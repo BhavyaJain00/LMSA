@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { ActionResult, Database, Question, ViolationType } from "@/lib/types";
+import type { ActionResult, Database, ViolationType } from "@/lib/types";
 import { getCurrentUser, isCreator, isModerator } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
@@ -165,7 +165,6 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
   const rows: QuizQuestionRow[] = [];
   const seen = new Map<string, number>();
   const duplicates: number[] = [];
-  const questions: Question[] = [];
   (Array.isArray(input.questions) ? input.questions : []).forEach((row, i) => {
     const q = db.questions.find((x) => x.id === row?.questionId);
     if (!q) {
@@ -179,15 +178,8 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
       fieldErrors.questions = `Marks for question ${i + 1} must be a whole number between 1 and ${MAX_MARKS}.`;
     }
     rows.push({ questionId: q.id, marks });
-    questions.push(q);
   });
   if (duplicates.length) fieldErrors.questions = `Rows ${Array.from(new Set(duplicates)).sort((a, b) => a - b).join(", ")} have the duplicate questions.`;
-
-  const hasOpen = questions.some((q) => q.type === "open_ended");
-  const hasClosed = questions.some((q) => q.type !== "open_ended");
-  if (hasOpen && hasClosed) {
-    fieldErrors.questions = "If you want open ended questions then make sure each question in the quiz is of open ended type.";
-  }
 
   const shuffleQuestions = !!s.shuffleQuestions;
   let limitQuestionsTo = shuffleQuestions ? num(s.limitQuestionsTo, NaN) : 0;
@@ -232,8 +224,8 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
     return { ok: false, error: Object.values(fieldErrors)[0] ?? "Please fix the highlighted fields.", fieldErrors };
   }
 
-  // Open-ended quizzes can't reveal answers live.
-  const showAnswers = hasOpen ? false : !!s.showAnswers;
+  // Open-ended answers are always graded after submission; "show answers" applies to auto-graded questions.
+  const showAnswers = !!s.showAnswers;
   const totalMarks = computeTotalMarks(rows, shuffleQuestions, limitQuestionsTo);
   const updatedAt = new Date().toISOString();
 

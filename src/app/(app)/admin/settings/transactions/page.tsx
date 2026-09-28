@@ -8,7 +8,8 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { TransactionFilters } from "@/components/commerce/transaction-filters";
 import { TransactionsTable, type TransactionView } from "@/components/commerce/transactions-table";
-import { formatNumber, formatPrice } from "@/lib/utils";
+import { money } from "@/components/commerce/order-summary";
+import { formatNumber } from "@/lib/utils";
 
 export const metadata = { title: "Transactions" };
 
@@ -67,7 +68,7 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
     paidAt: r.paidAt,
   }));
 
-  const revenueLabel = stats.revenue.length ? stats.revenue.map((r) => formatPrice(r.amount, r.currency)).join(" + ") : formatPrice(0, db.settings.commerce.defaultCurrency, "0");
+  const revenueLabel = stats.revenue.length ? stats.revenue.map((r) => money(r.amount, r.currency)).join(" + ") : money(0, db.settings.commerce.defaultCurrency);
 
   return (
     <>

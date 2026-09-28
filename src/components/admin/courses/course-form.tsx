@@ -28,20 +28,24 @@ export interface CourseFormProps {
   cancelHref: string;
 }
 
+/** Order-stable fingerprint of the form values (props may arrive without undefined keys). */
 function serialize(v: CourseFormValues): string {
-  return JSON.stringify({
-    ...v,
-    title: v.title.trim(),
-    slug: v.slug.trim(),
-    shortIntroduction: v.shortIntroduction.trim(),
-    description: v.description.trim(),
-    imageUrl: v.imageUrl ?? "",
-    videoUrl: v.videoUrl ?? "",
-    categoryId: v.categoryId ?? "",
-    evaluatorId: v.evaluatorId ?? "",
-    outcomes: v.outcomes.map((s) => s.trim()).filter(Boolean),
-    requirements: v.requirements.map((s) => s.trim()).filter(Boolean),
-  });
+  return JSON.stringify([
+    v.title.trim(),
+    v.slug.trim(),
+    v.shortIntroduction.trim(),
+    v.description.trim(),
+    v.imageUrl ?? "",
+    v.videoUrl ?? "",
+    v.cardGradient,
+    v.categoryId ?? "",
+    v.tags,
+    v.instructorIds,
+    v.evaluatorId ?? "",
+    v.outcomes.map((s) => s.trim()).filter(Boolean),
+    v.requirements.map((s) => s.trim()).filter(Boolean),
+    v.relatedCourseIds,
+  ]);
 }
 
 export function CourseForm({ mode, courseId, initial, options, tagSuggestions, reviewResetNotice, cancelHref }: CourseFormProps) {

@@ -5,7 +5,7 @@ import { Markdown } from "@/lib/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button, IconButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { Input, Select, Textarea } from "@/components/ui/input";
+import { Input, Select, Switch, Textarea } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { QuizIcon } from "./icons";
@@ -208,6 +208,17 @@ export function QuestionEditor({ value, onChange, errors, showErrors, allowedTyp
           <p className="mt-1 text-xs text-ink-faint">Markdown is supported: **bold**, `code`, lists, links and images.</p>
         )}
       </div>
+
+      {isChoices && (
+        <Switch
+          id={`${id}-multiple`}
+          label="Multiple correct answers"
+          description="Learners must select every correct option to get the marks."
+          checked={value.uiType === "multiple"}
+          disabled={disabled}
+          onChange={(e) => onChange(changeQuestionType(value, e.target.checked ? "multiple" : "single"))}
+        />
+      )}
 
       {isChoices && (
         <fieldset className="space-y-2.5">

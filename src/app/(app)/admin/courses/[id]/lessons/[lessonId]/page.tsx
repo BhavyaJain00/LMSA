@@ -1,16 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db/store";
-import { lessonHref } from "@/lib/data/courses";
+import { getCurrentUser } from "@/lib/auth/session";
+import { canManageCourse, lessonHref } from "@/lib/data/courses";
 import { getAssessmentOptions, getLessonEditorNav, getLessonPosition, getLessonVideoStats, requireManageableCourse } from "@/lib/data/admin-courses";
 import { Icon } from "@/components/ui/icons";
 import { LessonEditor } from "@/components/admin/courses/lesson-editor";
 
 export async function generateMetadata(props: PageProps<"/admin/courses/[id]/lessons/[lessonId]">) {
-  const { lessonId } = await props.params;
-  const db = await getDb();
-  const lesson = db.lessons.find((l) => l.id === lessonId);
-  return { title: lesson ? `Edit: ${lesson.title}` : "Lesson not found" };
+  const { id, lessonId } = await props.params;
+  const [db, user] = await Promise.all([getDb(), getCurrentUser()]);
+  const lesson = db.lessons.find((l) => l.id === lessonId && l.courseId === id);
+  const course = db.courses.find((c) => c.id === id);
+  if (!lesson || !course) return { title: "Lesson not found" };
+  return { title: canManageCourse(user, course) ? `Edit: ${lesson.title}` : "Edit lesson" };
 }
 
 export default async function LessonEditorPage(props: PageProps<"/admin/courses/[id]/lessons/[lessonId]">) {

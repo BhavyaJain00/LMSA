@@ -3,9 +3,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { roleLabels } from "@/lib/config";
 import { cn, formatDate, gradientFor } from "@/lib/utils";
-import { cardGradients } from "@/lib/config";
+import { cardGradients, roleLabels } from "@/lib/config";
 import { CoverEditor } from "./cover-editor";
 import { SocialLinks } from "./social-icons";
 
@@ -37,15 +36,17 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
 
   return (
     <header>
-      <div className="group relative h-32 overflow-hidden rounded-card bg-surface-2 sm:h-44">
-        {user.coverImageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={user.coverImageUrl} alt="" className="size-full object-cover" />
-        ) : (
-          <div className={cn("size-full bg-linear-to-br opacity-90", coverGradient(user.id))} aria-hidden="true" />
-        )}
+      <div className="group relative h-32 sm:h-44">
+        <div className="absolute inset-0 overflow-hidden rounded-card bg-surface-2">
+          {user.coverImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={user.coverImageUrl} alt="" className="size-full object-cover" />
+          ) : (
+            <div className={cn("size-full bg-linear-to-br opacity-90", coverGradient(user.id))} aria-hidden="true" />
+          )}
+        </div>
         {canEdit && (
-          <div className="absolute right-3 top-3 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+          <div className="absolute right-3 top-3 z-20 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 [@media(hover:none)]:opacity-100">
             <CoverEditor userId={user.id} hasCover={!!user.coverImageUrl} />
           </div>
         )}

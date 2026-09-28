@@ -44,7 +44,7 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/uploads/[...path
   const name = parts.join("/");
   if (name.includes("..") || name.startsWith("/")) return new NextResponse("Not found", { status: 404 });
 
-  const root = path.join(process.cwd(), siteConfig.uploadDir);
+  const root = path.resolve(process.cwd(), siteConfig.uploadDir);
   const filePath = path.join(root, name);
   if (!filePath.startsWith(root)) return new NextResponse("Not found", { status: 404 });
 

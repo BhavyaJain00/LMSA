@@ -26,7 +26,6 @@ import {
   MAX_MARKS,
   questionToInput,
   toUiType,
-  uiTypes,
   validateQuestionInput,
   type QuestionBankItem,
   type QuestionInput,
@@ -150,17 +149,10 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
   const hasOpenEnded = rowsHaveOpen || draft?.uiType === "open_ended" || openValue?.uiType === "open_ended";
   const limit = settings.shuffleQuestions && Number.isInteger(settings.limitQuestionsTo) ? settings.limitQuestionsTo : 0;
   const totalMarks = computeTotalMarks(rows, settings.shuffleQuestions, limit);
-  const bankScope: BankScope = rowsHaveOpen ? "open_ended" : rowsHaveClosed ? "closed" : "any";
+  const bankScope: BankScope = "any";
   const clientErrors = settingsErrors(settings, rows);
   const errors = { ...serverErrors, ...clientErrors };
   const canReorder = !openId && !draft && !search.trim() && rows.length > 1;
-
-  const allowedTypesFor = (excludeId: string | null): UiQuestionType[] => {
-    const others = rows.filter((r) => r.questionId !== excludeId).map((r) => questions[r.questionId]).filter((q): q is Question => !!q);
-    if (others.some((q) => q.type === "open_ended")) return ["open_ended"];
-    if (others.length) return ["single", "multiple", "user_input"];
-    return uiTypes;
-  };
 
   /* ---------------------------- Editing the quiz ---------------------------- */
 
@@ -308,7 +300,8 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
     closeCard();
     setBankOpen(false);
     setMobileTab("questions");
-    setDraft(emptyQuestionInput(rowsHaveOpen ? "open_ended" : "single"));
+    // All-written quizzes default to another open-ended question.
+    setDraft(emptyQuestionInput(rowsHaveOpen && !rowsHaveClosed ? "open_ended" : "single"));
     setEditorAttempted(false);
     setEditorServerErrors({});
   };
@@ -433,7 +426,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
         totalMarks,
         passingPercentage: settings.passingPercentage,
         maxAttempts: settings.maxAttempts,
-        showAnswers: settings.showAnswers && !open,
+        showAnswers: settings.showAnswers,
         showSubmissionHistory: settings.showSubmissionHistory,
         shuffleQuestions: settings.shuffleQuestions,
         limitQuestionsTo: limit,
@@ -534,7 +527,6 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
       }}
       errors={{ ...validateQuestionInput(value), ...editorServerErrors }}
       showErrors={editorAttempted}
-      allowedTypes={allowedTypesFor(excludeId)}
       usedIn={excludeId ? usage[excludeId] : undefined}
       disabled={persisting}
       autoFocus={isDraft}
@@ -651,7 +643,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
                     </IconButton>
                   }
                 >
-                  Learners write free-form answers. An open-ended question can&apos;t be mixed with other types, and live answer-reveal is turned off for this quiz.{" "}
+                  Learners write free-form answers to open-ended questions. Those answers score 0 and the attempt stays pending until you grade it; the other questions are marked automatically.{" "}
                   <Link href={`/admin/quizzes/submissions?quiz=${data.quizId}`} className="font-medium text-ink underline underline-offset-2">
                     Grade submissions
                   </Link>

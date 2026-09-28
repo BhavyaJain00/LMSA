@@ -49,7 +49,7 @@ export function LineChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [active, setActive] = useState<number | null>(null);
-  const gradientId = useId().replace(/:/g, "");
+  const gradientId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const color = chartColor(tone);
 
   useEffect(() => {

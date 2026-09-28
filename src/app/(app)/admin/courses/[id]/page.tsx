@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db/store";
-import { getCourseById } from "@/lib/data/courses";
+import { getCurrentUser } from "@/lib/auth/session";
+import { canManageCourse, getCourseById } from "@/lib/data/courses";
 import { getWorkflowFlags, requireManageableCourse } from "@/lib/data/admin-courses";
 import { PageHeader } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -20,8 +21,9 @@ type CourseTab = (typeof TABS)[number];
 
 export async function generateMetadata(props: PageProps<"/admin/courses/[id]">) {
   const { id } = await props.params;
-  const course = await getCourseById(id);
-  return { title: course ? `${course.title} · Manage` : "Course not found" };
+  const [course, user] = await Promise.all([getCourseById(id), getCurrentUser()]);
+  if (!course) return { title: "Course not found" };
+  return { title: canManageCourse(user, course) ? `${course.title} · Manage` : "Manage course" };
 }
 
 export default async function ManageCoursePage(props: PageProps<"/admin/courses/[id]">) {

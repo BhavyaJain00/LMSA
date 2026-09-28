@@ -207,8 +207,10 @@ export function QuizIntro({ quiz, mode, inVideo, schedule, attemptsUsed, canMana
                 {mode === "preview"
                   ? "Nothing is recorded in preview. The timer and proctoring are off."
                   : remaining !== null
-                    ? `${pluralize(remaining, "attempt")} remaining`
-                    : "Unlimited attempts"}
+                    ? `${attemptsUsed} of ${pluralize(quiz.maxAttempts, "attempt")} used · ${remaining} remaining`
+                    : attemptsUsed > 0
+                      ? `Unlimited attempts · ${attemptsUsed} used`
+                      : "Unlimited attempts"}
                 {proctored && " · The quiz opens in fullscreen"}
               </p>
             </div>

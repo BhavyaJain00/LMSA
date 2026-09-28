@@ -2,6 +2,8 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getStudentDashboard } from "@/lib/data/dashboard";
+import { profileCompleteness } from "@/lib/data/profile";
+import { ProfileCompletenessCard } from "@/components/profile/profile-sections";
 import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -40,6 +42,8 @@ export default async function DashboardPage() {
   const upcomingLive = countUpcoming(data.liveClasses);
   const hasEnrollments = data.stats.enrolled > 0;
   const f = settings.features;
+  const completeness = profileCompleteness(user);
+  const showCompleteProfile = !user.avatarUrl || !user.headline || !user.bio;
 
   return (
     <div className="animate-fade-in space-y-8">
@@ -202,6 +206,10 @@ export default async function DashboardPage() {
         </div>
 
         <aside className="min-w-0 space-y-6" aria-label="Your progress">
+          {showCompleteProfile && (
+            <ProfileCompletenessCard percent={completeness.percent} items={completeness.items.filter((i) => !i.done).slice(0, 4)} editHref={`${profileHref}/edit`} />
+          )}
+
           <Card className="p-4">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>

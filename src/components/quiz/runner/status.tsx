@@ -54,27 +54,19 @@ export function ViolationBanner({
   canFullscreen: boolean;
   onReturnToFullscreen: () => void;
 }) {
-  if (!events.length && (fullscreen || !canFullscreen)) return null;
   const last = events[events.length - 1];
+  if (!last) return null;
   const remaining = Math.max(0, max - events.length);
   return (
     <div role="alert" className="flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center">
       <Icon.AlertTriangle className="size-5 shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-sm">
-        {last ? (
-          <>
-            <p className="font-medium text-ink">
-              {violationLabels[last.eventType]} recorded · {events.length} of {max}
-            </p>
-            <p className="text-ink-muted">
-              {remaining > 0
-                ? `${pluralize(remaining, "more violation")} and the quiz will be submitted automatically.`
-                : "The quiz is being submitted."}
-            </p>
-          </>
-        ) : (
-          <p className="text-ink">This quiz is proctored. Return to fullscreen to continue.</p>
-        )}
+        <p className="font-medium text-ink">
+          {violationLabels[last.eventType]} recorded · {events.length} of {max}
+        </p>
+        <p className="text-ink-muted">
+          {remaining > 0 ? `${pluralize(remaining, "more violation")} and the quiz will be submitted automatically.` : "The quiz is being submitted."}
+        </p>
       </div>
       {canFullscreen && !fullscreen && (
         <Button size="sm" variant="outline" onClick={onReturnToFullscreen} leftIcon={<Icon.Fullscreen className="size-4" />}>

@@ -184,7 +184,7 @@ export function QuizResults({ quiz, mode, result, attempts, canRetake, onRetake,
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             {canRetake && (
               <Button onClick={onRetake} leftIcon={<Icon.Refresh className="size-4" />}>
-                {mode === "preview" ? "Restart preview" : "Try Again"}
+                {mode === "preview" ? "Restart preview" : "Retake"}
               </Button>
             )}
             {backHref && (

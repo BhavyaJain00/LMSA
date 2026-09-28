@@ -1,23 +1,58 @@
 /**
- * Static configuration. Runtime-editable branding and feature toggles live in
- * the Settings record (see src/lib/db/defaults.ts) and are managed from the
- * admin Settings page.
+ * Deployment configuration, read from environment variables (see .env.example).
+ * Runtime-editable branding and feature toggles live in the Settings record
+ * (see src/lib/db/defaults.ts) and are managed from Admin → Settings.
+ *
+ * Only server code should rely on these values: browsers do not see
+ * non-NEXT_PUBLIC_ variables, so client bundles fall back to the defaults.
  */
+function envString(name: string, fallback: string): string {
+  const v = typeof process !== "undefined" ? process.env[name] : undefined;
+  return v && v.trim() ? v.trim() : fallback;
+}
+
+function envNumber(name: string, fallback: number): number {
+  const v = Number(envString(name, ""));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/** "true"/"1"/"yes"/"on" → true, "false"/"0"/"no"/"off" → false, anything else → fallback. */
+function envBool(name: string, fallback: boolean): boolean {
+  const v = envString(name, "").toLowerCase();
+  if (["true", "1", "yes", "on"].includes(v)) return true;
+  if (["false", "0", "no", "off"].includes(v)) return false;
+  return fallback;
+}
+
+const MB = 1024 * 1024;
+
 export const siteConfig = {
   /** Fallback name used before settings load. */
   name: "LearnLoop",
-  /** Max upload size in bytes (default 2 GB for videos). */
-  maxUploadBytes: 2 * 1024 * 1024 * 1024,
-  /** Max upload size for images/documents (default 25 MB). */
-  maxAssetBytes: 25 * 1024 * 1024,
+  /** Public base URL (no trailing slash), used for absolute links and metadata. */
+  appUrl: envString("APP_URL", "http://localhost:3000").replace(/\/+$/, ""),
+  /** Max upload size in bytes for videos (default 2 GB). */
+  maxUploadBytes: envNumber("MAX_VIDEO_UPLOAD_MB", 2048) * MB,
+  /** Max upload size in bytes for images/documents/audio (default 25 MB). */
+  maxAssetBytes: envNumber("MAX_FILE_UPLOAD_MB", 25) * MB,
   /** Session lifetime in days. */
-  sessionDays: 30,
+  sessionDays: envNumber("SESSION_DAYS", 30),
   /** Name of the auth cookie. */
-  sessionCookie: "ll_session",
-  /** Where uploaded files are stored (relative to project root). */
-  uploadDir: "storage/uploads",
-  /** Where the JSON database lives (relative to project root). */
-  dataFile: "storage/db.json",
+  sessionCookie: envString("SESSION_COOKIE_NAME", "ll_session"),
+  /** Send the auth cookie only over HTTPS. Defaults to true in production. */
+  cookieSecure: envBool("COOKIE_SECURE", process.env.NODE_ENV === "production"),
+  /** Where uploaded files are stored (relative to the project root, or absolute). */
+  uploadDir: envString("UPLOAD_DIR", "storage/uploads"),
+  /** Where the JSON database lives (relative to the project root, or absolute). */
+  dataFile: envString("DATA_FILE", "storage/db.json"),
+  /** On first run, load the demo courses and users (true) or start empty with one admin (false). */
+  seedDemoData: envBool("SEED_DEMO_DATA", true),
+  /** First admin account created when SEED_DEMO_DATA=false. */
+  bootstrapAdmin: {
+    name: envString("ADMIN_NAME", "Administrator"),
+    email: envString("ADMIN_EMAIL", ""),
+    password: envString("ADMIN_PASSWORD", ""),
+  },
 } as const;
 
 export const levels = [

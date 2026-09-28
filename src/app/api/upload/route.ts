@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
   const ext = path.extname(file.name).toLowerCase().replace(/[^a-z0-9.]/g, "") || extFor(type);
   const base = slugify(path.basename(file.name, path.extname(file.name))).slice(0, 40) || "file";
   const name = `${base}-${uid()}${ext}`;
-  const dir = path.join(process.cwd(), siteConfig.uploadDir);
+  const dir = path.resolve(process.cwd(), siteConfig.uploadDir);
   await fs.mkdir(dir, { recursive: true });
   const buffer = Buffer.from(await file.arrayBuffer());
   await fs.writeFile(path.join(dir, name), buffer);

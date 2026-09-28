@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CollectionName, Database } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
-import { mergeSettings } from "./defaults";
+import { defaultSettings, mergeSettings } from "./defaults";
+import { hashPassword } from "@/lib/auth/password";
+import { uid } from "@/lib/utils";
 import { buildSeedDatabase } from "./seed";
 
 /**
@@ -40,7 +42,7 @@ const state: StoreState = (g.__llStore ??= {
   flushTimer: null,
 });
 
-const DATA_PATH = path.join(process.cwd(), siteConfig.dataFile);
+const DATA_PATH = path.resolve(process.cwd(), siteConfig.dataFile);
 
 export const COLLECTIONS: CollectionName[] = [
   "users",
@@ -105,10 +107,42 @@ async function load(): Promise<Database> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
-    state.db = normalize(await buildSeedDatabase());
+    state.db = normalize(siteConfig.seedDemoData ? await buildSeedDatabase() : await buildEmptyDatabase());
     await writeFile(state.db);
   }
   return state.db;
+}
+
+/**
+ * First-run database without demo content (SEED_DEMO_DATA=false): default
+ * settings plus a single admin account taken from ADMIN_NAME / ADMIN_EMAIL /
+ * ADMIN_PASSWORD.
+ */
+async function buildEmptyDatabase(): Promise<Partial<Database>> {
+  const { name, email, password } = siteConfig.bootstrapAdmin;
+  if (!email || !password) {
+    throw new Error("SEED_DEMO_DATA=false requires ADMIN_EMAIL and ADMIN_PASSWORD in your .env file to create the first admin account.");
+  }
+  if (password.length < 8) throw new Error("ADMIN_PASSWORD must be at least 8 characters.");
+  const now = new Date().toISOString();
+  const username = email.split("@")[0]!.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "admin";
+  return {
+    users: [
+      {
+        id: uid("usr"),
+        username,
+        name,
+        email: email.toLowerCase(),
+        passwordHash: await hashPassword(password),
+        roles: ["admin", "moderator", "course_creator", "batch_evaluator"],
+        enabled: true,
+        personaCaptured: true,
+        createdAt: now,
+        lastActiveAt: now,
+      },
+    ],
+    settings: { ...defaultSettings(), updatedAt: now },
+  };
 }
 
 async function writeFile(db: Database): Promise<void> {
