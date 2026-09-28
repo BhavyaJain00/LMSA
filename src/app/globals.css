@@ -1,26 +1,407 @@
 @import "tailwindcss";
 
+/* Dark mode is driven by the `data-theme` attribute on <html> (set by ThemeToggle). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ------------------------------------------------------------------ */
+/* Design tokens                                                        */
+/* ------------------------------------------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --accent: #4f46e5; /* overridden inline from Settings.brand.accentColor */
+  --accent-fg: #ffffff;
+
+  --surface: #f7f7f8;
+  --surface-1: #ffffff;
+  --surface-2: #f3f4f6;
+  --surface-3: #e5e7eb;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+
+  --ink: #18181b;
+  --ink-muted: #52525b;
+  --ink-faint: #a1a1aa;
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.08), 0 4px 12px rgb(0 0 0 / 0.04);
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 0.12);
+}
+
+:root[data-theme="dark"] {
+  --accent-fg: #ffffff;
+
+  --surface: #0f0f11;
+  --surface-1: #17171a;
+  --surface-2: #1f1f23;
+  --surface-3: #2a2a30;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+
+  --ink: #f4f4f5;
+  --ink-muted: #a1a1aa;
+  --ink-faint: #71717a;
+
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 0.6);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-surface: var(--surface);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --shadow-card: var(--shadow);
+  --shadow-pop: var(--shadow-lg);
+
+  --radius-card: 0.875rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ------------------------------------------------------------------ */
+/* Base                                                                 */
+/* ------------------------------------------------------------------ */
+html {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+* {
+  border-color: var(--border);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Thin scrollbars for sidebars and player menus. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Prose (markdown output)                                              */
+/* ------------------------------------------------------------------ */
+.prose-ll {
+  color: var(--ink);
+  line-height: 1.7;
+  font-size: 0.975rem;
+}
+.prose-ll > * + * {
+  margin-top: 0.9em;
+}
+.prose-ll h1,
+.prose-ll h2,
+.prose-ll h3,
+.prose-ll h4 {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin-top: 1.6em;
+}
+.prose-ll h1 {
+  font-size: 1.75rem;
+}
+.prose-ll h2 {
+  font-size: 1.4rem;
+}
+.prose-ll h3 {
+  font-size: 1.15rem;
+}
+.prose-ll h4 {
+  font-size: 1rem;
+}
+.prose-ll > :first-child {
+  margin-top: 0;
+}
+.prose-ll p {
+  margin: 0;
+}
+.prose-ll a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-ll strong {
+  font-weight: 650;
+}
+.prose-ll ul,
+.prose-ll ol {
+  padding-left: 1.5rem;
+}
+.prose-ll ul {
+  list-style: disc;
+}
+.prose-ll ol {
+  list-style: decimal;
+}
+.prose-ll li + li {
+  margin-top: 0.3em;
+}
+.prose-ll li > ul,
+.prose-ll li > ol {
+  margin-top: 0.3em;
+}
+.prose-ll blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 0.25rem 1rem;
+  color: var(--ink-muted);
+  background: var(--surface-2);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+.prose-ll code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.1em 0.35em;
+  border-radius: 0.35rem;
+}
+.prose-ll pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 1rem 1.25rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.prose-ll pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+.prose-ll img {
+  max-width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+}
+.prose-ll hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2em 0;
+}
+.prose-ll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.prose-ll th,
+.prose-ll td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.prose-ll th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.prose-ll mark {
+  padding: 0 0.15em;
+  border-radius: 0.25rem;
+}
+.prose-ll input[type="checkbox"] {
+  margin-right: 0.5rem;
+  accent-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Animations                                                           */
+/* ------------------------------------------------------------------ */
+@keyframes ll-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: ll-fade-in 0.18s ease-out both;
+}
+
+@keyframes ll-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-scale-in {
+  animation: ll-scale-in 0.15s ease-out both;
+}
+
+@keyframes ll-shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 800px 100%;
+  animation: ll-shimmer 1.4s linear infinite;
+  border-radius: 0.5rem;
+}
+
+@keyframes ll-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-spin-slow {
+  animation: ll-spin 1.2s linear infinite;
+}
+
+@keyframes ll-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-toast-in {
+  animation: ll-toast-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* ------------------------------------------------------------------ */
+/* Video player                                                         */
+/* ------------------------------------------------------------------ */
+.ll-player {
+  --player-accent: var(--accent);
+  container-type: inline-size;
+}
+.ll-player:fullscreen {
+  background: #000;
+}
+.ll-player:fullscreen video {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+}
+.ll-player video::-webkit-media-controls {
+  display: none !important;
+}
+.ll-player video::cue {
+  background: rgb(0 0 0 / 0.75);
+  color: #fff;
+  font-size: 1.05rem;
+  line-height: 1.4;
+}
+
+/* Native range inputs are restyled in the player components; hide default look. */
+.ll-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.ll-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 0;
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 0.25);
+}
+.ll-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 0;
+}
+.ll-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+}
+.ll-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-toast-in {
+    animation: none;
+  }
 }

@@ -1,0 +1,286 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { VideoChapterMarker, VideoQuizMarker } from "@/lib/types";
+import { cn, formatTime } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icons";
+import { LessonVideo } from "../lesson-video";
+import { useLearnPrefs } from "../learn-provider";
+import { useLessonRuntime } from "../lesson-runtime";
+
+export interface VideoBlockProps {
+  blockId: string;
+  src: string;
+  posterUrl?: string;
+  captionsUrl?: string;
+  title?: string;
+  chapters?: VideoChapterMarker[];
+  quizMarkers?: VideoQuizMarker[];
+  startAt?: number;
+  initialMaxPosition?: number;
+  preventSkipping: boolean;
+  /** The first video of the lesson: timestamped notes seek this one. */
+  primary: boolean;
+  /** Pre-rendered quiz blocks for the in-video quiz markers, by quiz id. */
+  quizNodes: Record<string, ReactNode>;
+  quizTitles: Record<string, string>;
+  passedQuizIds: string[];
+}
+
+interface ActiveQuiz {
+  quizId: string;
+  time: number;
+  resume: () => void;
+}
+
+const COUNTDOWN = 7;
+
+/** Keys the player uses as shortcuts; they must not reach it while a quiz is open. */
+const PLAYER_KEYS = new Set([" ", "k", "j", "l", "m", "f", "c", "p", "t", ",", ".", "<", ">", "home", "end", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
+
+/** A lesson video with resume, notes seeking, in-video quizzes and a chapter list. */
+export function VideoBlock({
+  blockId,
+  src,
+  posterUrl,
+  captionsUrl,
+  title,
+  chapters,
+  quizMarkers,
+  startAt,
+  initialMaxPosition,
+  preventSkipping,
+  primary,
+  quizNodes,
+  quizTitles,
+  passedQuizIds,
+}: VideoBlockProps) {
+  const rt = useLessonRuntime();
+  const { theater, toggleTheater } = useLearnPrefs();
+  const [initial] = useState(() => ({ startAt, initialMaxPosition }));
+  const [seek, setSeek] = useState<{ time: number; key: number; play?: boolean } | undefined>(undefined);
+  const [active, setActive] = useState<ActiveQuiz | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const seekTo = useCallback((time: number, play = true) => {
+    setSeek((s) => ({ time, key: (s?.key ?? 0) + 1, play }));
+    wrapperRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
+  const { registerPrimaryVideo } = rt;
+  useEffect(() => {
+    if (!primary) return;
+    return registerPrimaryVideo((time) => seekTo(time, true));
+  }, [primary, registerPrimaryVideo, seekTo]);
+
+  const onQuizMarker = useCallback((quizId: string, resume: () => void) => {
+    if (typeof document !== "undefined" && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    // Markers clicked on the seek bar do not pause playback by themselves.
+    wrapperRef.current?.querySelector("video")?.pause();
+    const marker = quizMarkers?.find((m) => m.quizId === quizId);
+    setActive({ quizId, resume, time: marker?.time ?? 0 });
+  }, [quizMarkers]);
+
+  const continueVideo = useCallback(() => {
+    active?.resume();
+    setActive(null);
+  }, [active]);
+
+  const sortedMarkers = quizMarkers?.length ? [...quizMarkers].sort((a, b) => a.time - b.time) : [];
+
+  return (
+    <div ref={wrapperRef} className={cn("mx-auto w-full", theater ? "max-w-[min(100%,calc((100dvh_-_9rem)*16/9))]" : "max-w-(--lesson-w)")} data-no-highlight>
+      {sortedMarkers.length > 0 && (
+        <div className="mb-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm text-ink-muted">
+          <p className="font-medium text-ink">
+            This video contains {sortedMarkers.length} {sortedMarkers.length === 1 ? "quiz" : "quizzes"}:
+          </p>
+          <ol className="mt-1 space-y-0.5">
+            {sortedMarkers.map((m, i) => (
+              <li key={`${m.quizId}@${m.time}`} className="flex items-center gap-2">
+                <span className="tabular-nums text-ink-faint">{i + 1}.</span>
+                <span className="min-w-0 truncate">{quizTitles[m.quizId] ?? "Quiz"}</span>
+                <span className="text-ink-faint">at</span>
+                <span className="font-medium tabular-nums text-ink">{formatTime(m.time)}</span>
+                {passedQuizIds.includes(m.quizId) && (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                    <Icon.CheckCircle className="size-3.5" /> Passed
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      <LessonVideo
+        lessonId={rt.lessonId}
+        blockId={blockId}
+        src={src}
+        posterUrl={posterUrl}
+        captionsUrl={captionsUrl}
+        title={title}
+        chapters={chapters}
+        quizMarkers={quizMarkers}
+        startAt={initial.startAt}
+        initialMaxPosition={initial.initialMaxPosition}
+        preventSkipping={preventSkipping}
+        track={rt.tracking}
+        onCompleted={rt.onVideoWatched}
+        onEnded={rt.onVideoEnded}
+        onQuizMarker={onQuizMarker}
+        onNext={rt.canGoNext ? () => void rt.goNext() : undefined}
+        nextLabel={rt.next?.locked ? "Complete and continue" : "Next lesson"}
+        theater={theater}
+        onToggleTheater={toggleTheater}
+        seekRequest={seek}
+        onTimeChange={primary ? rt.time.set : undefined}
+        className={active ? "min-h-[min(36rem,85vh)]" : undefined}
+        overlay={
+          active ? (
+            <QuizOverlay
+              key={`${active.quizId}@${active.time}`}
+              active={active}
+              title={quizTitles[active.quizId] ?? "Quiz"}
+              passed={passedQuizIds.includes(active.quizId)}
+              node={quizNodes[active.quizId]}
+              onContinue={continueVideo}
+            />
+          ) : undefined
+        }
+      />
+
+      {chapters && chapters.length > 1 && (
+        <details className="group mt-3 rounded-lg border border-border bg-surface-1">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-ink [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-2">
+              <Icon.Layers className="size-4 text-ink-muted" /> Chapters
+              <span className="rounded-full bg-surface-2 px-1.5 text-xs text-ink-muted">{chapters.length}</span>
+            </span>
+            <Icon.ChevronDown className="size-4 text-ink-faint transition-transform group-open:rotate-180" />
+          </summary>
+          <ol className="border-t border-border p-1.5">
+            {chapters.map((c) => (
+              <li key={`${c.time}-${c.title}`}>
+                <button
+                  type="button"
+                  onClick={() => seekTo(c.time)}
+                  className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                >
+                  <span className="w-12 shrink-0 font-mono text-xs tabular-nums text-accent">{formatTime(c.time)}</span>
+                  <span className="min-w-0 truncate">{c.title}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function QuizOverlay({
+  active,
+  title,
+  passed,
+  node,
+  onContinue,
+}: {
+  active: ActiveQuiz;
+  title: string;
+  passed: boolean;
+  node: ReactNode;
+  onContinue: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [opened, setOpened] = useState(false);
+  const [seconds, setSeconds] = useState(COUNTDOWN);
+  const phase: "countdown" | "quiz" = opened || seconds <= 0 ? "quiz" : "countdown";
+
+  // Countdown before the quiz opens.
+  useEffect(() => {
+    if (phase !== "countdown") return;
+    const id = window.setInterval(() => setSeconds((s) => Math.max(0, s - 1)), 1000);
+    return () => window.clearInterval(id);
+  }, [phase]);
+
+  // Move focus into the overlay whenever its phase changes.
+  useEffect(() => {
+    rootRef.current?.querySelector<HTMLButtonElement>("[data-autofocus]")?.focus({ preventScroll: true });
+  }, [phase]);
+
+  // Keep the player's keyboard shortcuts from firing while the quiz is open.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) return;
+      if (PLAYER_KEYS.has(e.key.toLowerCase()) || /^[0-9]$/.test(e.key)) e.stopPropagation();
+    };
+    el.addEventListener("keydown", onKey);
+    return () => el.removeEventListener("keydown", onKey);
+  }, []);
+
+  if (phase === "countdown") {
+    return (
+      <div ref={rootRef} className="flex size-full items-center justify-center bg-black/70 p-4 animate-fade-in">
+        <div
+          role="alertdialog"
+          aria-labelledby="video-quiz-title"
+          aria-describedby="video-quiz-desc"
+          className="w-full max-w-sm rounded-xl border border-border bg-surface-1 p-5 text-ink shadow-pop"
+        >
+          <div className="flex items-start gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
+              <Icon.ListChecks className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <p id="video-quiz-title" className="font-semibold">
+                Time for a quiz
+              </p>
+              <p id="video-quiz-desc" className="mt-1 text-sm text-ink-muted">
+                Complete the upcoming quiz to continue watching the video. The quiz will open in{" "}
+                <span className="font-medium tabular-nums text-ink">{seconds}</span> {seconds === 1 ? "second" : "seconds"}.
+              </p>
+              {passed && (
+                <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-success">
+                  <Icon.CheckCircle className="size-3.5" /> You already passed this quiz.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={onContinue}>
+              Continue video
+            </Button>
+            <Button data-autofocus size="sm" onClick={() => setOpened(true)} rightIcon={<Icon.ArrowRight className="size-4" />}>
+              Open quiz now
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={rootRef} role="dialog" aria-label={`In-video quiz: ${title}`} className="flex size-full flex-col bg-surface-1 text-ink animate-fade-in">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-ink-faint">In-video quiz · {formatTime(active.time)}</p>
+          <p className="truncate text-sm font-semibold">{title}</p>
+        </div>
+        <Button data-autofocus size="sm" variant="outline" onClick={onContinue} leftIcon={<Icon.Play className="size-3.5" />}>
+          Continue video
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 scrollbar-thin">
+        <p className="mb-3 text-xs text-ink-muted">Complete the quiz, then continue the video.</p>
+        {node ?? (
+          <p className="rounded-lg border border-dashed border-border-strong p-6 text-center text-sm text-ink-muted">This quiz is no longer available. You can continue the video.</p>
+        )}
+      </div>
+    </div>
+  );
+}

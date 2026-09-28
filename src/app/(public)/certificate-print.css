@@ -1,0 +1,56 @@
+/*
+ * Print styles for the public certificate page: one landscape A4 sheet,
+ * no page chrome, light colors even when the site is in dark mode.
+ */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 0;
+  }
+
+  /* Re-map the design tokens to the light palette for paper. */
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    --surface: #ffffff;
+    --surface-1: #ffffff;
+    --surface-2: #f3f4f6;
+    --surface-3: #e5e7eb;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --ink: #18181b;
+    --ink-muted: #52525b;
+    --ink-faint: #71717a;
+  }
+
+  html,
+  body {
+    background: var(--surface-1) !important;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .public-chrome {
+    display: none !important;
+  }
+
+  .public-main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+
+  .certificate-sheet {
+    width: 297mm !important;
+    max-width: none !important;
+    height: 210mm;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
