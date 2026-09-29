@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
+import { safeRedirectPath } from "@/lib/auth/redirects";
 import { getSettings } from "@/lib/db/store";
 import { Markdown } from "@/lib/markdown";
 import { clampMinLength } from "@/lib/auth/password-policy";
@@ -11,7 +12,7 @@ export const metadata = { title: "Create account" };
 export default async function RegisterPage(props: PageProps<"/register">) {
   const user = await getCurrentUser();
   const sp = await props.searchParams;
-  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
+  const next = safeRedirectPath(sp.next, undefined);
   if (user) redirect("/dashboard");
   const settings = await getSettings();
 

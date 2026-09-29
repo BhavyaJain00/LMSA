@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import type { ActionResult, Course, Database, Program, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
-import { canCreateProgram, canManageProgram, computeProgramProgress, programCourseAccess } from "@/lib/data/programs";
+import { canCreateProgram, canManageProgram, computeProgramProgress, managedCourseAccess, programCourseAccess } from "@/lib/data/programs";
 import { canManageCourse, getNextLesson, lessonHref } from "@/lib/data/courses";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
@@ -13,6 +13,7 @@ import { enrollUserInCourse } from "@/lib/services/enrollment";
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, slugify, uid, uniqueSlug } from "@/lib/utils";
+import { needsPurchaseText, type ProgramEnrollOptions, type ProgramEnrollmentReport } from "@/components/programs/types";
 
 type Guard = { ok: true; user: User; program: Program; db: Database } | { ok: false; error: string };
 
@@ -43,43 +44,99 @@ function refreshMemberProgress(d: Database, programId: string) {
   }
 }
 
+/** The courses a program member starts with: the first one when the order is enforced (later ones unlock as they finish), otherwise all. */
+function startingCourseIds(program: Pick<Program, "courseIds" | "enforceCourseOrder">): string[] {
+  return program.enforceCourseOrder ? program.courseIds.slice(0, 1) : program.courseIds;
+}
+
 /**
- * Enroll a member in the courses they may start: only the first course when
- * the order is enforced (later ones unlock as they finish), otherwise all.
+ * Enroll a learner who joined a program on their own in its starting
+ * course(s), limited to courses they could open anyway (published, and free
+ * or already paid for: paid courses stay behind checkout) whose prerequisites
+ * they have completed. The rest they start from the program page
+ * (`startProgramCourseAction`).
  */
-/**
- * Enroll a program member in the program's starting course(s). Managers adding
- * members grant access directly; a learner joining on their own (`self`) is
- * only enrolled in courses they could open anyway (published, and free or
- * already paid for). Paid courses stay behind checkout.
- */
-async function enrollMemberInCourses(program: Program, userId: string, opts: { self?: User } = {}) {
-  const ids = program.enforceCourseOrder ? program.courseIds.slice(0, 1) : program.courseIds;
-  const db = opts.self ? await getDb() : null;
-  for (const courseId of ids) {
-    if (db && opts.self) {
-      const course = db.courses.find((c) => c.id === courseId);
-      if (!course) continue;
-      const access = programCourseAccess(db, opts.self, course);
-      if (!access.ok) continue;
-      // Program membership doesn't waive course prerequisites; the course can be started once they're done.
-      if (!(await prerequisitesAllowStart(db, opts.self, course))) continue;
-      await enrollUserInCourse(userId, courseId, { notifyInstructors: false, paymentId: access.paymentId });
-    } else {
-      await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
-    }
+async function enrollSelfInStartingCourses(program: Program, self: User): Promise<void> {
+  const db = await getDb();
+  for (const courseId of startingCourseIds(program)) {
+    const course = db.courses.find((c) => c.id === courseId);
+    if (!course) continue;
+    const access = programCourseAccess(db, self, course);
+    if (!access.ok) continue;
+    if (await prerequisiteError(db, self, course)) continue;
+    await enrollUserInCourse(self.id, courseId, { notifyInstructors: false, paymentId: access.paymentId });
   }
   await mutate((d) => refreshMemberProgress(d, program.id));
 }
 
 /**
- * Course prerequisites still apply inside a program for learners starting a
- * course themselves (already enrolled learners and course managers are exempt).
+ * Enroll program members in courses on a manager's behalf (adding a member or
+ * a course, lifting the course order). Program membership waives neither a
+ * course's price nor its prerequisites:
+ *  - a paid course needs the member's paid order (the enrollment is linked to
+ *    it). Members without one are skipped and reported ("N members need to
+ *    purchase …") unless the manager explicitly ticked "Grant access without
+ *    payment" and manages that course (see `managedCourseAccess`);
+ *  - members who haven't completed a course's prerequisites are skipped and
+ *    start it from the program page once they have
+ *    (`startProgramCourseAction` checks again).
+ * Members already enrolled are left as they are.
  */
-async function prerequisitesAllowStart(db: Database, user: User, course: Course): Promise<boolean> {
-  return (await prerequisiteError(db, user, course)) === null;
+async function enrollMembersAsManager(
+  program: Program,
+  actor: User,
+  userIds: string[],
+  courseIds: string[],
+  options: ProgramEnrollOptions,
+): Promise<ProgramEnrollmentReport> {
+  const db = await getDb();
+  const grantPaidAccess = options.grantPaidAccess === true;
+  const report: ProgramEnrollmentReport = { enrolled: 0, granted: 0, needsPurchase: [], waitingOnPrerequisites: 0 };
+  for (const courseId of courseIds) {
+    const course = db.courses.find((c) => c.id === courseId);
+    if (!course) continue;
+    let unpaid = 0;
+    for (const userId of userIds) {
+      const member = db.users.find((u) => u.id === userId);
+      if (!member || db.enrollments.some((e) => e.userId === member.id && e.courseId === course.id)) continue;
+      const access = managedCourseAccess(db, actor, member, course, grantPaidAccess);
+      if (!access.ok) {
+        unpaid++;
+        continue;
+      }
+      if (await prerequisiteError(db, member, course)) {
+        report.waitingOnPrerequisites++;
+        continue;
+      }
+      await enrollUserInCourse(member.id, course.id, { notifyInstructors: false, paymentId: access.paymentId });
+      report.enrolled++;
+      if (access.granted) report.granted++;
+    }
+    if (unpaid) report.needsPurchase.push({ courseId: course.id, title: course.title, members: unpaid });
+  }
+  await mutate((d) => refreshMemberProgress(d, program.id));
+  return report;
 }
 
+/** Enroll options sent by the admin screens; only an explicit `true` grants paid access. */
+function parseEnrollOptions(options: unknown): ProgramEnrollOptions {
+  const grant = !!options && typeof options === "object" && (options as { grantPaidAccess?: unknown }).grantPaidAccess === true;
+  return { grantPaidAccess: grant };
+}
+
+/** Success message: the headline plus who still needs to buy a course or finish prerequisites. */
+function reportMessage(headline: string, report: ProgramEnrollmentReport, waiting: (count: number) => string): string {
+  const notes = report.needsPurchase.map((item) => `${needsPurchaseText(item)}.`);
+  if (report.waitingOnPrerequisites) notes.push(waiting(report.waitingOnPrerequisites));
+  return notes.length ? `${headline}. ${notes.join(" ")}` : headline;
+}
+
+/**
+ * Why a program member can't be enrolled in `course` yet: unmet course
+ * prerequisites (already enrolled learners and course managers are exempt).
+ * Program paths never waive prerequisites; a course manager who wants to can
+ * enroll the learner directly from the course's admin page.
+ */
 async function prerequisiteError(db: Database, user: User, course: Course): Promise<string | null> {
   if (db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) return null;
   if (canManageCourse(user, course)) return null;
@@ -121,7 +178,7 @@ function parseProgramForm(formData: FormData, db: Database, existing: Program | 
 /* CRUD                                                                */
 /* ------------------------------------------------------------------ */
 
-export async function createProgramAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+export async function createProgramAction(_prev: unknown, formData: FormData): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
   if (!canCreateProgram(user)) return { ok: false, error: "You are not permitted to manage programs." };
@@ -139,10 +196,16 @@ export async function createProgramAction(_prev: ActionResult | null, formData: 
   redirect(`/admin/programs/${program.id}`);
 }
 
-export async function updateProgramAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+/**
+ * Save a program's details. Lifting the course order enrolls the existing
+ * members in every course; paid courses only for members who bought them,
+ * unless the form's "Grant access without payment" box (`grantPaidAccess`)
+ * is ticked. The report lists who still needs to purchase a course.
+ */
+export async function updateProgramAction(_prev: unknown, formData: FormData): Promise<ActionResult<ProgramEnrollmentReport | undefined>> {
   const guard = await guardProgram(fd(formData, "programId"));
   if (!guard.ok) return guard;
-  const { program, db } = guard;
+  const { program, db, user } = guard;
   const { fieldErrors, values } = parseProgramForm(formData, db, program);
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
   const orderChanged = program.enforceCourseOrder !== values.enforceCourseOrder;
@@ -150,14 +213,18 @@ export async function updateProgramAction(_prev: ActionResult | null, formData: 
     const row = d.programs.find((p) => p.id === program.id);
     if (row) Object.assign(row, values, { updatedAt: new Date().toISOString() });
   });
-  // Lifting the order restriction gives existing members access to every course.
+  // Lifting the order restriction gives existing members access to every course (paid ones as described above).
+  let report: ProgramEnrollmentReport | undefined;
   if (orderChanged && !values.enforceCourseOrder) {
-    const members = db.programMembers.filter((m) => m.programId === program.id);
-    for (const m of members) await enrollMemberInCourses({ ...program, ...values }, m.userId);
+    const memberIds = db.programMembers.filter((m) => m.programId === program.id).map((m) => m.userId);
+    report = await enrollMembersAsManager({ ...program, ...values }, user, memberIds, program.courseIds, { grantPaidAccess: fdBool(formData, "grantPaidAccess") });
   }
   if (program.slug !== values.slug) revalidatePath(`/programs/${program.slug}`);
   revalidateProgram({ id: program.id, slug: values.slug });
-  return { ok: true, data: undefined, message: "Program updated successfully" };
+  const message = report
+    ? reportMessage("Program updated successfully", report, (n) => `${n === 1 ? "One course enrollment waits" : `${n} course enrollments wait`} for members to complete prerequisites.`)
+    : "Program updated successfully";
+  return { ok: true, data: report, message };
 }
 
 export async function deleteProgramAction(programId: string): Promise<ActionResult> {
@@ -177,11 +244,18 @@ export async function deleteProgramAction(programId: string): Promise<ActionResu
 /* Courses                                                             */
 /* ------------------------------------------------------------------ */
 
-export async function addProgramCourseAction(programId: string, courseId: string): Promise<ActionResult> {
+/**
+ * Add a course to a program. Without an enforced order, existing members are
+ * enrolled in it right away: for a paid course only those who bought it,
+ * unless `options.grantPaidAccess` (the "Grant access without payment" box)
+ * is set and the manager manages the course. The report says how many members
+ * need to purchase it.
+ */
+export async function addProgramCourseAction(programId: string, courseId: string, options?: ProgramEnrollOptions): Promise<ActionResult<ProgramEnrollmentReport>> {
   const guard = await guardProgram(programId);
   if (!guard.ok) return guard;
   const { program, db, user } = guard;
-  if (!courseId) return { ok: false, error: "Please select a course" };
+  if (!courseId || typeof courseId !== "string") return { ok: false, error: "Please select a course" };
   const course = db.courses.find((c) => c.id === courseId);
   if (!course) return { ok: false, error: "Please select a course" };
   if (program.courseIds.includes(course.id)) return { ok: false, error: "Course already added to program" };
@@ -195,14 +269,14 @@ export async function addProgramCourseAction(programId: string, courseId: string
     row.updatedAt = new Date().toISOString();
     refreshMemberProgress(d, program.id);
   });
+  let report: ProgramEnrollmentReport = { enrolled: 0, granted: 0, needsPurchase: [], waitingOnPrerequisites: 0 };
   if (!program.enforceCourseOrder) {
-    for (const m of db.programMembers.filter((x) => x.programId === program.id)) {
-      await enrollUserInCourse(m.userId, course.id, { notifyInstructors: false });
-    }
-    await mutate((d) => refreshMemberProgress(d, program.id));
+    const memberIds = db.programMembers.filter((m) => m.programId === program.id).map((m) => m.userId);
+    report = await enrollMembersAsManager(program, user, memberIds, [course.id], parseEnrollOptions(options));
   }
   revalidateProgram(program);
-  return { ok: true, data: undefined, message: "Course added to program successfully" };
+  const message = reportMessage("Course added to program successfully", report, (n) => `${n === 1 ? "One member" : `${n} members`} can start it once they complete its prerequisites.`);
+  return { ok: true, data: report, message };
 }
 
 export async function removeProgramCourseAction(programId: string, courseId: string): Promise<ActionResult> {
@@ -244,18 +318,24 @@ export async function moveProgramCourseAction(programId: string, courseId: strin
 /* Members                                                             */
 /* ------------------------------------------------------------------ */
 
-export async function addProgramMemberAction(programId: string, userId: string): Promise<ActionResult> {
+/**
+ * Add a member to a program and enroll them in its starting course(s): paid
+ * courses only when they bought them, unless `options.grantPaidAccess` (the
+ * "Grant access without payment" box) is set and the manager manages the
+ * course. The report says which courses they still need to purchase.
+ */
+export async function addProgramMemberAction(programId: string, userId: string, options?: ProgramEnrollOptions): Promise<ActionResult<ProgramEnrollmentReport>> {
   const guard = await guardProgram(programId);
   if (!guard.ok) return guard;
   const { program, db, user: actor } = guard;
-  if (!userId) return { ok: false, error: "Please select a member" };
+  if (!userId || typeof userId !== "string") return { ok: false, error: "Please select a member" };
   const user = db.users.find((u) => u.id === userId && u.enabled);
   if (!user) return { ok: false, error: "Please select a member" };
   if (db.programMembers.some((m) => m.programId === program.id && m.userId === user.id)) return { ok: false, error: "Member already added to program" };
   await mutate((d) => {
     d.programMembers.push({ id: uid("pm"), programId: program.id, userId: user.id, progress: 0, joinedAt: new Date().toISOString() });
   });
-  await enrollMemberInCourses(program, user.id);
+  const report = await enrollMembersAsManager(program, actor, [user.id], startingCourseIds(program), parseEnrollOptions(options));
   await notify(user.id, {
     type: "enrollment",
     subject: `You were added to the program ${program.title}`,
@@ -264,7 +344,12 @@ export async function addProgramMemberAction(programId: string, userId: string):
     fromUserId: actor.id,
   });
   revalidateProgram(program);
-  return { ok: true, data: undefined, message: "Member added to program successfully" };
+  const message = reportMessage(
+    "Member added to program successfully",
+    report,
+    (n) => `${n === 1 ? "One course" : `${n} courses`} can be started once the member completes the prerequisites.`,
+  );
+  return { ok: true, data: report, message };
 }
 
 export async function removeProgramMemberAction(programId: string, userId: string): Promise<ActionResult> {
@@ -306,7 +391,7 @@ export async function enrollInProgramAction(_prev: ActionResult | null, formData
         d.programMembers.push({ id: uid("pm"), programId: program.id, userId: user.id, progress: 0, joinedAt: new Date().toISOString() });
       }
     });
-    await enrollMemberInCourses(program, user.id, { self: user });
+    await enrollSelfInStartingCourses(program, user);
   }
   revalidateProgram(program);
   await setFlash(existing ? "You are already enrolled in this program" : "Successfully enrolled in program", existing ? "info" : "success");

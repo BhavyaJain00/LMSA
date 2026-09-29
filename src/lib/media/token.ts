@@ -1,13 +1,14 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAppSecret } from "@/lib/server-env";
-import { GUEST_MEDIA_SUBJECT, splitMediaToken } from "./paths";
+import { GUEST_MEDIA_SUBJECT, mediaPathKey, splitMediaToken } from "./paths";
 
 /**
  * Signed media tokens: `<expiresUnix>.<sig>` where
- * sig = base64url(HMAC-SHA256(APP_SECRET, `${path}|${subject}|${expires}`)).
+ * sig = base64url(HMAC-SHA256(APP_SECRET, `${key}|${subject}|${expires}`)).
  *
- * `path` is the canonical decoded pathname (see `canonicalMediaPath`) and
+ * `key` is the case-folded canonical path (`mediaPathKey`), so every spelling
+ * of one file on a case-insensitive filesystem shares one signature, and
  * `subject` the viewer's user id, or "guest" for signed-out visitors. The
  * subject is never part of the URL: the file route takes it from the
  * session, so a copied link does not play for another account.
@@ -22,6 +23,43 @@ export type MediaTokenFailure = "missing" | "malformed" | "expired" | "invalid";
 
 export type MediaTokenResult = { ok: true; expires: number } | { ok: false; reason: MediaTokenFailure };
 
+/**
+ * The signing key (APP_SECRET) is missing or invalid, e.g. a production
+ * deployment without APP_SECRET. Protected videos cannot be signed or
+ * verified; callers show "video unavailable" (HTTP 503) instead of crashing.
+ */
+export class MediaSigningUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("Protected videos are unavailable: APP_SECRET is missing or invalid.", { cause });
+    this.name = "MediaSigningUnavailableError";
+  }
+}
+
+let reportedUnavailable = false;
+
+function signingSecret(): string {
+  try {
+    return getAppSecret();
+  } catch (err) {
+    if (!reportedUnavailable) {
+      reportedUnavailable = true;
+      // The message names the variable only; the secret itself is never logged.
+      console.error("[media] Cannot sign protected videos:", err instanceof Error ? err.message : "APP_SECRET is not usable.");
+    }
+    throw new MediaSigningUnavailableError(err);
+  }
+}
+
+/** Whether protected videos can be signed and verified (APP_SECRET is usable). */
+export function mediaSigningAvailable(): boolean {
+  try {
+    signingSecret();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -32,16 +70,16 @@ export function mediaSubject(user: { id: string } | null | undefined): string {
 }
 
 function hmacDigest(secret: string, path: string, subject: string, expires: number): Buffer {
-  return createHmac("sha256", secret).update(`${path}|${subject}|${expires}`).digest();
+  return createHmac("sha256", secret).update(`${mediaPathKey(path)}|${subject}|${expires}`).digest();
 }
 
 /** base64url(HMAC-SHA256) for a path/subject/expiry triple. */
-export function computeMediaSignature(path: string, subject: string, expires: number, secret: string = getAppSecret()): string {
-  return hmacDigest(secret, path, subject, expires).toString("base64url");
+export function computeMediaSignature(path: string, subject: string, expires: number, secret?: string): string {
+  return hmacDigest(secret ?? signingSecret(), path, subject, expires).toString("base64url");
 }
 
-/** Create a token that expires at `expires` (unix seconds). */
-export function createMediaToken(path: string, subject: string, expires: number, secret: string = getAppSecret()): string {
+/** Create a token that expires at `expires` (unix seconds). Throws `MediaSigningUnavailableError` without a usable APP_SECRET. */
+export function createMediaToken(path: string, subject: string, expires: number, secret?: string): string {
   if (!Number.isSafeInteger(expires) || expires <= 0) throw new Error("Invalid media token expiry.");
   return `${expires}.${computeMediaSignature(path, subject, expires, secret)}`;
 }
@@ -56,21 +94,17 @@ export function issueMediaToken(path: string, subject: string, ttlSeconds: numbe
 /**
  * Verify a token for a path and subject. Fails closed: anything malformed,
  * expired, too far in the future or with a wrong signature is rejected. The
- * signature comparison is constant-time.
+ * signature comparison is constant-time. A missing or malformed token is
+ * reported without touching the secret; verifying a well-formed token without
+ * a usable APP_SECRET throws `MediaSigningUnavailableError`.
  */
-export function verifyMediaToken(
-  path: string,
-  subject: string,
-  token: string | null | undefined,
-  now = nowSeconds(),
-  secret: string = getAppSecret(),
-): MediaTokenResult {
+export function verifyMediaToken(path: string, subject: string, token: string | null | undefined, now = nowSeconds(), secret?: string): MediaTokenResult {
   if (!token) return { ok: false, reason: "missing" };
   const parts = splitMediaToken(token);
   if (!parts) return { ok: false, reason: "malformed" };
   const { expires, signature } = parts;
   const given = Buffer.from(signature, "base64url");
-  const expected = hmacDigest(secret, path, subject, expires);
+  const expected = hmacDigest(secret ?? signingSecret(), path, subject, expires);
   const sameLength = given.length === expected.length;
   // Always run the comparison so timing does not depend on the length check.
   const match = timingSafeEqual(sameLength ? given : expected, expected) && sameLength;

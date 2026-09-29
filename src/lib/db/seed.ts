@@ -1711,6 +1711,7 @@ export async function buildSeedDatabase(): Promise<Database> {
     authTokens: [],
     loginEvents: [],
     points: [],
+    loginThrottles: [],
     settings: defaultSettings(),
   };
 }

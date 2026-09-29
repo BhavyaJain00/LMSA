@@ -9,6 +9,7 @@ import {
   getProgramCourseOptions,
   getProgramMemberCandidates,
   getProgramMembers,
+  getProgramPaidCourses,
 } from "@/lib/data/programs";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -32,12 +33,18 @@ export default async function AdminProgramPage(props: PageProps<"/admin/programs
   if (!program) notFound();
   if (!canManageProgram(user, program)) redirect("/forbidden");
 
-  const [courses, options, members, candidates] = await Promise.all([
+  const [courses, options, members, candidates, paidCourses] = await Promise.all([
     getAdminProgramCourses(program),
     getProgramCourseOptions(program, user),
     getProgramMembers(program),
     getProgramMemberCandidates(program),
+    getProgramPaidCourses(program, user),
   ]);
+  // Paid courses a manager's change could enroll members in (see "Grant access without payment").
+  const paidInProgram = paidCourses.filter((c) => program.courseIds.includes(c.id));
+  const startingIds = program.enforceCourseOrder ? program.courseIds.slice(0, 1) : program.courseIds;
+  const startingPaidCourses = paidInProgram.filter((c) => startingIds.includes(c.id));
+  const paidOptions = paidCourses.filter((c) => options.some((o) => o.value === c.id));
 
   return (
     <div className="animate-fade-in pb-10">
@@ -64,10 +71,23 @@ export default async function AdminProgramPage(props: PageProps<"/admin/programs
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className="space-y-6">
-          <ProgramDetailsForm program={program} />
-          <ProgramCoursesManager programId={program.id} courses={courses} options={options} enforceOrder={program.enforceCourseOrder} />
+          <ProgramDetailsForm program={program} paidCourses={paidInProgram} memberCount={members.length} />
+          <ProgramCoursesManager
+            programId={program.id}
+            courses={courses}
+            options={options}
+            enforceOrder={program.enforceCourseOrder}
+            paidCourses={paidOptions}
+            memberCount={members.length}
+          />
         </div>
-        <ProgramMembersManager programId={program.id} programTitle={program.title} members={members} candidates={candidates} />
+        <ProgramMembersManager
+          programId={program.id}
+          programTitle={program.title}
+          members={members}
+          candidates={candidates}
+          startingPaidCourses={startingPaidCourses}
+        />
       </div>
     </div>
   );

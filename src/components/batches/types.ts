@@ -124,6 +124,16 @@ export interface TimetableEntry {
   href: string | null;
   completed?: boolean;
   source: "timetable" | "live_class";
+  /**
+   * Rows backed by a live class of this batch: the class's absolute start and
+   * end (epoch ms), computed on the server like its .ics download. The
+   * timetable shows these rows at this range in `classTimeZone` (the class's
+   * own zone), whatever date and times a timetable row itself carries; every
+   * other row is in the batch timezone.
+   */
+  classRange?: { start: number; end: number };
+  /** IANA zone the class is scheduled in (the batch's when the class has none); set with `classRange`. */
+  classTimeZone?: string;
 }
 
 export interface FeedbackView extends BatchFeedback {

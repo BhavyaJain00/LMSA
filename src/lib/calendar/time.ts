@@ -153,6 +153,27 @@ export function zonedTimeToUtc(dateKey: string, hhmm: string | undefined, tz: st
   return local - offBefore * MINUTE;
 }
 
+/**
+ * When a live class happens: `time` on `date` in the class's own timezone
+ * (`fallbackTimeZone`, normally the batch's, when the class has none),
+ * lasting `durationMinutes` (an hour when unset). Returns the absolute start
+ * and end (epoch ms) and the zone used, or null for an invalid date or time.
+ *
+ * The .ics export and the timetable's "add to calendar" links both use this,
+ * so every option of a menu puts a class at the same instant.
+ */
+export function liveClassRange(
+  c: { date: string; time: string; timezone?: string | null; durationMinutes: number },
+  fallbackTimeZone?: string | null,
+): { start: number; end: number; timeZone: string } | null {
+  if (!isDateKey(c.date) || !isClock(c.time)) return null;
+  const timeZone = safeTimeZone(c.timezone || fallbackTimeZone);
+  const start = zonedTimeToUtc(c.date, c.time, timeZone);
+  if (Number.isNaN(start)) return null;
+  const minutes = c.durationMinutes > 0 ? c.durationMinutes : 60;
+  return { start, end: start + minutes * MINUTE, timeZone };
+}
+
 /** Add days to a YYYY-MM-DD key. */
 export function addDaysToKey(dateKey: string, days: number): string {
   const [y, m, d] = dateKey.split("-").map(Number) as [number, number, number];

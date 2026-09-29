@@ -4,6 +4,8 @@ import { isCreator, isEvaluator, requireUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { ensureBatchReminders } from "@/lib/data/batches";
 import { getStudentDashboard } from "@/lib/data/dashboard";
+import { getOrderHistory } from "@/lib/data/commerce";
+import { ensureDripNotifications } from "@/lib/services/drip";
 import { profileCompleteness } from "@/lib/data/profile";
 import { ProfileCompletenessCard } from "@/components/profile/profile-sections";
 import { ButtonLink } from "@/components/ui/button";
@@ -16,9 +18,9 @@ import { EvaluationCard } from "@/components/dashboard/evaluation-card";
 import { LiveClassCard } from "@/components/dashboard/live-class-card";
 import { DashboardSection } from "@/components/dashboard/section";
 import { StreakWidget } from "@/components/dashboard/streak-widget";
-import { CertificateList, MiniStat, PendingWorkList, RecentBadges } from "@/components/dashboard/widgets";
+import { CertificateList, MiniStat, PendingWorkList, RecentBadges, YourRankWidget } from "@/components/dashboard/widgets";
 import { CommandPaletteButton } from "@/components/command-palette/open-button";
-import { formatDate, formatDuration, pluralize } from "@/lib/utils";
+import { formatDate, formatDuration, formatPrice, pluralize } from "@/lib/utils";
 
 export const metadata = { title: "Dashboard" };
 
@@ -61,7 +63,11 @@ export default async function DashboardPage() {
   // No scheduler: send any due "batch starts tomorrow" / "live class today" reminders before reading the dashboard.
   // Best effort: a failed reminder write must never break the dashboard.
   if (settings.features.batches) await ensureBatchReminders(user.id).catch(() => 0);
-  const data = await getStudentDashboard(user, settings);
+  // Same for "new lesson unlocked" drip notices (never throws).
+  await ensureDripNotifications(user.id);
+  const [data, orders] = await Promise.all([getStudentDashboard(user, settings), getOrderHistory(user.id)]);
+  // Latest completed purchases (paid or refunded) with their invoices.
+  const recentOrders = orders.filter((o) => o.status === "paid" || o.status === "refunded").slice(0, 3);
   const profileHref = `/user/${user.username}`;
   // Enrollments in unpublished or deleted courses are not shown, so they don't count here.
   const hasEnrollments = data.continueLearning.length > 0 || data.completedCourses.length > 0;
@@ -258,6 +264,8 @@ export default async function DashboardPage() {
             <MiniStat icon={<Icon.Timer />} label="Time learning" value={data.stats.minutesLearned ? formatDuration(data.stats.minutesLearned * 60) : "0m"} />
           </div>
 
+          <YourRankWidget user={user} />
+
           {f.badges && <RecentBadges badges={data.badges.recent} total={data.badges.total} profileHref={profileHref} />}
           {f.certifications && <CertificateList certificates={data.certificates} profileHref={profileHref} />}
 
@@ -272,6 +280,50 @@ export default async function DashboardPage() {
                       {c.title}
                     </Link>
                     <span className="shrink-0 text-xs text-ink-faint">{formatDate(c.completedAt, { year: undefined })}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {recentOrders.length > 0 && (
+            <Card className="p-4">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-ink">Recent orders</h2>
+                <Link href="/billing/history" className="text-xs font-medium text-ink-muted hover:text-accent">
+                  Orders &amp; invoices
+                </Link>
+              </div>
+              <ul className="space-y-3">
+                {recentOrders.map((o) => (
+                  <li key={o.id} className="flex items-start gap-2.5 text-sm">
+                    <Icon.Receipt className="mt-0.5 size-4 shrink-0 text-ink-faint" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-ink">{o.itemTitle}</p>
+                      <p className="flex flex-wrap items-center gap-x-2 text-xs text-ink-muted">
+                        <span className="tabular-nums">{formatPrice(o.amount, o.currency)}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{formatDate(o.paidAt ?? o.createdAt, { year: undefined })}</span>
+                        {o.status === "refunded" && <span className="text-warning">Refunded</span>}
+                      </p>
+                    </div>
+                    {o.invoiceNumber ? (
+                      <Link
+                        href={`/billing/invoice/${encodeURIComponent(o.orderId)}`}
+                        className="shrink-0 text-xs font-medium text-accent hover:underline"
+                        aria-label={`Invoice for ${o.itemTitle}`}
+                      >
+                        Invoice
+                      </Link>
+                    ) : (
+                      <Link
+                        href={`/billing/success/${encodeURIComponent(o.orderId)}`}
+                        className="shrink-0 text-xs font-medium text-accent hover:underline"
+                        aria-label={`Order details for ${o.itemTitle}`}
+                      >
+                        Details
+                      </Link>
+                    )}
                   </li>
                 ))}
               </ul>

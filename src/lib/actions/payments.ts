@@ -17,9 +17,18 @@ import {
   parseItemType,
   sendPaymentReminder,
   sendPendingPaymentReminders,
-  validateCoupon,
+  validateCouponForBuyer,
 } from "@/lib/data/commerce";
-import { acquireRefundLock, applyRefund, fulfillPayment, isGatewayPaymentReference, markPaymentFailed, releaseRefundLock, type FulfillmentResult } from "@/lib/payments/fulfillment";
+import {
+  acquireRefundLock,
+  applyRefund,
+  fulfillPayment,
+  isGatewayPaymentReference,
+  markPaymentFailed,
+  recordGatewayRefund,
+  releaseRefundLock,
+  type FulfillmentResult,
+} from "@/lib/payments/fulfillment";
 import {
   GATEWAY_NAMES,
   checkoutUrls,
@@ -29,11 +38,16 @@ import {
   gatewayErrorMessage,
   isConfigured,
   isRealGateway,
-  refund,
+  isValidRazorpayCheckoutSignature,
+  readGatewayRefunds,
+  refundsViaGateway,
+  reportUnmatchedPayment,
   resumeCheckout,
+  sendGatewayRefund,
   syncPaymentStatus,
   testGatewayConnection,
 } from "@/lib/payments/gateway";
+import { GatewayError } from "@/lib/payments/http";
 import { parseDecimalAmount } from "@/lib/payments/amounts";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
@@ -158,7 +172,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   const couponCode = fd(formData, "coupon");
   let coupon = null;
   if (couponCode) {
-    const check = await validateCoupon(couponCode, item);
+    // Rate limited per buyer and IP: codes cannot be guessed by submitting checkouts either.
+    const check = await validateCouponForBuyer(couponCode, item, { userId: user.id });
     if (!check.ok) return { ok: false, error: check.error, fieldErrors: { coupon: check.error } };
     coupon = check.coupon;
   }
@@ -181,7 +196,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
   }
 
-  const { payment, existing } = await insertPendingOrder({
+  // The coupon's usage limit is enforced again inside this serialized insert (the use is reserved there).
+  const inserted = await insertPendingOrder({
     id: uid("pay"),
     userId: user.id,
     itemType: type,
@@ -210,6 +226,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     status: "pending",
     createdAt: new Date().toISOString(),
   });
+  if (!inserted.ok) return { ok: false, error: inserted.error, fieldErrors: { coupon: inserted.error } };
+  const { payment, existing } = inserted;
   if (existing) {
     await setFlash("You already have an open order for this item.", "info");
     redirect(orderPath(payment.orderId));
@@ -295,10 +313,21 @@ export async function confirmRazorpayPaymentAction(input: {
   if (!orderId || orderId.length > 64 || !/^order_[A-Za-z0-9]+$/.test(razorpayOrderId) || !/^pay_[A-Za-z0-9]+$/.test(razorpayPaymentId) || !/^[0-9a-f]{64}$/i.test(signature)) {
     return { ok: false, error: "The payment response was incomplete. If you were charged, contact support with your order ID." };
   }
-  const payment = await getPaymentByOrderId(orderId);
-  if (!payment) return { ok: false, error: "Order not found." };
+  // Only the buyer can confirm their order; missing and foreign orders get the same answer.
+  const found = await ownPayment(orderId);
+  if ("error" in found) {
+    const user = await getCurrentUser();
+    const db = await getDb();
+    // A genuine Razorpay payment for a checkout whose order was deleted: money arrived without an order.
+    if (user && !db.payments.some((p) => p.gatewayOrderId === razorpayOrderId) && isValidRazorpayCheckoutSignature({ razorpayOrderId, razorpayPaymentId, signature })) {
+      await reportUnmatchedPayment({ gateway: "razorpay", paymentRef: razorpayPaymentId, checkoutRef: razorpayOrderId });
+      return { ok: false, error: "We received your payment but couldn't match it to an open order. Our team has been notified and will contact you." };
+    }
+    return { ok: false, error: found.error };
+  }
+  const { payment } = found;
 
-  const state = await confirmRazorpayCheckout({ ...payment }, { razorpayOrderId, razorpayPaymentId, signature });
+  const state = await confirmRazorpayCheckout(payment, { razorpayOrderId, razorpayPaymentId, signature });
   revalidateOrder(payment.orderId);
   if (state.state === "paid") {
     revalidatePath("/", "layout");
@@ -324,6 +353,10 @@ export async function cancelOrderAction(_prev: ActionResult | null, formData: Fo
       revalidateOrder(payment.orderId);
       revalidatePath("/", "layout");
       return { ok: false, error: "Your payment has already gone through, so this order can't be cancelled." };
+    }
+    if (!closed.reached) {
+      // Cancelling without closing the checkout would leave it payable.
+      return { ok: false, error: `We couldn't reach ${GATEWAY_NAMES[payment.gateway]} to close the payment page. Please try again in a moment.` };
     }
   }
   await markPaymentFailed(payment.id);
@@ -412,20 +445,93 @@ export async function refundPaymentAction(paymentId: string, opts: { amount?: st
     value = parsed;
   }
   const recordOnly = opts?.recordOnly === true;
+  const requested = value ?? remaining;
 
   if (!acquireRefundLock(payment.id)) return { ok: false, error: "A refund for this order is already in progress." };
   try {
-    const result = recordOnly ? { amount: value ?? remaining, viaGateway: false, refundId: undefined } : await refund(payment, value);
-    const res = await applyRefund(payment.id, { refundId: result.refundId, amount: alreadyRefunded + result.amount });
+    // Re-read under the lock: a webhook may have recorded a refund since the dialog opened.
+    const current = (await findPayment(payment.id)) ?? payment;
+    if (current.status !== "paid") return { ok: false, error: "Only paid orders can be refunded." };
+
+    if (!refundsViaGateway(current)) {
+      // Manual and free orders: the admin returns the money; only the record changes.
+      const res = await applyRefund(current.id, { amount: requested });
+      if (!res.ok) return { ok: false, error: res.error };
+      revalidateCommerce(current.orderId);
+      const label = formatPrice(requested, current.currency, "nothing");
+      return { ok: true, data: { viaGateway: false }, message: `Order ${current.orderId} marked as refunded${requested > 0 ? ` (${label})` : ""}.` };
+    }
+
+    const name = GATEWAY_NAMES[current.gateway as keyof typeof GATEWAY_NAMES] ?? current.gateway;
+
+    if (recordOnly) {
+      // Refunded in the gateway dashboard: record what the gateway reports (so a refund its webhook
+      // already recorded is not counted twice), or the typed amount when the gateway can't be asked.
+      const ledger = await readGatewayRefunds(current).catch(() => null);
+      if (!ledger) {
+        const res = await applyRefund(current.id, { amount: requested });
+        if (!res.ok) return { ok: false, error: res.error };
+        revalidateCommerce(current.orderId);
+        return { ok: true, data: { viaGateway: false }, message: `Order ${current.orderId} marked as refunded (${formatPrice(requested, current.currency, "nothing")}).` };
+      }
+      if (ledger.total <= 0) {
+        return { ok: false, error: `${name} shows no refund for this payment yet. Refund it in the ${name} dashboard first, or untick “Already refunded” to refund it from here.` };
+      }
+      const newest = ledger.unrecorded[0];
+      const res = await applyRefund(current.id, { refundId: newest?.id, amount: newest?.amount, total: ledger.total });
+      if (!res.ok) return { ok: false, error: res.error };
+      revalidateCommerce(current.orderId);
+      return {
+        ok: true,
+        data: { viaGateway: false },
+        message: `Order ${current.orderId} marked as refunded (${formatPrice(res.data.payment.refundedAmount ?? ledger.total, current.currency)} refunded on ${name}).`,
+      };
+    }
+
+    // What the gateway already refunded, read before anything is sent: a retry after a timed-out
+    // request records the refund that went through instead of refunding twice.
+    const ledger = await readGatewayRefunds(current);
+    const recorded = current.refundedAmount ?? 0;
+    if (ledger.unrecorded.length) {
+      // An earlier refund from this app went through but was never recorded (the request timed out).
+      const earlier = ledger.unrecorded[0]!;
+      const res = await applyRefund(current.id, { refundId: earlier.id, amount: earlier.amount, total: ledger.total });
+      if (!res.ok) return { ok: false, error: res.error };
+      revalidateCommerce(current.orderId);
+      return {
+        ok: true,
+        data: { viaGateway: true },
+        message: `An earlier refund of ${formatPrice(earlier.amount, current.currency)} had already gone through on ${name} (${earlier.id}). It is recorded now; nothing else was sent.`,
+      };
+    }
+    if (ledger.total > recorded) {
+      // Refunded in the gateway dashboard, but the webhook never reached us: record it and let the admin decide.
+      const res = await recordGatewayRefund(current.id, { total: ledger.total });
+      revalidateCommerce(current.orderId);
+      if (res.kind === "refunded") {
+        return { ok: true, data: { viaGateway: false }, message: `${name} shows this payment as fully refunded already. Order ${current.orderId} is now marked as refunded.` };
+      }
+      return {
+        ok: false,
+        error: `${name} already shows ${formatPrice(ledger.total, current.currency)} refunded on this payment, which wasn't recorded here. It is recorded now; check the order and refund again only if more should go back.`,
+      };
+    }
+
+    const sent = await sendGatewayRefund(current, requested, ledger);
+    const res = await applyRefund(current.id, { refundId: sent.refundId, amount: sent.amount, total: ledger.total + sent.amount });
     if (!res.ok) return { ok: false, error: res.error };
-    revalidateCommerce(payment.orderId);
-    const amountLabel = formatPrice(result.amount, payment.currency, "nothing");
-    const message = result.viaGateway
-      ? `Refunded ${amountLabel} through ${GATEWAY_NAMES[payment.gateway as keyof typeof GATEWAY_NAMES] ?? payment.gateway}. It usually reaches the learner within 5–10 business days.`
-      : `Order ${payment.orderId} marked as refunded${result.amount > 0 ? ` (${amountLabel})` : ""}.`;
-    return { ok: true, data: { viaGateway: result.viaGateway }, message };
+    revalidateCommerce(current.orderId);
+    return {
+      ok: true,
+      data: { viaGateway: true },
+      message: `Refunded ${formatPrice(sent.amount, current.currency, "nothing")} through ${name}. It usually reaches the learner within 5–10 business days.`,
+    };
   } catch (error) {
-    return { ok: false, error: gatewayErrorMessage(error) };
+    const message = gatewayErrorMessage(error);
+    if (error instanceof GatewayError && error.transient) {
+      return { ok: false, error: `${message} Retrying is safe: the refunds already on the payment are checked first, so one that went through is recorded instead of being sent again.` };
+    }
+    return { ok: false, error: message };
   } finally {
     releaseRefundLock(payment.id);
   }

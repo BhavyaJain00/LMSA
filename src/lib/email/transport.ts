@@ -55,6 +55,15 @@ export function resolveReplyTo(settings: Settings): MailAddress | undefined {
   return parseAddress(raw) ?? undefined;
 }
 
+/**
+ * Whether plain-text SMTP is refused for non-loopback hosts. On by default;
+ * `SMTP_REQUIRE_TLS=false` is an explicit opt-out for relays without TLS.
+ */
+export function smtpTlsRequired(): boolean {
+  const raw = (process.env.SMTP_REQUIRE_TLS ?? "").trim().toLowerCase();
+  return !["false", "0", "no", "off"].includes(raw);
+}
+
 /** SMTP client options from the environment. */
 export function smtpClientOptions(): SmtpClientOptions {
   return {
@@ -63,6 +72,8 @@ export function smtpClientOptions(): SmtpClientOptions {
     secure: mailEnv.secure,
     auth: mailEnv.user ? { user: mailEnv.user, pass: mailEnv.pass } : undefined,
     clientName: ehloName(appHostname()),
+    // Default (undefined): TLS is required unless the host is a loopback address.
+    requireTls: smtpTlsRequired() ? undefined : false,
   };
 }
 
@@ -86,6 +97,8 @@ export interface TransportStatus {
   host: string;
   port: number;
   security: "Implicit TLS" | "STARTTLS" | "None";
+  /** Unencrypted SMTP is refused (always true unless SMTP_REQUIRE_TLS=false or the host is a loopback address). */
+  tlsRequired: boolean;
   user: string;
   passSet: boolean;
   sender: SenderIdentity | null;
@@ -107,8 +120,15 @@ export function getTransportStatus(settings: Settings): TransportStatus {
     if (mailEnv.secure && mailEnv.port === 587) warnings.push("SMTP_SECURE=true with port 587: most servers expect STARTTLS on 587 and implicit TLS on 465.");
     if (!mailEnv.secure && mailEnv.port === 465) warnings.push("Port 465 usually needs SMTP_SECURE=true (implicit TLS).");
     if (!mailEnv.user && mailEnv.host && !isLoopbackHost(mailEnv.host)) warnings.push("No SMTP_USER: most providers require authentication.");
+    if (!mailEnv.secure && !smtpTlsRequired() && mailEnv.host && !isLoopbackHost(mailEnv.host)) {
+      warnings.push("SMTP_REQUIRE_TLS=false: if the server does not offer STARTTLS (or an attacker strips it), mail — including password-reset links — is sent unencrypted.");
+    }
   } else {
-    warnings.push("MAIL_TRANSPORT is \"log\": emails are stored in the outbox and printed to the server log, but not delivered.");
+    warnings.push(
+      process.env.NODE_ENV === "production"
+        ? "MAIL_TRANSPORT is \"log\": emails are stored in the outbox but not delivered, so members can't receive password-reset or verification links."
+        : "MAIL_TRANSPORT is \"log\": emails are stored in the outbox but not delivered. In development, password-reset and verification links are printed to the server console.",
+    );
   }
   if (mailEnv.from && !parseAddress(mailEnv.from)) problems.push("MAIL_FROM is not a valid address (use \"Name <no-reply@example.com>\" or \"no-reply@example.com\").");
   if (settings.email.replyTo && !resolveReplyTo(settings)) warnings.push("The reply-to address in settings is not valid and will be ignored.");
@@ -120,6 +140,7 @@ export function getTransportStatus(settings: Settings): TransportStatus {
     host: maskHost(mailEnv.host),
     port: mailEnv.port,
     security: mailEnv.transport === "smtp" ? security : "None",
+    tlsRequired: mailEnv.transport === "smtp" && (mailEnv.secure || (smtpTlsRequired() && !isLoopbackHost(mailEnv.host))),
     user: mailEnv.user ? (isSafeAddress(mailEnv.user) ? maskEmail(mailEnv.user) : maskSecret(mailEnv.user, 2)) : "",
     passSet: !!mailEnv.pass,
     sender,
@@ -153,12 +174,28 @@ export interface DeliveryAgent {
   close(): Promise<void>;
 }
 
+/** One-time links (password reset, email verification) in a plain-text body. */
+export function oneTimeLinks(text: string): string[] {
+  const links = text
+    .split(/\s+/)
+    .map((word) => word.replace(/^[(<\[]+|[)>\].,;]+$/g, ""))
+    .filter((word) => /^https?:\/\//i.test(word) && /\/(?:reset-password|verify-email)\b/i.test(word) && /[?&]token=[^&[\]]+/.test(word));
+  return Array.from(new Set(links));
+}
+
 class LogAgent implements DeliveryAgent {
   readonly kind = "log" as const;
   async send(message: EmailMessage, raw: string, envelope: SmtpEnvelope): Promise<DeliveryReceipt> {
     const cc = envelope.to.length > 1 ? ` (+${envelope.to.length - 1} cc)` : "";
     // One line, no body: bodies can contain one-time links.
     console.info(`[email:log] ${message.category} → ${message.to}${cc}: ${message.subject} [${message.id}, ${Buffer.byteLength(raw, "utf8")} bytes]`);
+    if (process.env.NODE_ENV !== "production") {
+      // Development/demo installs have no mailbox: print the one-time link so
+      // "Forgot password" and email verification can be completed. Never in production.
+      for (const link of oneTimeLinks(message.text)) {
+        console.info(`[email:log] DEV ONLY — not delivered, not printed in production. One-time link for ${message.to}: ${link}`);
+      }
+    }
     return { response: "Logged (MAIL_TRANSPORT=log)", rejected: [] };
   }
   async close(): Promise<void> {}
@@ -169,7 +206,12 @@ class SmtpAgent implements DeliveryAgent {
   readonly kind = "smtp" as const;
   private conn: SmtpConnection | null = null;
 
-  constructor(private readonly options: SmtpClientOptions) {}
+  private readonly options: SmtpClientOptions;
+
+  // Plain field + assignment (no parameter property): tests run this file with Node type stripping.
+  constructor(options: SmtpClientOptions) {
+    this.options = options;
+  }
 
   private async connection(): Promise<SmtpConnection> {
     if (this.conn?.isOpen) return this.conn;

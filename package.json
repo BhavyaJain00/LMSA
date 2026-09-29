@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test \"tests/**/*.test.ts\"",
+    "test:watch": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test --watch \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "next": "16.3.6",

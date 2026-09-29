@@ -23,7 +23,7 @@ export async function OutlineTab({ course }: { course: Course }) {
           </a>
         )}
       </div>
-      <OutlineEditor courseId={course.id} chapters={chapters} />
+      <OutlineEditor courseId={course.id} chapters={chapters} enforceOrder={course.enforceLessonCompletion} />
     </div>
   );
 }

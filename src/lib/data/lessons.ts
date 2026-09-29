@@ -22,6 +22,7 @@ import { ensureDripNotifications } from "@/lib/services/drip";
 import {
   legacyLockReason,
   nextUnlockTime,
+  pickContinueLesson,
   unmetPrerequisites,
   type LessonLock,
   type LessonNeighborWithLock,
@@ -207,18 +208,14 @@ export function toNeighbor(lesson: LearnLesson | null | undefined): LessonNeighb
 /**
  * Where "continue learning" should take the viewer: the lesson they last
  * opened (when it is still unlocked and not complete), else the first
- * unlocked incomplete lesson, else the first unlocked lesson. Never a locked
- * lesson: when nothing is open yet (e.g. all content is still scheduled) the
- * result is null and callers fall back to the course page.
+ * unlocked incomplete lesson. Never a locked lesson, and never a finished one
+ * while later lessons are still scheduled: when nothing is open yet, or the
+ * learner has completed everything released so far, the result is null and
+ * callers fall back to the course page (which shows when the next lesson
+ * unlocks). Once the whole course is done, the first lesson (for review).
  */
 export function pickResumeLesson(ctx: Pick<LearnContext, "flat" | "enrollment">): LearnLesson | null {
-  const { flat, enrollment } = ctx;
-  if (!flat.length) return null;
-  if (enrollment?.currentLessonId) {
-    const current = flat.find((l) => l.id === enrollment.currentLessonId);
-    if (current && !current.locked && current.status !== "complete") return current;
-  }
-  return flat.find((l) => !l.locked && l.status !== "complete") ?? flat.find((l) => !l.locked) ?? null;
+  return pickContinueLesson(ctx.flat, ctx.enrollment?.currentLessonId);
 }
 
 export async function getResumeLessonForCourse(course: Course, viewer: User | null): Promise<LearnLesson | null> {
@@ -303,6 +300,75 @@ export function lockedLessonError(access: Pick<LessonAccess, "lock" | "enrolled"
     case "enroll":
       return access.enrolled ? "You do not have access to this lesson." : "Enroll in this course to open this lesson.";
   }
+}
+
+/**
+ * Why an assessment embedded in `lessonId` can't be submitted from that lesson
+ * right now (drip schedule, enforced order, prerequisites, not enrolled), or
+ * null when the lesson is open to the user. Assignment and exercise
+ * submissions call this so locked lessons can't be worked around.
+ */
+export async function lessonSubmissionLockError(user: User | null, lessonId: string, noun: "quiz" | "assignment" | "exercise"): Promise<string | null> {
+  const access = await getLessonAccess(user, lessonId);
+  if (!access || access.canView) return null;
+  return assessmentLockMessage(access, noun);
+}
+
+function assessmentLockMessage(access: LessonAccess, noun: "quiz" | "assignment" | "exercise"): string {
+  if (access.lock && access.lock.reason !== "order") return lockedLessonError(access);
+  if (access.locked) return `Complete the previous lessons to unlock this ${noun}.`;
+  return "You do not have access to this lesson.";
+}
+
+export type AssessmentAccess =
+  | {
+      ok: true;
+      /** Lessons embedding the assessment that the user can open (the only ones a submission may name). */
+      openLessonIds: string[];
+    }
+  | {
+      ok: false;
+      message: string;
+      /** Course page of a lesson that embeds it, for a "View course" link. */
+      courseHref: string | null;
+    };
+
+/**
+ * Who may open and submit a standalone assignment or exercise page
+ * (`/assignments/[id]`, `/exercises/[id]`) — the same rules as quizzes:
+ *  - staff (they author, test and grade assessments);
+ *  - when lessons embed it: learners who can open at least one of those
+ *    lessons right now (enrolled, released, in order, prerequisites met), so
+ *    an assessment inside a scheduled or locked lesson can't be read or
+ *    submitted early from its own URL;
+ *  - instructors and members of a batch whose assessments list it;
+ *  - an assessment that no lesson embeds keeps its open behaviour (anyone
+ *    logged in).
+ */
+export async function getAssessmentAccess(user: User, kind: "assignment" | "exercise", refId: string): Promise<AssessmentAccess> {
+  const db = await getDb();
+  const embedding = db.lessons.filter((l) =>
+    l.blocks.some((b) => (kind === "assignment" ? b.type === "assignment" && b.assignmentId === refId : b.type === "exercise" && b.exerciseId === refId)),
+  );
+  if (isStaff(user)) return { ok: true, openLessonIds: embedding.map((l) => l.id) };
+
+  const openLessonIds: string[] = [];
+  let blocked: LessonAccess | null = null;
+  for (const lesson of embedding) {
+    const access = await getLessonAccess(user, lesson.id);
+    if (!access) continue; // orphaned lesson (its course is gone): not a placement
+    if (access.canView) openLessonIds.push(lesson.id);
+    else blocked ??= access;
+  }
+  if (openLessonIds.length || !blocked) return { ok: true, openLessonIds };
+
+  const viaBatch = db.batches.some(
+    (b) =>
+      b.assessments.some((a) => a.type === kind && a.refId === refId) &&
+      (b.instructorIds.includes(user.id) || db.batchEnrollments.some((m) => m.batchId === b.id && m.userId === user.id)),
+  );
+  if (viaBatch) return { ok: true, openLessonIds };
+  return { ok: false, message: assessmentLockMessage(blocked, kind), courseHref: `/courses/${blocked.course.slug}` };
 }
 
 /* ------------------------------------------------------------------ */

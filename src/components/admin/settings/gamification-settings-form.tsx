@@ -42,8 +42,8 @@ export function GamificationSettingsForm({ initial, guestAccess }: { initial: Ga
           <Switch
             name="excludeStaff"
             defaultChecked={initial.excludeStaff}
-            label="Leave admins and moderators out of rankings"
-            description="Staff still earn points and levels, but they are not ranked on leaderboards."
+            label="Leave staff out of rankings"
+            description="Admins, moderators, instructors (course creators) and evaluators still earn points and levels for their own learning, but they are not ranked on leaderboards. Nobody earns points for courses, quizzes, assignments or exercises they manage, or for results they grade or issue themselves."
           />
         </SettingsSwitchRow>
       </SettingsSection>

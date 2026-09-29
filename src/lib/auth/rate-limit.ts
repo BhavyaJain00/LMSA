@@ -5,9 +5,10 @@
  *   attempts and allows at most `limit` inside any rolling `windowMs`
  *   (a sliding-window log — no burst at window boundaries).
  * - `FailureLockout` counts consecutive failures per key and locks the key for
- *   a while once a threshold is reached. The login flow uses it for emails
- *   that have no account, so unknown and real accounts lock out identically
- *   and the response never reveals whether an email is registered.
+ *   a while once a threshold is reached (a generic in-memory helper; sign-in
+ *   lockouts are persisted instead, see `login-throttle.ts`).
+ * - `KeyedMutex` runs async work one at a time per key; the login flow uses
+ *   it so parallel attempts for one email can't slip past the lockout.
  *
  * Both are bounded TTL maps: entries expire on their own, a sweep runs
  * periodically, and the oldest keys are evicted past `maxKeys`, so a flood of
@@ -195,6 +196,8 @@ const HOUR = 60 * MINUTE;
 export const RATE_LIMITS = {
   /** Sign-in attempts from one IP across all accounts. */
   loginIp: { limit: 40, windowMs: 15 * MINUTE },
+  /** Sign-in attempts from every client whose IP isn't known (TRUST_PROXY_HOPS=0), together. */
+  loginIpShared: { limit: 400, windowMs: 15 * MINUTE },
   /** Sign-in attempts for one email from one IP. */
   loginAccount: { limit: 10, windowMs: 15 * MINUTE },
   /** Sign-in attempts for one email from anywhere (distributed guessing). */
@@ -203,8 +206,12 @@ export const RATE_LIMITS = {
   forgotEmail: { limit: 3, windowMs: HOUR },
   /** Password-reset requests from one IP. */
   forgotIp: { limit: 10, windowMs: HOUR },
+  /** Password-reset requests from every client whose IP isn't known, together. */
+  forgotIpShared: { limit: 100, windowMs: HOUR },
   /** Reset-password form submissions from one IP. */
   resetIp: { limit: 20, windowMs: 15 * MINUTE },
+  /** Reset-password form submissions from every client whose IP isn't known, together. */
+  resetIpShared: { limit: 200, windowMs: 15 * MINUTE },
   /** Second-factor attempts for one account from one IP. */
   twoFactor: { limit: 10, windowMs: 15 * MINUTE },
   /** Codes tried against a single sign-in challenge before it is revoked. */
@@ -213,18 +220,60 @@ export const RATE_LIMITS = {
   verificationResend: { limit: 3, windowMs: HOUR },
   /** Sign-ups from one IP. */
   registerIp: { limit: 10, windowMs: HOUR },
+  /** Sign-ups from every client whose IP isn't known, together. */
+  registerIpShared: { limit: 100, windowMs: HOUR },
   /** Password / code confirmations inside account settings (change password, 2FA setup/disable). */
   accountChange: { limit: 10, windowMs: 15 * MINUTE },
 } as const satisfies Record<string, RateLimitRule>;
 
-type Globals = { __llAuthRateLimiter?: SlidingWindowRateLimiter; __llAuthLockouts?: FailureLockout };
+/**
+ * Key and rule for a per-IP limit. When the client IP isn't known (no trusted
+ * proxy, see request-info.ts) every such client shares one bucket, with a
+ * site-wide rule sized for all of them together, so per-IP limits degrade to
+ * a global limit instead of trusting spoofable headers.
+ */
+export function perIpLimit(scope: string, ip: string | null | undefined, perIp: RateLimitRule, shared: RateLimitRule): { key: string; rule: RateLimitRule } {
+  const known = !!ip && ip !== "unknown";
+  return known ? { key: `${scope}:${ip}`, rule: perIp } : { key: `${scope}:unknown`, rule: shared };
+}
+
+/**
+ * Serialises async work per key: `run(key, fn)` starts `fn` only after every
+ * earlier task for the same key has settled. Idle keys are dropped, so memory
+ * is bounded by the number of keys with work in flight.
+ */
+export class KeyedMutex {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  /** Keys with work queued or running (for diagnostics and tests). */
+  get size(): number {
+    return this.tails.size;
+  }
+
+  async run<T>(key: string, fn: () => T | Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const done = new Promise<void>((resolve) => (release = resolve));
+    const tail = previous.then(() => done);
+    this.tails.set(key, tail);
+    try {
+      await previous;
+      return await fn();
+    } finally {
+      release();
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    }
+  }
+}
+
+type Globals = { __llAuthRateLimiter?: SlidingWindowRateLimiter; __llLoginAttemptLock?: KeyedMutex };
 const g = globalThis as unknown as Globals;
 
 /** Process-wide limiter for the auth flows. */
 export const authRateLimiter: SlidingWindowRateLimiter = (g.__llAuthRateLimiter ??= new SlidingWindowRateLimiter());
 
-/** Lockout counters for emails without an account (mirrors the per-user lockout). */
-export const unknownAccountLockouts: FailureLockout = (g.__llAuthLockouts ??= new FailureLockout());
+/** One sign-in attempt (password or second factor) at a time per email address. */
+export const loginAttemptLock: KeyedMutex = (g.__llLoginAttemptLock ??= new KeyedMutex());
 
 /** Normalised key fragment for an email address. */
 export function emailKey(email: string): string {

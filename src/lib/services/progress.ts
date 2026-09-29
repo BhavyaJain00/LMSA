@@ -5,7 +5,7 @@ import { percent, shortCode, toDateKey, uid } from "@/lib/utils";
 import { evaluateBadges } from "./badges";
 import { logActivity, getStreak } from "./activity";
 import { notify } from "./notifications";
-import { awardPoints } from "./points";
+import { awardCertificatePoints, awardPoints } from "./points";
 import { computeProgramProgress } from "@/lib/data/programs";
 
 /**
@@ -181,7 +181,11 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
 }
 
 /** Issue a certificate for a course (idempotent per user/course). */
-export async function issueCertificate(user: User, course: Course, opts: { batchId?: string; evaluatorId?: string; expiryDate?: string } = {}): Promise<Certificate> {
+export async function issueCertificate(
+  user: User,
+  course: Course,
+  opts: { batchId?: string; evaluatorId?: string; expiryDate?: string; /** Staff member issuing it by hand (no points when it is the learner). */ issuedById?: string } = {},
+): Promise<Certificate> {
   const db = await getDb();
   const existing = db.certificates.find((c) => c.userId === user.id && c.courseId === course.id);
   if (existing) return existing;
@@ -196,11 +200,16 @@ export async function issueCertificate(user: User, course: Course, opts: { batch
     expiryDate: opts.expiryDate,
     published: true,
   };
-  await mutate((d) => {
+  // Re-checked inside the write lock so concurrent requests never create two certificates.
+  const duplicate = await mutate((d) => {
+    const already = d.certificates.find((c) => c.userId === user.id && c.courseId === course.id);
+    if (already) return already;
     d.certificates.push(cert);
     const enrollment = d.enrollments.find((e) => e.userId === user.id && e.courseId === course.id);
     if (enrollment) enrollment.certificateId = cert.id;
+    return null;
   });
+  if (duplicate) return duplicate;
   await notify(user.id, {
     type: "certificate",
     subject: "Your certificate is ready",
@@ -208,6 +217,6 @@ export async function issueCertificate(user: User, course: Course, opts: { batch
     link: `/certificates/${cert.code}`,
   });
   await evaluateBadges(user.id, "certificate_issued");
-  await awardPoints(user.id, "certificate", { refId: cert.id, courseId: course.id });
+  await awardCertificatePoints(cert, { grantedBy: opts.issuedById ?? opts.evaluatorId });
   return cert;
 }

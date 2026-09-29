@@ -135,7 +135,8 @@ export const EMAIL_CATEGORY_LABELS: Record<EmailCategory, string> = {
 export const EMAIL_CATEGORIES = Object.keys(EMAIL_CATEGORY_LABELS) as EmailCategory[];
 
 export function isEmailCategory(value: unknown): value is EmailCategory {
-  return typeof value === "string" && value in EMAIL_CATEGORY_LABELS;
+  // Own keys only: `in` would also accept inherited names such as "constructor" from a query string.
+  return typeof value === "string" && (EMAIL_CATEGORIES as string[]).includes(value);
 }
 
 /** Categories that carry one-time secrets (links with tokens) and must never be opted out of. */

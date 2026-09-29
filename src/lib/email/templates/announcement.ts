@@ -8,7 +8,9 @@ export interface AnnouncementEmailData {
   /** Subject line (placeholders already filled). */
   subject: string;
   /** Announcement body as markdown (placeholders already filled, values markdown-escaped). */
-  markdown: string;
+  markdown?: string;
+  /** The same body already rendered (`prepareMarkdown` + `personalize`); used instead of `markdown`. */
+  body?: { html: string; text: string };
   authorName?: string;
   /** Link to the batch/course announcements. */
   url: string;
@@ -28,7 +30,7 @@ export function announcementEmail(brand: EmailBrand, data: AnnouncementEmailData
       text: `You were copied on this announcement, which was sent to ${data.ccRecipientCount} ${data.ccRecipientCount === 1 ? "member" : "members"} of the ${where.toLowerCase()} ${data.contextTitle}.`,
     });
   }
-  blocks.push({ type: "markdown", markdown: data.markdown });
+  blocks.push(data.body ? { type: "html", html: data.body.html, text: data.body.text } : { type: "markdown", markdown: data.markdown ?? "" });
   blocks.push({ type: "divider" });
   if (data.authorName) blocks.push({ type: "muted", text: `Posted by ${data.authorName} in ${data.contextTitle}.` });
   blocks.push({ type: "button", label: data.contextKind === "batch" ? "Open the batch" : "Open the course", url: data.url });

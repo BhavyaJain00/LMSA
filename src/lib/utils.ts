@@ -45,7 +45,8 @@ export function slugify(input: string): string {
       .replace(/[̀-ͯ]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "item"
+      .slice(0, 80)
+      .replace(/-+$/, "") || "item"
   );
 }
 
@@ -73,9 +74,10 @@ export function formatTime(totalSeconds: number): string {
 
 /** Parse "1:02:05" / "2:05" / "125" into seconds. Returns NaN if invalid. */
 export function parseTime(input: string): number {
-  const parts = input.trim().split(":").map((p) => Number(p));
-  if (parts.some((p) => !Number.isFinite(p) || p < 0)) return NaN;
-  return parts.reduce((acc, p) => acc * 60 + p, 0);
+  const parts = input.trim().split(":").map((p) => p.trim());
+  // At most h:mm:ss, and every part a plain non-negative decimal ("", "0x10", "1e3" are invalid).
+  if (parts.length > 3 || parts.some((p) => !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(p))) return NaN;
+  return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
 }
 
 /** 3725 -> "1h 2m", 125 -> "2m", 30 -> "30s" */

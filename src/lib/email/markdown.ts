@@ -54,52 +54,172 @@ interface LinkParts {
   end: number;
 }
 
-/** Parse `[label](dest "title")` starting at `start` (which must be "["). */
-function parseLinkParts(src: string, start: number): LinkParts | null {
-  let depth = 0;
-  let i = start;
-  let labelEnd = -1;
-  for (; i < src.length; i++) {
-    const ch = src[i]!;
-    if (ch === "\\") {
-      i++;
-      continue;
-    }
+/*
+ * Inline parsing runs in linear time, whatever the input. Authors control
+ * up to 20,000 characters of markdown and every search for a closing
+ * delimiter used to rescan the rest of the text, so pathological input
+ * (thousands of unmatched `*`, `_`, `[`, `![`, `~~`) cost seconds per render.
+ * Each `parseInline` call now precomputes, lazily and in single passes:
+ *  - which characters are backslash-escaped,
+ *  - the matching `]` of every `[` (one stack pass),
+ *  - for each emphasis delimiter, the next valid closer at or after every
+ *    position (one backward pass),
+ * so every lookup is O(1). Code-span searches remember failures per run
+ * length, link destinations stop after 32 nested parentheses or 2,048
+ * characters, titles after 1,000 characters, and nesting is capped, so the
+ * total work stays proportional to the input length.
+ */
+
+const MAX_LINK_PAREN_DEPTH = 32;
+const MAX_LINK_DEST = 2048;
+const MAX_LINK_TITLE = 1000;
+/** Emphasis may nest this deep; links and images less. */
+const MAX_EMPHASIS_DEPTH = 8;
+const MAX_LINK_DEPTH = 4;
+
+interface InlineScan {
+  src: string;
+  escaped?: Uint8Array;
+  brackets?: Int32Array;
+  closers: Map<string, Int32Array>;
+  /** Backtick run length → position from which no closing run of that length exists. */
+  codeMiss: Map<number, number>;
+}
+
+/** Whitespace test with an ASCII fast path (it runs for most characters of the input). */
+function isSpace(ch: string | undefined): boolean {
+  if (ch === undefined) return true;
+  const code = ch.charCodeAt(0);
+  if (code < 128) return code === 32 || (code >= 9 && code <= 13);
+  return /\s/.test(ch);
+}
+const isWordChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+
+/** `escaped[i]` is 1 when character i follows an unescaped backslash (odd run of backslashes). */
+function escapedFlags(scan: InlineScan): Uint8Array {
+  if (scan.escaped) return scan.escaped;
+  const { src } = scan;
+  const out = new Uint8Array(src.length);
+  for (let i = 1; i < src.length; i++) if (src.charCodeAt(i - 1) === 92 && !out[i - 1]) out[i] = 1;
+  scan.escaped = out;
+  return out;
+}
+
+/**
+ * Matching `]` for every `[` (-1 when unmatched), skipping escaped brackets
+ * and brackets inside backtick pairs. A blank line ends every open bracket.
+ */
+function bracketMatches(scan: InlineScan): Int32Array {
+  if (scan.brackets) return scan.brackets;
+  const { src } = scan;
+  const esc = escapedFlags(scan);
+  const match = new Int32Array(src.length).fill(-1);
+  const stack: number[] = [];
+  let noBacktickAfter = src.length;
+  for (let i = 0; i < src.length; i++) {
+    if (esc[i]) continue;
+    const ch = src[i];
     if (ch === "`") {
+      if (i >= noBacktickAfter) continue;
       const close = src.indexOf("`", i + 1);
-      if (close !== -1) i = close;
-      continue;
+      if (close === -1) noBacktickAfter = i;
+      else i = close;
+    } else if (ch === "[") {
+      stack.push(i);
+    } else if (ch === "]") {
+      const open = stack.pop();
+      if (open !== undefined) match[open] = i;
+    } else if (ch === "\n" && src[i + 1] === "\n") {
+      stack.length = 0;
     }
-    if (ch === "[") depth++;
-    else if (ch === "]") {
-      depth--;
-      if (depth === 0) {
-        labelEnd = i;
-        break;
-      }
-    } else if (ch === "\n" && src[i + 1] === "\n") return null;
   }
-  if (labelEnd === -1 || src[labelEnd + 1] !== "(") return null;
+  scan.brackets = match;
+  return match;
+}
+
+/**
+ * For delimiter `delim` ("*", "**", "_", "__", "~~" or "=="): `table[k]` is
+ * the first position ≥ k where a closing delimiter may stand, or -1. A closer
+ * is unescaped and follows a non-space character; a single `*`/`_` must not
+ * touch another one, and `_` must not be followed by a letter or digit.
+ */
+function closerTable(scan: InlineScan, delim: string): Int32Array {
+  const cached = scan.closers.get(delim);
+  if (cached) return cached;
+  const { src } = scan;
+  const esc = escapedFlags(scan);
+  const n = src.length;
+  const c = delim[0]!;
+  const double = delim.length === 2;
+  const table = new Int32Array(n + 1);
+  table[n] = -1;
+  for (let j = n - 1; j >= 0; j--) {
+    let ok = src[j] === c && !esc[j] && j > 0 && !isSpace(src[j - 1]);
+    if (ok) {
+      if (double) ok = src[j + 1] === c;
+      else ok = (src[j - 1] !== c || esc[j - 1] === 1) && src[j + 1] !== c && !(c === "_" && isWordChar(src[j + 1]));
+    }
+    table[j] = ok ? j : table[j + 1]!;
+  }
+  scan.closers.set(delim, table);
+  return table;
+}
+
+/** The closing delimiter for a span whose content starts at `from` (never at `from` itself). */
+function findClosing(scan: InlineScan, from: number, delim: string): number {
+  const table = closerTable(scan, delim);
+  const k = from + 1;
+  return k < table.length ? table[k]! : -1;
+}
+
+/** Start of the next run of exactly `run` backticks at or after `from`, or -1. */
+function findCodeClose(scan: InlineScan, from: number, run: number): number {
+  const miss = scan.codeMiss.get(run);
+  if (miss !== undefined && from >= miss) return -1;
+  const { src } = scan;
+  let j = from;
+  for (;;) {
+    const k = src.indexOf("`", j);
+    if (k === -1) break;
+    let end = k;
+    while (src.charCodeAt(end) === 96) end++;
+    if (end - k === run) return k;
+    j = end;
+  }
+  // No closer after `from` means none after any later position either.
+  scan.codeMiss.set(run, from);
+  return -1;
+}
+
+/** Parse `[label](dest "title")` starting at `start` (which must be "["). */
+function parseLinkParts(scan: InlineScan, start: number): LinkParts | null {
+  const { src } = scan;
+  const labelEnd = bracketMatches(scan)[start] ?? -1;
+  if (labelEnd < 0 || src[labelEnd + 1] !== "(") return null;
   let j = labelEnd + 2;
   while (src[j] === " ") j++;
-  let dest = "";
+  let dest: string;
   if (src[j] === "<") {
-    const close = src.indexOf(">", j + 1);
-    if (close === -1) return null;
-    dest = src.slice(j + 1, close);
-    j = close + 1;
+    // <dest>: no line breaks or other angle brackets inside.
+    let k = j + 1;
+    while (k < src.length && src[k] !== ">" && src[k] !== "<" && src[k] !== "\n") k++;
+    if (src[k] !== ">") return null;
+    dest = src.slice(j + 1, k);
+    j = k + 1;
   } else {
     let parens = 0;
     const startDest = j;
     for (; j < src.length; j++) {
+      if (j - startDest > MAX_LINK_DEST) return null;
       const ch = src[j]!;
       if (ch === "\\" && j + 1 < src.length) {
         j++;
         continue;
       }
-      if (/\s/.test(ch)) break;
-      if (ch === "(") parens++;
-      else if (ch === ")") {
+      if (isSpace(ch)) break;
+      if (ch === "(") {
+        if (++parens > MAX_LINK_PAREN_DEPTH) return null;
+      } else if (ch === ")") {
         if (parens === 0) break;
         parens--;
       }
@@ -110,9 +230,10 @@ function parseLinkParts(src: string, start: number): LinkParts | null {
   let title: string | undefined;
   const quote = src[j];
   if (quote === '"' || quote === "'") {
+    const limit = Math.min(src.length, j + 1 + MAX_LINK_TITLE);
     let close = j + 1;
-    while (close < src.length && src[close] !== quote) close += src[close] === "\\" ? 2 : 1;
-    if (close >= src.length) return null;
+    while (close < limit && src[close] !== quote) close += src[close] === "\\" ? 2 : 1;
+    if (close >= limit || src[close] !== quote) return null;
     title = src.slice(j + 1, close).replace(/\\(.)/g, "$1");
     j = close + 1;
     while (src[j] === " ") j++;
@@ -121,37 +242,18 @@ function parseLinkParts(src: string, start: number): LinkParts | null {
   return { label: src.slice(start + 1, labelEnd), dest: dest.replace(/\\(.)/g, "$1"), title, end: j + 1 };
 }
 
-const isSpace = (ch: string | undefined) => ch === undefined || /\s/.test(ch);
-const isWordChar = (ch: string | undefined) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+/** Sticky: matched at an explicit position, no substring copies. */
+const AUTOLINK_RE = /https?:\/\/[^\s<>"\\]+[^\s<>".,;:!?)\]'*_~\\]/iy;
 
-/** Find the closing delimiter for emphasis-like spans. */
-function findClosing(src: string, from: number, delim: string): number {
-  let j = from;
-  while (j < src.length) {
-    j = src.indexOf(delim, j);
-    if (j === -1) return -1;
-    let backslashes = 0;
-    for (let k = j - 1; k >= 0 && src[k] === "\\"; k--) backslashes++;
-    if (backslashes % 2 === 1 || j === from || isSpace(src[j - 1])) {
-      j += 1;
-      continue;
-    }
-    if (delim.length === 1 && src[j + 1] === delim) {
-      j += 2;
-      continue;
-    }
-    if (delim === "_" && isWordChar(src[j + 1])) {
-      j += 1;
-      continue;
-    }
-    return j;
-  }
-  return -1;
+/** Remove trailing spaces and tabs (manual loop: `/[ \t]+$/` backtracks quadratically on long space runs). */
+function trimTrailingBlanks(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === " " || text[end - 1] === "\t")) end--;
+  return end === text.length ? text : text.slice(0, end);
 }
 
-const AUTOLINK_RE = /^https?:\/\/[^\s<>"\\]+[^\s<>".,;:!?)\]'*_~\\]/i;
-
 function parseInline(src: string, depth = 0): InlineNode[] {
+  const scan: InlineScan = { src, closers: new Map(), codeMiss: new Map() };
   const nodes: InlineNode[] = [];
   let text = "";
   const flush = () => {
@@ -180,7 +282,7 @@ function parseInline(src: string, depth = 0): InlineNode[] {
     }
 
     if (ch === "\n") {
-      text = text.replace(/[ \t]+$/, "");
+      text = trimTrailingBlanks(text);
       flush();
       nodes.push({ type: "br" });
       i++;
@@ -191,24 +293,22 @@ function parseInline(src: string, depth = 0): InlineNode[] {
     if (ch === "`") {
       let run = 1;
       while (src[i + run] === "`") run++;
-      const fence = "`".repeat(run);
-      let close = src.indexOf(fence, i + run);
-      while (close !== -1 && src[close + run] === "`") close = src.indexOf(fence, close + run + 1);
+      const close = findCodeClose(scan, i + run, run);
       if (close !== -1) {
         flush();
         let value = src.slice(i + run, close).replace(/\n/g, " ");
-        if (/^ .* $/.test(value) && value.trim()) value = value.slice(1, -1);
+        if (value.length >= 2 && value[0] === " " && value[value.length - 1] === " " && value.trim()) value = value.slice(1, -1);
         nodes.push({ type: "code", value });
         i = close + run;
         continue;
       }
-      text += fence;
+      text += src.slice(i, i + run);
       i += run;
       continue;
     }
 
-    if (ch === "!" && next === "[") {
-      const parts = parseLinkParts(src, i + 1);
+    if (ch === "!" && next === "[" && depth < MAX_LINK_DEPTH) {
+      const parts = parseLinkParts(scan, i + 1);
       if (parts) {
         flush();
         nodes.push({ type: "image", src: parts.dest, alt: plainText(parseInline(parts.label, depth + 1)), title: parts.title });
@@ -217,8 +317,8 @@ function parseInline(src: string, depth = 0): InlineNode[] {
       }
     }
 
-    if (ch === "[" && depth < 4) {
-      const parts = parseLinkParts(src, i);
+    if (ch === "[" && depth < MAX_LINK_DEPTH) {
+      const parts = parseLinkParts(scan, i);
       if (parts) {
         flush();
         nodes.push({ type: "link", href: parts.dest, title: parts.title, children: parseInline(parts.label, depth + 1) });
@@ -227,13 +327,13 @@ function parseInline(src: string, depth = 0): InlineNode[] {
       }
     }
 
-    if ((ch === "*" || ch === "_") && depth < 8) {
+    if ((ch === "*" || ch === "_") && depth < MAX_EMPHASIS_DEPTH) {
       const double = next === ch;
       const len = double ? 2 : 1;
       const delim = ch.repeat(len);
       const opensOk = !isSpace(src[i + len]) && !(ch === "_" && isWordChar(src[i - 1]));
       if (opensOk) {
-        const close = findClosing(src, i + len, delim);
+        const close = findClosing(scan, i + len, delim);
         if (close !== -1) {
           flush();
           nodes.push({ type: double ? "strong" : "em", children: parseInline(src.slice(i + len, close), depth + 1) });
@@ -243,9 +343,9 @@ function parseInline(src: string, depth = 0): InlineNode[] {
       }
     }
 
-    if ((ch === "~" || ch === "=") && next === ch && !isSpace(src[i + 2]) && depth < 8) {
+    if ((ch === "~" || ch === "=") && next === ch && !isSpace(src[i + 2]) && depth < MAX_EMPHASIS_DEPTH) {
       const delim = ch + ch;
-      const close = findClosing(src, i + 2, delim);
+      const close = findClosing(scan, i + 2, delim);
       if (close !== -1) {
         flush();
         nodes.push({ type: ch === "~" ? "del" : "mark", children: parseInline(src.slice(i + 2, close), depth + 1) });
@@ -255,7 +355,8 @@ function parseInline(src: string, depth = 0): InlineNode[] {
     }
 
     if ((ch === "h" || ch === "H") && (i === 0 || /[\s(]/.test(src[i - 1]!))) {
-      const m = AUTOLINK_RE.exec(src.slice(i));
+      AUTOLINK_RE.lastIndex = i;
+      const m = AUTOLINK_RE.exec(src);
       if (m) {
         flush();
         nodes.push({ type: "link", href: m[0], auto: true, children: [{ type: "text", value: m[0] }] });
@@ -311,10 +412,50 @@ type Block =
   | { type: "table"; header: string[]; rows: string[][]; align: Align[] };
 
 const LIST_RE = /^(\s*)([-+*]|\d{1,9}[.)])\s+(.*)$/;
-const FENCE_RE = /^\s{0,3}(```+|~~~+)\s*([\w+#.-]*)\s*$/;
-const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
-const HR_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
-const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+/*
+ * Block syntax is recognised with small helpers instead of one regex each:
+ * patterns such as `\s*([\w]*)\s*$` or `(.*?)\s*#*\s*$` backtrack
+ * quadratically on long runs of spaces, which an author could exploit.
+ */
+
+/** Opening code fence: up to 3 spaces, 3+ backticks or tildes, optional one-word language. */
+function fenceOf(line: string): { marker: string; lang: string } | null {
+  const m = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!m) return null;
+  const lang = m[2]!.trim();
+  return /^[\w+#.-]*$/.test(lang) ? { marker: m[1]!, lang } : null;
+}
+
+/** ATX heading; a closing run of "#" is removed only when a space precedes it ("# C#" keeps its "#"). */
+function headingOf(line: string): { level: number; text: string } | null {
+  const m = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line);
+  if (!m) return null;
+  let text = m[2]!.trim();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "#") end--;
+  if (end < text.length && (end === 0 || /\s/.test(text[end - 1]!))) text = text.slice(0, end).trimEnd();
+  return { level: m[1]!.length, text };
+}
+
+/** Thematic break: 3+ of the same "-", "*" or "_", optionally spaced, indented at most 3. */
+function isRule(line: string): boolean {
+  if (line.length - line.trimStart().length > 3) return false;
+  const compact = line.replace(/\s+/g, "");
+  if (compact.length < 3) return false;
+  const c = compact[0];
+  if (c !== "-" && c !== "*" && c !== "_") return false;
+  for (let k = 1; k < compact.length; k++) if (compact[k] !== c) return false;
+  return true;
+}
+
+/** Table delimiter row, e.g. "| :--- | ---: |". */
+function isTableSeparator(line: string): boolean {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  if (!s) return false;
+  return s.split("|").every((cell) => /^\s*:?-{2,}:?\s*$/.test(cell));
+}
 
 function splitRow(line: string): string[] {
   let l = line.trim();
@@ -337,7 +478,7 @@ function splitRow(line: string): string[] {
 }
 
 function startsBlock(line: string): boolean {
-  return !line.trim() || HEADING_RE.test(line) || FENCE_RE.test(line) || /^\s*>/.test(line) || LIST_RE.test(line) || HR_RE.test(line);
+  return !line.trim() || !!headingOf(line) || !!fenceOf(line) || /^\s*>/.test(line) || LIST_RE.test(line) || isRule(line);
 }
 
 function parseBlocks(lines: string[], depth = 0): Block[] {
@@ -350,9 +491,9 @@ function parseBlocks(lines: string[], depth = 0): Block[] {
       continue;
     }
 
-    const fence = FENCE_RE.exec(line);
+    const fence = fenceOf(line);
     if (fence) {
-      const marker = fence[1]!;
+      const marker = fence.marker;
       const code: string[] = [];
       i++;
       while (i < lines.length && !lines[i]!.trim().startsWith(marker[0]!.repeat(marker.length))) {
@@ -360,18 +501,18 @@ function parseBlocks(lines: string[], depth = 0): Block[] {
         i++;
       }
       i++;
-      blocks.push({ type: "code", lang: fence[2] ?? "", code: code.join("\n") });
+      blocks.push({ type: "code", lang: fence.lang, code: code.join("\n") });
       continue;
     }
 
-    const heading = HEADING_RE.exec(line);
+    const heading = headingOf(line);
     if (heading) {
-      blocks.push({ type: "heading", level: heading[1]!.length, text: heading[2]! });
+      blocks.push({ type: "heading", level: heading.level, text: heading.text });
       i++;
       continue;
     }
 
-    if (HR_RE.test(line)) {
+    if (isRule(line)) {
       blocks.push({ type: "hr" });
       i++;
       continue;
@@ -387,7 +528,7 @@ function parseBlocks(lines: string[], depth = 0): Block[] {
       continue;
     }
 
-    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1]!)) {
+    if (line.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1]!)) {
       const header = splitRow(line);
       const align: Align[] = splitRow(lines[i + 1]!).map((c) => {
         const l = c.startsWith(":");
@@ -463,7 +604,7 @@ function parseBlocks(lines: string[], depth = 0): Block[] {
 
     const para: string[] = [line];
     i++;
-    while (i < lines.length && !startsBlock(lines[i]!) && !(lines[i]!.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1]!))) {
+    while (i < lines.length && !startsBlock(lines[i]!) && !(lines[i]!.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1]!))) {
       para.push(lines[i]!);
       i++;
     }

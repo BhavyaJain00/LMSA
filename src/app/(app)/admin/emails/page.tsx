@@ -74,6 +74,31 @@ export default async function OutboxPage(props: PageProps<"/admin/emails">) {
         actions={<OutboxToolbar defaultTestTo={viewer.email} failedCount={list.counts.failed} canConfigure={isAdmin(viewer)} />}
       />
 
+      {delivery.configError && (
+        <div role="alert" className="mb-5 flex gap-3 rounded-card border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
+          <Icon.AlertTriangle className="mt-0.5 size-5 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-medium">Delivery is paused because of a configuration error.</p>
+            <p className="mt-1">
+              {delivery.configError}
+              {delivery.pausedUntil ? ` Automatic retries resume at ${formatDateTime(delivery.pausedUntil)}; “Run delivery now” tries again immediately.` : ""}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {transport.transport === "log" && (
+        <div role="status" className="mb-5 flex gap-3 rounded-card border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+          <Icon.AlertTriangle className="mt-0.5 size-5 shrink-0" />
+          <p className="min-w-0">
+            <span className="font-medium">Emails are not delivered.</span> MAIL_TRANSPORT is &quot;log&quot;: emails are recorded here and summarised in the server log, but nobody
+            receives them — including password-reset and verification links.
+            {process.env.NODE_ENV !== "production" && " In development, those one-time links are printed to the server console (never in production)."} Set
+            MAIL_TRANSPORT=smtp and the SMTP_* variables in .env to send real email.
+          </p>
+        </div>
+      )}
+
       {transport.problems.length > 0 ? (
         <div role="alert" className="mb-5 flex gap-3 rounded-card border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
           <Icon.AlertTriangle className="mt-0.5 size-5 shrink-0" />
@@ -90,14 +115,6 @@ export default async function OutboxPage(props: PageProps<"/admin/emails">) {
               </Link>
             )}
           </div>
-        </div>
-      ) : transport.transport === "log" ? (
-        <div className="mb-5 flex gap-3 rounded-card border border-info/30 bg-info/10 p-4 text-sm text-info">
-          <Icon.Info className="mt-0.5 size-5 shrink-0" />
-          <p className="min-w-0">
-            <span className="font-medium">Log mode.</span> MAIL_TRANSPORT is &quot;log&quot;: emails are recorded here and summarised in the server log, but nothing is delivered. Set
-            MAIL_TRANSPORT=smtp and the SMTP_* variables in .env to send real email.
-          </p>
         </div>
       ) : !settings.email.enabled ? (
         <div className="mb-5 flex gap-3 rounded-card border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
@@ -238,8 +255,10 @@ export default async function OutboxPage(props: PageProps<"/admin/emails">) {
               ? "A delivery run is in progress."
               : delivery.lastRun?.ran
                 ? `Last delivery run ${relativeTime(delivery.lastRun.startedAt)}: ${delivery.lastRun.sent} sent, ${delivery.lastRun.retried} to retry, ${delivery.lastRun.failed} failed.`
-                : "Queued emails are delivered in the background and retried after 1 min, 5 min, 30 min and 2 h."}
-            {delivery.pausedUntil && ` Automatic delivery is paused until ${formatDateTime(delivery.pausedUntil)} after a connection error.`}
+                : "Queued emails are delivered in the background and retried after 1 min, 5 min, 30 min, 2 h and 12 h."}
+            {delivery.pausedUntil &&
+              !delivery.configError &&
+              ` Automatic delivery is paused until ${formatDateTime(delivery.pausedUntil)} after a connection error.`}
           </p>
         </div>
       )}

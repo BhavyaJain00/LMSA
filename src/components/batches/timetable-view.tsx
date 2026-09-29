@@ -10,8 +10,11 @@ import { SegmentedControl } from "@/components/ui/tabs";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { AddToCalendar, type AddToCalendarEvent } from "@/components/pwa/add-to-calendar";
-import { addDaysToKey, isClock, zonedTimeToUtc } from "@/lib/calendar/time";
-import { MONTHS_LONG, WEEKDAYS_SHORT, formatClockRange, formatDayKey } from "./tz";
+import { zonedRange } from "@/lib/calendar/ics";
+import { addDaysToKey, isClock, isValidTimeZone, tzOffsetMinutes, zonedTimeToUtc } from "@/lib/calendar/time";
+import { useViewerTimeZone } from "./hooks";
+import { scheduleRows, timetableTimesNote, type RowSchedule } from "./timetable-schedule";
+import { MONTHS_LONG, WEEKDAYS_SHORT, formatClockRange, formatDayKey, formatGmtOffset } from "./tz";
 import type { TimetableEntry } from "./types";
 
 export const timetableTypeLabel: Record<TimetableItemType, string> = {
@@ -69,6 +72,22 @@ function EntryLink({ entry, children, className, style }: { entry: TimetableEntr
   );
 }
 
+function zoneName(tz: string): string {
+  return tz.replace(/_/g, " ");
+}
+
+/** A class's start in the viewer's own timezone, when its clock differs from the one shown (client only). */
+function ViewerTime({ at, shownZone }: { at: number; shownZone: string }) {
+  const viewerZone = useViewerTimeZone();
+  if (!viewerZone || !isValidTimeZone(viewerZone) || tzOffsetMinutes(viewerZone, at) === tzOffsetMinutes(shownZone, at)) return null;
+  const local = new Intl.DateTimeFormat(undefined, { timeZone: viewerZone, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(new Date(at));
+  return (
+    <span className="mt-0.5 block text-xs text-ink-faint" title={`Converted to ${zoneName(viewerZone)}`}>
+      Your time: {local} ({zoneName(viewerZone)})
+    </span>
+  );
+}
+
 type Month = { y: number; m: number };
 
 function monthOf(key: string): Month {
@@ -97,7 +116,12 @@ function shiftMonth(month: Month, delta: number): Month {
   return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1 };
 }
 
-/** Calendar export for a timetable row: timed in the batch timezone, or all-day. */
+/**
+ * Calendar export for a timetable row, matching the row's server .ics: rows
+ * backed by a live class use the class's own start and end (their clock times
+ * are in the class timezone, not the batch's); other rows are timed in the
+ * batch timezone, or all-day.
+ */
 function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEvent | null {
   const fromClass = entry.source === "live_class" && entry.refId;
   const icsHref = fromClass
@@ -114,12 +138,13 @@ function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEv
     url: entry.href ?? undefined,
     icsHref,
   };
+  if (entry.classRange) return { ...base, start: entry.classRange.start, end: entry.classRange.end };
   if (entry.startTime && isClock(entry.startTime)) {
-    const start = zonedTimeToUtc(entry.date, entry.startTime, timezone);
-    if (Number.isNaN(start)) return null;
-    let end = entry.endTime && isClock(entry.endTime) ? zonedTimeToUtc(entry.date, entry.endTime, timezone) : NaN;
-    if (!Number.isNaN(end) && end <= start) end = zonedTimeToUtc(addDaysToKey(entry.date, 1), entry.endTime!, timezone);
-    if (Number.isNaN(end) || end <= start) end = start + 3_600_000;
+    // Same conversion as the server export (crossing midnight, DST gaps).
+    const range = zonedRange(entry.date, entry.startTime, entry.endTime, timezone, 60);
+    if (!range || range.start.kind !== "utc") return null;
+    const start = range.start.epochMs;
+    const end = range.end?.kind === "utc" && range.end.epochMs > start ? range.end.epochMs : start + 3_600_000;
     return { ...base, start, end };
   }
   const endDate = addDaysToKey(entry.date, 1);
@@ -129,7 +154,7 @@ function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEv
   return { ...base, start, end, allDay: { startDate: entry.date, endDate } };
 }
 
-function EntryRow({ entry, timezone, showCalendar }: { entry: TimetableEntry; timezone: string; showCalendar: boolean }) {
+function EntryRow({ entry, schedule, timezone, showCalendar }: { entry: TimetableEntry; schedule: RowSchedule; timezone: string; showCalendar: boolean }) {
   const calendar = showCalendar ? calendarEvent(entry, timezone) : null;
   return (
     <li className="flex items-start gap-3 py-3">
@@ -159,8 +184,15 @@ function EntryRow({ entry, timezone, showCalendar }: { entry: TimetableEntry; ti
         <p className="mt-0.5 text-xs text-ink-muted">
           {timetableTypeLabel[entry.type]}
           {entry.legendLabel && entry.legendLabel !== timetableTypeLabel[entry.type] && <> · {entry.legendLabel}</>}
-          {entry.startTime && <> · {formatClockRange(entry.startTime, entry.endTime)}</>}
+          {schedule.startTime && <> · {formatClockRange(schedule.startTime, schedule.endTime)}</>}
+          {schedule.zone && schedule.startsAt !== null && (
+            <span className="text-ink-faint">
+              {" "}
+              ({zoneName(schedule.zone)}, {formatGmtOffset(schedule.zone, schedule.startsAt)})
+            </span>
+          )}
         </p>
+        {schedule.startsAt !== null && <ViewerTime at={schedule.startsAt} shownZone={schedule.zone ?? timezone} />}
       </div>
       {calendar && <AddToCalendar event={calendar} size="xs" className="mt-1 shrink-0" />}
       {entry.href && <Icon.ChevronRight className="mt-2 size-4 shrink-0 text-ink-faint" />}
@@ -191,19 +223,21 @@ export function TimetableView({
   showAddToCalendar?: boolean;
 }) {
   const [view, setView] = useState<"calendar" | "list">("calendar");
-  const initial = todayKey >= startDate && todayKey <= endDate ? todayKey : entries.find((e) => e.date >= todayKey)?.date ?? startDate;
+  // Where and when each row is shown (live classes at their real time, see rowSchedule).
+  const rows = useMemo(() => scheduleRows(entries, timezone), [entries, timezone]);
+  const initial = todayKey >= startDate && todayKey <= endDate ? todayKey : rows.find((r) => r.schedule.date >= todayKey)?.schedule.date ?? startDate;
   const [month, setMonth] = useState<Month>(() => monthOf(initial));
   const [selected, setSelected] = useState<string | null>(null);
 
   const byDate = useMemo(() => {
-    const map = new Map<string, TimetableEntry[]>();
-    for (const e of entries) {
-      const list = map.get(e.date) ?? [];
-      list.push(e);
-      map.set(e.date, list);
+    const map = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const list = map.get(row.schedule.date) ?? [];
+      list.push(row);
+      map.set(row.schedule.date, list);
     }
     return map;
-  }, [entries]);
+  }, [rows]);
 
   if (!entries.length) {
     return (
@@ -219,8 +253,10 @@ export function TimetableView({
   const hasLiveMerged = entries.some((e) => e.source === "live_class" || (e.type === "live_class" && !e.color));
   const selectedEntries = selected ? (byDate.get(selected) ?? []) : [];
   const grouped = Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b));
-  const firstMonth = monthOf(startDate);
-  const lastMonth = monthOf(entries.reduce((max, e) => (e.date > max ? e.date : max), endDate));
+  const firstMonth = monthOf(rows.reduce((min, r) => (r.schedule.date < min ? r.schedule.date : min), startDate));
+  const lastMonth = monthOf(rows.reduce((max, r) => (r.schedule.date > max ? r.schedule.date : max), endDate));
+  // Rows are in the batch timezone except live classes scheduled in a zone whose clock differs.
+  const timesNote = timetableTimesNote(rows, timezone);
   const canPrev = month.y * 12 + month.m > firstMonth.y * 12 + firstMonth.m - 1;
   const canNext = month.y * 12 + month.m < lastMonth.y * 12 + lastMonth.m + 1;
 
@@ -311,28 +347,39 @@ export function TimetableView({
                   {dayEntries.length > 0 && (
                     <>
                       <div className="mt-1 flex flex-wrap gap-1 sm:hidden" aria-hidden="true">
-                        {dayEntries.slice(0, 4).map((e) => (e.milestone ? <MilestoneMark key={e.id} className="size-2.5" /> : <Dot key={e.id} color={e.color} />))}
+                        {dayEntries.slice(0, 4).map(({ entry: e }) => (e.milestone ? <MilestoneMark key={e.id} className="size-2.5" /> : <Dot key={e.id} color={e.color} />))}
                       </div>
                       <ul className="mt-1 hidden space-y-1 sm:block">
-                        {dayEntries.slice(0, 3).map((e) => (
-                          <li key={e.id}>
-                            <EntryLink
-                              entry={e}
-                              style={chipStyle(e.color)}
-                              className={cn(
-                                "flex items-center gap-1 truncate rounded border-l-2 px-1.5 py-0.5 text-[11px] leading-4 text-ink",
-                                !e.color && "border-accent bg-accent/10",
-                                e.href && "hover:brightness-95 hover:underline",
-                              )}
-                            >
-                              {e.milestone && <MilestoneMark className="size-2.5" />}
-                              <span className="truncate" title={`${e.title}${e.startTime ? ` · ${formatClockRange(e.startTime, e.endTime)}` : ""}`}>
-                                {e.startTime && <span className="text-ink-muted">{e.startTime} </span>}
-                                {e.title}
-                              </span>
-                            </EntryLink>
-                          </li>
-                        ))}
+                        {dayEntries.slice(0, 3).map(({ entry: e, schedule: s }) => {
+                          const offset = s.zone && s.startsAt !== null ? formatGmtOffset(s.zone, s.startsAt) : null;
+                          return (
+                            <li key={e.id}>
+                              <EntryLink
+                                entry={e}
+                                style={chipStyle(e.color)}
+                                className={cn(
+                                  "flex items-center gap-1 truncate rounded border-l-2 px-1.5 py-0.5 text-[11px] leading-4 text-ink",
+                                  !e.color && "border-accent bg-accent/10",
+                                  e.href && "hover:brightness-95 hover:underline",
+                                )}
+                              >
+                                {e.milestone && <MilestoneMark className="size-2.5" />}
+                                <span
+                                  className="truncate"
+                                  title={`${e.title}${s.startTime ? ` · ${formatClockRange(s.startTime, s.endTime)}` : ""}${s.zone && offset ? ` (${zoneName(s.zone)}, ${offset})` : ""}`}
+                                >
+                                  {s.startTime && (
+                                    <span className="text-ink-muted">
+                                      {s.startTime}
+                                      {offset && ` ${offset}`}{" "}
+                                    </span>
+                                  )}
+                                  {e.title}
+                                </span>
+                              </EntryLink>
+                            </li>
+                          );
+                        })}
                         {dayEntries.length > 3 && (
                           <li>
                             <button type="button" onClick={() => setSelected(cell.key)} className="px-1.5 text-[11px] font-medium text-accent hover:underline">
@@ -357,8 +404,8 @@ export function TimetableView({
               </div>
               {selectedEntries.length ? (
                 <ul className="divide-y divide-border">
-                  {selectedEntries.map((e) => (
-                    <EntryRow key={e.id} entry={e} timezone={timezone} showCalendar={showAddToCalendar} />
+                  {selectedEntries.map(({ entry, schedule }) => (
+                    <EntryRow key={entry.id} entry={entry} schedule={schedule} timezone={timezone} showCalendar={showAddToCalendar} />
                   ))}
                 </ul>
               ) : (
@@ -366,7 +413,7 @@ export function TimetableView({
               )}
             </div>
           )}
-          <p className="border-t border-border px-4 py-2 text-xs text-ink-faint">Times are shown in the batch timezone ({timezone.replace(/_/g, " ")}).</p>
+          <p className="border-t border-border px-4 py-2 text-xs text-ink-faint">{timesNote}</p>
         </div>
       ) : (
         <div className="space-y-5">
@@ -377,13 +424,13 @@ export function TimetableView({
                 {date === todayKey && <span className="ml-2 text-xs font-medium">Today</span>}
               </h3>
               <ul className="divide-y divide-border rounded-card border border-border bg-surface-1 px-4 shadow-card">
-                {list.map((e) => (
-                  <EntryRow key={e.id} entry={e} timezone={timezone} showCalendar={showAddToCalendar} />
+                {list.map(({ entry, schedule }) => (
+                  <EntryRow key={entry.id} entry={entry} schedule={schedule} timezone={timezone} showCalendar={showAddToCalendar} />
                 ))}
               </ul>
             </section>
           ))}
-          <p className="text-xs text-ink-faint">Times are shown in the batch timezone ({timezone.replace(/_/g, " ")}).</p>
+          <p className="text-xs text-ink-faint">{timesNote}</p>
         </div>
       )}
     </div>

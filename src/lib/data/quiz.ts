@@ -17,7 +17,8 @@ import type {
   ViolationType,
 } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
-import { canManageCourse, getCourseOutline, getLessonHref } from "@/lib/data/courses";
+import { canManageCourse, getLessonHref } from "@/lib/data/courses";
+import { getLessonAccess, lockedLessonError } from "@/lib/data/lessons";
 import { isCreator, isModerator, toPublicUser } from "@/lib/auth/session";
 import { completeLesson } from "@/lib/services/progress";
 import { evaluateBadges } from "@/lib/services/badges";
@@ -189,10 +190,18 @@ export type QuizAccess = { ok: true; manage: boolean } | { ok: false; reason: "g
  * Who may take a quiz (mirrors Frappe's can_access_quiz):
  *  - managers (moderators, the author, instructors of the quiz's own course)
  *  - instructors of a course whose lessons embed it (take only, no management)
- *  - learners enrolled in a course that embeds it, unless the lesson is locked
- *    by sequential completion
- *  - anyone logged in, for a free-preview lesson of a published course
+ *  - learners enrolled in a course that embeds it, only while that lesson is
+ *    open to them (not locked by sequential completion, a drip schedule or
+ *    unmet prerequisites — the same rule as the lesson player)
+ *  - learners enrolled in the quiz's own course when the quiz is not placed in
+ *    any lesson of that course
+ *  - anyone logged in, for a free-preview lesson they can open (published
+ *    course, guest access on, and past its `availableFrom` date)
  *  - instructors and members of a batch whose assessments list the quiz
+ *
+ * Access to the quiz does not open the lessons that embed it: an attempt only
+ * counts toward (and completes) a lesson the learner can open, see
+ * `recordQuizSubmission`.
  */
 export async function getQuizAccess(user: User | null, quiz: Quiz): Promise<QuizAccess> {
   if (!user) return { ok: false, reason: "guest", message: "Please log in to access the quiz." };
@@ -201,22 +210,33 @@ export async function getQuizAccess(user: User | null, quiz: Quiz): Promise<Quiz
   // Instructors of a course that embeds the quiz may take it, but not edit it.
   if (teachesQuizPlacement(user, quiz, db)) return { ok: true, manage: false };
 
-  let locked = false;
-  for (const placement of findQuizPlacements(db, quiz)) {
+  let lockedMessage: string | null = null;
+  const placements = findQuizPlacements(db, quiz);
+  for (const placement of placements) {
     const course = placement.course;
     if (!course) continue;
     const enrolled = db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id);
     if (enrolled) {
-      if (!course.enforceLessonCompletion) return { ok: true, manage: false };
-      const outline = await getCourseOutline(course, user);
-      const row = outline.flatMap((c) => c.lessons).find((l) => l.id === placement.lesson.id);
-      if (row && !row.locked) return { ok: true, manage: false };
-      locked = true;
+      // The placement lesson must be open for this learner (drip, order and prerequisites).
+      const access = await getLessonAccess(user, placement.lesson.id);
+      if (access?.canView) return { ok: true, manage: false };
+      if (access) lockedMessage ??= access.lock && access.lock.reason !== "order" ? lockedLessonError(access) : "Complete the previous lessons to unlock this quiz.";
       continue;
     }
-    if (course.published && placement.lesson.includeInPreview) return { ok: true, manage: false };
+    if (course.published && placement.lesson.includeInPreview) {
+      // Free previews follow the lesson player: guest access must be on, and a preview scheduled
+      // with `availableFrom` stays closed to everyone until that date.
+      const preview = await getLessonAccess(user, placement.lesson.id);
+      if (preview?.canView) return { ok: true, manage: false };
+      if (preview?.lock?.reason === "drip") lockedMessage ??= lockedLessonError(preview);
+    }
   }
-  if (quiz.courseId && db.enrollments.some((e) => e.userId === user.id && e.courseId === quiz.courseId)) {
+  // A course quiz that isn't placed in any of the course's lessons (so no lesson can lock it).
+  if (
+    quiz.courseId &&
+    !placements.some((p) => p.course?.id === quiz.courseId) &&
+    db.enrollments.some((e) => e.userId === user.id && e.courseId === quiz.courseId)
+  ) {
     return { ok: true, manage: false };
   }
   for (const batch of db.batches) {
@@ -224,8 +244,22 @@ export async function getQuizAccess(user: User | null, quiz: Quiz): Promise<Quiz
     if (batch.instructorIds.includes(user.id)) return { ok: true, manage: false };
     if (db.batchEnrollments.some((b) => b.batchId === batch.id && b.userId === user.id)) return { ok: true, manage: false };
   }
-  if (locked) return { ok: false, reason: "locked", message: "Complete the previous lessons to unlock this quiz." };
+  if (lockedMessage) return { ok: false, reason: "locked", message: lockedMessage };
   return { ok: false, reason: "forbidden", message: "You are not authorized to view this quiz." };
+}
+
+/**
+ * Whether a quiz attempt may be tied to `lessonId` and complete it: people who
+ * manage the quiz, and anyone who can open that lesson right now (its course
+ * managers, enrolled learners once it is released and unlocked, visitors on an
+ * open free preview). Taking the quiz is authorized separately — another
+ * placement or a batch assessment may open it — so without this check a
+ * passing attempt would complete, and so unlock, a lesson that is still
+ * scheduled (drip), order-locked or behind prerequisites.
+ */
+async function attemptMayCompleteLesson(user: User, lessonId: string, managesQuiz: boolean): Promise<boolean> {
+  if (managesQuiz) return true;
+  return (await getLessonAccess(user, lessonId))?.canView === true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -785,11 +819,15 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
     };
   }
 
-  // Resolve where the attempt happened (only lessons that really embed this quiz count).
+  // Resolve where the attempt happened: only a lesson that really embeds this quiz and that the
+  // learner can open right now counts. An attempt naming a lesson that is still locked for them is
+  // recorded without a lesson, so it can't complete (and so unlock) that lesson.
   let lesson: Lesson | null = null;
   if (input.lessonId) {
     const candidate = db.lessons.find((l) => l.id === input.lessonId);
-    if (candidate && (lessonUsesQuiz(candidate, quiz.id) || quiz.lessonId === candidate.id)) lesson = candidate;
+    if (candidate && (lessonUsesQuiz(candidate, quiz.id) || quiz.lessonId === candidate.id) && (await attemptMayCompleteLesson(user, candidate.id, access.manage))) {
+      lesson = candidate;
+    }
   }
   const courseIds = quizCourseIds(db, quiz);
   const courseId = lesson?.courseId ?? (input.courseId && courseIds.includes(input.courseId) ? input.courseId : undefined) ?? courseIds[0];
@@ -1389,7 +1427,10 @@ export async function gradeSubmission(grader: User, input: { submissionId: strin
     const learner = db.users.find((u) => u.id === submission.userId);
     const lesson = submission.lessonId ? db.lessons.find((l) => l.id === submission.lessonId) : null;
     if (learner) {
-      if (lesson) {
+      // Re-checked now: the lesson may be locked for the learner at grading time (or the attempt may
+      // predate this check), and a passing grade must not complete a lesson they can't open.
+      const managesQuiz = !!quiz && canManageQuiz(learner, quiz, db);
+      if (lesson && (await attemptMayCompleteLesson(learner, lesson.id, managesQuiz))) {
         try {
           await completeLesson(learner, lesson, 9999);
         } catch (err) {

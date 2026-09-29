@@ -42,6 +42,7 @@ import {
   shiftDayKey,
   zonedTimeToUtc,
 } from "@/components/batches/tz";
+import { liveClassRange } from "@/lib/calendar/time";
 
 /* ------------------------------------------------------------------ */
 /* Time & status                                                       */
@@ -579,6 +580,15 @@ function timetableCompleted(db: Database, type: TimetableItemType, refId: string
 export async function getBatchTimetable(batch: Batch, viewerId: string | null): Promise<TimetableEntry[]> {
   const db = await getDb();
   const legends = new Map(batch.timetableLegends.map((l) => [l.id, l]));
+  // Absolute times of this batch's classes: their clock times are in the class's own timezone.
+  const classRanges = new Map<string, { start: number; end: number }>();
+  const classZones = new Map<string, string>();
+  for (const c of db.liveClasses) {
+    const range = c.batchId === batch.id ? liveClassRange(c, batch.timezone) : null;
+    if (!range) continue;
+    classRanges.set(c.id, { start: range.start, end: range.end });
+    classZones.set(c.id, range.timeZone);
+  }
   const entries: TimetableEntry[] = batch.timetable.map((item) => {
     const legend = item.legendId ? legends.get(item.legendId) : undefined;
     return {
@@ -597,6 +607,8 @@ export async function getBatchTimetable(batch: Batch, viewerId: string | null): 
       href: timetableHref(db, batch, item.type, item.refId),
       completed: timetableCompleted(db, item.type, item.refId, viewerId),
       source: "timetable",
+      classRange: item.type === "live_class" && item.refId ? classRanges.get(item.refId) : undefined,
+      classTimeZone: item.type === "live_class" && item.refId ? classZones.get(item.refId) : undefined,
     };
   });
   if (batch.showLiveClass) {
@@ -616,6 +628,8 @@ export async function getBatchTimetable(batch: Batch, viewerId: string | null): 
         href: `/batches/${batch.slug}?tab=classes#class-${c.id}`,
         completed: viewerId ? c.attendeeIds.includes(viewerId) : undefined,
         source: "live_class",
+        classRange: classRanges.get(c.id),
+        classTimeZone: classZones.get(c.id),
       });
     }
   }

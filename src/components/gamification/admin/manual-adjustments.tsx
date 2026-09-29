@@ -13,7 +13,8 @@ import { SegmentedControl } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { MemberPicker, type PickerMember } from "@/components/admin/settings/member-picker";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { LocalTime } from "@/components/quiz/local-time";
 import { formatPoints, formatSignedPoints } from "../levels";
 import { MAX_MANUAL_POINTS } from "../reasons";
 
@@ -123,7 +124,9 @@ export function ManualAdjustments({ members, recent, enabled }: { members: Picke
                     <span className={cn("font-semibold tabular-nums", row.points >= 0 ? "text-success" : "text-danger")}>{formatSignedPoints(row.points)}</span>
                   </p>
                   {row.note && <p className="break-words text-sm text-ink-muted">{row.note}</p>}
-                  <p className="text-xs text-ink-faint">{formatDateTime(row.createdAt)}</p>
+                  <p className="text-xs text-ink-faint">
+                    <LocalTime iso={row.createdAt} />
+                  </p>
                 </div>
                 <IconButton label="Undo this adjustment" size="icon-sm" onClick={() => setToUndo(row)} disabled={undoing}>
                   <Icon.Trash className="size-4" />

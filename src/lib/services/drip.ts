@@ -3,7 +3,7 @@ import type { Chapter, Course, Database, Lesson, Notification, User } from "@/li
 import { getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
 import { sendNotificationEmails } from "@/lib/services/notifications";
-import { canManageCourse, flattenOutline, getCourseOutline, getViewerCourseState, lessonHref } from "@/lib/data/courses";
+import { canManageCourse, computeViewerLessons, flattenOutline, getCourseOutline, getViewerCourseState, lessonHref } from "@/lib/data/courses";
 import {
   DAY_MS,
   dripAnchor,
@@ -150,7 +150,9 @@ interface PendingDripNotice {
  * window and have not been opened yet. A chapter whose own schedule releases
  * several lessons at once produces one notification ("drip:<chapterId>");
  * lessons with a later schedule of their own get "drip:<lessonId>". Content
- * that was already available when the learner enrolled is never announced.
+ * that was already available when the learner enrolled is never announced,
+ * and neither is content that is still locked for the learner by enforced
+ * lesson order (it is announced once it opens, while still in the window).
  */
 function collectDueDripNotices(db: Database, userId: string, now: number): PendingDripNotice[] {
   const user = db.users.find((u) => u.id === userId);
@@ -175,6 +177,8 @@ function collectDueDripNotices(db: Database, userId: string, now: number): Pendi
     const previewsOpen = course.published && db.settings.learning.allowGuestAccess;
     // Same rule as the lesson player: open free previews ignore drip days.
     const lessonRelease = (chapter: Chapter, lesson: Lesson) => releaseTime(chapter, lesson, previewsOpen && lesson.includeInPreview ? null : anchor);
+    // Only lessons the learner can open right now are announced (same locks as the lesson player).
+    const openNow = new Set(computeViewerLessons(db, course, user, now).lessons.filter((l) => !l.lock).map((l) => l.lesson.id));
 
     chapters.forEach((chapter, ci) => {
       const chapterLessons = lessons.filter((l) => l.chapterId === chapter.id).sort((a, b) => a.order - b.order);
@@ -184,7 +188,7 @@ function collectDueDripNotices(db: Database, userId: string, now: number): Pendi
       if (recent(chapterRelease)) {
         const releasedWithChapter = chapterLessons
           .map((lesson, li) => ({ lesson, li }))
-          .filter(({ lesson }) => lessonRelease(chapter, lesson) === chapterRelease);
+          .filter(({ lesson }) => lessonRelease(chapter, lesson) === chapterRelease && openNow.has(lesson.id));
         const first = releasedWithChapter.find(({ lesson }) => !opened.has(lesson.id));
         if (first) {
           const count = releasedWithChapter.length;
@@ -199,7 +203,7 @@ function collectDueDripNotices(db: Database, userId: string, now: number): Pendi
 
       chapterLessons.forEach((lesson, li) => {
         const release = lessonRelease(chapter, lesson);
-        if (!recent(release) || release === chapterRelease || opened.has(lesson.id)) return;
+        if (!recent(release) || release === chapterRelease || opened.has(lesson.id) || !openNow.has(lesson.id)) return;
         out.push({
           key: dripNotificationKey(lesson.id),
           subject: `New lesson unlocked: ${lesson.title}`,

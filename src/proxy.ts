@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { siteConfig } from "@/lib/config";
+import { UNSUBSCRIBE_RECEIPT_COOKIE } from "@/lib/email/unsubscribe-cookie";
 
 /**
  * Optimistic auth check: routes under these prefixes need a session cookie.
@@ -13,17 +14,19 @@ const PROTECTED_PREFIXES = ["/dashboard", "/admin", "/settings", "/billing", "/n
 
 /**
  * One-click unsubscribe links from emails (`/settings/notifications?unsubscribe=…&u=…&t=…`)
- * must work without a session: the page verifies the HMAC signature itself.
+ * must work without a session: the page verifies the HMAC signature itself. So must the
+ * token-free result page the confirmation redirects to (it carries a signed receipt cookie).
  */
-function isSignedUnsubscribeLink(pathname: string, params: URLSearchParams): boolean {
-  return pathname === "/settings/notifications" && params.has("unsubscribe") && params.has("u") && params.has("t");
+function isSignedUnsubscribeLink(request: NextRequest, pathname: string, params: URLSearchParams): boolean {
+  if (pathname !== "/settings/notifications") return false;
+  return (params.has("unsubscribe") && params.has("u") && params.has("t")) || request.cookies.has(UNSUBSCRIBE_RECEIPT_COOKIE);
 }
 
 export function proxy(request: NextRequest) {
   const { pathname, search, searchParams } = request.nextUrl;
   const needsAuth = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!needsAuth) return NextResponse.next();
-  if (isSignedUnsubscribeLink(pathname, searchParams)) return NextResponse.next();
+  if (isSignedUnsubscribeLink(request, pathname, searchParams)) return NextResponse.next();
 
   const hasSession = request.cookies.has(siteConfig.sessionCookie);
   if (hasSession) return NextResponse.next();

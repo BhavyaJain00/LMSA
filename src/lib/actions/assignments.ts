@@ -6,11 +6,12 @@ import type { ActionResult, Assignment, AssignmentStatus, AssignmentSubmission, 
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { getLessonHref } from "@/lib/data/courses";
+import { getAssessmentAccess, lessonSubmissionLockError } from "@/lib/data/lessons";
 import { canDeleteSubmissions, canManageAssessments, completeLessonFromAssessment, toSubmissionView } from "@/lib/data/assessments";
 import { notify, notifyMany } from "@/lib/services/notifications";
 import { evaluateBadges } from "@/lib/services/badges";
 import { logActivity } from "@/lib/services/activity";
-import { awardPoints, setPointsAward } from "@/lib/services/points";
+import { awardPoints, syncAssignmentPassPoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, formatDateTime, isValidUrl, uid } from "@/lib/utils";
 import {
@@ -199,6 +200,12 @@ export async function submitAssignmentAction(
   if (!assignment) return { ok: false, error: "This assignment no longer exists." };
 
   const privileged = canManageAssessments(user);
+  // Whatever lesson the form names: an assignment that lives only in lessons still locked for this
+  // learner (drip schedule, enforced order, prerequisites) takes no submissions.
+  if (!privileged) {
+    const gate = await getAssessmentAccess(user, "assignment", assignment.id);
+    if (!gate.ok) return { ok: false, error: gate.message };
+  }
   const schedule = assignmentScheduleState(assignment, Date.now());
   if (schedule.blocked && !privileged) {
     return {
@@ -243,6 +250,11 @@ export async function submitAssignmentAction(
   if (lessonIdInput) {
     lesson = db.lessons.find((l) => l.id === lessonIdInput && l.blocks.some((b) => b.type === "assignment" && b.assignmentId === assignment.id));
   }
+  // A lesson that is still locked for this learner (drip, order, prerequisites) can't take submissions.
+  if (lesson && !privileged) {
+    const locked = await lessonSubmissionLockError(user, lesson.id, "assignment");
+    if (locked) return { ok: false, error: locked };
+  }
   const courseId =
     lesson?.courseId ?? (courseIdInput && db.courses.some((c) => c.id === courseIdInput) ? courseIdInput : undefined) ?? assignment.courseId;
 
@@ -286,7 +298,7 @@ export async function submitAssignmentAction(
 
   if (isNew) {
     await logActivity(user.id, "assignment_submit", assignment.id);
-    await awardPoints(user.id, "assignment_submit", { refId: assignment.id, courseId: saved.courseId });
+    await awardPoints(user.id, "assignment_submit", { refId: assignment.id, lessonId: saved.lessonId });
     await notifyGraders(user, assignment, saved);
   }
 
@@ -347,14 +359,16 @@ export async function gradeAssignmentAction(_prev: ActionResult<{ status: Assign
   if (!statusChanged && !commentsChanged) return { ok: true, data: { status }, message: "No changes to save" };
 
   const now = new Date().toISOString();
-  await mutate((d) => {
+  const previousStatus = await mutate((d) => {
     const row = d.assignmentSubmissions.find((s) => s.id === submissionId);
-    if (!row) return;
+    if (!row) return null;
+    const before = row.status;
     row.status = status;
     row.comments = comments || undefined;
     if (row.userId !== user.id) row.evaluatorId = user.id;
     row.gradedAt = status === "pass" || status === "fail" ? now : undefined;
     row.updatedAt = now;
+    return before;
   });
 
   const title = assignment?.title ?? submission.assignmentTitle;
@@ -377,7 +391,8 @@ export async function gradeAssignmentAction(_prev: ActionResult<{ status: Assign
     });
   }
   if (statusChanged && status === "pass") await evaluateBadges(submission.userId, "assignment_passed");
-  if (statusChanged) await setPointsAward(submission.userId, "assignment_pass", status === "pass", { refId: submission.assignmentId, courseId: submission.courseId });
+  // Points follow the grade stored now (re-read inside the write lock, so concurrent regrades stay consistent).
+  if (previousStatus !== null && previousStatus !== status) await syncAssignmentPassPoints(submission.id, user.id);
 
   await revalidateAssignment(submission.assignmentId, submission.lessonId);
   revalidatePath(`/admin/assignments/submissions/${submission.id}`);

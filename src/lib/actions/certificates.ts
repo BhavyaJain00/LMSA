@@ -9,6 +9,7 @@ import { canIssueCertificates, isEvaluatorRole } from "@/lib/data/certificates";
 import { issueCertificate } from "@/lib/services/progress";
 import { notify } from "@/lib/services/notifications";
 import { evaluateBadges } from "@/lib/services/badges";
+import { awardCertificatePoints, revokeCertificatePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, shortCode, toDateKey, uid } from "@/lib/utils";
 import { isValidDateKey } from "@/components/certificates/time";
@@ -26,6 +27,8 @@ interface IssueOptions {
   batchId?: string;
   /** Registered certificate template id (templates.ts). */
   templateId: string;
+  /** Who issues it (no points when a staff member issues their own certificate). */
+  issuedById?: string;
 }
 
 function revalidateCertificates(extra: string[] = []) {
@@ -85,7 +88,7 @@ async function batchCertificateBlocker(learner: User, batch: Batch): Promise<str
 
 /** Course certificate through the shared progress service, then apply form overrides. */
 async function issueCourseCertificate(learner: User, course: Course, opts: IssueOptions): Promise<Certificate> {
-  const cert = await issueCertificate(learner, course, { batchId: opts.batchId, evaluatorId: opts.evaluatorId, expiryDate: opts.expiryDate });
+  const cert = await issueCertificate(learner, course, { batchId: opts.batchId, evaluatorId: opts.evaluatorId, expiryDate: opts.expiryDate, issuedById: opts.issuedById });
   if (
     cert.issueDate !== opts.issueDate ||
     cert.published !== opts.published ||
@@ -120,9 +123,14 @@ async function issueBatchCertificate(learner: User, batch: Batch, opts: IssueOpt
     published: opts.published,
     templateId: opts.templateId,
   };
-  await mutate((d) => {
+  // Re-checked inside the write lock so concurrent requests never create two batch certificates.
+  const duplicate = await mutate((d) => {
+    const already = d.certificates.find((c) => c.userId === learner.id && c.batchId === batch.id && !c.courseId);
+    if (already) return already;
     d.certificates.push(cert);
+    return null;
   });
+  if (duplicate) return duplicate;
   await notify(learner.id, {
     type: "certificate",
     subject: "Your certificate is ready",
@@ -130,6 +138,7 @@ async function issueBatchCertificate(learner: User, batch: Batch, opts: IssueOpt
     link: `/certificates/${cert.code}`,
   });
   await evaluateBadges(learner.id, "certificate_issued");
+  await awardCertificatePoints(cert, { grantedBy: opts.issuedById ?? opts.evaluatorId });
   return cert;
 }
 
@@ -167,7 +176,7 @@ export async function issueCertificateAction(_prev: ActionResult<{ code: string 
   }
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
 
-  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, templateId };
+  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, templateId, issuedById: user.id };
   let cert: Certificate;
   if (course) {
     const blocker = await courseCertificateBlocker(learner!, course, { allowIncomplete });
@@ -223,7 +232,7 @@ export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueR
   if (!userIds.length) errors.userIds = "Select at least one student.";
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
 
-  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, batchId: batch.id, templateId };
+  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, batchId: batch.id, templateId, issuedById: user.id };
   const result: BulkIssueResult = { issued: [], skipped: [] };
   for (const id of userIds) {
     const learner = db.users.find((u) => u.id === id);
@@ -303,6 +312,8 @@ export async function revokeCertificateAction(id: string): Promise<ActionResult>
     return row;
   });
   if (!removed) return { ok: false, error: "This certificate no longer exists." };
+  // A revoked certificate takes its points back (re-issuing it pays once again, never twice).
+  await revokeCertificatePoints(removed);
   const db = await getDb();
   const course = removed.courseId ? db.courses.find((c) => c.id === removed.courseId) : undefined;
   const learner = db.users.find((u) => u.id === removed.userId);

@@ -17,18 +17,42 @@ import { Table, TableEmpty, TBody, TD, TH, THead, TR } from "@/components/ui/tab
 import { useServerAction } from "@/components/batches/hooks";
 import { GroupedSelect } from "@/components/batches/admin/form-fields";
 import type { Option } from "@/components/batches/types";
-import type { AdminProgramCourse, ProgramMemberView } from "../types";
+import type { AdminProgramCourse, ProgramMemberView, ProgramPaidCourse } from "../types";
+import { GrantPaidAccessField, useEnrollmentToast } from "./grant-paid-access";
 
 /* ------------------------------------------------------------------ */
 /* Courses                                                             */
 /* ------------------------------------------------------------------ */
 
-export function ProgramCoursesManager({ programId, courses, options, enforceOrder }: { programId: string; courses: AdminProgramCourse[]; options: Option[]; enforceOrder: boolean }) {
+export function ProgramCoursesManager({
+  programId,
+  courses,
+  options,
+  enforceOrder,
+  paidCourses,
+  memberCount,
+}: {
+  programId: string;
+  courses: AdminProgramCourse[];
+  options: Option[];
+  enforceOrder: boolean;
+  /** Paid courses among the options (see "Grant access without payment"). */
+  paidCourses: ProgramPaidCourse[];
+  memberCount: number;
+}) {
   const [adding, setAdding] = useState(false);
   const [courseId, setCourseId] = useState("");
+  const [grant, setGrant] = useState(false);
   const [removing, setRemoving] = useState<AdminProgramCourse | null>(null);
   const add = useServerAction();
   const mutate = useServerAction();
+  const enrollmentToast = useEnrollmentToast();
+  // Without an enforced order, adding a course enrolls the current members in it.
+  const selectedPaid = !enforceOrder && memberCount > 0 ? paidCourses.filter((c) => c.id === courseId) : [];
+  const closeAdd = () => {
+    setAdding(false);
+    setGrant(false);
+  };
 
   return (
     <Card>
@@ -81,22 +105,24 @@ export function ProgramCoursesManager({ programId, courses, options, enforceOrde
 
       <Dialog
         open={adding}
-        onClose={() => setAdding(false)}
+        onClose={closeAdd}
         title="Add Course to Program"
         size="sm"
         footer={
           <>
-            <Button variant="outline" onClick={() => setAdding(false)} disabled={add.pending}>
+            <Button variant="outline" onClick={closeAdd} disabled={add.pending}>
               Cancel
             </Button>
             <Button
               loading={add.pending}
               disabled={!courseId}
               onClick={() =>
-                add.run(() => addProgramCourseAction(programId, courseId), {
-                  onSuccess: () => {
+                add.run(() => addProgramCourseAction(programId, courseId, { grantPaidAccess: grant && selectedPaid.some((c) => c.grantable) }), {
+                  toast: false,
+                  onSuccess: (report, message) => {
+                    enrollmentToast(message, report);
                     setCourseId("");
-                    setAdding(false);
+                    closeAdd();
                   },
                 })
               }
@@ -106,9 +132,22 @@ export function ProgramCoursesManager({ programId, courses, options, enforceOrde
           </>
         }
       >
-        <Field label="Course" htmlFor="program-add-course">
-          <GroupedSelect id="program-add-course" value={courseId} onChange={setCourseId} options={options} placeholder={options.length ? "Select a course" : "Every course is already added"} disabled={!options.length} />
-        </Field>
+        <div className="space-y-4">
+          <Field label="Course" htmlFor="program-add-course">
+            <GroupedSelect
+              id="program-add-course"
+              value={courseId}
+              onChange={(value) => {
+                setCourseId(value);
+                setGrant(false);
+              }}
+              options={options}
+              placeholder={options.length ? "Select a course" : "Every course is already added"}
+              disabled={!options.length}
+            />
+          </Field>
+          <GrantPaidAccessField id="program-course-grant" courses={selectedPaid} checked={grant} onChange={setGrant} />
+        </div>
       </Dialog>
       <ConfirmDialog
         open={!!removing}
@@ -203,15 +242,34 @@ export function ProgressSummaryDialog({ open, onClose, title, members }: { open:
 /* Members                                                             */
 /* ------------------------------------------------------------------ */
 
-export function ProgramMembersManager({ programId, programTitle, members, candidates }: { programId: string; programTitle: string; members: ProgramMemberView[]; candidates: Option[] }) {
+export function ProgramMembersManager({
+  programId,
+  programTitle,
+  members,
+  candidates,
+  startingPaidCourses,
+}: {
+  programId: string;
+  programTitle: string;
+  members: ProgramMemberView[];
+  candidates: Option[];
+  /** Paid courses a new member is enrolled in (the first course, or all when the order isn't enforced). */
+  startingPaidCourses: ProgramPaidCourse[];
+}) {
   const [adding, setAdding] = useState(false);
   const [summary, setSummary] = useState(false);
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState("");
+  const [grant, setGrant] = useState(false);
   const [search, setSearch] = useState("");
   const [removing, setRemoving] = useState<ProgramMemberView | null>(null);
   const add = useServerAction();
   const remove = useServerAction();
+  const enrollmentToast = useEnrollmentToast();
+  const closeAdd = () => {
+    setAdding(false);
+    setGrant(false);
+  };
   const q = query.trim().toLowerCase();
   const rows = members.filter((m) => !q || `${m.user.name} ${m.user.email}`.toLowerCase().includes(q));
   const s = search.trim().toLowerCase();
@@ -294,22 +352,24 @@ export function ProgramMembersManager({ programId, programTitle, members, candid
 
       <Dialog
         open={adding}
-        onClose={() => setAdding(false)}
+        onClose={closeAdd}
         title="Enroll Member to Program"
         size="md"
         footer={
           <>
-            <Button variant="outline" onClick={() => setAdding(false)} disabled={add.pending}>
+            <Button variant="outline" onClick={closeAdd} disabled={add.pending}>
               Cancel
             </Button>
             <Button
               loading={add.pending}
               disabled={!pick}
               onClick={() =>
-                add.run(() => addProgramMemberAction(programId, pick), {
-                  onSuccess: () => {
+                add.run(() => addProgramMemberAction(programId, pick, { grantPaidAccess: grant && startingPaidCourses.some((c) => c.grantable) }), {
+                  toast: false,
+                  onSuccess: (report, message) => {
+                    enrollmentToast(message, report);
                     setPick("");
-                    setAdding(false);
+                    closeAdd();
                   },
                 })
               }
@@ -340,6 +400,7 @@ export function ProgramMembersManager({ programId, programTitle, members, candid
               </li>
             ))}
           </ul>
+          <GrantPaidAccessField id="program-member-grant" courses={startingPaidCourses} checked={grant} onChange={setGrant} single />
         </div>
       </Dialog>
       <ProgressSummaryDialog open={summary} onClose={() => setSummary(false)} title={programTitle} members={members} />

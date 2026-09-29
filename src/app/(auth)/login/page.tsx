@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
+import { safeRedirectPath } from "@/lib/auth/redirects";
 import { getSettings } from "@/lib/db/store";
 import { LoginForm } from "./login-form";
 
@@ -9,7 +10,7 @@ export const metadata = { title: "Log in" };
 export default async function LoginPage(props: PageProps<"/login">) {
   const user = await getCurrentUser();
   const sp = await props.searchParams;
-  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
+  const next = safeRedirectPath(sp.next, undefined);
   const email = typeof sp.email === "string" ? sp.email.slice(0, 254) : undefined;
   if (user) redirect(next ?? "/dashboard");
   const settings = await getSettings();

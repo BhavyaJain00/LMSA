@@ -10,6 +10,8 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Checkbox, Field, FormError, Input, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { useActionForm, useServerAction } from "@/components/batches/hooks";
+import type { ProgramEnrollmentReport, ProgramPaidCourse } from "../types";
+import { GrantPaidAccessField, useEnrollmentToast } from "./grant-paid-access";
 
 interface Values {
   title: string;
@@ -19,8 +21,13 @@ interface Values {
   enforceCourseOrder: boolean;
 }
 
-/** Create or edit a program's details (title, URL, description, published, enforced order). */
-export function ProgramDetailsForm({ program }: { program?: Program }) {
+/**
+ * Create or edit a program's details (title, URL, description, published,
+ * enforced order). Lifting an enforced order enrolls the members in every
+ * course; for paid courses the form asks whether to grant access without
+ * payment (off by default).
+ */
+export function ProgramDetailsForm({ program, paidCourses = [], memberCount = 0 }: { program?: Program; paidCourses?: ProgramPaidCourse[]; memberCount?: number }) {
   const initial: Values = {
     title: program?.title ?? "",
     slug: program?.slug ?? "",
@@ -30,12 +37,21 @@ export function ProgramDetailsForm({ program }: { program?: Program }) {
   };
   const [values, setValues] = useState<Values>(initial);
   const [saved, setSaved] = useState<Values>(initial);
+  const [grant, setGrant] = useState(false);
   const submitted = useRef<Values>(initial);
-  const { submit, pending, error, fieldErrors } = useActionForm(program ? updateProgramAction : createProgramAction, {
-    onSuccess: () => setSaved(submitted.current),
+  const enrollmentToast = useEnrollmentToast();
+  const { submit, pending, error, fieldErrors } = useActionForm<ProgramEnrollmentReport | undefined>(program ? updateProgramAction : createProgramAction, {
+    toast: false,
+    onSuccess: (result) => {
+      enrollmentToast(result.message, result.data);
+      setSaved(submitted.current);
+      setGrant(false);
+    },
   });
   const set = <K extends keyof Values>(key: K, value: Values[K]) => setValues((v) => ({ ...v, [key]: value }));
   const dirty = JSON.stringify(values) !== JSON.stringify(saved);
+  // Saving with the order lifted enrolls the current members in every course, paid ones included.
+  const liftingOrder = !!program && saved.enforceCourseOrder && !values.enforceCourseOrder && memberCount > 0;
 
   return (
     <form
@@ -79,11 +95,15 @@ export function ProgramDetailsForm({ program }: { program?: Program }) {
             <Checkbox
               name="enforceCourseOrder"
               checked={values.enforceCourseOrder}
-              onChange={(e) => set("enforceCourseOrder", e.target.checked)}
+              onChange={(e) => {
+                set("enforceCourseOrder", e.target.checked);
+                setGrant(false);
+              }}
               label="Enforce Course Order"
               description="Each course unlocks after the previous one is completed."
             />
           </div>
+          {liftingOrder && <GrantPaidAccessField id="program-grant-paid-access" name="grantPaidAccess" courses={paidCourses} checked={grant} onChange={setGrant} />}
         </CardBody>
         <CardFooter>
           {!program && (
@@ -92,7 +112,14 @@ export function ProgramDetailsForm({ program }: { program?: Program }) {
             </ButtonLink>
           )}
           {program && dirty && (
-            <Button variant="ghost" onClick={() => setValues(saved)} disabled={pending}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setValues(saved);
+                setGrant(false);
+              }}
+              disabled={pending}
+            >
               Discard
             </Button>
           )}

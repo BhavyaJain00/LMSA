@@ -134,6 +134,10 @@ export default async function YouPage() {
           <SearchRow className={rowClass} />
         </li>
         <Row href="/settings" icon={<Icon.Settings />} label="Account settings" />
+        <Row href="/settings/security" icon={<Icon.ShieldCheck />} label="Security" />
+        <Row href="/settings/notifications" icon={<Icon.Mail />} label="Email notifications" />
+        <Row href="/settings/calendar" icon={<Icon.Calendar />} label="Calendar feed" />
+        <Row href="/billing/history" icon={<Icon.Receipt />} label="Orders & invoices" />
         <Row href="/persona" icon={<Icon.Target />} label="Learning goals" />
         <li>
           <ColourModeRow className={rowClass} />

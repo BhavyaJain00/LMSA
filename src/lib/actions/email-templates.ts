@@ -6,7 +6,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, hasRole } from "@/lib/auth/session";
 import { canManageBatch } from "@/lib/data/batches";
 import { fd, isValidEmail, splitList, uid } from "@/lib/utils";
-import { sendBatchMessage } from "@/lib/email";
+import { queueBatchMessage } from "@/lib/email";
 
 /** Placeholders the template editor understands (see the Emails tab). */
 const KNOWN_PLACEHOLDERS = [
@@ -99,8 +99,12 @@ export async function deleteEmailTemplateAction(templateId: string): Promise<Act
 
 /**
  * Send a batch email: either a saved template (`templateId`) or an ad-hoc
- * subject/body, to every enrolled student or the selected ones (`userId`
- * fields), with optional CC addresses. Placeholders are filled per student.
+ * subject/body, with optional CC addresses. The form must say who receives
+ * it — `audience=all` (every enrolled student) or `audience=selected` with
+ * `userId` fields; an empty selection is refused, never widened to everyone.
+ * At least one student must actually receive it (CC alone never makes a
+ * send), CC recipients count against the sender's quota, and the emails are
+ * rendered and queued after the response.
  */
 export async function sendBatchEmailAction(
   _prev: ActionResult<{ queued: number; skipped: number; cc: number }> | null,
@@ -115,9 +119,8 @@ export async function sendBatchEmailAction(
   const subject = template ? template.subject : fd(formData, "subject");
   const body = template ? template.body : fd(formData, "body");
   const cc = Array.from(new Set(splitList(fd(formData, "cc")).map((e) => e.toLowerCase())));
-  const userIds = formData
-    .getAll("userId")
-    .filter((v): v is string => typeof v === "string" && !!v);
+  const audience = fd(formData, "audience");
+  const userIds = Array.from(new Set(formData.getAll("userId").filter((v): v is string => typeof v === "string" && !!v)));
 
   const fieldErrors: Record<string, string> = {};
   if (!subject) fieldErrors.subject = "Add a subject line.";
@@ -131,17 +134,20 @@ export async function sendBatchEmailAction(
   const badCc = cc.find((e) => !isValidEmail(e));
   if (badCc) fieldErrors.cc = `"${badCc}" is not a valid email address.`;
   else if (cc.length > 50) fieldErrors.cc = "Add at most 50 CC addresses.";
-  if (userIds.length > 5000) fieldErrors.recipients = "Too many recipients selected.";
+  if (audience !== "all" && audience !== "selected") fieldErrors.recipients = "Choose who receives this email.";
+  else if (audience === "selected" && !userIds.length) fieldErrors.recipients = "Choose at least one student to email.";
+  else if (audience === "all" && userIds.length) fieldErrors.recipients = "Choose either all students or a selection.";
+  else if (userIds.length > 5000) fieldErrors.recipients = "Too many recipients selected.";
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
 
   const enrolled = new Set(db.batchEnrollments.filter((e) => e.batchId === batch.id).map((e) => e.userId));
   if (userIds.some((id) => !enrolled.has(id))) return { ok: false, error: "Some selected recipients are not enrolled in this batch." };
 
-  const result = await sendBatchMessage({ batchId: batch.id, subject, body, userIds: userIds.length ? userIds : undefined, cc, senderId: user.id });
-  if (!result.ok) return result;
+  const result = await queueBatchMessage({ batchId: batch.id, subject, body, audience: audience === "selected" ? "selected" : "all", userIds: audience === "selected" ? userIds : undefined, cc, senderId: user.id });
+  if (!result.ok) return result.field ? { ok: false, error: result.error, fieldErrors: { [result.field]: result.error } } : { ok: false, error: result.error };
   revalidatePath(`/admin/batches/${batch.id}`);
   revalidatePath("/admin/emails");
-  const parts = [`Email sent to ${result.queued} ${result.queued === 1 ? "student" : "students"}`];
+  const parts = [`Email queued for ${result.queued} ${result.queued === 1 ? "student" : "students"}`];
   if (result.ccQueued) parts.push(`${cc.length} CC`);
   if (result.skipped) parts.push(`${result.skipped} opted out`);
   return { ok: true, data: { queued: result.queued, skipped: result.skipped, cc: result.ccQueued ? cc.length : 0 }, message: parts.join(" · ") };

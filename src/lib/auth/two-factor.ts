@@ -140,6 +140,39 @@ export async function consumeSecondFactor(userId: string, input: SecondFactorInp
   });
 }
 
+export type ConfirmSetupResult = { ok: true; step: number } | { ok: false; reason: "invalid_code" | "changed" | "unreadable_secret" };
+
+/**
+ * Confirm a pending setup: verify the code against the pending secret and
+ * turn two-step verification on — in one serialized `mutate`, so a setup
+ * restarted in another tab can never slip in between (2FA would otherwise be
+ * enabled with a secret the member never confirmed). `expectedSecretEnc` is
+ * the sealed secret the request started with; if the pending secret has been
+ * replaced (or setup cancelled / already finished) nothing changes.
+ */
+export async function confirmTwoFactorSetup(
+  userId: string,
+  code: string,
+  expectedSecretEnc: string,
+  recoveryCodeHashes: string[],
+  options: { nowMs?: number } = {},
+): Promise<ConfirmSetupResult> {
+  return mutate((db): ConfirmSetupResult => {
+    const user = db.users.find((u) => u.id === userId);
+    if (!user || user.twoFactorEnabled === true || !user.twoFactorSecretEnc || user.twoFactorSecretEnc !== expectedSecretEnc) {
+      return { ok: false, reason: "changed" };
+    }
+    const secret = openTotpSecret(user);
+    if (!secret) return { ok: false, reason: "unreadable_secret" };
+    const step = verifyTotp(secret, code, { nowMs: options.nowMs, lastStep: user.twoFactorLastStep });
+    if (step === null) return { ok: false, reason: "invalid_code" };
+    user.twoFactorLastStep = step;
+    user.twoFactorEnabled = true;
+    user.recoveryCodeHashes = [...recoveryCodeHashes];
+    return { ok: true, step };
+  });
+}
+
 /** Read the method + code fields posted by the second-factor forms. */
 export function readSecondFactorInput(formData: FormData): SecondFactorInput {
   const method = formData.get("method") === "recovery" ? "recovery" : "totp";

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { countdownParts, formatUtcDate } from "./drip-shared";
+import { countdownParts, formatUtcDateTime } from "./drip-shared";
 import { fullLocalDateTime, useNow, useRefreshWhenUnlocked } from "./unlock-time";
 
 function Unit({ value, label }: { value: number; label: string }) {
@@ -55,7 +55,8 @@ export function DripLockedCard({
   const remaining = now === null ? null : Math.max(0, ms - now);
   const parts = countdownParts(remaining ?? 0);
   const unlocked = remaining !== null && remaining <= 0;
-  const when = now === null ? `${formatUtcDate(ms)} at 00:00 UTC` : fullLocalDateTime(ms, now);
+  // Before hydration (and without JavaScript) the exact UTC release time; then the viewer's local time.
+  const when = now === null ? formatUtcDateTime(ms) || unlocksAt : fullLocalDateTime(ms, now);
 
   return (
     <div className="mx-auto w-full max-w-(--lesson-w) py-6">

@@ -9,7 +9,8 @@ import { SmtpError } from "./smtp";
 import { type DeliveryAgent, type SenderIdentity, createDeliveryAgent, resolveReplyTo, resolveSender } from "./transport";
 import { brandFromSettings } from "./context";
 import { wrapHtmlFragment } from "./templates/layout";
-import { findUnsubscribeLink, preferencesUrl } from "./signing";
+import { findUnsubscribeScope, oneClickUnsubscribeUrl, preferencesUrl } from "./signing";
+import { AUTH_TOKEN_TTL_MS } from "@/lib/auth/tokens";
 import { SENSITIVE_EMAIL_CATEGORIES, TRANSACTIONAL_EMAIL_CATEGORIES } from "./preferences";
 
 /**
@@ -18,7 +19,8 @@ import { SENSITIVE_EMAIL_CATEGORIES, TRANSACTIONAL_EMAIL_CATEGORIES } from "./pr
  *  queued ──claim──▶ sending ──▶ sent
  *     ▲                 │
  *     └── retry (1m, 5m, 30m, 2h, 12h) ◀── transient failure
- *                       └──▶ failed (permanent error or 5 attempts)
+ *                       └──▶ failed (permanent error, 6th failed attempt,
+ *                             or a one-time link that expired first)
  *
  * `enqueueEmail` stores a message and schedules a fire-and-forget delivery
  * run. `deliverDueEmails` is the runner (also called by the cron route and
@@ -46,14 +48,21 @@ export interface EnqueueOptions {
   deliverNow?: boolean;
 }
 
-/** Attempts before a message is marked failed. */
-export const MAX_ATTEMPTS = 5;
-/** Wait after the n-th failed attempt (index n-1). */
+/** Attempts before a message is marked failed: the first try plus one retry per delay below. */
+export const MAX_ATTEMPTS = 6;
+/** Wait after the n-th failed attempt (index n-1): every delay is used once. */
 export const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3_600_000, 12 * 3_600_000];
 /** A claimed message is considered abandoned after this long in "sending". */
 const SENDING_LEASE_MS = 10 * 60_000;
 /** Pause automatic runs after a connection-level failure. */
 const CONNECTION_COOLDOWN_MS = 60_000;
+/**
+ * Pause automatic runs this long when the configuration makes delivery
+ * impossible (no sender address): retrying cannot help until an admin fixes
+ * .env and restarts, so the runner must not spin.
+ */
+const CONFIG_COOLDOWN_MS = 30 * 60_000;
+const NO_SENDER_ERROR = "No sender address: set MAIL_FROM (or an email-address SMTP_USER) in .env and restart the server.";
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_CC = 50;
 export const DEFAULT_RUN_LIMIT = 50;
@@ -88,6 +97,8 @@ interface RunnerState {
   cooldownUntil: number;
   lastRun: DeliveryRunResult | null;
   bootstrapped: boolean;
+  /** Configuration problem that stops every delivery (shown to admins). */
+  configError: string | null;
 }
 
 const g = globalThis as unknown as { __llEmailRunner?: RunnerState };
@@ -100,6 +111,7 @@ function runner(): RunnerState {
     cooldownUntil: 0,
     lastRun: null,
     bootstrapped: false,
+    configError: null,
   });
 }
 
@@ -168,6 +180,7 @@ export async function enqueueEmail(input: EnqueueEmailInput, opts: EnqueueOption
   const settings = await getSettings();
   const message = prepareMessage(input, settings, new Date().toISOString());
   await mutate((db) => {
+    supersedeOlderLinks(db.emails, message);
     db.emails.push(message);
   });
   if (message.status === "queued") {
@@ -185,6 +198,7 @@ export async function enqueueEmails(inputs: EnqueueEmailInput[]): Promise<EmailM
   const now = new Date().toISOString();
   const messages = inputs.map((input) => prepareMessage(input, settings, now));
   await mutate((db) => {
+    for (const message of messages) supersedeOlderLinks(db.emails, message);
     db.emails.push(...messages);
   });
   if (messages.some((m) => m.status === "queued")) scheduleDelivery();
@@ -204,9 +218,60 @@ function scrubSecrets(row: EmailMessage) {
   row.text = row.text.replace(SECRET_LINK_RE, "$1[redacted]");
 }
 
-/** For admin views: hide every `token=` value regardless of category. */
+/** Signature of one-click unsubscribe links (`&t=<43 chars>`). */
+const UNSUBSCRIBE_SIG_RE = /([?&](?:amp;)?t=)[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g;
+
+/**
+ * For admin views: hide every `token=` value regardless of category, and the
+ * signature of unsubscribe links, so staff opening a preview can neither use
+ * a member's one-time link nor unsubscribe them.
+ */
 export function redactForView(value: string): string {
-  return value.replace(ANY_TOKEN_RE, "$1••••••••");
+  return value.replace(ANY_TOKEN_RE, "$1••••••••").replace(UNSUBSCRIBE_SIG_RE, "$1••••••••");
+}
+
+/* ------------------------------------------------------------------ */
+/* One-time link lifetime                                              */
+/* ------------------------------------------------------------------ */
+
+/** How long the one-time link in each sensitive category stays valid (the auth token TTL). */
+const LINK_TTL_MS: Partial<Record<EmailCategory, number>> = {
+  password_reset: AUTH_TOKEN_TTL_MS.password_reset,
+  email_verification: AUTH_TOKEN_TTL_MS.email_verification,
+};
+
+export const LINK_EXPIRED_ERROR = "Link expired before it could be delivered — the one-time link in this email is no longer valid. The member can request a new one.";
+const LINK_SUPERSEDED_ERROR = "Not delivered: a newer link was requested for this member, which invalidates this one.";
+
+/** When the one-time link in this email stops working (ms), or null when it has none. */
+export function linkExpiresAt(row: Pick<EmailMessage, "category" | "createdAt">): number | null {
+  const ttl = LINK_TTL_MS[row.category];
+  if (!ttl) return null;
+  const created = Date.parse(row.createdAt);
+  return Number.isNaN(created) ? 0 : created + ttl;
+}
+
+export function isLinkExpired(row: Pick<EmailMessage, "category" | "createdAt">, now: number = Date.now()): boolean {
+  const expires = linkExpiresAt(row);
+  return expires !== null && expires <= now;
+}
+
+function failRow(row: EmailMessage, error: string) {
+  row.status = "failed";
+  row.nextAttemptAt = undefined;
+  row.lastError = error;
+  scrubSecrets(row);
+}
+
+/**
+ * Issuing a new reset/verification link invalidates the member's older one,
+ * so older copies still waiting in the queue are failed instead of retried.
+ */
+function supersedeOlderLinks(rows: EmailMessage[], message: EmailMessage) {
+  if (!message.userId || !LINK_TTL_MS[message.category] || message.status !== "queued") return;
+  for (const row of rows) {
+    if (row.userId === message.userId && row.category === message.category && row.status === "queued") failRow(row, LINK_SUPERSEDED_ERROR);
+  }
 }
 
 export function isSensitiveCategory(category: EmailCategory): boolean {
@@ -231,10 +296,19 @@ async function claim(sender: SenderIdentity, onlyId?: string): Promise<EmailMess
     let candidate: EmailMessage | undefined;
     if (onlyId) {
       candidate = db.emails.find((e) => e.id === onlyId && (e.status === "queued" || (e.status === "sending" && isDue(e, now))));
+      if (candidate && isLinkExpired(candidate, now)) {
+        failRow(candidate, LINK_EXPIRED_ERROR);
+        return null;
+      }
     } else {
       let best = "";
       for (const e of db.emails) {
         if (!isDue(e, now)) continue;
+        if (isLinkExpired(e, now)) {
+          // Never send (or keep a plaintext token for) a link that can no longer work.
+          failRow(e, LINK_EXPIRED_ERROR);
+          continue;
+        }
         const key = e.nextAttemptAt ?? e.createdAt;
         if (!candidate || key < best) {
           candidate = e;
@@ -270,8 +344,12 @@ function composeMime(message: EmailMessage, settings: Settings, sender: SenderId
     "X-LL-Outbox-Id": message.id,
   };
   if (message.userId && !TRANSACTIONAL_EMAIL_CATEGORIES.includes(message.category)) {
-    const link = findUnsubscribeLink(message.html, message.userId) ?? findUnsubscribeLink(message.text, message.userId);
-    if (link) headers["List-Unsubscribe"] = `<${link}>`;
+    const scope = findUnsubscribeScope(message.html, message.userId) ?? findUnsubscribeScope(message.text, message.userId);
+    if (scope) {
+      // RFC 8058 one-click: mail clients POST "List-Unsubscribe=One-Click" to this URL.
+      headers["List-Unsubscribe"] = `<${oneClickUnsubscribeUrl(message.userId, scope)}>`;
+      headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+    }
   }
   const built = buildMimeMessage({
     from: { address: sender.address, name: sender.name },
@@ -341,9 +419,15 @@ async function finalize(id: string, outcome: SendOutcome): Promise<EmailMessage 
         : undefined;
       scrubSecrets(row);
     } else if (outcome.retryable && row.attempts < MAX_ATTEMPTS) {
-      row.status = "queued";
-      row.nextAttemptAt = new Date(now + retryDelayMs(row.attempts)).toISOString();
-      row.lastError = outcome.error;
+      const nextAt = now + retryDelayMs(row.attempts);
+      const expires = linkExpiresAt(row);
+      if (expires !== null && nextAt >= expires) {
+        failRow(row, `${LINK_EXPIRED_ERROR} Last error: ${outcome.error}`.slice(0, 1000));
+      } else {
+        row.status = "queued";
+        row.nextAttemptAt = new Date(nextAt).toISOString();
+        row.lastError = outcome.error;
+      }
     } else {
       row.status = "failed";
       row.nextAttemptAt = undefined;
@@ -377,8 +461,19 @@ async function runDelivery(limit: number): Promise<DeliveryRunResult> {
   const result: DeliveryRunResult = { ...emptyResult(), ran: true, startedAt: new Date(started).toISOString() };
   const settings = await getSettings();
   const sender = resolveSender(settings);
+  const state = runner();
   if (!sender) {
-    return { ...result, ran: false, reason: "no_sender", error: "No sender address: set MAIL_FROM (or an email-address SMTP_USER) in .env." };
+    // A configuration error, not a transient failure: pause automatic runs
+    // for a long while (admins see the warning) instead of retrying every second.
+    if (state.configError !== NO_SENDER_ERROR) console.warn(`[email] delivery paused: ${NO_SENDER_ERROR}`);
+    state.configError = NO_SENDER_ERROR;
+    state.cooldownUntil = Date.now() + CONFIG_COOLDOWN_MS;
+    return { ...result, ran: false, reason: "no_sender", error: NO_SENDER_ERROR };
+  }
+  if (state.configError) {
+    // The configuration works again (a forced run succeeded): resume automatic runs.
+    state.configError = null;
+    state.cooldownUntil = 0;
   }
   const agent = createDeliveryAgent();
   try {
@@ -473,6 +568,7 @@ async function scheduleNextRetry(): Promise<void> {
   try {
     const db = await getDb();
     const now = Date.now();
+    const pausedUntil = runner().cooldownUntil;
     let earliest = Infinity;
     for (const e of db.emails) {
       if (e.status !== "queued" && e.status !== "sending") continue;
@@ -480,7 +576,9 @@ async function scheduleNextRetry(): Promise<void> {
       if (!Number.isNaN(at) && at < earliest) earliest = at;
     }
     if (earliest === Infinity) return;
-    scheduleDelivery(Math.min(15 * 60_000, Math.max(1_000, earliest - now + 250)));
+    // Never wake up before a pause (connection or configuration problem) ends.
+    const at = Math.max(earliest, pausedUntil);
+    scheduleDelivery(Math.min(15 * 60_000, Math.max(1_000, at - now + 250)));
   } catch (error) {
     console.error("[email] could not schedule the next retry:", describeError(error));
   }
@@ -496,8 +594,9 @@ export async function deliverEmailNow(id: string): Promise<EmailMessage | null> 
   if (!sender) {
     await mutate((db) => {
       const row = db.emails.find((e) => e.id === id);
-      if (row && row.status === "queued") row.lastError = "No sender address: set MAIL_FROM (or an email-address SMTP_USER) in .env.";
+      if (row && row.status === "queued") row.lastError = NO_SENDER_ERROR;
     });
+    runner().configError = NO_SENDER_ERROR;
     return findById("emails", id);
   }
   const message = await claim(sender, id);
@@ -516,9 +615,11 @@ export async function deliverEmailNow(id: string): Promise<EmailMessage | null> 
 export interface DeliveryState {
   running: boolean;
   lastRun: DeliveryRunResult | null;
-  /** Automatic runs paused until (ISO), after a connection failure. */
+  /** Automatic runs paused until (ISO), after a connection failure or a configuration error. */
   pausedUntil: string | null;
   nextRunAt: string | null;
+  /** A configuration problem that stops every delivery (e.g. no sender address). */
+  configError: string | null;
 }
 
 export function getDeliveryState(): DeliveryState {
@@ -528,6 +629,7 @@ export function getDeliveryState(): DeliveryState {
     lastRun: state.lastRun,
     pausedUntil: state.cooldownUntil > Date.now() ? new Date(state.cooldownUntil).toISOString() : null,
     nextRunAt: state.timer && state.timerAt ? new Date(state.timerAt).toISOString() : null,
+    configError: state.configError,
   };
 }
 
@@ -556,6 +658,10 @@ export async function retryEmail(id: string): Promise<OutboxOpResult> {
     if (row.status === "sending") return { ok: false, error: "This email is being sent right now." };
     if (row.status === "failed" && isSensitiveCategory(row.category)) {
       return { ok: false, error: "One-time links in this email were removed after it failed. Ask the member to request a new link." };
+    }
+    if (isLinkExpired(row)) {
+      failRow(row, LINK_EXPIRED_ERROR);
+      return { ok: false, error: "The one-time link in this email has expired, so it was not sent. Ask the member to request a new link." };
     }
     if (row.status === "failed") row.attempts = 0;
     row.status = "queued";

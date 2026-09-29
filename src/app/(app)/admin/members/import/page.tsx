@@ -1,4 +1,6 @@
 import { isAdmin, requireRole } from "@/lib/auth/session";
+import { getSettings } from "@/lib/db/store";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { ButtonLink } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -9,7 +11,7 @@ export const metadata = { title: "Import members" };
 
 /** Bulk-add members from a CSV file (Frappe: Data Import for users). Moderators. */
 export default async function ImportMembersPage() {
-  const viewer = await requireRole(["moderator"], "/admin/members/import");
+  const [viewer, settings] = await Promise.all([requireRole(["moderator"], "/admin/members/import"), getSettings()]);
   return (
     <div>
       <PageHeader
@@ -30,7 +32,7 @@ export default async function ImportMembersPage() {
           </ButtonLink>
         }
       />
-      <MemberImport canGrantAdmin={isAdmin(viewer)} />
+      <MemberImport canGrantAdmin={isAdmin(viewer)} minPasswordLength={clampMinLength(settings.security.passwordMinLength)} />
     </div>
   );
 }

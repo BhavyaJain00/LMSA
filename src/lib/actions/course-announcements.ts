@@ -6,7 +6,7 @@ import { findById, getDb, insert, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { canManageCourse } from "@/lib/data/courses";
 import { notifyMany } from "@/lib/services/notifications";
-import { courseAudienceText, sendCourseAnnouncementEmails } from "@/lib/email";
+import { courseAudienceText, externalRecipientLimitMessage, queueCourseAnnouncementEmails, reserveExternalRecipients } from "@/lib/email";
 import { fd, isValidEmail, splitList, stripMarkdown, truncate, uid } from "@/lib/utils";
 
 /**
@@ -34,6 +34,11 @@ export async function createCourseAnnouncementAction(
   const badCc = cc.find((e) => !isValidEmail(e));
   if (badCc) fieldErrors.cc = `"${badCc}" is not a valid email address.`;
   else if (cc.length > 20) fieldErrors.cc = "Add at most 20 CC addresses.";
+  if (!fieldErrors.cc && cc.length) {
+    // CC addresses are external recipients of real email: limited per author.
+    const quota = reserveExternalRecipients(user.id, new Set(cc).size);
+    if (!quota.ok) fieldErrors.cc = externalRecipientLimitMessage(quota);
+  }
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the errors below.", fieldErrors };
 
   const db = await getDb();
@@ -61,11 +66,12 @@ export async function createCourseAnnouncementAction(
     // Learners (and CC'd addresses) get the full announcement by email below.
     email: false,
   });
-  const mail = await sendCourseAnnouncementEmails(announcement.id);
+  // Emails are rendered and queued after the response; the outbox delivers them.
+  const mail = await queueCourseAnnouncementEmails(announcement.id, { allowCcOnly: isModerator(user) });
   revalidatePath(`/admin/courses/${course.id}`);
   revalidatePath(`/courses/${course.slug}`, "layout");
   revalidatePath("/admin/emails");
-  const emailed = !mail.disabled && mail.queued ? ` (${mail.queued} emailed)` : "";
+  const emailed = !mail.disabled && mail.queued ? ` (emailing ${mail.queued})` : mail.ccSkipped ? " (CC copy not sent: no learner receives this email)" : "";
   return {
     ok: true,
     data: { recipients: recipients.length },

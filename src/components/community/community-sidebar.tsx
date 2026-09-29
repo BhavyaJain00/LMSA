@@ -5,8 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { MEDAL_CHIP } from "@/components/gamification/medals";
 
-const placeTone = ["bg-amber-400 text-amber-950", "bg-slate-300 text-slate-800", "bg-orange-400 text-orange-950"];
+const placeTone = MEDAL_CHIP;
 
 /** "Top contributors this month": most answers to other members' questions. */
 export function TopContributors({ contributors, monthLabel, pointsEnabled, viewerId }: { contributors: CommunityContributor[]; monthLabel: string; pointsEnabled: boolean; viewerId: string }) {

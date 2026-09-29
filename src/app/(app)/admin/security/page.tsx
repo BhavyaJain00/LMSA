@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db/store";
 import { hasStaffRole, isAccountLocked, isEmailVerified, isTwoFactorActive, lockRemainingMs, formatWait } from "@/lib/auth/account-status";
 import { describeLoginReason, isLoginEventReason, LOGIN_EVENT_REASONS, LOGIN_EVENT_REASON_KEYS } from "@/lib/auth/login-reasons";
 import { describeUserAgent } from "@/lib/auth/user-agent";
+import { throttleStatusIn } from "@/lib/auth/login-throttle";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -34,9 +35,9 @@ function queryString(params: Record<string, string | number | undefined>): strin
   return s ? `?${s}` : "";
 }
 
-function accountActions(user: User, viewerId: string): AdminAccountActionKey[] {
+function accountActions(user: User, viewerId: string, failures: number): AdminAccountActionKey[] {
   const keys: AdminAccountActionKey[] = [];
-  if (isAccountLocked(user) || (user.failedLoginCount ?? 0) > 0) keys.push("unlock");
+  if (isAccountLocked(user) || failures > 0) keys.push("unlock");
   if (user.enabled) keys.push("sendReset");
   if (!isEmailVerified(user) || (user.emailVerificationRequired && !user.emailVerifiedAt)) keys.push("verify");
   if (user.id !== viewerId && (user.twoFactorEnabled || user.twoFactorSecretEnc)) keys.push("reset2fa");
@@ -61,6 +62,8 @@ async function loadActivity({ q, outcome, reason, period, pageRaw, selectedUserI
   const now = Date.now();
   const usersById = new Map(db.users.map((u) => [u.id, u]));
   const selectedUser = selectedUserId ? (usersById.get(selectedUserId) ?? null) : null;
+  // Failures decay after a day, so read the live counter rather than the mirrored field.
+  const selectedFailures = selectedUser ? throttleStatusIn(db, selectedUser.email, now).failures : 0;
 
   // Stats for the last 24 hours ("waiting for code" is not a failure).
   const since24h = now - DAY;
@@ -103,7 +106,7 @@ async function loadActivity({ q, outcome, reason, period, pageRaw, selectedUserI
   const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const matchingAccounts = needle && !selectedUser ? db.users.filter((u) => `${u.name} ${u.email} ${u.username}`.toLowerCase().includes(needle)).slice(0, 6) : [];
 
-  return { db, now, usersById, selectedUser, ok24, failed24, failingIps, lockedUsers, staff, staffWith2fa, filtered, pageCount, page, visible, matchingAccounts };
+  return { db, now, usersById, selectedUser, selectedFailures, ok24, failed24, failingIps, lockedUsers, staff, staffWith2fa, filtered, pageCount, page, visible, matchingAccounts };
 }
 
 export default async function LoginActivityPage(props: PageProps<"/admin/security">) {
@@ -116,7 +119,7 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
   const pageRaw = Number(str(sp.page) || 1);
   const selectedUserId = str(sp.user);
 
-  const { db, now, usersById, selectedUser, ok24, failed24, failingIps, lockedUsers, staff, staffWith2fa, filtered, pageCount, page, visible, matchingAccounts } =
+  const { db, now, usersById, selectedUser, selectedFailures, ok24, failed24, failingIps, lockedUsers, staff, staffWith2fa, filtered, pageCount, page, visible, matchingAccounts } =
     await loadActivity({ q, outcome, reason, period, pageRaw, selectedUserId });
   const baseParams = {
     q: q || undefined,
@@ -210,10 +213,10 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
                   <Badge tone="neutral">Off</Badge>
                 )}
               </DetailItem>
-              <DetailItem label="Failed attempts">{selectedUser.failedLoginCount ?? 0} in a row</DetailItem>
+              <DetailItem label="Failed attempts">{selectedFailures} in a row</DetailItem>
             </dl>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <AdminAccountActions userId={selectedUser.id} name={selectedUser.name} actions={accountActions(selectedUser, viewer.id)} />
+              <AdminAccountActions userId={selectedUser.id} name={selectedUser.name} actions={accountActions(selectedUser, viewer.id, selectedFailures)} />
               <Link href={`/admin/members/${selectedUser.id}`} className="text-sm font-medium text-accent hover:underline">
                 Open member profile →
               </Link>

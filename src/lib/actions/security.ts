@@ -12,7 +12,16 @@ import { unlockAccount } from "@/lib/auth/lockout";
 import { issueAuthToken, revokeAuthTokens } from "@/lib/auth/tokens";
 import { sendPasswordResetEmail, sendSecurityNotice } from "@/lib/auth/emails";
 import { markEmailVerified, sendEmailVerification, verificationError } from "@/lib/auth/verification";
-import { consumeSecondFactor, generateRecoveryCodes, hashRecoveryCode, newTotpSecret, openTotpSecret, readSecondFactorInput, sealTotpSecret } from "@/lib/auth/two-factor";
+import {
+  confirmTwoFactorSetup,
+  consumeSecondFactor,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  newTotpSecret,
+  openTotpSecret,
+  readSecondFactorInput,
+  sealTotpSecret,
+} from "@/lib/auth/two-factor";
 import { normalizeTotpInput } from "@/lib/auth/totp";
 import { describeUserAgent } from "@/lib/auth/user-agent";
 import { PASSWORD_MIN_LENGTH_CEILING, PASSWORD_MIN_LENGTH_FLOOR } from "@/lib/auth/password-policy";
@@ -118,25 +127,19 @@ export async function confirmTwoFactorSetupAction(_prev: ActionResult<{ recovery
   if (!limit.ok) return limited(limit);
 
   if (!openTotpSecret(user)) return { ok: false, error: "The setup key can't be read any more. Cancel and start the setup again." };
-  const result = await consumeSecondFactor(user.id, { method: "totp", code }, { requireEnabled: false });
+
+  // Verify the code and turn 2FA on atomically, for the pending secret this request started with.
+  const recoveryCodes = generateRecoveryCodes();
+  const result = await confirmTwoFactorSetup(user.id, code, user.twoFactorSecretEnc!, recoveryCodes.map(hashRecoveryCode));
   if (!result.ok) {
+    if (result.reason === "changed") return { ok: false, error: "Two-step verification was changed in another window. Reload the page and try again." };
+    if (result.reason === "unreadable_secret") return { ok: false, error: "The setup key can't be read any more. Cancel and start the setup again." };
     return {
       ok: false,
       error: "That code didn't match. Make sure you scanned the latest QR code and that your phone's clock is set automatically.",
       fieldErrors: { code: "Invalid code" },
     };
   }
-
-  const recoveryCodes = generateRecoveryCodes();
-  const hashes = recoveryCodes.map(hashRecoveryCode);
-  const enabled = await mutate((db) => {
-    const row = db.users.find((u) => u.id === user.id);
-    if (!row || !row.twoFactorSecretEnc || row.twoFactorEnabled === true) return false;
-    row.twoFactorEnabled = true;
-    row.recoveryCodeHashes = hashes;
-    return true;
-  });
-  if (!enabled) return { ok: false, error: "Two-step verification was changed in another window. Reload the page and try again." };
 
   await revokeAuthTokens(user.id, "two_factor_login");
   await sendSecurityNotice(user, "two_factor_enabled", await requestContext());

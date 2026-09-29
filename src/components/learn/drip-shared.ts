@@ -283,6 +283,36 @@ export function legacyLockReason(lock: LessonLock | null | undefined): LockReaso
   return undefined;
 }
 
+/** A lesson as "continue learning" sees it (outline rows of the viewer, in course order). */
+export interface ContinueCandidate {
+  id: string;
+  status: ProgressStatus;
+  locked: boolean;
+  lock?: LessonLock | null;
+}
+
+/**
+ * Where "continue learning" should take the viewer: the lesson they last
+ * opened (`currentLessonId`) while it is open and incomplete, else the first
+ * open incomplete lesson. Never a locked lesson.
+ *
+ * When every open lesson is already complete:
+ *  - while later lessons are still scheduled (drip), there is nothing to
+ *    continue with yet, so the result is null and callers show when the next
+ *    lesson unlocks instead of sending the learner back to a finished lesson;
+ *  - otherwise (the whole course is done) the first open lesson, for review.
+ */
+export function pickContinueLesson<T extends ContinueCandidate>(lessons: readonly T[], currentLessonId?: string | null): T | null {
+  if (currentLessonId) {
+    const current = lessons.find((l) => l.id === currentLessonId);
+    if (current && !current.locked && current.status !== "complete") return current;
+  }
+  const next = lessons.find((l) => !l.locked && l.status !== "complete");
+  if (next) return next;
+  if (lessons.some((l) => l.locked && l.lock?.reason === "drip")) return null;
+  return lessons.find((l) => !l.locked) ?? null;
+}
+
 /** Earliest future drip unlock among locks (epoch ms), or null. */
 export function nextUnlockTime(locks: Iterable<LessonLock | null | undefined>, now: number): number | null {
   let best: number | null = null;
@@ -406,6 +436,17 @@ export function formatDateKey(key: string, withYear = true): string {
 /** "Oct 4, 2026" in UTC (used for server-rendered fallbacks before the browser shows local time). */
 export function formatUtcDate(ms: number, withYear = true): string {
   return formatDateKey(utcDateKey(ms), withYear);
+}
+
+/**
+ * "Oct 2, 2026 at 12:00 UTC": the exact release instant in UTC, shown until
+ * the browser renders local time. Day-based releases (enrollment + N × 24h)
+ * fall at any time of day, so the time is part of the label. Empty for an
+ * invalid instant.
+ */
+export function formatUtcDateTime(ms: number): string {
+  if (!Number.isFinite(ms)) return "";
+  return `${formatUtcDate(ms)} at ${new Date(ms).toISOString().slice(11, 16)} UTC`;
 }
 
 function plural(n: number, one: string, many = `${one}s`): string {

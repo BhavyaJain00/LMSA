@@ -58,16 +58,32 @@ export function preferencesUrl(): string {
 }
 
 /**
- * Find a valid unsubscribe link for `userId` inside a rendered email body
- * (used to build the List-Unsubscribe header at send time).
+ * RFC 8058 one-click endpoint for the `List-Unsubscribe` header: mail clients
+ * POST `List-Unsubscribe=One-Click` to it (no login, no confirmation page); a
+ * plain GET only redirects to the confirmation page and changes nothing.
  */
-export function findUnsubscribeLink(body: string, userId: string): string | null {
+export function oneClickUnsubscribeUrl(userId: string, scope: UnsubscribeScope): string {
+  const q = new URLSearchParams({ unsubscribe: scope, u: userId, t: unsubscribeToken(userId, scope) });
+  return `${siteConfig.appUrl}/api/email/unsubscribe?${q.toString()}`;
+}
+
+/**
+ * The category of a valid unsubscribe link for `userId` inside a rendered
+ * email body (used to build the List-Unsubscribe header at send time).
+ */
+export function findUnsubscribeScope(body: string, userId: string): UnsubscribeScope | null {
   const re = /\/settings\/notifications\?unsubscribe=([A-Za-z]+)&(?:amp;)?u=([A-Za-z0-9_-]+)&(?:amp;)?t=([A-Za-z0-9_-]{43})/g;
   for (const m of body.matchAll(re)) {
     const [, scope, uid, token] = m;
-    if (uid === userId && verifyUnsubscribeToken(uid, scope, token)) return unsubscribeUrl(userId, scope as UnsubscribeScope);
+    if (uid === userId && verifyUnsubscribeToken(uid, scope, token)) return scope as UnsubscribeScope;
   }
   return null;
+}
+
+/** Like `findUnsubscribeScope`, returning the confirmation-page link. */
+export function findUnsubscribeLink(body: string, userId: string): string | null {
+  const scope = findUnsubscribeScope(body, userId);
+  return scope ? unsubscribeUrl(userId, scope) : null;
 }
 
 /* ------------------------------------------------------------------ */

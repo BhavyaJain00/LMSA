@@ -20,11 +20,12 @@ import { RoleSwitches } from "./role-switches";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
 
-function generatePassword(): string {
+/** Random password with letters and digits, at least `minLength` (never under 14) characters. */
+function generatePassword(minLength: number): string {
   const letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
   const digits = "23456789";
   const all = letters + digits;
-  const bytes = new Uint8Array(14);
+  const bytes = new Uint8Array(Math.max(14, minLength));
   crypto.getRandomValues(bytes);
   let out = "";
   bytes.forEach((b, i) => {
@@ -59,7 +60,7 @@ function PasswordInput({ id, name, value, onChange, invalid, autoComplete = "new
 /* Create                                                              */
 /* ------------------------------------------------------------------ */
 
-export function CreateMemberForm({ canGrantAdmin }: { canGrantAdmin: boolean }) {
+export function CreateMemberForm({ canGrantAdmin, minPasswordLength }: { canGrantAdmin: boolean; minPasswordLength: number }) {
   const [password, setPassword] = useState("");
   const { onSubmit, pending, errors, formError } = useFormAction(createMemberAction, { toastError: false });
 
@@ -78,12 +79,12 @@ export function CreateMemberForm({ canGrantAdmin }: { canGrantAdmin: boolean }) 
           <Field label="Username" htmlFor="member-username" error={errors.username} hint={errors.username ? undefined : "Optional — derived from the email when empty."}>
             <Input id="member-username" name="username" placeholder="ada" maxLength={40} invalid={!!errors.username} leftAddon={<span className="text-xs">@</span>} />
           </Field>
-          <Field label="Password" htmlFor="member-password" error={errors.password} hint={errors.password ? undefined : "At least 8 characters with letters and numbers."} required>
+          <Field label="Password" htmlFor="member-password" error={errors.password} hint={errors.password ? undefined : `At least ${minPasswordLength} characters with letters and numbers.`} required>
             <div className="flex gap-2">
               <div className="min-w-0 flex-1">
                 <PasswordInput id="member-password" name="password" value={password} onChange={setPassword} invalid={!!errors.password} />
               </div>
-              <Button type="button" variant="outline" onClick={() => setPassword(generatePassword())} title="Generate a strong password">
+              <Button type="button" variant="outline" onClick={() => setPassword(generatePassword(minPasswordLength))} title="Generate a strong password">
                 Generate
               </Button>
             </div>
@@ -176,7 +177,15 @@ export function MemberRolesForm({ memberId, roles, canGrantAdmin, readOnly, lock
 /* Edit: account (admin only)                                          */
 /* ------------------------------------------------------------------ */
 
-export function MemberAccountPanel({ member, isSelf }: { member: { id: string; name: string; enabled: boolean }; isSelf: boolean }) {
+export function MemberAccountPanel({
+  member,
+  isSelf,
+  minPasswordLength,
+}: {
+  member: { id: string; name: string; enabled: boolean };
+  isSelf: boolean;
+  minPasswordLength: number;
+}) {
   const toast = useToast();
   const [confirm, setConfirm] = useState<"toggle" | "delete" | null>(null);
   const [busy, startTransition] = useTransition();
@@ -243,7 +252,13 @@ export function MemberAccountPanel({ member, isSelf }: { member: { id: string; n
         <h2 className="text-base font-semibold text-ink">Reset password</h2>
         <p className="mt-0.5 text-sm text-ink-muted">Set a new password and share it with the member securely.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Field label="New password" htmlFor={`reset-${member.id}`} error={reset.errors.password} required>
+          <Field
+            label="New password"
+            htmlFor={`reset-${member.id}`}
+            error={reset.errors.password}
+            hint={reset.errors.password ? undefined : `At least ${minPasswordLength} characters with letters and numbers.`}
+            required
+          >
             <div className="flex gap-2">
               <div className="min-w-0 flex-1">
                 <PasswordInput id={`reset-${member.id}`} name="password" value={password} onChange={setPassword} invalid={!!reset.errors.password} />
@@ -252,7 +267,7 @@ export function MemberAccountPanel({ member, isSelf }: { member: { id: string; n
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  const p = generatePassword();
+                  const p = generatePassword(minPasswordLength);
                   setPassword(p);
                   setConfirmPassword(p);
                 }}
@@ -266,7 +281,15 @@ export function MemberAccountPanel({ member, isSelf }: { member: { id: string; n
           </Field>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          {!isSelf ? <Checkbox name="signOut" id={`signout-${member.id}`} defaultChecked label="Sign the member out of all devices" /> : <span />}
+          {!isSelf ? (
+            <>
+              <Checkbox name="signOut" id={`signout-${member.id}`} defaultChecked label="Sign the member out of all devices" />
+              {/* Posted only when the box is unticked (the checkbox value comes first otherwise): signing out is the default. */}
+              <input type="hidden" name="signOut" value="off" />
+            </>
+          ) : (
+            <span />
+          )}
           <Button type="submit" variant="outline" loading={reset.pending} disabled={!password}>
             Update password
           </Button>

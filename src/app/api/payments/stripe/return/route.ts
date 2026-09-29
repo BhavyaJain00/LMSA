@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/lib/db/store";
 import { setFlash } from "@/lib/flash";
-import { gatewayErrorMessage, reconcileStripeSession } from "@/lib/payments/gateway";
+import { gatewayErrorMessage, reconcileStripeSession, type SyncState } from "@/lib/payments/gateway";
 import { isStripeConfigured, isStripeSessionId, retrieveStripeCheckoutSession, type StripeCheckoutSession } from "@/lib/payments/stripe";
 
 /**
@@ -22,7 +22,8 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const db = await getDb();
-  const local = db.payments.find((p) => p.gateway === "stripe" && p.gatewayOrderId === sessionId);
+  // Matched whatever the order is labelled now (an order confirmed by hand becomes "manual").
+  const local = db.payments.find((p) => p.gatewayOrderId === sessionId);
   const orderPage = (orderId: string) => `/billing/success/${encodeURIComponent(orderId)}`;
 
   if (!isStripeConfigured()) {
@@ -40,13 +41,21 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const ourId = session.metadata.paymentId || session.clientReferenceId;
-  const payment = local ?? db.payments.find((p) => p.gateway === "stripe" && !!ourId && p.id === ourId);
+  const payment = local ?? db.payments.find((p) => !!ourId && p.id === ourId);
   if (!payment) {
     await setFlash("We couldn't match this payment to an order. Please contact support with your receipt from Stripe.", "error");
     return to("/billing/history");
   }
 
-  const state = await reconcileStripeSession({ ...payment }, session, "stripe_return");
+  let state: SyncState;
+  try {
+    state = await reconcileStripeSession({ ...payment }, session, "stripe_return");
+  } catch (error) {
+    // The payment could not be verified with Stripe right now; the order page checks again.
+    console.warn(`[payments] Stripe return for order ${payment.orderId} could not be verified: ${gatewayErrorMessage(error)}`);
+    await setFlash("We're confirming your payment with Stripe. This page updates as soon as it's done.", "info");
+    return to(orderPage(payment.orderId));
+  }
   revalidatePath(orderPage(payment.orderId));
   revalidatePath("/billing/history");
   switch (state.state) {

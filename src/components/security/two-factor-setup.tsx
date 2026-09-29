@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { safeRedirectPath } from "@/lib/auth/redirects";
 import { CopyButton } from "./copy-button";
 import { OtpCodeInput } from "./otp-code-input";
 import { RecoveryCodesDialog } from "./recovery-codes-dialog";
@@ -41,8 +42,8 @@ export function TwoFactorSetup({
   email,
   continueTo,
 }: {
-  /** Server-rendered QR code for the otpauth:// URI. */
-  qr: ReactNode;
+  /** Server-rendered QR code for the otpauth:// URI (null when it couldn't be drawn: the key is shown instead). */
+  qr: ReactNode | null;
   /** Base32 secret grouped in fours for manual entry. */
   secret: string;
   brand: string;
@@ -72,7 +73,8 @@ export function TwoFactorSetup({
   const finish = () => {
     setCodes(null);
     toast.success("Two-step verification is on.");
-    if (continueTo) router.push(continueTo);
+    const target = safeRedirectPath(continueTo);
+    if (target) router.push(target);
     else router.refresh();
   };
 
@@ -80,16 +82,24 @@ export function TwoFactorSetup({
     <div className="space-y-6">
       <ol className="space-y-6">
         <li className="grid gap-4 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-start">
-          <div className="mx-auto w-44 max-w-full rounded-xl border border-border bg-white p-2 shadow-sm sm:mx-0">{qr}</div>
+          {qr ? (
+            <div className="mx-auto w-44 max-w-full rounded-xl border border-border bg-white p-2 shadow-sm sm:mx-0">{qr}</div>
+          ) : (
+            <div role="note" className="mx-auto flex w-44 max-w-full items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-ink sm:mx-0">
+              <Icon.AlertTriangle className="size-4 shrink-0 text-warning" />
+              <span>We couldn&apos;t draw a QR code for this account. Enter the setup key instead.</span>
+            </div>
+          )}
           <div className="min-w-0 space-y-3">
             <p className="text-sm font-medium text-ink">
               <span className="mr-2 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">1</span>
-              Scan the QR code
+              {qr ? "Scan the QR code" : "Add the key to your app"}
             </p>
             <p className="text-sm text-ink-muted">
-              Open an authenticator app such as Google Authenticator, Microsoft Authenticator, 1Password or Authy, add an account and scan this code.
+              Open an authenticator app such as Google Authenticator, Microsoft Authenticator, 1Password or Authy, add an account and{" "}
+              {qr ? "scan this code." : "choose to enter a setup key."}
             </p>
-            <details className="group rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm">
+            <details open={!qr} className="group rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm">
               <summary className="cursor-pointer select-none font-medium text-ink marker:text-ink-faint">Can&apos;t scan it? Enter the key instead</summary>
               <div className="mt-3 space-y-3">
                 <p className="break-all rounded-md bg-surface-1 px-3 py-2 font-mono text-sm tracking-wider text-ink select-all" aria-label="Setup key">

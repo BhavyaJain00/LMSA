@@ -3,16 +3,18 @@
 import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { ActionResult, User } from "@/lib/types";
-import { getSettings, insert, mutate } from "@/lib/db/store";
+import type { ActionResult, Settings, User } from "@/lib/types";
+import { getSettings, mutate } from "@/lib/db/store";
 import { hashPassword, validatePasswordStrength, verifyPassword, verifyPasswordConstantTime } from "@/lib/auth/password";
 import { createSession, destroyAllSessions, destroyOtherSessions, destroySession, getCurrentUser, touchActivity } from "@/lib/auth/session";
-import { formatWait, isAccountLocked, isTwoFactorActive, lockRemainingMs, mustSetUpTwoFactor } from "@/lib/auth/account-status";
-import { authRateLimiter, emailKey, RATE_LIMITS, unknownAccountLockouts, type RateLimitResult } from "@/lib/auth/rate-limit";
+import { formatWait, isTwoFactorActive, mustSetUpTwoFactor } from "@/lib/auth/account-status";
+import { authRateLimiter, emailKey, loginAttemptLock, perIpLimit, RATE_LIMITS, type RateLimitResult } from "@/lib/auth/rate-limit";
 import { getRequestInfo, type RequestInfo } from "@/lib/auth/request-info";
 import { recordLoginEvent } from "@/lib/auth/login-events";
 import type { LoginEventReason } from "@/lib/auth/login-reasons";
-import { clearLoginFailures, forgetAuthCounters, registerLoginFailure } from "@/lib/auth/lockout";
+import { clearLoginFailures, forgetAuthCounters } from "@/lib/auth/lockout";
+import { getLoginThrottleStatus, recordLoginFailure } from "@/lib/auth/login-throttle";
+import { safeRedirectPath } from "@/lib/auth/redirects";
 import { checkAuthToken, consumeAuthToken, issueAuthToken, revokeAuthToken, revokeAuthTokens } from "@/lib/auth/tokens";
 import { sendPasswordResetEmail, sendSecurityNotice } from "@/lib/auth/emails";
 import { sendEmailVerification } from "@/lib/auth/verification";
@@ -22,9 +24,10 @@ import {
   readSecondFactorInput,
   readTwoFactorChallengeCookie,
   setTwoFactorChallengeCookie,
+  type SecondFactorResult,
 } from "@/lib/auth/two-factor";
 import { describeUserAgent } from "@/lib/auth/user-agent";
-import { getUserByEmail, getUserByUsername } from "@/lib/data/users";
+import { getUserByEmail } from "@/lib/data/users";
 import { evaluateBadges } from "@/lib/services/badges";
 import { fd, isValidEmail, slugify, uid } from "@/lib/utils";
 import { setFlash } from "@/lib/flash";
@@ -35,9 +38,9 @@ import { setFlash } from "@/lib/flash";
 
 const GENERIC_LOGIN_ERROR = "Incorrect email or password.";
 
-function safeNext(next: string | undefined | null): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return "/";
-  return next;
+/** The posted `next` as a safe same-origin path ("/" when missing or unsafe). */
+function nextFrom(formData: FormData): string {
+  return safeRedirectPath(fd(formData, "next"), "/");
 }
 
 function defaultHomeFor(user: User): string {
@@ -91,76 +94,102 @@ async function startTwoFactorChallenge(user: User, info: RequestInfo, next: stri
   redirect(next !== "/" ? `/two-factor?next=${encodeURIComponent(next)}` : "/two-factor");
 }
 
+function remainingUntil(epochMs: number | string | null | undefined): number {
+  if (epochMs === null || epochMs === undefined) return 0;
+  const at = typeof epochMs === "number" ? epochMs : Date.parse(epochMs);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Log in                                                               */
 /* ------------------------------------------------------------------ */
 
+type PasswordStep =
+  | { kind: "locked"; user: User | null; remainingMs: number }
+  | { kind: "failed"; user: User | null; locked: boolean; remainingMs: number }
+  | { kind: "disabled"; user: User }
+  | { kind: "two_factor"; user: User }
+  | { kind: "ok"; user: User };
+
+/**
+ * Check the lock, verify the password and record the outcome as one step per
+ * email address (`loginAttemptLock`), so parallel requests see each other's
+ * failures and can't get more than `maxLoginAttempts` guesses. Unknown and
+ * registered addresses go through exactly the same throttle.
+ */
+async function passwordStep(email: string, password: string, security: Settings["security"]): Promise<PasswordStep> {
+  return loginAttemptLock.run(emailKey(email), async (): Promise<PasswordStep> => {
+    const [status, user] = await Promise.all([getLoginThrottleStatus(email), getUserByEmail(email)]);
+    if (status.locked) return { kind: "locked", user, remainingMs: remainingUntil(status.lockedUntil) };
+
+    // Unknown emails burn the same scrypt work as real ones.
+    const ok = await verifyPasswordConstantTime(password, user?.passwordHash);
+    if (!ok || !user) {
+      const outcome = await recordLoginFailure(email, security);
+      return { kind: "failed", user, locked: outcome.locked, remainingMs: remainingUntil(outcome.lockedUntil) };
+    }
+    if (!user.enabled) return { kind: "disabled", user };
+    // The failure counter is only cleared once sign-in is complete (after the second factor for 2FA accounts).
+    if (isTwoFactorActive(user)) return { kind: "two_factor", user };
+    await clearLoginFailures(user.id);
+    return { kind: "ok", user };
+  });
+}
+
 export async function loginAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const email = fd(formData, "email").toLowerCase();
   const password = fd(formData, "password");
-  const next = safeNext(fd(formData, "next"));
+  const next = nextFrom(formData);
 
   if (!email || !password) return { ok: false, error: "Please enter your email and password." };
   const info = await getRequestInfo();
   const key = emailKey(email);
 
-  const limits = [
-    authRateLimiter.hit(`login:ip:${info.ip}`, RATE_LIMITS.loginIp),
-    authRateLimiter.hit(`login:acct:${key}|${info.ip}`, RATE_LIMITS.loginAccount),
-    authRateLimiter.hit(`login:email:${key}`, RATE_LIMITS.loginEmail),
-  ];
-  const user = await getUserByEmail(email);
+  // The per-IP (or shared, when the IP isn't trusted) limit goes first: a blocked client creates no further limiter keys.
+  const ipLimit = perIpLimit("login:ip", info.ip, RATE_LIMITS.loginIp, RATE_LIMITS.loginIpShared);
+  const byIp = authRateLimiter.hit(ipLimit.key, ipLimit.rule);
+  const limits = byIp.ok
+    ? [byIp, authRateLimiter.hit(`login:acct:${key}|${info.ip}`, RATE_LIMITS.loginAccount), authRateLimiter.hit(`login:email:${key}`, RATE_LIMITS.loginEmail)]
+    : [byIp];
   if (limits.some((r) => !r.ok)) {
+    const user = await getUserByEmail(email);
     await logEvent("rate_limited", email, info, user?.id);
     return { ok: false, error: rateLimitedMessage(limits) };
   }
 
   const settings = await getSettings();
-  const lockMs = Math.max(1, settings.security.lockoutMinutes) * 60 * 1000;
+  const step = await passwordStep(email, password, settings.security);
 
-  if (!user) {
-    // Same work, same messages and the same lockout behaviour as a real account.
-    const phantom = unknownAccountLockouts.status(key);
-    if (phantom.locked && phantom.lockedUntil) {
-      await logEvent("locked", email, info);
-      return { ok: false, error: lockedMessage(phantom.lockedUntil - Date.now()) };
-    }
-    await verifyPasswordConstantTime(password, null);
-    const outcome = unknownAccountLockouts.fail(key, settings.security.maxLoginAttempts, lockMs);
-    await logEvent("unknown_email", email, info);
-    if (outcome.locked && outcome.lockedUntil) return { ok: false, error: lockedMessage(outcome.lockedUntil - Date.now()) };
-    return { ok: false, error: GENERIC_LOGIN_ERROR };
+  switch (step.kind) {
+    case "locked":
+      await logEvent("locked", email, info, step.user?.id);
+      return { ok: false, error: lockedMessage(step.remainingMs) };
+    case "failed":
+      await logEvent(!step.user ? "unknown_email" : step.locked ? "lockout" : "bad_password", email, info, step.user?.id);
+      return { ok: false, error: step.locked ? lockedMessage(step.remainingMs) : GENERIC_LOGIN_ERROR };
+    case "disabled":
+      await logEvent("disabled", email, info, step.user.id);
+      return { ok: false, error: "This account has been disabled. Contact support." };
+    case "two_factor":
+      return startTwoFactorChallenge(step.user, info, next);
+    case "ok":
+      await completeSignIn(step.user, "ok", info);
+      redirect(await destinationAfterSignIn(step.user, next));
   }
-
-  if (isAccountLocked(user)) {
-    await logEvent("locked", email, info, user.id);
-    return { ok: false, error: lockedMessage(lockRemainingMs(user)) };
-  }
-
-  if (!(await verifyPasswordConstantTime(password, user.passwordHash))) {
-    const outcome = await registerLoginFailure(user.id, settings.security);
-    await logEvent(outcome.locked ? "lockout" : "bad_password", email, info, user.id);
-    if (outcome.locked && outcome.lockedUntil) return { ok: false, error: lockedMessage(new Date(outcome.lockedUntil).getTime() - Date.now()) };
-    return { ok: false, error: GENERIC_LOGIN_ERROR };
-  }
-
-  if (!user.enabled) {
-    await logEvent("disabled", email, info, user.id);
-    return { ok: false, error: "This account has been disabled. Contact support." };
-  }
-
-  if (isTwoFactorActive(user)) await startTwoFactorChallenge(user, info, next);
-
-  await completeSignIn(user, "ok", info);
-  redirect(await destinationAfterSignIn(user, next));
 }
 
 /* ------------------------------------------------------------------ */
 /* Second step (TOTP / recovery code)                                   */
 /* ------------------------------------------------------------------ */
 
+type SecondStep =
+  | { kind: "locked"; remainingMs: number }
+  | { kind: "failed"; result: Extract<SecondFactorResult, { ok: false }>; locked: boolean; remainingMs: number }
+  | { kind: "expired" }
+  | { kind: "ok"; result: Extract<SecondFactorResult, { ok: true }> };
+
 export async function verifyTwoFactorLoginAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  const next = safeNext(fd(formData, "next"));
+  const next = nextFrom(formData);
   const raw = await readTwoFactorChallengeCookie();
   const check = await checkAuthToken(raw, "two_factor_login");
   if (check.status !== "valid") {
@@ -169,13 +198,6 @@ export async function verifyTwoFactorLoginAction(_prev: ActionResult | null, for
   }
   const { user } = check;
   const info = await getRequestInfo();
-
-  if (isAccountLocked(user)) {
-    await revokeAuthToken(raw, "two_factor_login");
-    await clearTwoFactorChallengeCookie();
-    await logEvent("locked", user.email, info, user.id);
-    return { ok: false, error: lockedMessage(lockRemainingMs(user)), fieldErrors: { session: "expired" } };
-  }
 
   const input = readSecondFactorInput(formData);
   if (!input.code) {
@@ -201,15 +223,39 @@ export async function verifyTwoFactorLoginAction(_prev: ActionResult | null, for
     return { ok: false, error: "Too many incorrect codes. Please log in again.", fieldErrors: { session: "expired" } };
   }
 
-  const result = await consumeSecondFactor(user.id, input);
-  if (!result.ok) {
-    const settings = await getSettings();
-    const outcome = await registerLoginFailure(user.id, settings.security);
-    await logEvent(outcome.locked ? "2fa_lockout" : "2fa_failed", user.email, info, user.id);
-    if (outcome.locked && outcome.lockedUntil) {
+  // Same per-address serialization as the password step: lock check, code check and failure count happen together.
+  const settings = await getSettings();
+  const step = await loginAttemptLock.run(emailKey(user.email), async (): Promise<SecondStep> => {
+    const status = await getLoginThrottleStatus(user.email);
+    if (status.locked) return { kind: "locked", remainingMs: remainingUntil(status.lockedUntil) };
+    const result = await consumeSecondFactor(user.id, input);
+    if (!result.ok) {
+      const outcome = await recordLoginFailure(user.email, settings.security);
+      return { kind: "failed", result, locked: outcome.locked, remainingMs: remainingUntil(outcome.lockedUntil) };
+    }
+    // The challenge is single use: if another request consumed it first, stop here.
+    const consumed = await consumeAuthToken(raw, "two_factor_login");
+    if (!consumed) return { kind: "expired" };
+    await clearLoginFailures(user.id);
+    return { kind: "ok", result };
+  });
+
+  if (step.kind === "locked") {
+    await revokeAuthToken(raw, "two_factor_login");
+    await clearTwoFactorChallengeCookie();
+    await logEvent("locked", user.email, info, user.id);
+    return { ok: false, error: lockedMessage(step.remainingMs), fieldErrors: { session: "expired" } };
+  }
+  if (step.kind === "expired") {
+    await clearTwoFactorChallengeCookie();
+    return { ok: false, error: "Your sign-in attempt expired. Please log in again.", fieldErrors: { session: "expired" } };
+  }
+  if (step.kind === "failed") {
+    await logEvent(step.locked ? "2fa_lockout" : "2fa_failed", user.email, info, user.id);
+    if (step.locked) {
       await revokeAuthToken(raw, "two_factor_login");
       await clearTwoFactorChallengeCookie();
-      return { ok: false, error: lockedMessage(new Date(outcome.lockedUntil).getTime() - Date.now()), fieldErrors: { session: "expired" } };
+      return { ok: false, error: lockedMessage(step.remainingMs), fieldErrors: { session: "expired" } };
     }
     if (limits[1]!.remaining === 0) {
       // That was the last code this challenge accepts.
@@ -217,7 +263,7 @@ export async function verifyTwoFactorLoginAction(_prev: ActionResult | null, for
       await clearTwoFactorChallengeCookie();
       return { ok: false, error: "Too many incorrect codes. Please log in again.", fieldErrors: { session: "expired" } };
     }
-    if (result.reason === "unreadable_secret") {
+    if (step.result.reason === "unreadable_secret") {
       return { ok: false, error: "Two-step verification can't be checked for this account right now. Use a recovery code or contact an administrator." };
     }
     return input.method === "recovery"
@@ -225,11 +271,8 @@ export async function verifyTwoFactorLoginAction(_prev: ActionResult | null, for
       : { ok: false, error: "That code didn't work. Check the time on your phone and try the newest code.", fieldErrors: { code: "Invalid code" } };
   }
 
-  // The challenge is single use: if another request consumed it first, stop here.
-  const consumed = await consumeAuthToken(raw, "two_factor_login");
+  const { result } = step;
   await clearTwoFactorChallengeCookie();
-  if (!consumed) return { ok: false, error: "Your sign-in attempt expired. Please log in again.", fieldErrors: { session: "expired" } };
-
   await completeSignIn(user, result.method === "recovery" ? "recovery_code" : "2fa_ok", info);
   if (result.method === "recovery") {
     await setFlash(
@@ -261,7 +304,7 @@ export async function registerAction(_prev: ActionResult | null, formData: FormD
   const name = fd(formData, "name");
   const email = fd(formData, "email").toLowerCase();
   const password = fd(formData, "password");
-  const next = safeNext(fd(formData, "next"));
+  const next = nextFrom(formData);
 
   const fieldErrors: Record<string, string> = {};
   if (name.length < 2) fieldErrors.name = "Please enter your full name.";
@@ -272,31 +315,41 @@ export async function registerAction(_prev: ActionResult | null, formData: FormD
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the errors below.", fieldErrors };
 
   const info = await getRequestInfo();
-  const limit = authRateLimiter.hit(`register:ip:${info.ip}`, RATE_LIMITS.registerIp);
+  const ipLimit = perIpLimit("register:ip", info.ip, RATE_LIMITS.registerIp, RATE_LIMITS.registerIpShared);
+  const limit = authRateLimiter.hit(ipLimit.key, ipLimit.rule);
   if (!limit.ok) return { ok: false, error: rateLimitedMessage([limit], "sign-ups from this network") };
 
-  if (await getUserByEmail(email)) return { ok: false, error: "An account with this email already exists.", fieldErrors: { email: "Already registered" } };
+  const DUPLICATE: ActionResult = { ok: false, error: "An account with this email already exists.", fieldErrors: { email: "Already registered" } };
+  if (await getUserByEmail(email)) return DUPLICATE;
 
-  // Derive a unique username from the email local part.
-  let username = slugify(email.split("@")[0] ?? name) || "user";
-  let suffix = 1;
-  while (await getUserByUsername(username)) username = `${slugify(email.split("@")[0] ?? name)}-${++suffix}`;
-
+  const passwordHash = await hashPassword(password);
+  const base = slugify(email.split("@")[0] ?? name) || "user";
   const now = new Date().toISOString();
-  const user: User = {
-    id: uid("usr"),
-    username,
-    name,
-    email,
-    passwordHash: await hashPassword(password),
-    roles: ["student"],
-    enabled: true,
-    personaCaptured: false,
-    emailVerificationRequired: true,
-    createdAt: now,
-    lastActiveAt: now,
-  };
-  await insert("users", user);
+
+  // Uniqueness of the email (and a free username) is decided in the same serialized write as the insert,
+  // so two concurrent sign-ups can't both create an account for one address.
+  const user = await mutate((db): User | null => {
+    if (db.users.some((u) => u.email.toLowerCase() === email)) return null;
+    const taken = new Set(db.users.map((u) => u.username.toLowerCase()));
+    let username = base;
+    for (let suffix = 2; taken.has(username); suffix++) username = `${base}-${suffix}`;
+    const row: User = {
+      id: uid("usr"),
+      username,
+      name,
+      email,
+      passwordHash,
+      roles: ["student"],
+      enabled: true,
+      personaCaptured: false,
+      emailVerificationRequired: true,
+      createdAt: now,
+      lastActiveAt: now,
+    };
+    db.users.push(row);
+    return row;
+  });
+  if (!user) return DUPLICATE;
 
   let emailSent = true;
   try {
@@ -358,8 +411,9 @@ export async function changePasswordAction(_prev: ActionResult | null, formData:
     const row = db.users.find((u) => u.id === user.id);
     if (row) row.passwordHash = passwordHash;
   });
-  // Outstanding reset links were issued for the old password.
+  // Outstanding reset links and half-finished sign-ins were issued for the old password.
   await revokeAuthTokens(user.id, "password_reset");
+  await revokeAuthTokens(user.id, "two_factor_login");
   const removed = await destroyOtherSessions(user.id);
   const info = await getRequestInfo();
   await sendSecurityNotice(user, "password_changed", { ip: info.ip, device: describeUserAgent(info.userAgent).label });
@@ -382,10 +436,9 @@ export async function forgotPasswordAction(_prev: ActionResult<{ email: string }
     return { ok: false, error: "Please enter a valid email address.", fieldErrors: { email: "Enter a valid email address" } };
   }
   const info = await getRequestInfo();
-  const limits = [
-    authRateLimiter.hit(`forgot:email:${emailKey(email)}`, RATE_LIMITS.forgotEmail),
-    authRateLimiter.hit(`forgot:ip:${info.ip}`, RATE_LIMITS.forgotIp),
-  ];
+  const ipLimit = perIpLimit("forgot:ip", info.ip, RATE_LIMITS.forgotIp, RATE_LIMITS.forgotIpShared);
+  const byIp = authRateLimiter.hit(ipLimit.key, ipLimit.rule);
+  const limits = byIp.ok ? [byIp, authRateLimiter.hit(`forgot:email:${emailKey(email)}`, RATE_LIMITS.forgotEmail)] : [byIp];
   if (limits.some((r) => !r.ok)) return { ok: false, error: rateLimitedMessage(limits, "reset requests") };
 
   // Look up and send after the response, so timing is identical whether or not the account exists.
@@ -413,7 +466,8 @@ export async function resetPasswordAction(_prev: ActionResult | null, formData: 
   const confirm = fd(formData, "confirm");
   const info = await getRequestInfo();
 
-  const limit = authRateLimiter.hit(`reset:ip:${info.ip}`, RATE_LIMITS.resetIp);
+  const ipLimit = perIpLimit("reset:ip", info.ip, RATE_LIMITS.resetIp, RATE_LIMITS.resetIpShared);
+  const limit = authRateLimiter.hit(ipLimit.key, ipLimit.rule);
   if (!limit.ok) return { ok: false, error: rateLimitedMessage([limit], "attempts") };
 
   const INVALID_LINK = "This reset link is invalid or has expired. Request a new one.";
@@ -434,15 +488,16 @@ export async function resetPasswordAction(_prev: ActionResult | null, formData: 
     const row = db.users.find((u) => u.id === consumed.user.id);
     if (!row) return null;
     row.passwordHash = passwordHash;
-    row.failedLoginCount = 0;
-    delete row.lockedUntil;
     // Following the emailed link proves the member controls the inbox.
     if (row.emailVerificationRequired && !row.emailVerifiedAt) row.emailVerifiedAt = now;
     return row;
   });
   if (!user) return { ok: false, error: INVALID_LINK };
 
+  // The lock and failure counter end with the reset; so does everything issued for the old password.
+  await clearLoginFailures(user.id);
   await revokeAuthTokens(user.id, "password_reset");
+  await revokeAuthTokens(user.id, "two_factor_login");
   await destroyAllSessions(user.id);
   forgetAuthCounters(user.email, user.id);
   await sendSecurityNotice(user, "password_changed", { ip: info.ip, device: describeUserAgent(info.userAgent).label });

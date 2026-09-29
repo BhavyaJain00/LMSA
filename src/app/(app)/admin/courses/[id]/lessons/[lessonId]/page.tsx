@@ -6,6 +6,7 @@ import { canManageCourse, lessonHref } from "@/lib/data/courses";
 import { getAssessmentOptions, getLessonEditorNav, getLessonPosition, getLessonVideoStats, requireManageableCourse } from "@/lib/data/admin-courses";
 import { Icon } from "@/components/ui/icons";
 import { LessonEditor } from "@/components/admin/courses/lesson-editor";
+import { loadLessonReleaseAction } from "@/lib/actions/drip";
 
 export async function generateMetadata(props: PageProps<"/admin/courses/[id]/lessons/[lessonId]">) {
   const { id, lessonId } = await props.params;
@@ -23,7 +24,13 @@ export default async function LessonEditorPage(props: PageProps<"/admin/courses/
   const lesson = db.lessons.find((l) => l.id === lessonId && l.courseId === course.id);
   if (!lesson) notFound();
 
-  const [nav, position, assessments, videoStats] = await Promise.all([getLessonEditorNav(course), getLessonPosition(lesson), getAssessmentOptions(), getLessonVideoStats(lesson)]);
+  const [nav, position, assessments, videoStats, release] = await Promise.all([
+    getLessonEditorNav(course),
+    getLessonPosition(lesson),
+    getAssessmentOptions(),
+    getLessonVideoStats(lesson),
+    loadLessonReleaseAction(lesson.id),
+  ]);
   const flat = nav.flatMap((c) => c.lessons);
   const i = flat.findIndex((l) => l.id === lesson.id);
   const chapter = db.chapters.find((c) => c.id === lesson.chapterId);
@@ -63,6 +70,7 @@ export default async function LessonEditorPage(props: PageProps<"/admin/courses/
         nav={nav}
         assessments={assessments}
         videoStats={videoStats}
+        release={release.ok ? release.data : null}
       />
     </div>
   );

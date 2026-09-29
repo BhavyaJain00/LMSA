@@ -7,6 +7,7 @@ import { gatewayLabel, getBillingItem, getPaymentByOrderId, ITEM_TYPE_LABELS } f
 import { getNextLesson, lessonHref } from "@/lib/data/courses";
 import { backfillInvoiceNumbers, formatAddressLines, hasInvoice, needsInvoiceNumber } from "@/lib/payments/invoice";
 import { isRealGateway, syncPaymentStatus } from "@/lib/payments/gateway";
+import { restoreOrderAccess } from "@/lib/payments/fulfillment";
 import { ButtonLink } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -35,6 +36,8 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
   }
   if (needsInvoiceNumber(found)) await backfillInvoiceNumbers();
   const payment = (await getPaymentByOrderId(orderId)) ?? found;
+  // A paid order whose access could not be granted earlier (admins were alerted): try again now.
+  const accessPending = payment.status === "paid" && payment.userId === user.id && payment.itemType !== "batch" && !(await restoreOrderAccess(payment.id));
 
   const db = await getDb();
   const item = await getBillingItem(payment.itemType, payment.itemId);
@@ -103,6 +106,12 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       }
     } else {
       message = <>Thanks for your purchase of {payment.itemTitle}.</>;
+    }
+    if (accessPending) {
+      tone = "warning";
+      heading = "Payment received";
+      message = <>Your payment was received, but we couldn&apos;t finish setting up your access to <strong className="text-ink">{payment.itemTitle}</strong> yet. Our team has been notified and will sort it out shortly.</>;
+      actions.length = 0;
     }
     if (invoiced && payment.amount > 0) {
       actions.push(
@@ -236,7 +245,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
                   <div className="mt-5 flex flex-wrap items-start gap-2">
                     {showPendingActions && online && !processing && <ResumePaymentButton orderId={payment.orderId} gateway={payment.gateway} />}
                     {actions}
-                    {showPendingActions && !processing && <CancelOrderButton orderId={payment.orderId} online={online} />}
+                    {showPendingActions && !processing && <CancelOrderButton orderId={payment.orderId} online={online} gateway={payment.gateway} />}
                   </div>
                 )}
               </div>

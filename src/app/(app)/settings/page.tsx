@@ -3,7 +3,8 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import type { Session } from "@/lib/types";
 import { requireUser } from "@/lib/auth/session";
-import { filter } from "@/lib/db/store";
+import { filter, getSettings } from "@/lib/db/store";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { roleLabels, siteConfig } from "@/lib/config";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -62,7 +63,8 @@ export default async function AccountSettingsPage() {
   const store = await cookies();
   const token = store.get(siteConfig.sessionCookie)?.value;
   const currentHash = token ? createHash("sha256").update(token).digest("hex") : null;
-  const sessions = await activeSessions(user.id);
+  const [sessions, settings] = await Promise.all([activeSessions(user.id), getSettings()]);
+  const minPasswordLength = clampMinLength(settings.security.passwordMinLength);
   const rows: SessionRow[] = sessions
     .map((s) => {
       const { device, kind } = describeDevice(s.userAgent);
@@ -153,9 +155,51 @@ export default async function AccountSettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Password" description="Use at least 8 characters. A longer passphrase is stronger than a short, complex one." />
+          <CardHeader title="Notifications, calendar and billing" description="Choose which emails you get, sync your schedule and find your receipts." />
+          <ul className="divide-y divide-border">
+            {[
+              {
+                href: "/settings/notifications",
+                icon: <Icon.Mail className="size-4" />,
+                title: "Email notifications",
+                description: "Pick the emails you receive about courses, batches, grades and payments.",
+              },
+              {
+                href: "/settings/calendar",
+                icon: <Icon.Calendar className="size-4" />,
+                title: "Calendar feed",
+                description: "Subscribe to your live classes and evaluations in Google, Apple or Outlook calendar.",
+              },
+              {
+                href: "/billing/history",
+                icon: <Icon.Receipt className="size-4" />,
+                title: "Orders & invoices",
+                description: "Your purchases, payment status and downloadable invoices.",
+              },
+            ].map((item) => (
+              <li key={item.href}>
+                <Link href={item.href} className="group flex items-center gap-3 px-5 py-4 hover:bg-surface-2">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-muted group-hover:bg-surface-3 group-hover:text-ink">
+                    {item.icon}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-ink">{item.title}</span>
+                    <span className="block text-sm text-ink-muted">{item.description}</span>
+                  </span>
+                  <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint group-hover:text-ink" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Password"
+            description={`Use at least ${minPasswordLength} characters with letters and numbers. A longer passphrase is stronger than a short, complex one.`}
+          />
           <CardBody>
-            <PasswordForm />
+            <PasswordForm minLength={minPasswordLength} context={[user.name, user.email.split("@")[0] ?? ""]} />
           </CardBody>
         </Card>
 

@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import type { ActionResult, Settings, SidebarItem } from "@/lib/types";
 import { createSession, getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate, resetDatabase } from "@/lib/db/store";
-import { currencies } from "@/lib/config";
 import { Icon } from "@/components/ui/icons";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, isValidEmail, isValidUrl, uid } from "@/lib/utils";
@@ -184,42 +183,6 @@ export async function saveLearningSettingsAction(_prev: ActionResult | null, for
     s.learning.notifyOnPublishedBatches = notifyBatches as Settings["learning"]["notifyOnPublishedBatches"];
     s.customSignupContent = customSignupContent || undefined;
   }, "Learning settings saved");
-}
-
-/* ------------------------------------------------------------------ */
-/* Payments                                                            */
-/* ------------------------------------------------------------------ */
-
-const GATEWAYS = ["none", "manual", "stripe", "razorpay"] as const;
-
-export async function savePaymentSettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  if (!(await requireAdmin())) return DENIED;
-  const defaultCurrency = fd(formData, "defaultCurrency").toUpperCase();
-  const paymentGateway = fd(formData, "paymentGateway");
-  const applyTax = fdBool(formData, "applyTax");
-  const rawTax = fd(formData, "taxPercentage");
-  const taxLabel = fd(formData, "taxLabel");
-
-  const errors: Errors = {};
-  if (!(currencies as readonly string[]).includes(defaultCurrency)) errors.defaultCurrency = "Choose a supported currency.";
-  if (!(GATEWAYS as readonly string[]).includes(paymentGateway)) errors.paymentGateway = "Choose a payment gateway.";
-  const taxPercentage = rawTax === "" ? 0 : Number(rawTax);
-  if (!Number.isFinite(taxPercentage) || taxPercentage < 0 || taxPercentage > 100) errors.taxPercentage = "Enter a percentage between 0 and 100.";
-  else if (applyTax && taxPercentage <= 0) errors.taxPercentage = "Enter a tax percentage greater than zero, or turn tax off.";
-  if (applyTax && !taxLabel) errors.taxLabel = "Tax label is required when tax is applied.";
-  else if (taxLabel.length > 30) errors.taxLabel = "Keep the tax label under 30 characters.";
-  if (Object.keys(errors).length) return fail(errors);
-
-  return commit((s) => {
-    s.commerce.defaultCurrency = defaultCurrency;
-    s.commerce.paymentGateway = paymentGateway as Settings["commerce"]["paymentGateway"];
-    s.commerce.applyTax = applyTax;
-    s.commerce.taxPercentage = Math.round(taxPercentage * 100) / 100;
-    s.commerce.taxLabel = taxLabel || "Tax";
-    s.commerce.showUsdEquivalent = fdBool(formData, "showUsdEquivalent");
-    s.commerce.applyRounding = fdBool(formData, "applyRounding");
-    s.commerce.sendPaymentReminders = fdBool(formData, "sendPaymentReminders");
-  }, "Payment settings saved");
 }
 
 /* ------------------------------------------------------------------ */

@@ -118,7 +118,12 @@ export class ReplyParser {
   private code: number | null = null;
   private lines: string[] = [];
 
-  constructor(private readonly maxBuffer = 64 * 1024) {}
+  private readonly maxBuffer: number;
+
+  // Plain field + assignment (no parameter property): tests run this file with Node type stripping.
+  constructor(maxBuffer = 64 * 1024) {
+    this.maxBuffer = maxBuffer;
+  }
 
   push(chunk: string): SmtpReply[] {
     this.buffer += chunk;
@@ -261,7 +266,12 @@ export interface SmtpClientOptions {
   commandTimeoutMs?: number;
   /** Time allowed for the final reply after the message body. */
   dataTimeoutMs?: number;
-  /** Refuse to continue without TLS. Defaults to true when credentials are configured and the host is not a loopback address. */
+  /**
+   * Refuse to continue without TLS. Defaults to true for every host that is
+   * not a loopback address (with or without credentials), so an on-path
+   * attacker cannot strip STARTTLS and read the mail; pass false to allow
+   * unencrypted delivery to a relay that has no TLS.
+   */
   requireTls?: boolean;
   /** Verify TLS certificates. Defaults to true, except for loopback hosts (local test servers). */
   rejectUnauthorized?: boolean;
@@ -354,7 +364,7 @@ export class SmtpConnection {
       greetingTimeoutMs: options.greetingTimeoutMs ?? DEFAULTS.greetingTimeoutMs,
       commandTimeoutMs: options.commandTimeoutMs ?? DEFAULTS.commandTimeoutMs,
       dataTimeoutMs: options.dataTimeoutMs ?? DEFAULTS.dataTimeoutMs,
-      requireTls: options.requireTls ?? (!!options.auth?.user && !loopback),
+      requireTls: options.requireTls ?? !loopback,
       rejectUnauthorized: options.rejectUnauthorized ?? !loopback,
       logger: options.logger,
     };
@@ -556,7 +566,7 @@ export class SmtpConnection {
         await this.ehlo();
       } else if (this.opts.requireTls) {
         throw new SmtpError(
-          "The server does not offer STARTTLS, so the connection cannot be encrypted. Refusing to send credentials in clear text — use SMTP_SECURE=true (port 465) or a server that supports STARTTLS.",
+          "The server does not offer STARTTLS, so the connection cannot be encrypted. Refusing to send mail or credentials in clear text — use SMTP_SECURE=true (port 465) or a server that supports STARTTLS (SMTP_REQUIRE_TLS=false allows unencrypted delivery, not recommended).",
           { phase: "starttls", transient: true, scope: "connection" },
         );
       }

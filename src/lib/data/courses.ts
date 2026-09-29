@@ -10,6 +10,7 @@ import type {
   Enrollment,
   Lesson,
   LessonWithState,
+  ProgressStatus,
   PublicUser,
   User,
 } from "@/lib/types";
@@ -20,10 +21,10 @@ import { percent } from "@/lib/utils";
 import {
   computeLessonLocks,
   dripAnchor,
+  pickContinueLesson,
   resolvePrerequisites,
   unmetPrerequisites,
   type LessonLock,
-  type LockInputLesson,
   type PrerequisiteItem,
 } from "@/components/learn/drip-shared";
 
@@ -242,9 +243,25 @@ export function getViewerCourseState(db: Database, course: Course, viewer: Pick<
   };
 }
 
+/** One lesson of a course in outline order, with the viewer's status and lock. */
+export interface ViewerLesson {
+  lesson: Lesson;
+  chapter: Chapter;
+  /** 0-based chapter position (chapter number - 1). */
+  ci: number;
+  /** 0-based position within the chapter (lesson number - 1). */
+  li: number;
+  status: ProgressStatus;
+  /** Why the viewer can't open the lesson right now; null when it is open. */
+  lock: LessonLock | null;
+}
+
 /**
- * Build the chapter/lesson tree for a course with completion and locking
- * computed for the viewer.
+ * Every lesson of `course` in outline order (chapters, then lessons) with the
+ * viewer's progress status and lock, computed synchronously from a database
+ * snapshot. `getCourseOutline` is built on it; code that already holds the
+ * database and must not await (inside `mutate`, other synchronous read
+ * models) uses it directly so it applies exactly the same locking rules.
  *
  * Locking rules (Frappe LMS plus round-2 drip content; see drip-shared.ts):
  *  - Course managers see everything unlocked.
@@ -258,8 +275,12 @@ export function getViewerCourseState(db: Database, course: Course, viewer: Pick<
  *    every previous lesson (in order) is complete.
  *  - Completed lessons never lock.
  */
-export async function getCourseOutline(course: Course, viewer: User | null, now: number = Date.now()): Promise<ScheduledChapter[]> {
-  const db = await getDb();
+export function computeViewerLessons(
+  db: Database,
+  course: Course,
+  viewer: Pick<User, "id" | "roles"> | null,
+  now: number,
+): { state: ViewerCourseState; chapters: Chapter[]; lessons: ViewerLesson[] } {
   const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
   const lessonsByChapter = new Map<string, Lesson[]>();
   for (const lesson of db.lessons) {
@@ -271,38 +292,54 @@ export async function getCourseOutline(course: Course, viewer: User | null, now:
   for (const list of lessonsByChapter.values()) list.sort((a, b) => a.order - b.order);
 
   const state = getViewerCourseState(db, course, viewer);
-  const progressMap = new Map<string, "complete" | "partial" | "incomplete">();
+  const progressMap = new Map<string, ProgressStatus>();
   if (viewer) {
     for (const p of db.progress) if (p.userId === viewer.id && p.courseId === course.id) progressMap.set(p.lessonId, p.status);
   }
 
-  const ordered: { lesson: Lesson; chapter: Chapter; ci: number; li: number }[] = [];
-  chapters.forEach((chapter, ci) => (lessonsByChapter.get(chapter.id) ?? []).forEach((lesson, li) => ordered.push({ lesson, chapter, ci, li })));
+  const ordered: { lesson: Lesson; chapter: Chapter; ci: number; li: number; status: ProgressStatus }[] = [];
+  chapters.forEach((chapter, ci) =>
+    (lessonsByChapter.get(chapter.id) ?? []).forEach((lesson, li) =>
+      ordered.push({ lesson, chapter, ci, li, status: progressMap.get(lesson.id) ?? "incomplete" }),
+    ),
+  );
 
-  const lockInput: LockInputLesson[] = ordered.map(({ lesson, chapter }) => ({
-    id: lesson.id,
-    status: progressMap.get(lesson.id) ?? "incomplete",
-    includeInPreview: lesson.includeInPreview,
-    dripDays: lesson.dripDays,
-    availableFrom: lesson.availableFrom,
-    chapter: { dripDays: chapter.dripDays, availableFrom: chapter.availableFrom },
-  }));
-  const locks = computeLessonLocks(lockInput, {
-    manager: state.manager,
-    enrolled: state.enrolled,
-    previewAllowed: state.previewAllowed,
-    enforceOrder: course.enforceLessonCompletion,
-    anchor: state.anchor,
-    prerequisitesPending: state.prerequisitesPending,
-    now,
-  });
+  const locks = computeLessonLocks(
+    ordered.map(({ lesson, chapter, status }) => ({
+      id: lesson.id,
+      status,
+      includeInPreview: lesson.includeInPreview,
+      dripDays: lesson.dripDays,
+      availableFrom: lesson.availableFrom,
+      chapter: { dripDays: chapter.dripDays, availableFrom: chapter.availableFrom },
+    })),
+    {
+      manager: state.manager,
+      enrolled: state.enrolled,
+      previewAllowed: state.previewAllowed,
+      enforceOrder: course.enforceLessonCompletion,
+      anchor: state.anchor,
+      prerequisitesPending: state.prerequisitesPending,
+      now,
+    },
+  );
+
+  return { state, chapters, lessons: ordered.map((row, i) => ({ ...row, lock: locks[i] ?? null })) };
+}
+
+/**
+ * Build the chapter/lesson tree for a course with completion and locking
+ * computed for the viewer (rules: see `computeViewerLessons`).
+ */
+export async function getCourseOutline(course: Course, viewer: User | null, now: number = Date.now()): Promise<ScheduledChapter[]> {
+  const db = await getDb();
+  const { chapters, lessons } = computeViewerLessons(db, course, viewer, now);
 
   const byChapter = new Map<string, ScheduledLesson[]>();
-  ordered.forEach(({ lesson, chapter, ci, li }, i) => {
-    const lock = locks[i] ?? undefined;
+  for (const { lesson, chapter, ci, li, status, lock } of lessons) {
     const row: ScheduledLesson = {
       ...lesson,
-      status: lockInput[i]!.status,
+      status,
       locked: !!lock,
       ...(lock ? { lock } : {}),
       chapterNumber: ci + 1,
@@ -312,7 +349,7 @@ export async function getCourseOutline(course: Course, viewer: User | null, now:
     const list = byChapter.get(chapter.id) ?? [];
     list.push(row);
     byChapter.set(chapter.id, list);
-  });
+  }
 
   return chapters.map((chapter) => ({ ...chapter, lessons: byChapter.get(chapter.id) ?? [] }));
 }
@@ -374,23 +411,18 @@ export async function getCourseProgress(userId: string, courseId: string): Promi
 
 /**
  * Lesson for "continue learning": the lesson the learner last opened (when it
- * is still open and incomplete), else the first open incomplete lesson, else
- * the first open lesson. Never a locked lesson; when nothing is open because
- * content is still scheduled (drip), returns null so callers fall back to the
- * course page, which shows when the next lesson unlocks.
+ * is still open and incomplete), else the first open incomplete lesson. Never
+ * a locked lesson, and never a finished lesson while later content is still
+ * scheduled: a learner who has completed everything released so far gets
+ * null, so callers fall back to the course page, which shows when the next
+ * lesson unlocks ("Next lesson is scheduled"). Once the whole course is done,
+ * the first lesson (for review). See `pickContinueLesson`.
  */
 export async function getNextLesson(course: Course, viewer: User | null): Promise<ScheduledLesson | null> {
-  const outline = await getCourseOutline(course, viewer);
-  const flat = flattenOutline(outline);
+  const flat = flattenOutline(await getCourseOutline(course, viewer));
   if (!flat.length) return null;
   const enrollment = viewer ? await getEnrollment(viewer.id, course.id) : null;
-  if (enrollment?.currentLessonId) {
-    const current = flat.find((l) => l.id === enrollment.currentLessonId);
-    if (current && !current.locked && current.status !== "complete") return current;
-  }
-  const open = flat.find((l) => l.status !== "complete" && !l.locked) ?? flat.find((l) => !l.locked);
-  if (open) return open;
-  return flat.some((l) => l.lock?.reason === "drip") ? null : (flat[0] ?? null);
+  return pickContinueLesson(flat, enrollment?.currentLessonId);
 }
 
 /* ------------------------------------------------------------------ */

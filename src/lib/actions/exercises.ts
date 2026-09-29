@@ -8,6 +8,7 @@ import type { ActionResult, ExerciseLanguage, ExerciseSubmission, Lesson, Progra
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { getLessonHref } from "@/lib/data/courses";
+import { getAssessmentAccess, lessonSubmissionLockError } from "@/lib/data/lessons";
 import { canManageAssessments, completeLessonFromAssessment, toExerciseSubmissionView } from "@/lib/data/assessments";
 import { logActivity } from "@/lib/services/activity";
 import { awardPoints } from "@/lib/services/points";
@@ -247,6 +248,23 @@ export async function submitExerciseAction(
   }
   const exercise = db.exercises.find((e) => e.id === input.exerciseId);
   if (!exercise) return { ok: false, error: "This exercise no longer exists." };
+  // Whatever lesson the client names: an exercise that lives only in lessons still locked for this
+  // learner (drip schedule, enforced order, prerequisites) takes no submissions.
+  if (!canManageAssessments(user)) {
+    const gate = await getAssessmentAccess(user, "exercise", exercise.id);
+    if (!gate.ok) return { ok: false, error: gate.message };
+  }
+
+  // Only trust a lesson id if that lesson actually embeds this exercise.
+  let lesson: Lesson | undefined;
+  if (typeof input.lessonId === "string" && input.lessonId) {
+    lesson = db.lessons.find((l) => l.id === input.lessonId && l.blocks.some((b) => b.type === "exercise" && b.exerciseId === exercise.id));
+  }
+  // A lesson that is still locked for this learner (drip, order, prerequisites) can't take submissions.
+  if (lesson && !canManageAssessments(user)) {
+    const locked = await lessonSubmissionLockError(user, lesson.id, "exercise");
+    if (locked) return { ok: false, error: locked };
+  }
 
   const code = typeof input.code === "string" ? input.code.replace(/\r\n?/g, "\n") : "";
   if (!code.trim()) return { ok: false, error: "Write some code before submitting." };
@@ -279,10 +297,6 @@ export async function submitExerciseAction(
     runnable && clientResults.length > 0 && clientResults.some((c) => results.find((r) => r.testCaseId === c.testCaseId)?.passed !== c.passed);
   const status: ExerciseSubmission["status"] = runnable && results.length > 0 && results.every((r) => r.passed) ? "passed" : "failed";
 
-  let lesson: Lesson | undefined;
-  if (input.lessonId) {
-    lesson = db.lessons.find((l) => l.id === input.lessonId && l.blocks.some((b) => b.type === "exercise" && b.exerciseId === exercise.id));
-  }
   const courseId =
     lesson?.courseId ?? (input.courseId && db.courses.some((c) => c.id === input.courseId) ? input.courseId : undefined) ?? exercise.courseId;
 
@@ -318,7 +332,7 @@ export async function submitExerciseAction(
   });
 
   await logActivity(user.id, "exercise_submit", exercise.id);
-  if (status === "passed") await awardPoints(user.id, "exercise_pass", { refId: exercise.id, courseId: saved.courseId });
+  if (status === "passed") await awardPoints(user.id, "exercise_pass", { refId: exercise.id, lessonId: saved.lessonId });
   // A passing submission from a lesson completes that lesson (when its other requirements are met).
   let lessonCompleted = false;
   const completionLesson = lesson ?? (saved.lessonId ? db.lessons.find((l) => l.id === saved.lessonId) : undefined);

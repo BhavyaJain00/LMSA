@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { findById } from "@/lib/db/store";
 import { getCourseById, getLessonById, getLessonHref } from "@/lib/data/courses";
+import { getLessonAccess } from "@/lib/data/lessons";
 import { getQuizAccess, getRunnerPayload, lessonUsesQuiz } from "@/lib/data/quiz";
 import { PageHeader } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
@@ -32,14 +33,17 @@ export default async function QuizPage(props: PageProps<"/quiz/[id]">) {
   const quiz = await findById("quizzes", id);
   if (!quiz) notFound();
 
-  // Optional lesson context (?lesson=&course=) for breadcrumbs and "Back to lesson".
-  const lesson = lessonParam ? await getLessonById(lessonParam) : null;
-  const validLesson = lesson && (lessonUsesQuiz(lesson, quiz.id) || quiz.lessonId === lesson.id) ? lesson : null;
-  const lessonHref = validLesson ? await getLessonHref(validLesson.id) : null;
-  const course = validLesson ? await getCourseById(validLesson.courseId) : courseParam ? await getCourseById(courseParam) : null;
-
   const access = await getQuizAccess(user, quiz);
   const manage = access.ok && access.manage;
+
+  // Optional lesson context (?lesson=&course=) for breadcrumbs, "Back to lesson" and tying the
+  // attempt to the lesson. It only counts for a lesson that embeds the quiz and that the viewer
+  // can open right now (not locked by a drip schedule, the lesson order or prerequisites).
+  const lesson = lessonParam ? await getLessonById(lessonParam) : null;
+  const embedsQuiz = !!lesson && (lessonUsesQuiz(lesson, quiz.id) || quiz.lessonId === lesson.id);
+  const validLesson = embedsQuiz && (manage || (await getLessonAccess(user, lesson.id))?.canView) ? lesson : null;
+  const lessonHref = validLesson ? await getLessonHref(validLesson.id) : null;
+  const course = validLesson ? await getCourseById(validLesson.courseId) : courseParam ? await getCourseById(courseParam) : null;
 
   const crumbs: Crumb[] = [];
   if (validLesson && course) {

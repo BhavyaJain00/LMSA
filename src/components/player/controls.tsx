@@ -7,8 +7,10 @@ import { AUTO_QUALITY, type QualityOption } from "@/lib/media/sources";
 import type { PlayerActions, PlayerState } from "./use-video-player";
 import { SeekBar, chapterAt, type SeekChapter, type SeekMarker } from "./seek-bar";
 import { KeyboardIcon, QualityIcon } from "./player-icons";
+import { PLAYBACK_RATES } from "@/lib/media/playback";
 
-export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+/** Shared with the server, which bounds heartbeats by the fastest rate. */
+export { PLAYBACK_RATES };
 
 function ControlButton({ label, onClick, children, active, className }: { label: string; onClick: () => void; children: ReactNode; active?: boolean; className?: string }) {
   return (

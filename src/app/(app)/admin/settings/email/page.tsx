@@ -40,7 +40,7 @@ export default async function EmailSettingsPage() {
       <div className="space-y-6">
         <SettingsSection
           title="Delivery"
-          description="Configured in the server's .env file (MAIL_TRANSPORT, MAIL_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS)."
+          description="Configured in the server's .env file (MAIL_TRANSPORT, MAIL_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_REQUIRE_TLS, SMTP_USER, SMTP_PASS)."
           actions={
             transport.transport === "log" ? (
               <Badge tone="info">Log only</Badge>
@@ -55,8 +55,14 @@ export default async function EmailSettingsPage() {
             )
           }
         >
-          {(transport.problems.length > 0 || transport.warnings.length > 0) && (
+          {(transport.problems.length > 0 || transport.warnings.length > 0 || delivery.configError) && (
             <div className="space-y-2 px-4 py-4 sm:px-5">
+              {delivery.configError && (
+                <p role="alert" className="flex gap-2 text-sm text-danger">
+                  <Icon.XCircle className="mt-0.5 size-4 shrink-0" />
+                  Delivery is paused: {delivery.configError}
+                </p>
+              )}
               {transport.problems.map((p) => (
                 <p key={p} role="alert" className="flex gap-2 text-sm text-danger">
                   <Icon.XCircle className="mt-0.5 size-4 shrink-0" />
@@ -79,8 +85,11 @@ export default async function EmailSettingsPage() {
               <SettingsRow label="Server" description="Host and port (the host is partly hidden).">
                 <Value>{transport.host ? `${transport.host}:${transport.port}` : "SMTP_HOST missing"}</Value>
               </SettingsRow>
-              <SettingsRow label="Encryption" description="Implicit TLS (SMTP_SECURE=true, usually port 465) or STARTTLS when the server offers it.">
-                <Value>{transport.security}</Value>
+              <SettingsRow
+                label="Encryption"
+                description="Implicit TLS (SMTP_SECURE=true, usually port 465) or STARTTLS. Unencrypted delivery is refused unless SMTP_REQUIRE_TLS=false or the server is on this machine."
+              >
+                <Value>{transport.security === "STARTTLS" ? (transport.tlsRequired ? "STARTTLS (required)" : "STARTTLS if offered (not required)") : transport.security}</Value>
               </SettingsRow>
               <SettingsRow label="Sign-in" description="Credentials are only ever sent over an encrypted connection.">
                 <span className="flex flex-wrap items-center gap-2 text-sm">
@@ -119,7 +128,7 @@ export default async function EmailSettingsPage() {
 
         <SettingsSection
           title="Scheduled delivery"
-          description="Emails are sent in the background as soon as they are queued, and retried automatically (1 min, 5 min, 30 min, 2 h; failed after 5 attempts). Call this URL every minute from a scheduler so retries also happen after restarts."
+          description="Emails are sent in the background as soon as they are queued, and retried automatically (1 min, 5 min, 30 min, 2 h, 12 h; failed after 6 attempts). Call this URL every minute from a scheduler so retries also happen after restarts."
         >
           <SettingsRow label="Cron URL" description="Keep it secret: anyone with the URL can trigger delivery. It changes when APP_SECRET changes." stacked>
             <CopyField value={cron} label="Cron URL" secret />

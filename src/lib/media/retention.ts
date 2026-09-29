@@ -105,11 +105,14 @@ export function binsCovered(ranges: WatchRange[], duration: number): number[] {
 /**
  * Add one viewing pass to every bin covered by `ranges`. Each bin grows by at
  * most one per call, so a single heartbeat can never add more than the range
- * it reported.
+ * it reported. `maxBins` caps how many bins one call may count (the earliest
+ * covered bins win), so many tiny ranges around bin midpoints cannot credit
+ * more of the video than the time the heartbeat could really cover.
  */
-export function applyRangesToBins(bins: readonly number[] | undefined, ranges: WatchRange[], duration: number): number[] {
+export function applyRangesToBins(bins: readonly number[] | undefined, ranges: WatchRange[], duration: number, maxBins: number = RETENTION_BINS): number[] {
   const next = normalizeBins(bins);
-  for (const i of binsCovered(mergeRanges(ranges), duration)) next[i] = (next[i] ?? 0) + 1;
+  const limit = Math.max(0, Math.floor(maxBins));
+  for (const i of binsCovered(mergeRanges(ranges), duration).slice(0, limit)) next[i] = (next[i] ?? 0) + 1;
   return next;
 }
 

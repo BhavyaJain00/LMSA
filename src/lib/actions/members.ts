@@ -6,11 +6,13 @@ import { redirect } from "next/navigation";
 import type { ActionResult, Database, PublicUser, Role, User } from "@/lib/types";
 import { destroyAllSessions, getCurrentUser, isAdmin, isModerator, toPublicUser } from "@/lib/auth/session";
 import { hashPassword, validatePasswordStrength } from "@/lib/auth/password";
+import { revokeAuthTokens } from "@/lib/auth/tokens";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { getDb, mutate } from "@/lib/db/store";
 import { isRole } from "@/components/admin/settings/roles";
 import { MEMBER_IMPORT_MAX_ROWS, parseRoleList, type MemberImportRow } from "@/components/admin/settings/member-import-csv";
 import { setFlash } from "@/lib/flash";
-import { fd, fdBool, isValidEmail, slugify, uid } from "@/lib/utils";
+import { fd, isValidEmail, slugify, uid } from "@/lib/utils";
 
 /**
  * Member management (Frappe: Settings → Users + /settings/users/:member).
@@ -57,7 +59,16 @@ interface NewMemberInput {
  * share these rules). `takenEmails`/`takenUsernames` hold lower-cased values
  * that already exist, including rows earlier in the same import.
  */
-function validateNewMember(actor: User, input: NewMemberInput, takenEmails: Set<string>, takenUsernames: Set<string>): Errors {
+function validateNewMember(
+  actor: User,
+  input: NewMemberInput,
+  takenEmails: Set<string>,
+  takenUsernames: Set<string>,
+  /** `settings.security.passwordMinLength`. */
+  minPasswordLength: number,
+  /** The password will be generated (CSV import), so there is nothing to check. */
+  generatedPassword = false,
+): Errors {
   const errors: Errors = {};
   if (!input.email) errors.email = "Email is required";
   else if (input.email.length > 254 || !isValidEmail(input.email)) errors.email = "Please enter a valid email address.";
@@ -68,7 +79,7 @@ function validateNewMember(actor: User, input: NewMemberInput, takenEmails: Set<
     if (!USERNAME_RE.test(input.username)) errors.username = "Use 3–40 lowercase letters, numbers, dashes or underscores.";
     else if (takenUsernames.has(input.username)) errors.username = "This username is taken.";
   }
-  const pwError = validatePasswordStrength(input.password);
+  const pwError = generatedPassword ? null : validatePasswordStrength(input.password, minPasswordLength);
   if (pwError) errors.password = pwError;
   if (input.roles.includes("admin") && !isAdmin(actor)) errors.roles = "Only administrators can grant the admin role.";
   return errors;
@@ -109,7 +120,7 @@ async function insertMember(actor: User, formData: FormData): Promise<ActionResu
   };
   const takenEmails = new Set(db.users.map((u) => u.email.toLowerCase()));
   const takenUsernames = new Set(db.users.map((u) => u.username.toLowerCase()));
-  const errors = validateNewMember(actor, input, takenEmails, takenUsernames);
+  const errors = validateNewMember(actor, input, takenEmails, takenUsernames, db.settings.security.passwordMinLength);
   if (Object.keys(errors).length) return fail(errors);
 
   const passwordHash = await hashPassword(input.password);
@@ -259,7 +270,7 @@ export async function resetMemberPasswordAction(_prev: ActionResult | null, form
   const password = fd(formData, "password");
   const confirm = fd(formData, "confirm");
   const errors: Errors = {};
-  const pwError = validatePasswordStrength(password);
+  const pwError = validatePasswordStrength(password, db.settings.security.passwordMinLength);
   if (pwError) errors.password = pwError;
   else if (password !== confirm) errors.confirm = "Passwords do not match.";
   if (Object.keys(errors).length) return fail(errors);
@@ -269,7 +280,11 @@ export async function resetMemberPasswordAction(_prev: ActionResult | null, form
     const row = d.users.find((u) => u.id === id);
     if (row) row.passwordHash = passwordHash;
   });
-  if (fdBool(formData, "signOut") && target.id !== actor.id) await destroyAllSessions(id);
+  // Reset links and half-finished sign-ins were issued for the old password; sessions end too unless
+  // the admin explicitly unticked "Sign the member out" (the form then posts signOut=off).
+  await revokeAuthTokens(id, "password_reset");
+  await revokeAuthTokens(id, "two_factor_login");
+  if (formData.get("signOut") !== "off" && target.id !== actor.id) await destroyAllSessions(id);
   revalidateMember(id);
   return { ok: true, data: undefined, message: `Password updated for ${target.name}.` };
 }
@@ -401,10 +416,12 @@ function checkImportRows(actor: User, db: Database, rows: MemberImportRow[]): Me
     const errors: string[] = [];
     const fieldErrors = validateNewMember(
       actor,
-      // A generated password always passes the strength rule, so check a stand-in that does too.
-      { name: row.name, email: row.email, username: "", password: generatePassword ? "generated1" : row.password, roles },
+      { name: row.name, email: row.email, username: "", password: row.password, roles },
       takenEmails,
       takenUsernames,
+      db.settings.security.passwordMinLength,
+      // A generated password always passes the policy (see generatePassword).
+      generatePassword,
     );
     if (fieldErrors.email) errors.push(fieldErrors.email);
     else if (row.email) {
@@ -424,13 +441,14 @@ function checkImportRows(actor: User, db: Database, rows: MemberImportRow[]): Me
   });
 }
 
-/** Random password with letters and digits that passes the strength rule. */
-function generatePassword(): string {
+/** Random password with letters and digits that passes the password policy (at least `minLength`, never under 12). */
+function generatePassword(minLength: number): string {
   const letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
   const digits = "23456789";
   const all = letters + digits;
+  const length = Math.max(12, clampMinLength(minLength));
   const chars = [letters[randomInt(letters.length)], digits[randomInt(digits.length)]];
-  while (chars.length < 12) chars.push(all[randomInt(all.length)]);
+  while (chars.length < length) chars.push(all[randomInt(all.length)]);
   for (let i = chars.length - 1; i > 0; i--) {
     const j = randomInt(i + 1);
     [chars[i], chars[j]] = [chars[j], chars[i]];
@@ -468,7 +486,7 @@ export async function importMembersAction(rows: MemberImportRow[]): Promise<Acti
     const row = clean[i];
     const check = checks[i];
     if (check.errors.length) skipped.push({ line: row.line, email: row.email, errors: check.errors });
-    else valid.push({ row, check, password: check.generatePassword ? generatePassword() : row.password });
+    else valid.push({ row, check, password: check.generatePassword ? generatePassword(db.settings.security.passwordMinLength) : row.password });
   }
   // scrypt is deliberately slow and memory hungry: hash a few at a time.
   const ready: { row: MemberImportRow; check: MemberImportCheck; password: string; hash: string }[] = [];

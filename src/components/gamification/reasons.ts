@@ -100,7 +100,7 @@ export const REASON_META: Record<PointsReason, ReasonMeta> = {
   certificate: {
     label: "Certificate earned",
     ledger: "Earned a certificate",
-    description: "For each certificate issued.",
+    description: "Once per course or batch certificate (taken back if the certificate is revoked).",
     icon: "Certificate",
   },
   streak_day: {

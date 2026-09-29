@@ -3,10 +3,12 @@
  * printed (no sidebar, header or page actions), on A4 paper, in light colors
  * even when the site is in dark mode. Every rule is scoped to documents that
  * contain the invoice, so the stylesheet is harmless after client-side
- * navigation to other pages.
+ * navigation to other pages (Next.js keeps global stylesheets loaded). The
+ * page box is a named page used only by the invoice sheet: an unnamed `@page`
+ * rule cannot be scoped and would fight the certificate's landscape page.
  */
 @media print {
-  @page {
+  @page invoice {
     size: A4 portrait;
     margin: 14mm 14mm 16mm;
   }
@@ -54,6 +56,7 @@
   }
 
   #invoice-sheet {
+    page: invoice;
     max-width: none !important;
     margin: 0 !important;
     padding: 0 !important;

@@ -4,8 +4,18 @@ import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
 import { notifyMany } from "@/lib/services/notifications";
+import { sendPaymentReminderEmail } from "@/lib/email";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { formatPrice, shortCode, toDateKey, uid } from "@/lib/utils";
+import { getRequestInfo } from "@/lib/auth/request-info";
+import {
+  couponAppliesTo,
+  couponAttemptsBlocked,
+  couponProblem,
+  couponUsesTaken,
+  normalizeCouponCode,
+  recordRejectedCoupon,
+} from "@/lib/payments/coupon-rules";
 
 /**
  * Commerce domain logic: billing items, access checks, coupons, order
@@ -216,52 +226,42 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
 /* Coupons                                                             */
 /* ------------------------------------------------------------------ */
 
-export function normalizeCouponCode(code: string): string {
-  return code.trim().toUpperCase().replace(/\s+/g, "");
-}
-
-export function couponAppliesTo(coupon: Coupon, item: Pick<BillingItem, "type" | "id">): boolean {
-  if (!coupon.applicableItems.length) return true;
-  if (item.type === "batch") return coupon.applicableItems.some((a) => a.type === "batch" && a.id === item.id);
-  // Course and certificate purchases match coupons listed for the course.
-  return coupon.applicableItems.some((a) => a.type === "course" && a.id === item.id);
-}
+// The rules live in `src/lib/payments/coupon-rules.ts` (pure, usable inside `mutate`).
+export { normalizeCouponCode, couponAppliesTo, couponUsesTaken };
 
 export type CouponCheck = { ok: true; coupon: Coupon } | { ok: false; error: string };
 
 /**
- * Redemptions a coupon has used up: paid orders (`redemptionCount`) plus
- * orders still awaiting confirmation, which reserve a use so a limited code
- * cannot be over-redeemed while the manual gateway queue is unconfirmed.
- */
-export function couponUsesTaken(coupon: Coupon, payments: Payment[]): number {
-  const reserved = payments.filter((p) => p.status === "pending" && p.couponId === coupon.id).length;
-  return coupon.redemptionCount + reserved;
-}
-
-/**
  * Validate a coupon code for an item (enabled, not expired, under usage limit,
  * applicable). Fixed-amount coupons are stored in the platform's default
- * currency and only apply to items priced in that currency.
+ * currency and only apply to items priced in that currency. This is the
+ * friendly early check; the authoritative one runs inside the serialized
+ * write that creates the order (`insertPendingOrder`).
  */
 export async function validateCoupon(rawCode: string, item: Pick<BillingItem, "type" | "id" | "currency">): Promise<CouponCheck> {
   const code = normalizeCouponCode(rawCode);
   if (!code) return { ok: false, error: "Please enter a coupon code" };
   const db = await getDb();
   const coupon = db.coupons.find((c) => c.code.toUpperCase() === code);
-  if (!coupon || !coupon.enabled) return { ok: false, error: `The coupon code '${code}' is invalid.` };
-  if (coupon.expiresOn && coupon.expiresOn < toDateKey()) return { ok: false, error: "This coupon has expired." };
-  if (coupon.usageLimit > 0 && couponUsesTaken(coupon, db.payments) >= coupon.usageLimit) {
-    return { ok: false, error: "This coupon has reached its maximum usage limit." };
-  }
-  if (!couponAppliesTo(coupon, item)) {
-    return { ok: false, error: `This coupon is not applicable to this ${ITEM_TYPE_LABELS[item.type]}.` };
-  }
-  const defaultCurrency = db.settings.commerce.defaultCurrency.toUpperCase();
-  if (coupon.discountType === "fixed" && item.currency.toUpperCase() !== defaultCurrency) {
-    return { ok: false, error: `This coupon can only be used for prices in ${defaultCurrency}.` };
-  }
+  const problem = couponProblem(coupon, item, { payments: db.payments, defaultCurrency: db.settings.commerce.defaultCurrency, today: toDateKey() }, code);
+  if (problem || !coupon) return { ok: false, error: problem ?? `The coupon code '${code}' is invalid.` };
   return { ok: true, coupon };
+}
+
+/**
+ * `validateCoupon` for a buyer, with guessing protection: once too many codes
+ * were rejected for this account (or IP address) recently, every check is
+ * refused for a while, so private codes cannot be found by trying them.
+ */
+export async function validateCouponForBuyer(rawCode: string, item: Pick<BillingItem, "type" | "id" | "currency">, buyer: { userId: string }): Promise<CouponCheck> {
+  if (!normalizeCouponCode(rawCode)) return { ok: false, error: "Please enter a coupon code" };
+  const { ip } = await getRequestInfo();
+  const keys = { userId: buyer.userId, ip };
+  const blocked = couponAttemptsBlocked(keys);
+  if (blocked) return { ok: false, error: blocked };
+  const check = await validateCoupon(rawCode, item);
+  if (!check.ok) recordRejectedCoupon(keys);
+  return check;
 }
 
 /* ------------------------------------------------------------------ */
@@ -357,17 +357,35 @@ export async function generateOrderId(): Promise<string> {
  * for the same item — checked and written in one serialized mutation so a
  * double-submitted checkout cannot create two orders. The order id is made
  * unique inside the same mutation.
+ *
+ * A pending order reserves a use of its coupon, so the coupon is checked
+ * again here, against the live data and in the same write that makes the
+ * reservation: concurrent checkouts cannot all pass a snapshot check and
+ * over-redeem a limited code.
  */
-export async function insertPendingOrder(draft: Omit<Payment, "orderId">): Promise<{ payment: Payment; existing: boolean }> {
-  return mutate((d) => {
+export type InsertOrderResult = { ok: true; payment: Payment; existing: boolean } | { ok: false; error: string };
+
+export async function insertPendingOrder(draft: Omit<Payment, "orderId">): Promise<InsertOrderResult> {
+  const today = toDateKey();
+  return mutate((d): InsertOrderResult => {
     const open = d.payments.find((p) => p.userId === draft.userId && p.itemType === draft.itemType && p.itemId === draft.itemId && p.status === "pending");
-    if (open) return { payment: { ...open }, existing: true };
+    if (open) return { ok: true, payment: { ...open }, existing: true };
+    if (draft.couponId) {
+      const coupon = d.coupons.find((c) => c.id === draft.couponId);
+      const problem = couponProblem(
+        coupon,
+        { type: draft.itemType, id: draft.itemId, currency: draft.currency },
+        { payments: d.payments, defaultCurrency: d.settings.commerce.defaultCurrency, today },
+        draft.couponCode,
+      );
+      if (problem) return { ok: false, error: problem };
+    }
     const taken = new Set(d.payments.map((p) => p.orderId));
     let orderId = `ORD-${shortCode(2, 4)}`;
     while (taken.has(orderId)) orderId = `ORD-${shortCode(2, 4)}`;
     const payment: Payment = { ...draft, orderId };
     d.payments.push(payment);
-    return { payment: { ...payment }, existing: false };
+    return { ok: true, payment: { ...payment }, existing: false };
   });
 }
 
@@ -498,10 +516,11 @@ function reminderNotification(payment: Payment, now: Date): Notification {
 async function remindPayments(paymentIds: string[], now: Date): Promise<{ sent: number; skipped: number; firstError: string | null }> {
   if (!paymentIds.length) return { sent: 0, skipped: 0, firstError: null };
   const wanted = new Set(paymentIds);
-  return mutate((d) => {
+  const result = await mutate((d) => {
     let sent = 0;
     let skipped = 0;
     let firstError: string | null = null;
+    const reminded: Payment[] = [];
     const stamp = now.toISOString();
     for (const payment of d.payments) {
       if (!wanted.has(payment.id)) continue;
@@ -513,10 +532,20 @@ async function remindPayments(paymentIds: string[], now: Date): Promise<{ sent: 
       }
       d.notifications.push(reminderNotification(payment, now));
       payment.lastReminderAt = stamp;
+      reminded.push({ ...payment });
       sent++;
     }
-    return { sent, skipped, firstError };
+    return { sent, skipped, firstError, reminded };
   });
+  // Email copy of each reminder (Settings → Email and the learner's "payments" preference decide).
+  for (const payment of result.reminded) {
+    try {
+      await sendPaymentReminderEmail(payment.id, reminderLink(payment));
+    } catch (error) {
+      console.error("[email] could not queue a payment reminder:", error instanceof Error ? error.message : String(error));
+    }
+  }
+  return { sent: result.sent, skipped: result.skipped, firstError: result.firstError };
 }
 
 /** Send the in-app payment reminder for one unpaid order (eligibility re-checked atomically). */

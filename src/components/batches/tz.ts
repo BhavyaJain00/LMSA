@@ -1,6 +1,7 @@
 /**
  * Pure date/time helpers for batches and live classes, shared by server and
- * client code (no runtime imports, no "server-only").
+ * client code (no "server-only"; the only runtime import is the equally pure
+ * `@/lib/calendar/time`).
  *
  * Batches and live classes store a wall-clock date (`YYYY-MM-DD`), time
  * (`HH:mm`) and an IANA timezone. These helpers convert that wall-clock time
@@ -8,6 +9,7 @@
  * with hand-written month names so server and browser output is identical
  * (no hydration mismatches caused by ICU differences).
  */
+import { zonedTimeToUtc as wallClockToUtc } from "@/lib/calendar/time";
 
 export const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 export const MONTHS_LONG = [
@@ -190,19 +192,17 @@ export function tzOffsetMinutes(tz: string, epochMs: number): number {
 
 /**
  * Convert a wall-clock date + time in `tz` to an absolute epoch (ms).
- * Returns NaN for invalid input.
+ * Returns NaN for invalid input; unknown zones fall back to UTC.
+ *
+ * This is the calendar module's conversion (`@/lib/calendar/time`), so batch
+ * pages, drip schedules, emails and calendar exports agree on every instant,
+ * including across daylight-saving transitions: a time repeated when clocks
+ * fall back resolves to the earlier instant, and a time skipped when they
+ * spring forward moves FORWARD by the gap (02:30 on the day New York springs
+ * forward is 03:30 EDT).
  */
 export function zonedTimeToUtc(dateKey: string, hhmm: string, tz: string): number {
-  const p = parseKey(dateKey);
-  const mins = clockToMinutes(hhmm || "00:00");
-  if (!p || Number.isNaN(mins)) return NaN;
-  const zone = safeZone(tz);
-  const guess = Date.UTC(p.y, p.m - 1, p.d, Math.floor(mins / 60), mins % 60);
-  const first = tzOffsetMinutes(zone, guess);
-  let result = guess - first * 60000;
-  const second = tzOffsetMinutes(zone, result);
-  if (second !== first) result = guess - second * 60000;
-  return result;
+  return wallClockToUtc(dateKey, hhmm || "00:00", tz);
 }
 
 /** "GMT+5:30", "GMT-4", "GMT" */

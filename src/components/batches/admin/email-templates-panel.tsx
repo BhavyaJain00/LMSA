@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { Markdown } from "@/lib/markdown";
-import { deleteEmailTemplateAction, saveEmailTemplateAction } from "@/lib/actions/email-templates";
+import { deleteEmailTemplateAction, saveEmailTemplateAction, sendBatchEmailAction } from "@/lib/actions/email-templates";
 import { formatDate } from "@/lib/utils";
-import { Button, IconButton } from "@/components/ui/button";
+import { Button, ButtonLink, IconButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Field, FormError, Input, Textarea } from "@/components/ui/input";
@@ -134,11 +134,89 @@ function TemplateForm({ batchId, template, sample, onDone }: { batchId: string; 
   );
 }
 
-/** Batch email templates (e.g. enrollment confirmation) with placeholders and preview. */
-export function EmailTemplatesPanel({ batchId, templates, sample }: { batchId: string; templates: EmailTemplateView[]; sample: Record<string, string> }) {
+/** Send one template to every student of the batch (placeholders filled per student). */
+function SendTemplateForm({
+  batchId,
+  template,
+  sample,
+  studentCount,
+  composeHref,
+  onDone,
+}: {
+  batchId: string;
+  template: EmailTemplateView;
+  sample: Record<string, string>;
+  studentCount: number;
+  composeHref: string | null;
+  onDone: () => void;
+}) {
+  const { onSubmit, pending, error, fieldErrors } = useActionForm(sendBatchEmailAction, { onSuccess: onDone });
+  const noStudents = studentCount === 0;
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4" noValidate>
+      <input type="hidden" name="batchId" value={batchId} />
+      <input type="hidden" name="templateId" value={template.id} />
+      <input type="hidden" name="audience" value="all" />
+      <FormError message={error} />
+      <div className="rounded-lg border border-border bg-surface-2/50 p-4">
+        <p className="mb-3 border-b border-border pb-2 text-sm">
+          <span className="text-ink-muted">Subject: </span>
+          <span className="font-medium text-ink">{fillPlaceholders(template.subject, sample)}</span>
+        </p>
+        <Markdown content={fillPlaceholders(template.body, sample)} className="text-sm" />
+        <p className="mt-3 text-xs text-ink-faint">Preview uses sample values; each student gets their own name and details.</p>
+      </div>
+      <p className="flex items-start gap-2 text-sm text-ink-muted">
+        <Icon.Users className="mt-0.5 size-4 shrink-0 text-ink-faint" />
+        {noStudents
+          ? "No students are enrolled in this batch yet, so there is nobody to email."
+          : `Sends to all ${studentCount} enrolled ${studentCount === 1 ? "student" : "students"}. Students who turned off batch emails are skipped.`}
+      </p>
+      <Field label="CC" htmlFor="send-cc" hint="Optional. Separate several addresses with commas." error={fieldErrors.cc}>
+        <Input id="send-cc" name="cc" type="text" inputMode="email" autoComplete="off" placeholder="mentor@example.com" invalid={!!fieldErrors.cc} disabled={noStudents} />
+      </Field>
+      <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+        {composeHref ? (
+          <ButtonLink href={composeHref} variant="ghost" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
+            Pick recipients or edit first
+          </ButtonLink>
+        ) : (
+          <span />
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onDone} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={pending} disabled={noStudents} leftIcon={<Icon.Send className="size-4" />}>
+            Send email
+          </Button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+/** Batch email templates (e.g. enrollment confirmation) with placeholders, preview and sending. */
+export function EmailTemplatesPanel({
+  batchId,
+  templates,
+  sample,
+  studentCount,
+  canCompose = false,
+}: {
+  batchId: string;
+  templates: EmailTemplateView[];
+  sample: Record<string, string>;
+  /** Enrolled students (the recipients of "Send"). */
+  studentCount: number;
+  /** Moderators can open the full composer (/admin/emails/compose) to pick recipients. */
+  canCompose?: boolean;
+}) {
   const [editing, setEditing] = useState<EmailTemplateView | null | "new">(null);
   const [previewing, setPreviewing] = useState<EmailTemplateView | null>(null);
   const [deleting, setDeleting] = useState<EmailTemplateView | null>(null);
+  const [sending, setSending] = useState<EmailTemplateView | null>(null);
   const { pending, run } = useServerAction();
   const open = editing !== null;
 
@@ -175,6 +253,9 @@ export function EmailTemplatesPanel({ batchId, templates, sample }: { batchId: s
                   <p className="truncate text-sm text-ink-muted">{t.subject}</p>
                 </div>
                 <div className="flex shrink-0 gap-0.5">
+                  <IconButton label={`Send ${t.name}`} size="icon-sm" onClick={() => setSending(t)}>
+                    <Icon.Send className="size-4" />
+                  </IconButton>
                   <IconButton label={`Preview ${t.name}`} size="icon-sm" onClick={() => setPreviewing(t)}>
                     <Icon.Eye className="size-4" />
                   </IconButton>
@@ -195,6 +276,18 @@ export function EmailTemplatesPanel({ batchId, templates, sample }: { batchId: s
 
       <Dialog open={open} onClose={() => setEditing(null)} title={editing === "new" ? "New Email Template" : "Edit Email Template"} size="lg">
         {open && <TemplateForm batchId={batchId} template={editing === "new" ? null : editing} sample={sample} onDone={() => setEditing(null)} />}
+      </Dialog>
+      <Dialog open={!!sending} onClose={() => setSending(null)} title={sending ? `Send "${sending.name}"` : "Send email"} description="Email this template to the batch's students." size="lg">
+        {sending && (
+          <SendTemplateForm
+            batchId={batchId}
+            template={sending}
+            sample={sample}
+            studentCount={studentCount}
+            composeHref={canCompose ? `/admin/emails/compose?batch=${encodeURIComponent(batchId)}` : null}
+            onDone={() => setSending(null)}
+          />
+        )}
       </Dialog>
       <Dialog open={!!previewing} onClose={() => setPreviewing(null)} title={previewing?.name} description="Preview with sample values" size="lg">
         {previewing && (

@@ -3,7 +3,7 @@ import type { LessonBlock, Settings, User, VideoSource } from "@/lib/types";
 import { findById, getSettings } from "@/lib/db/store";
 import { lessonReferencesPath, siteOrigins } from "./access";
 import { GUEST_MEDIA_SUBJECT, parseMediaSrc, stripMediaToken, withMediaToken } from "./paths";
-import { issueMediaToken } from "./token";
+import { issueMediaToken, mediaSigningAvailable } from "./token";
 
 /**
  * Server-side signing of lesson video URLs.
@@ -11,6 +11,11 @@ import { issueMediaToken } from "./token";
  * Only uploads under `/uploads/videos/` are signed, and only while
  * `settings.video.protectUploads` is on. External URLs, other uploads and
  * everything while protection is off pass through unchanged.
+ *
+ * Without a usable APP_SECRET (e.g. missing in production) nothing can be
+ * signed: lesson pages then render protected videos unsigned, the player asks
+ * `/api/media/sign`, which answers 503, and the block shows "video
+ * unavailable" instead of the whole lesson crashing.
  */
 
 export interface SignedMedia {
@@ -29,6 +34,7 @@ export function signedUrlTtlSeconds(settings: Pick<Settings, "video">): number {
 /**
  * Sign `src` for a subject (user id, or null for a signed-out visitor).
  * Callers must have authorized the viewer first (see `authorizeMediaAccess`).
+ * Throws `MediaSigningUnavailableError` without a usable APP_SECRET.
  */
 export function signMediaForSubject(src: string, userId: string | null, settings: Pick<Settings, "video">, requestOrigin?: string | null): SignedMedia {
   const parsed = parseMediaSrc(src, siteOrigins(requestOrigin));
@@ -50,7 +56,7 @@ export async function signMediaUrl(src: string, userId: string | null, lessonId:
   const parsed = parseMediaSrc(src, siteOrigins());
   if (!parsed || !parsed.isProtectedVideo || !settings.video.protectUploads) return src;
   const lesson = await findById("lessons", lessonId);
-  if (!lesson || !lessonReferencesPath(lesson, parsed.path)) return stripMediaToken(src);
+  if (!lesson || !lessonReferencesPath(lesson, parsed.path) || !mediaSigningAvailable()) return stripMediaToken(src);
   return signMediaForSubject(src, userId, settings).src;
 }
 
@@ -69,6 +75,8 @@ export interface LessonPlayerOptions {
   watermark: PlayerWatermark | null;
   seekThumbnails: boolean;
   autoplayNext: boolean;
+  /** Lifetime of signed URLs (seconds) while protection is on: the player schedules renewals from it, not from its own clock. */
+  signedUrlTtlSeconds: number | null;
 }
 
 export interface LessonVideoMedia {
@@ -89,6 +97,7 @@ export function playerOptionsFor(viewer: Pick<User, "email" | "name"> | null, se
     watermark: watermarkFor(viewer, settings),
     seekThumbnails: settings.video.seekThumbnails,
     autoplayNext: settings.video.autoplayNext,
+    signedUrlTtlSeconds: settings.video.protectUploads ? signedUrlTtlSeconds(settings) : null,
   };
 }
 
@@ -108,10 +117,12 @@ export async function prepareLessonVideos(
   if (hasVideo) {
     const lesson = await findById("lessons", lessonId);
     const origins = siteOrigins();
+    // Checked once: without a usable APP_SECRET protected videos are left unsigned (shown as unavailable).
+    const canSign = !settings.video.protectUploads || mediaSigningAvailable();
     const sign = (src: string): string => {
       const parsed = parseMediaSrc(src, origins);
       if (!parsed?.isProtectedVideo || !settings.video.protectUploads) return src;
-      if (!lesson || !lessonReferencesPath(lesson, parsed.path, origins)) return stripMediaToken(src);
+      if (!canSign || !lesson || !lessonReferencesPath(lesson, parsed.path, origins)) return stripMediaToken(src);
       return signMediaForSubject(src, viewer?.id ?? null, settings).src;
     };
     for (const block of blocks) {

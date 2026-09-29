@@ -1051,6 +1051,8 @@ export interface Payment {
   refundedAmount?: number;
   refundedAt?: string;
   failureReason?: string;
+  /** Gateway refunds recorded on this order (deduplicates redelivered refund webhooks). */
+  refunds?: { id: string; amount: number; at: string }[];
 }
 
 export interface Coupon {
@@ -1218,9 +1220,11 @@ export interface Settings {
   gamification: {
     enabled: boolean;
     showLeaderboard: boolean;
-    /** Exclude admins/moderators from leaderboards. */
+    /** Exclude staff (admins, moderators, course creators, evaluators) from leaderboards. */
     excludeStaff: boolean;
     points: Record<PointsReason, number>;
+    /** Round 2 fix: when the ledger was first filled from history (unset = the one-time backfill has not succeeded yet). */
+    ledgerBuiltAt?: string;
   };
   updatedAt: string;
 }
@@ -1286,6 +1290,22 @@ export interface LoginEvent {
   ip?: string;
   userAgent?: string;
   createdAt: string;
+}
+
+/**
+ * Round 2 fix (account security): consecutive failed sign-ins for one email
+ * address, kept the same way whether or not an account exists for it, so
+ * lockouts never reveal which addresses are registered.
+ */
+export interface LoginThrottle {
+  id: string;
+  /** HMAC-SHA256 of the normalised email address (keyed from APP_SECRET); addresses are not stored. */
+  keyHash: string;
+  /** Failures since the last success, lock or reset (forgotten a day after the last one). */
+  failures: number;
+  lastFailureAt: string;
+  /** Sign-in for this address is refused until then. */
+  lockedUntil?: string;
 }
 
 export type PointsReason =
@@ -1364,6 +1384,8 @@ export interface Database {
   authTokens: AuthToken[];
   loginEvents: LoginEvent[];
   points: PointsEntry[];
+  /** Round 2 fix: persisted sign-in failure counters (account security). */
+  loginThrottles: LoginThrottle[];
   settings: Settings;
 }
 

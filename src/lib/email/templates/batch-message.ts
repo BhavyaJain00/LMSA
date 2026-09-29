@@ -4,7 +4,9 @@ export interface BatchMessageEmailData {
   /** Subject (placeholders already filled). */
   subject: string;
   /** Message body as markdown (placeholders already filled, values markdown-escaped). */
-  markdown: string;
+  markdown?: string;
+  /** The same body already rendered (`prepareMarkdown` + `personalize`); used instead of `markdown`. */
+  body?: { html: string; text: string };
   batchTitle: string;
   batchUrl: string;
   senderName?: string;
@@ -27,7 +29,7 @@ export function batchMessageEmail(brand: EmailBrand, data: BatchMessageEmailData
       text: `You were copied on this message, which was sent to ${data.ccRecipientCount} ${data.ccRecipientCount === 1 ? "member" : "members"} of ${data.batchTitle}.`,
     });
   }
-  blocks.push({ type: "markdown", markdown: data.markdown });
+  blocks.push(data.body ? { type: "html", html: data.body.html, text: data.body.text } : { type: "markdown", markdown: data.markdown ?? "" });
   blocks.push({ type: "button", label: "Open the batch", url: data.batchUrl });
   if (data.senderName) blocks.push({ type: "muted", text: `Sent by ${data.senderName} for ${data.batchTitle}.` });
   return renderEmail(brand, data.subject, {

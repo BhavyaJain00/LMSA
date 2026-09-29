@@ -1,9 +1,40 @@
 import "server-only";
-import type { ActivityType, Course, Database, PointsEntry, PointsReason, Settings, User } from "@/lib/types";
+import type {
+  ActivityType,
+  Assignment,
+  Batch,
+  Certificate,
+  Course,
+  Database,
+  DiscussionReply,
+  DiscussionTopic,
+  Lesson,
+  PointsEntry,
+  PointsReason,
+  ProgrammingExercise,
+  Quiz,
+  Settings,
+  User,
+} from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
-import { canViewCourse, lessonHref } from "@/lib/data/courses";
+import { isCreator, isModerator, isStaff } from "@/lib/auth/session";
+import { canManageCourse, canViewCourse, lessonHref } from "@/lib/data/courses";
+import { canManageBatch } from "@/lib/data/batches";
 import { addDays, toDateKey, uid } from "@/lib/utils";
 import { notify } from "./notifications";
+import {
+  adoptSource,
+  entryTime,
+  indexAdd,
+  indexRemove,
+  invalidateIndex,
+  localDay,
+  pointsKey,
+  syncIndex,
+  windowTotals,
+  type LedgerIndex,
+  type TimeWindow,
+} from "./points-index";
 import { formatPoints, getLevelInfo, levelForPoints, tierForLevel, type LevelInfo, type TierName, type TierTone } from "@/components/gamification/levels";
 import { DISCUSSION_REPLY_DAILY_CAP, MAX_MANUAL_POINTS, POINTS_REASONS, REASON_META, isPointsReason } from "@/components/gamification/reasons";
 
@@ -16,27 +47,50 @@ export { getLevelInfo, type LevelInfo } from "@/components/gamification/levels";
  * idempotent per (user, reason, refId) — a lesson, quiz, assignment … can
  * only pay out once — and per day for "streak_day". Manual adjustments are
  * the only entries that may repeat. The ledger can be rebuilt from the
- * learning history at any time (admin "Recalculate"), and is backfilled
- * automatically the first time it is needed while empty.
+ * learning history at any time (admin "Recalculate"), and is filled from
+ * history once, automatically (`settings.gamification.ledgerBuiltAt` records
+ * that the one-time backfill succeeded).
+ *
+ * Nobody earns points from content they control: course managers get
+ * nothing for lessons, completions, certificates, reviews or replies in
+ * their courses, quiz managers nothing for their quizzes, staff (who can
+ * edit and grade every assignment and exercise) nothing for assignments and
+ * exercises, and nothing is paid for courses that are not published or for
+ * results a member graded or issued to themselves.
  *
  * Canonical refIds (hooks and the backfill must agree):
  *   lesson_complete → lessonId        course_complete → courseId
  *   quiz_pass / quiz_perfect → quizId assignment_submit / assignment_pass → assignmentId
- *   exercise_pass → exerciseId        certificate → certificateId
+ *   exercise_pass → exerciseId        certificate → "course:<courseId>" or "batch:<batchId>"
  *   review → courseId                 discussion_reply → replyId
  *   streak_day → YYYY-MM-DD           manual → none (or an explicit refId)
+ *
+ * Course attribution of quiz, assignment and exercise points is derived on
+ * the server from where the content really lives (the verified lesson that
+ * embeds it, the content's own course, other embedding lessons), limited to
+ * courses the member is enrolled in — never from a course id sent by the
+ * client.
+ *
+ * Reads go through the in-memory ledger index (`points-index.ts`), so
+ * awards and heartbeats are O(1) and leaderboards add up day buckets.
  */
 
 const MAX_ABS_POINTS = 100000;
-const DAY_MS = 86400000;
+/** How long computed standings are reused for identical requests. */
+const STANDINGS_TTL_MS = 15_000;
+/** Pause before retrying a failed automatic backfill. */
+const BACKFILL_RETRY_MS = 60_000;
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Admins and moderators are hidden from leaderboards when `excludeStaff` is on. */
+/**
+ * Staff are hidden from leaderboards when `excludeStaff` is on: admins,
+ * moderators, course creators (instructors) and batch evaluators.
+ */
 export function isLeaderboardStaff(user: Pick<User, "roles">): boolean {
-  return user.roles.includes("admin") || user.roles.includes("moderator");
+  return isStaff(user);
 }
 
 function clampPoints(value: number): number {
@@ -49,44 +103,343 @@ function resolveValue(reason: PointsReason, override: number | undefined, settin
   return Number.isFinite(n) ? clampPoints(n) : 0;
 }
 
-function sameRef(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? "") === (b ?? "");
-}
-
-function hasEntry(points: PointsEntry[], userId: string, reason: PointsReason, refId: string | undefined): boolean {
-  return points.some((p) => p.userId === userId && p.reason === reason && sameRef(p.refId, refId));
-}
-
-function dayOf(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : toDateKey(d);
-}
-
-function countOnDay(points: PointsEntry[], userId: string, reason: PointsReason, day: string): number {
-  let n = 0;
-  for (const p of points) if (p.userId === userId && p.reason === reason && dayOf(p.createdAt) === day) n++;
-  return n;
-}
-
-/** Midday of a YYYY-MM-DD key as ISO (avoids day shifts across time zones). */
-function dayKeyToIso(day: string): string {
-  const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
-}
-
-function validIso(value: string | undefined, fallback: string): string {
-  if (value && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
-  return fallback;
-}
-
-function time(iso: string): number {
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? 0 : t;
+/** Midday of a YYYY-MM-DD key in ms (avoids day shifts across time zones). */
+function dayKeyToMs(day: string): number {
+  const t = new Date(`${day}T12:00:00`).getTime();
+  return Number.isNaN(t) ? Date.now() : t;
 }
 
 /** Activity types that make a day count as a learning day ("streak_day"). */
 export function isLearningActivity(type: ActivityType): boolean {
   return type !== "login" && type !== "enroll";
+}
+
+/** ISO timestamps sort correctly as plain strings (much faster than localeCompare). */
+function byCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
+  return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0;
+}
+
+function ledgerIndex(db: Database): LedgerIndex {
+  return syncIndex(db.points);
+}
+
+/**
+ * Id lookups that stay O(1) on repeated calls: positions are cached per
+ * array and verified on every hit, so replaced, appended, removed or
+ * reordered rows are always found correctly (a miss rebuilds the map).
+ */
+const positions = new WeakMap<object, Map<string, number>>();
+function lookup<T extends { id: string }>(rows: T[], id: string | undefined | null): T | undefined {
+  if (!id) return undefined;
+  const cached = positions.get(rows);
+  const at = cached?.get(id);
+  if (at !== undefined && rows[at]?.id === id) return rows[at];
+  const map = new Map<string, number>();
+  for (let i = 0; i < rows.length; i++) map.set(rows[i]!.id, i);
+  positions.set(rows, map);
+  const i = map.get(id);
+  return i === undefined ? undefined : rows[i];
+}
+
+/* ------------------------------------------------------------------ */
+/* Certificates                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Certificate points are keyed by what is certified, so re-issuing never pays twice. */
+export function certificatePointsRef(cert: Pick<Certificate, "id" | "courseId" | "batchId">): string {
+  if (cert.courseId) return `course:${cert.courseId}`;
+  if (cert.batchId) return `batch:${cert.batchId}`;
+  return cert.id;
+}
+
+function parseCertificateRef(ref: string): { kind: "course" | "batch"; id: string } | { kind: "legacy"; id: string } {
+  if (ref.startsWith("course:")) return { kind: "course", id: ref.slice(7) };
+  if (ref.startsWith("batch:")) return { kind: "batch", id: ref.slice(6) };
+  return { kind: "legacy", id: ref };
+}
+
+function sameCertificateSubject(a: Pick<Certificate, "courseId" | "batchId">, b: Pick<Certificate, "courseId" | "batchId">): boolean {
+  if (a.courseId || b.courseId) return a.courseId === b.courseId;
+  return !!a.batchId && a.batchId === b.batchId;
+}
+
+/* ------------------------------------------------------------------ */
+/* Who may earn what (shared by live awards and the backfill)           */
+/* ------------------------------------------------------------------ */
+
+type ContentKind = "quiz" | "assignment" | "exercise";
+
+interface Catalog {
+  user(id?: string): User | undefined;
+  lesson(id?: string): Lesson | undefined;
+  course(id?: string): Course | undefined;
+  batch(id?: string): Batch | undefined;
+  quiz(id?: string): Quiz | undefined;
+  assignment(id?: string): Assignment | undefined;
+  exercise(id?: string): ProgrammingExercise | undefined;
+  certificate(id?: string): Certificate | undefined;
+  topic(id?: string): DiscussionTopic | undefined;
+  reply(id?: string): DiscussionReply | undefined;
+  enrolled(userId: string, courseId: string): boolean;
+  /** Courses of the lessons that embed the content. */
+  placements(kind: ContentKind, id: string): string[];
+}
+
+function lessonEmbeds(lesson: Lesson, kind: ContentKind, id: string): boolean {
+  return lesson.blocks.some((b) =>
+    kind === "quiz"
+      ? (b.type === "quiz" && b.quizId === id) || (b.type === "video" && !!b.quizMarkers?.some((m) => m.quizId === id))
+      : kind === "assignment"
+        ? b.type === "assignment" && b.assignmentId === id
+        : b.type === "exercise" && b.exerciseId === id,
+  );
+}
+
+/** Lookups for single awards: O(1) id lookups, placements scanned on demand. */
+function liveCatalog(db: Database): Catalog {
+  const placementMemo = new Map<string, string[]>();
+  return {
+    user: (id) => lookup(db.users, id),
+    lesson: (id) => lookup(db.lessons, id),
+    course: (id) => lookup(db.courses, id),
+    batch: (id) => lookup(db.batches, id),
+    quiz: (id) => lookup(db.quizzes, id),
+    assignment: (id) => lookup(db.assignments, id),
+    exercise: (id) => lookup(db.exercises, id),
+    certificate: (id) => lookup(db.certificates, id),
+    topic: (id) => lookup(db.discussionTopics, id),
+    reply: (id) => lookup(db.discussionReplies, id),
+    enrolled: (userId, courseId) => db.enrollments.some((e) => e.userId === userId && e.courseId === courseId),
+    placements: (kind, id) => {
+      const key = `${kind}:${id}`;
+      let out = placementMemo.get(key);
+      if (!out) {
+        const set = new Set<string>();
+        for (const lesson of db.lessons) if (lessonEmbeds(lesson, kind, id)) set.add(lesson.courseId);
+        out = Array.from(set);
+        placementMemo.set(key, out);
+      }
+      return out;
+    },
+  };
+}
+
+/** Lookups for whole-history work: every map is built once. */
+function bulkCatalog(db: Database): Catalog {
+  const byId = <T extends { id: string }>(rows: () => T[]) => {
+    let map: Map<string, T> | null = null;
+    return (id?: string) => {
+      if (!id) return undefined;
+      map ??= new Map(rows().map((r) => [r.id, r]));
+      return map.get(id);
+    };
+  };
+  let enrollments: Set<string> | null = null;
+  let placements: Map<string, string[]> | null = null;
+  return {
+    user: byId(() => db.users),
+    lesson: byId(() => db.lessons),
+    course: byId(() => db.courses),
+    batch: byId(() => db.batches),
+    quiz: byId(() => db.quizzes),
+    assignment: byId(() => db.assignments),
+    exercise: byId(() => db.exercises),
+    certificate: byId(() => db.certificates),
+    topic: byId(() => db.discussionTopics),
+    reply: byId(() => db.discussionReplies),
+    enrolled: (userId, courseId) => {
+      enrollments ??= new Set(db.enrollments.map((e) => `${e.userId}|${e.courseId}`));
+      return enrollments.has(`${userId}|${courseId}`);
+    },
+    placements: (kind, id) => {
+      if (!placements) {
+        const map = new Map<string, Set<string>>();
+        const add = (key: string, courseId: string) => {
+          const set = map.get(key) ?? new Set<string>();
+          set.add(courseId);
+          map.set(key, set);
+        };
+        for (const lesson of db.lessons) {
+          for (const b of lesson.blocks) {
+            if (b.type === "quiz") add(`quiz:${b.quizId}`, lesson.courseId);
+            else if (b.type === "assignment") add(`assignment:${b.assignmentId}`, lesson.courseId);
+            else if (b.type === "exercise") add(`exercise:${b.exerciseId}`, lesson.courseId);
+            else if (b.type === "video") for (const m of b.quizMarkers ?? []) add(`quiz:${m.quizId}`, lesson.courseId);
+          }
+        }
+        placements = new Map(Array.from(map, ([k, v]) => [k, Array.from(v)]));
+      }
+      return placements.get(`${kind}:${id}`) ?? [];
+    },
+  };
+}
+
+interface AwardContext {
+  refId?: string;
+  courseId?: string;
+  lessonId?: string;
+  grantedBy?: string;
+  activity?: { type: ActivityType; refId?: string };
+}
+
+type Verdict = { ok: true; courseId?: string } | { ok: false };
+
+const DENY: Verdict = { ok: false };
+
+/** Points for a course: none in unpublished courses or courses the member manages. */
+function courseVerdict(cat: Catalog, user: User, courseId: string | undefined): Verdict {
+  const course = cat.course(courseId);
+  if (!course) return { ok: true, courseId: courseId || undefined };
+  if (!course.published || canManageCourse(user, course)) return DENY;
+  return { ok: true, courseId: course.id };
+}
+
+function quizCourses(cat: Catalog, quiz: Quiz): string[] {
+  const ids = new Set<string>();
+  if (quiz.courseId) ids.add(quiz.courseId);
+  const own = cat.lesson(quiz.lessonId);
+  if (own) ids.add(own.courseId);
+  for (const id of cat.placements("quiz", quiz.id)) ids.add(id);
+  return Array.from(ids);
+}
+
+/** The member manages the quiz (moderator, author, instructor of its course) or teaches a course that embeds it. */
+function managesQuiz(cat: Catalog, user: User, quiz: Quiz): boolean {
+  if (quiz.authorId === user.id || isModerator(user)) return true;
+  if (!isCreator(user)) return false;
+  return quizCourses(cat, quiz).some((id) => {
+    const course = cat.course(id);
+    return !!course && canManageCourse(user, course);
+  });
+}
+
+/**
+ * The course quiz/assignment/exercise points count toward: the verified
+ * lesson's course, then a (validated) course hint, then the content's own
+ * course and the courses of other lessons that embed it — the first one the
+ * member is enrolled in. Undefined when the member is in none of them.
+ */
+function contentCourse(cat: Catalog, userId: string, kind: ContentKind, content: { id: string; courseId?: string; lessonId?: string }, ctx: AwardContext): string | undefined {
+  const usable = (courseId: string | undefined) => (courseId && cat.course(courseId) && cat.enrolled(userId, courseId) ? courseId : undefined);
+  const hinted = cat.lesson(ctx.lessonId);
+  if (hinted && (lessonEmbeds(hinted, kind, content.id) || content.lessonId === hinted.id)) {
+    const found = usable(hinted.courseId);
+    if (found) return found;
+  }
+  const candidates = new Set<string>();
+  if (content.courseId) candidates.add(content.courseId);
+  const own = cat.lesson(content.lessonId);
+  if (own) candidates.add(own.courseId);
+  for (const id of cat.placements(kind, content.id)) candidates.add(id);
+  if (ctx.courseId && candidates.has(ctx.courseId)) {
+    const found = usable(ctx.courseId);
+    if (found) return found;
+  }
+  for (const id of candidates) {
+    const found = usable(id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Content points attributed to an unpublished course are not paid. */
+function withCourse(cat: Catalog, courseId: string | undefined): Verdict {
+  if (!courseId) return { ok: true };
+  const course = cat.course(courseId);
+  return course && !course.published ? DENY : { ok: true, courseId };
+}
+
+/**
+ * Whether a member may earn `reason` for `ctx.refId`, and which course the
+ * points count toward. Unknown content is allowed (nothing to check).
+ */
+function assessAward(cat: Catalog, user: User, reason: PointsReason, ctx: AwardContext): Verdict {
+  const ref = ctx.refId ?? "";
+  switch (reason) {
+    case "manual":
+      return { ok: true, courseId: ctx.courseId };
+    case "lesson_complete": {
+      const lesson = cat.lesson(ref);
+      return lesson ? courseVerdict(cat, user, lesson.courseId) : { ok: true, courseId: ctx.courseId };
+    }
+    case "course_complete":
+    case "review":
+      return courseVerdict(cat, user, ref || ctx.courseId);
+    case "certificate": {
+      if (ctx.grantedBy && ctx.grantedBy === user.id) return DENY;
+      const subject = parseCertificateRef(ref);
+      let courseId: string | undefined;
+      let batchId: string | undefined;
+      if (subject.kind === "course") courseId = subject.id;
+      else if (subject.kind === "batch") batchId = subject.id;
+      else {
+        const cert = cat.certificate(subject.id);
+        courseId = cert?.courseId;
+        batchId = cert?.batchId;
+      }
+      if (courseId) return courseVerdict(cat, user, courseId);
+      const batch = cat.batch(batchId);
+      if (batch && canManageBatch(user, batch)) return DENY;
+      return { ok: true };
+    }
+    case "quiz_pass":
+    case "quiz_perfect": {
+      const quiz = cat.quiz(ref);
+      if (!quiz) return { ok: true };
+      if (managesQuiz(cat, user, quiz)) return DENY;
+      return withCourse(cat, contentCourse(cat, user.id, "quiz", quiz, ctx));
+    }
+    case "assignment_submit":
+    case "assignment_pass": {
+      // Staff can edit and grade every assignment.
+      if (isStaff(user)) return DENY;
+      if (reason === "assignment_pass" && ctx.grantedBy === user.id) return DENY;
+      const assignment = cat.assignment(ref);
+      if (!assignment) return { ok: true };
+      if (assignment.authorId === user.id) return DENY;
+      return withCourse(cat, contentCourse(cat, user.id, "assignment", assignment, ctx));
+    }
+    case "exercise_pass": {
+      // Staff can edit every exercise (including its test cases).
+      if (isStaff(user)) return DENY;
+      const exercise = cat.exercise(ref);
+      if (!exercise) return { ok: true };
+      if (exercise.authorId === user.id) return DENY;
+      return withCourse(cat, contentCourse(cat, user.id, "exercise", exercise, ctx));
+    }
+    case "discussion_reply": {
+      const reply = cat.reply(ref);
+      const topic = cat.topic(reply?.topicId);
+      if (!topic) return { ok: true, courseId: ctx.courseId };
+      if (topic.refType === "batch") {
+        const batch = cat.batch(topic.refId);
+        return batch && canManageBatch(user, batch) ? DENY : { ok: true };
+      }
+      const lesson = topic.refType === "lesson" ? cat.lesson(topic.refId) : undefined;
+      const verdict = courseVerdict(cat, user, lesson?.courseId ?? topic.courseId);
+      return verdict.ok ? { ok: true, courseId: topic.courseId ?? verdict.courseId } : DENY;
+    }
+    case "streak_day": {
+      const activity = ctx.activity;
+      if (!activity?.refId) return { ok: true };
+      switch (activity.type) {
+        case "lesson_view":
+        case "lesson_complete": {
+          const lesson = cat.lesson(activity.refId);
+          return lesson && !courseVerdict(cat, user, lesson.courseId).ok ? DENY : { ok: true };
+        }
+        case "quiz_submit": {
+          const quiz = cat.quiz(activity.refId);
+          return quiz && managesQuiz(cat, user, quiz) ? DENY : { ok: true };
+        }
+        case "assignment_submit":
+        case "exercise_submit":
+          return isStaff(user) ? DENY : { ok: true };
+        default:
+          return { ok: true };
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,20 +449,27 @@ export function isLearningActivity(type: ActivityType): boolean {
 export interface AwardPointsOptions {
   /** What the points are for (see the canonical refIds above). */
   refId?: string;
+  /**
+   * Course hint. For quiz, assignment and exercise points it is only used
+   * when the content really belongs to that course and the member is
+   * enrolled in it.
+   */
   courseId?: string;
+  /** Lesson the activity happened in (verified to embed the content before it is used). */
+  lessonId?: string;
   /** Override the configured value (required for "manual"). */
   points?: number;
   note?: string;
+  /** Who graded or issued the result: nothing is awarded when that is the member themselves. */
+  grantedBy?: string;
+  /** For "streak_day": the learning activity that made the day count. */
+  activity?: { type: ActivityType; refId?: string };
 }
 
-/**
- * Award points to a member. Uses `settings.gamification.points[reason]`
- * unless `points` is given. Idempotent per (user, reason, refId) — per day
- * for "streak_day" — and capped per day for discussion replies. A no-op
- * when gamification is off or the value is 0. Never throws: failures are
- * logged and `null` is returned, so it is safe to call from any flow.
- */
-export async function awardPoints(userId: string, reason: PointsReason, opts: AwardPointsOptions = {}): Promise<PointsEntry | null> {
+/** Re-checked inside the write lock (e.g. the stored grade still is "pass"). */
+type AwardGuard = (db: Database) => boolean;
+
+async function award(userId: string, reason: PointsReason, opts: AwardPointsOptions, guard?: AwardGuard): Promise<PointsEntry | null> {
   try {
     if (!userId || !isPointsReason(reason)) return null;
     const db = await getDb();
@@ -117,33 +477,41 @@ export async function awardPoints(userId: string, reason: PointsReason, opts: Aw
     const value = resolveValue(reason, opts.points, db.settings.gamification);
     if (value === 0) return null;
 
-    // The first award on an empty ledger backfills the history first, so nothing is lost or doubled.
+    const refId = reason === "streak_day" ? opts.refId || toDateKey() : opts.refId || undefined;
+    const key = reason !== "manual" || refId ? pointsKey(userId, reason, refId) : null;
+    // O(1) idempotency check outside the write lock: heartbeats call this on every tick.
+    if (key && ledgerIndex(db).keys.has(key)) return null;
+
+    // The first award fills the ledger from history once (a keyed merge, safe next to live awards).
     await ensurePointsLedger();
 
-    const refId = reason === "streak_day" ? opts.refId || toDateKey() : opts.refId || undefined;
-    const keyed = reason !== "manual" || !!refId;
-    // Cheap check outside the write lock: heartbeats call this for every tick.
-    if (keyed && hasEntry(db.points, userId, reason, refId)) return null;
+    const member = lookup(db.users, userId);
+    if (!member) return null;
+    const verdict = assessAward(liveCatalog(db), member, reason, { ...opts, refId });
+    if (!verdict.ok) return null;
 
     const result = await mutate((d) => {
       if (!d.settings.gamification.enabled) return null;
-      if (!d.users.some((u) => u.id === userId)) return null;
-      if (keyed && hasEntry(d.points, userId, reason, refId)) return null;
-      const now = new Date();
-      if (reason === "discussion_reply" && countOnDay(d.points, userId, reason, toDateKey(now)) >= DISCUSSION_REPLY_DAILY_CAP) return null;
-      let before = 0;
-      for (const p of d.points) if (p.userId === userId) before += p.points;
+      if (!lookup(d.users, userId)) return null;
+      if (guard && !guard(d)) return null;
+      const idx = ledgerIndex(d);
+      if (key && idx.keys.has(key)) return null;
+      const now = Date.now();
+      if (reason === "discussion_reply" && (idx.replyDays.get(`${userId}|${localDay(now)}`) ?? 0) >= DISCUSSION_REPLY_DAILY_CAP) return null;
+      const before = idx.all.totals.get(userId)?.points ?? 0;
       const entry: PointsEntry = {
         id: uid("pts"),
         userId,
         points: value,
         reason,
         refId,
-        courseId: opts.courseId || undefined,
+        courseId: verdict.courseId || undefined,
         note: opts.note?.trim().slice(0, 200) || undefined,
-        createdAt: now.toISOString(),
+        createdAt: new Date(now).toISOString(),
       };
       d.points.push(entry);
+      indexAdd(idx, entry);
+      adoptSource(idx, d.points);
       return { entry, before, after: before + value };
     });
     if (!result) return null;
@@ -153,6 +521,18 @@ export async function awardPoints(userId: string, reason: PointsReason, opts: Aw
     console.error(`[points] could not award "${reason}":`, err instanceof Error ? err.message : err);
     return null;
   }
+}
+
+/**
+ * Award points to a member. Uses `settings.gamification.points[reason]`
+ * unless `points` is given. Idempotent per (user, reason, refId) — per day
+ * for "streak_day" — and capped per day for discussion replies. A no-op
+ * when gamification is off, the value is 0 or the member controls the
+ * content (see the module comment). Never throws: failures are logged and
+ * `null` is returned, so it is safe to call from any flow.
+ */
+export async function awardPoints(userId: string, reason: PointsReason, opts: AwardPointsOptions = {}): Promise<PointsEntry | null> {
+  return award(userId, reason, opts);
 }
 
 /** Tell a member when an award takes them to a new level (never throws). */
@@ -179,27 +559,49 @@ function articleFor(word: string): string {
   return /^[aeiou]/i.test(word) ? "an" : "a";
 }
 
+async function revoke(reason: PointsReason, refIds: string | string[], userId?: string, guard?: AwardGuard): Promise<number> {
+  try {
+    const ids = new Set((Array.isArray(refIds) ? refIds : [refIds]).filter((id): id is string => typeof id === "string" && id.length > 0));
+    if (!ids.size || !isPointsReason(reason)) return 0;
+    const matches = (p: PointsEntry) => p.reason === reason && !!p.refId && ids.has(p.refId) && (!userId || p.userId === userId);
+    const db = await getDb();
+    const idx = ledgerIndex(db);
+    // Cheap pre-check through the index.
+    let any = false;
+    for (const id of ids) {
+      if (userId ? idx.keys.has(pointsKey(userId, reason, id)) : reason === "discussion_reply" ? idx.replies.has(id) : true) {
+        any = true;
+        break;
+      }
+    }
+    if (!any) return 0;
+    return await mutate((d) => {
+      if (guard && !guard(d)) return 0;
+      const current = ledgerIndex(d);
+      const removed: PointsEntry[] = [];
+      d.points = d.points.filter((p) => {
+        if (!matches(p)) return true;
+        removed.push(p);
+        return false;
+      });
+      if (!removed.length) return 0;
+      for (const e of removed) indexRemove(current, e);
+      adoptSource(current, d.points);
+      return removed.length;
+    });
+  } catch (err) {
+    console.error(`[points] could not revoke "${reason}":`, err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 /**
  * Remove the entries of a reason for the given refIds (e.g. a deleted reply
  * or a regraded assignment). Optionally limited to one member. Never throws.
  * Returns how many entries were removed.
  */
 export async function revokePoints(reason: PointsReason, refIds: string | string[], userId?: string): Promise<number> {
-  try {
-    const ids = new Set((Array.isArray(refIds) ? refIds : [refIds]).filter((id): id is string => typeof id === "string" && id.length > 0));
-    if (!ids.size || !isPointsReason(reason)) return 0;
-    const matches = (p: PointsEntry) => p.reason === reason && !!p.refId && ids.has(p.refId) && (!userId || p.userId === userId);
-    const db = await getDb();
-    if (!db.points.some(matches)) return 0;
-    return await mutate((d) => {
-      const before = d.points.length;
-      d.points = d.points.filter((p) => !matches(p));
-      return before - d.points.length;
-    });
-  } catch (err) {
-    console.error(`[points] could not revoke "${reason}":`, err instanceof Error ? err.message : err);
-    return 0;
-  }
+  return revoke(reason, refIds, userId);
 }
 
 /** Award when `earned`, otherwise take the award back (for results that can change, like a regrade). */
@@ -208,18 +610,36 @@ export async function setPointsAward(userId: string, reason: PointsReason, earne
   else await revokePoints(reason, opts.refId, userId);
 }
 
+/**
+ * Make the "assignment passed" points follow the grade that is stored now.
+ * The stored status is re-read inside the write lock, so concurrent
+ * regrades always end with points matching the saved grade. Never throws.
+ */
+export async function syncAssignmentPassPoints(submissionId: string, gradedBy?: string): Promise<void> {
+  try {
+    const db = await getDb();
+    const s = lookup(db.assignmentSubmissions, submissionId);
+    if (!s) return;
+    const passing = (d: Database) => lookup(d.assignmentSubmissions, submissionId)?.status === "pass";
+    if (s.status === "pass") {
+      await award(s.userId, "assignment_pass", { refId: s.assignmentId, lessonId: s.lessonId, grantedBy: gradedBy ?? s.evaluatorId }, passing);
+    } else {
+      await revoke("assignment_pass", s.assignmentId, s.userId, (d) => !passing(d));
+    }
+  } catch (err) {
+    console.error("[points] could not update assignment points:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Pass / perfect-score points for a stored quiz submission (after submitting or grading). Never throws. */
 export async function awardQuizPoints(submissionId: string): Promise<void> {
   try {
     const db = await getDb();
-    const submission = db.quizSubmissions.find((s) => s.id === submissionId);
+    const submission = lookup(db.quizSubmissions, submissionId);
     if (!submission || submission.pendingGrading || !submission.passed) return;
-    const quiz = db.quizzes.find((q) => q.id === submission.quizId);
-    const courseId = submission.courseId ?? quiz?.courseId;
-    await awardPoints(submission.userId, "quiz_pass", { refId: submission.quizId, courseId });
-    if (submission.scoreOutOf > 0 && submission.percentage >= 100) {
-      await awardPoints(submission.userId, "quiz_perfect", { refId: submission.quizId, courseId });
-    }
+    const opts: AwardPointsOptions = { refId: submission.quizId, lessonId: submission.lessonId, courseId: submission.courseId };
+    await awardPoints(submission.userId, "quiz_pass", opts);
+    if (submission.scoreOutOf > 0 && submission.percentage >= 100) await awardPoints(submission.userId, "quiz_perfect", opts);
   } catch (err) {
     console.error("[points] could not award quiz points:", err instanceof Error ? err.message : err);
   }
@@ -233,8 +653,8 @@ export async function awardDiscussionReplyPoints(replyId: string | undefined | n
   try {
     if (!replyId) return;
     const db = await getDb();
-    const reply = db.discussionReplies.find((r) => r.id === replyId);
-    const topic = reply ? db.discussionTopics.find((t) => t.id === reply.topicId) : undefined;
+    const reply = lookup(db.discussionReplies, replyId);
+    const topic = reply ? lookup(db.discussionTopics, reply.topicId) : undefined;
     if (!reply || !topic || reply.authorId === topic.authorId) return;
     const opening = db.discussionReplies
       .filter((r) => r.topicId === topic.id)
@@ -246,169 +666,324 @@ export async function awardDiscussionReplyPoints(replyId: string | undefined | n
   }
 }
 
+/**
+ * "Learning day" points for an activity (called by `logActivity`). Days
+ * spent only on content the member controls do not count. Never throws.
+ */
+export async function awardLearningDayPoints(userId: string, type: ActivityType, refId?: string, date: string = toDateKey()): Promise<void> {
+  if (!isLearningActivity(type)) return;
+  await awardPoints(userId, "streak_day", { refId: date, activity: { type, refId } });
+}
+
+/** Certificate points for a newly issued certificate (once per course or batch). Never throws. */
+export async function awardCertificatePoints(cert: Certificate, opts: { grantedBy?: string } = {}): Promise<void> {
+  await awardPoints(cert.userId, "certificate", {
+    refId: certificatePointsRef(cert),
+    courseId: cert.courseId,
+    grantedBy: opts.grantedBy ?? cert.evaluatorId,
+  });
+}
+
+/**
+ * Take certificate points back after a certificate was revoked (unless the
+ * member still holds another certificate for the same course or batch).
+ * Never throws.
+ */
+export async function revokeCertificatePoints(cert: Certificate): Promise<void> {
+  try {
+    const db = await getDb();
+    if (db.certificates.some((c) => c.userId === cert.userId && c.id !== cert.id && sameCertificateSubject(c, cert))) return;
+    await revokePoints("certificate", [certificatePointsRef(cert), cert.id], cert.userId);
+  } catch (err) {
+    console.error("[points] could not revoke certificate points:", err instanceof Error ? err.message : err);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Backfill / recalculation                                             */
 /* ------------------------------------------------------------------ */
 
 interface BackfillState {
   running: Promise<void> | null;
-  /** When an automatic backfill last ran and found nothing to award. */
-  emptyCheckedAt: number;
+  error: string | null;
+  failedAt: number;
+  retryAt: number;
+  /** Ledger array the failure happened on (a replaced ledger retries at once). */
+  failedSource: PointsEntry[] | null;
 }
 
 const backfillGlobal = globalThis as unknown as { __llPointsBackfill?: BackfillState };
-const backfill: BackfillState = (backfillGlobal.__llPointsBackfill ??= { running: null, emptyCheckedAt: 0 });
+const backfill: BackfillState = (backfillGlobal.__llPointsBackfill ??= { running: null, error: null, failedAt: 0, retryAt: 0, failedSource: null });
+// Older shapes of this state (hot reload) lack the new fields.
+backfill.error ??= null;
+backfill.failedAt ??= 0;
+backfill.retryAt ??= 0;
+backfill.failedSource ??= null;
 
-/** Minimum pause between automatic backfills of a ledger that stays empty. */
-const EMPTY_RECHECK_MS = 60_000;
+export interface BuildLedgerOptions {
+  /**
+   * The ledger being replaced: its "exercise_pass" entries are kept (the
+   * submission row only stores the latest attempt, so a later failing
+   * attempt must not take away an exercise that was solved).
+   */
+  previous?: PointsEntry[];
+}
 
 /**
  * Rebuild point entries (everything except manual adjustments) from the
- * learning history with the current point values. Pure: reads `db` only.
+ * learning history with the current point values and the same rules as
+ * live awards. Pure: reads `db` only. Entries are never dated in the future.
  */
-export function buildLedgerFromHistory(db: Database): PointsEntry[] {
+export function buildLedgerFromHistory(db: Database, options: BuildLedgerOptions = {}): PointsEntry[] {
   const values = db.settings.gamification.points;
-  const users = new Set(db.users.map((u) => u.id));
+  const cat = bulkCatalog(db);
   const out: PointsEntry[] = [];
   const seen = new Set<string>();
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  // One random id per run plus a counter: generating 16 random bytes per entry is slow on large histories.
+  const idBase = uid("pts");
+  let idCounter = 0;
 
-  const push = (userId: string, reason: PointsReason, refId: string | undefined, createdAt: string, courseId?: string) => {
+  const push = (userId: string, reason: PointsReason, ctx: AwardContext, at: number) => {
     const points = resolveValue(reason, undefined, db.settings.gamification);
-    if (!points || !users.has(userId)) return;
-    const key = `${userId}|${reason}|${refId ?? ""}`;
+    if (!points) return;
+    const key = pointsKey(userId, reason, ctx.refId);
     if (seen.has(key)) return;
+    const user = cat.user(userId);
+    if (!user) return;
+    const verdict = assessAward(cat, user, reason, ctx);
+    if (!verdict.ok) return;
     seen.add(key);
-    out.push({ id: uid("pts"), userId, points, reason, refId, courseId: courseId || undefined, createdAt: validIso(createdAt, nowIso) });
+    const ms = Math.min(Number.isFinite(at) && at > 0 ? at : nowMs, nowMs);
+    out.push({ id: `${idBase}${(idCounter++).toString(36)}`, userId, points, reason, refId: ctx.refId, courseId: verdict.courseId || undefined, createdAt: new Date(ms).toISOString() });
   };
-  const earliestFirst = <T>(rows: T[], at: (row: T) => string) => [...rows].sort((a, b) => time(at(a)) - time(at(b)));
+  const byTime = <T>(rows: T[], at: (row: T) => string | undefined) =>
+    rows
+      .map((row) => ({ row, t: entryTime(at(row)) }))
+      .sort((a, b) => a.t - b.t);
 
   // Lessons completed (only lessons that still exist).
   if (values.lesson_complete) {
-    const lessons = new Map(db.lessons.map((l) => [l.id, l]));
-    for (const p of earliestFirst(db.progress, (r) => r.completedAt ?? r.updatedAt)) {
-      if (p.status !== "complete") continue;
-      const lesson = lessons.get(p.lessonId);
-      if (!lesson) continue;
-      push(p.userId, "lesson_complete", lesson.id, p.completedAt ?? p.updatedAt, lesson.courseId);
+    for (const { row: p, t } of byTime(db.progress, (r) => r.completedAt ?? r.updatedAt)) {
+      if (p.status !== "complete" || !cat.lesson(p.lessonId)) continue;
+      push(p.userId, "lesson_complete", { refId: p.lessonId }, t);
     }
   }
 
   // Courses completed.
   if (values.course_complete) {
-    for (const e of earliestFirst(db.enrollments, (r) => r.completedAt ?? r.enrolledAt)) {
-      if (e.completedAt) push(e.userId, "course_complete", e.courseId, e.completedAt, e.courseId);
+    for (const { row: e, t } of byTime(db.enrollments, (r) => r.completedAt)) {
+      if (e.completedAt) push(e.userId, "course_complete", { refId: e.courseId }, t);
     }
   }
 
   // Quizzes: the first passing attempt, and the first perfect one.
   if (values.quiz_pass || values.quiz_perfect) {
-    const quizzes = new Map(db.quizzes.map((q) => [q.id, q]));
-    for (const s of earliestFirst(db.quizSubmissions, (r) => r.submittedAt)) {
+    for (const { row: s, t } of byTime(db.quizSubmissions, (r) => r.submittedAt)) {
       if (s.pendingGrading || !s.passed) continue;
-      const courseId = s.courseId ?? quizzes.get(s.quizId)?.courseId;
-      push(s.userId, "quiz_pass", s.quizId, s.submittedAt, courseId);
-      if (s.scoreOutOf > 0 && s.percentage >= 100) push(s.userId, "quiz_perfect", s.quizId, s.submittedAt, courseId);
+      const ctx: AwardContext = { refId: s.quizId, lessonId: s.lessonId, courseId: s.courseId };
+      push(s.userId, "quiz_pass", ctx, t);
+      if (s.scoreOutOf > 0 && s.percentage >= 100) push(s.userId, "quiz_perfect", ctx, t);
     }
   }
 
-  // Assignments: submitted, and graded as pass.
+  // Assignments: submitted, and graded as pass (never when the member graded themselves).
   if (values.assignment_submit || values.assignment_pass) {
-    const assignments = new Map(db.assignments.map((a) => [a.id, a]));
-    for (const s of earliestFirst(db.assignmentSubmissions, (r) => r.submittedAt)) {
-      const courseId = s.courseId ?? assignments.get(s.assignmentId)?.courseId;
-      push(s.userId, "assignment_submit", s.assignmentId, s.submittedAt, courseId);
-      if (s.status === "pass") push(s.userId, "assignment_pass", s.assignmentId, s.gradedAt ?? s.updatedAt, courseId);
+    for (const { row: s, t } of byTime(db.assignmentSubmissions, (r) => r.submittedAt)) {
+      push(s.userId, "assignment_submit", { refId: s.assignmentId, lessonId: s.lessonId }, t);
+      if (s.status === "pass") {
+        push(s.userId, "assignment_pass", { refId: s.assignmentId, lessonId: s.lessonId, grantedBy: s.evaluatorId }, entryTime(s.gradedAt ?? s.updatedAt));
+      }
     }
   }
 
-  // Programming exercises solved.
+  // Programming exercises solved: earlier passes recorded in the ledger count even if a later attempt failed.
   if (values.exercise_pass) {
-    const exercises = new Map(db.exercises.map((x) => [x.id, x]));
-    for (const s of earliestFirst(db.exerciseSubmissions, (r) => r.submittedAt)) {
+    const submissions = new Map(db.exerciseSubmissions.map((s) => [`${s.userId}|${s.exerciseId}`, s]));
+    const kept = (options.previous ?? []).filter((p) => p.reason === "exercise_pass" && p.refId && submissions.has(`${p.userId}|${p.refId}`));
+    for (const { row: p, t } of byTime(kept, (r) => r.createdAt)) {
+      const s = submissions.get(`${p.userId}|${p.refId}`)!;
+      push(p.userId, "exercise_pass", { refId: p.refId, lessonId: s.lessonId }, t);
+    }
+    for (const { row: s, t } of byTime(db.exerciseSubmissions, (r) => r.submittedAt)) {
       if (s.status !== "passed") continue;
-      push(s.userId, "exercise_pass", s.exerciseId, s.submittedAt, s.courseId ?? exercises.get(s.exerciseId)?.courseId);
+      push(s.userId, "exercise_pass", { refId: s.exerciseId, lessonId: s.lessonId }, t);
     }
   }
 
-  // Certificates issued (published or not, matching the award made when a certificate is created).
+  // Certificates: once per certified course or batch (published or not, like the live award).
   if (values.certificate) {
-    for (const c of db.certificates) push(c.userId, "certificate", c.id, dayKeyToIso(c.issueDate), c.courseId);
+    for (const { row: c, t } of byTime(db.certificates, (r) => r.issueDate)) {
+      push(c.userId, "certificate", { refId: certificatePointsRef(c), grantedBy: c.evaluatorId }, Number.isFinite(t) && t > 0 ? dayKeyToMs(c.issueDate) : nowMs);
+    }
   }
 
   // Course reviews.
   if (values.review) {
-    for (const r of db.reviews) push(r.userId, "review", r.courseId, r.createdAt, r.courseId);
+    for (const r of db.reviews) push(r.userId, "review", { refId: r.courseId }, entryTime(r.createdAt));
   }
 
   // Helpful replies: not the opening post, not on your own topic, at most N a day.
   if (values.discussion_reply) {
-    const topics = new Map(db.discussionTopics.map((t) => [t.id, t]));
-    const byTopic = new Map<string, typeof db.discussionReplies>();
+    const byTopic = new Map<string, DiscussionReply[]>();
     for (const r of db.discussionReplies) {
       const list = byTopic.get(r.topicId) ?? [];
       list.push(r);
       byTopic.set(r.topicId, list);
     }
-    const candidates: { userId: string; replyId: string; createdAt: string; courseId?: string }[] = [];
+    const candidates: { userId: string; replyId: string; t: number; courseId?: string }[] = [];
     for (const [topicId, replies] of byTopic) {
-      const topic = topics.get(topicId);
+      const topic = cat.topic(topicId);
       if (!topic) continue;
-      const sorted = [...replies].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const sorted = [...replies].sort(byCreatedAt);
       for (const r of sorted.slice(1)) {
         if (r.authorId === topic.authorId) continue;
-        candidates.push({ userId: r.authorId, replyId: r.id, createdAt: r.createdAt, courseId: topic.courseId });
+        candidates.push({ userId: r.authorId, replyId: r.id, t: entryTime(r.createdAt), courseId: topic.courseId });
       }
     }
     const perDay = new Map<string, number>();
-    for (const c of candidates.sort((a, b) => time(a.createdAt) - time(b.createdAt))) {
-      const key = `${c.userId}|${dayOf(c.createdAt)}`;
+    for (const c of candidates.sort((a, b) => a.t - b.t)) {
+      const key = `${c.userId}|${localDay(c.t)}`;
       const used = perDay.get(key) ?? 0;
       if (used >= DISCUSSION_REPLY_DAILY_CAP) continue;
-      perDay.set(key, used + 1);
-      push(c.userId, "discussion_reply", c.replyId, c.createdAt, c.courseId);
+      const before = out.length;
+      push(c.userId, "discussion_reply", { refId: c.replyId, courseId: c.courseId }, c.t);
+      if (out.length > before) perDay.set(key, used + 1);
     }
   }
 
-  // Learning days: lessons, quizzes, assignments or exercises (logins and enrollments alone do not count).
+  // Learning days: lessons, quizzes, assignments or exercises (logins, enrollments and content you control do not count).
   if (values.streak_day) {
-    const firstOfDay = new Map<string, { userId: string; date: string; createdAt: string }>();
+    const firstOfDay = new Map<string, { userId: string; date: string; t: number }>();
     for (const a of db.activities) {
       if (!isLearningActivity(a.type) || !a.date) continue;
+      const user = cat.user(a.userId);
+      if (!user || !assessAward(cat, user, "streak_day", { refId: a.date, activity: { type: a.type, refId: a.refId } }).ok) continue;
       const key = `${a.userId}|${a.date}`;
+      const t = entryTime(a.createdAt) || dayKeyToMs(a.date);
       const existing = firstOfDay.get(key);
-      if (!existing || time(a.createdAt) < time(existing.createdAt)) firstOfDay.set(key, { userId: a.userId, date: a.date, createdAt: a.createdAt });
+      if (!existing || t < existing.t) firstOfDay.set(key, { userId: a.userId, date: a.date, t });
     }
-    for (const day of firstOfDay.values()) push(day.userId, "streak_day", day.date, day.createdAt || dayKeyToIso(day.date));
+    for (const day of firstOfDay.values()) push(day.userId, "streak_day", { refId: day.date }, day.t);
   }
 
-  return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return out.sort(byCreatedAt);
+}
+
+interface MergePlan {
+  drop: Set<PointsEntry>;
+  rewrite: { entry: PointsEntry; refId?: string; courseId?: string; createdAt?: string }[];
+  add: PointsEntry[];
 }
 
 /**
- * Backfill the ledger from history once when it is empty and gamification
- * is on. Concurrent callers share one run; an empty result is not retried
- * for a minute. Never throws.
+ * The one-time fill of an existing ledger from history. A keyed merge: every
+ * history entry whose (member, reason, refId) is missing is added, so live
+ * awards that landed first are never doubled. Legacy certificate entries
+ * (keyed by certificate id) move to the course/batch key — duplicates and
+ * entries of revoked certificates are dropped — and entries dated in the
+ * future are brought back to now. Pure: reads `db` only.
+ */
+function planHistoryMerge(db: Database): MergePlan {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const certs = new Map(db.certificates.map((c) => [c.id, c]));
+  const keys = new Set<string>();
+  const replyDays = new Map<string, number>();
+  const plan: MergePlan = { drop: new Set(), rewrite: [], add: [] };
+
+  for (const p of db.points) {
+    let refId = p.refId;
+    let courseId = p.courseId;
+    let changed = false;
+    if (p.reason === "certificate" && refId && !refId.startsWith("course:") && !refId.startsWith("batch:")) {
+      const cert = certs.get(refId);
+      if (!cert) {
+        plan.drop.add(p);
+        continue;
+      }
+      refId = certificatePointsRef(cert);
+      courseId = cert.courseId;
+      changed = true;
+    }
+    const keyed = p.reason !== "manual" || !!refId;
+    const key = pointsKey(p.userId, p.reason, refId);
+    if (keyed && keys.has(key) && p.reason === "certificate") {
+      plan.drop.add(p);
+      continue;
+    }
+    if (keyed) keys.add(key);
+    const future = entryTime(p.createdAt) > nowMs;
+    if (changed || future) plan.rewrite.push({ entry: p, refId, courseId, createdAt: future ? nowIso : undefined });
+    if (p.reason === "discussion_reply") {
+      const dayKey = `${p.userId}|${localDay(Math.min(entryTime(p.createdAt), nowMs))}`;
+      replyDays.set(dayKey, (replyDays.get(dayKey) ?? 0) + 1);
+    }
+  }
+
+  for (const h of buildLedgerFromHistory(db)) {
+    const key = pointsKey(h.userId, h.reason, h.refId);
+    if (keys.has(key)) continue;
+    if (h.reason === "discussion_reply") {
+      const dayKey = `${h.userId}|${localDay(entryTime(h.createdAt))}`;
+      const used = replyDays.get(dayKey) ?? 0;
+      if (used >= DISCUSSION_REPLY_DAILY_CAP) continue;
+      replyDays.set(dayKey, used + 1);
+    }
+    keys.add(key);
+    plan.add.push(h);
+  }
+  return plan;
+}
+
+/** Apply a merge plan (cannot throw: plain assignments and pushes). */
+function applyMerge(d: Database, plan: MergePlan): void {
+  if (plan.drop.size) d.points = d.points.filter((p) => !plan.drop.has(p));
+  for (const r of plan.rewrite) {
+    r.entry.refId = r.refId;
+    r.entry.courseId = r.courseId || undefined;
+    if (r.createdAt) r.entry.createdAt = r.createdAt;
+  }
+  // Append one by one: spreading a large array into push() overflows the call stack.
+  for (const e of plan.add) d.points.push(e);
+  invalidateIndex();
+}
+
+/**
+ * Fill the ledger from history once (gamification on and the one-time
+ * backfill not done yet — `settings.gamification.ledgerBuiltAt` unset).
+ * Concurrent callers share one run. On failure nothing is changed, the
+ * marker stays unset, the error is kept for the admin page and the next
+ * attempt happens after a short pause (live awards keep working meanwhile:
+ * the merge is keyed, so they are never doubled). Never throws.
  */
 export async function ensurePointsLedger(): Promise<void> {
   try {
     const db = await getDb();
-    if (!db.settings.gamification.enabled || db.points.length > 0) return;
+    const g = db.settings.gamification;
+    if (!g.enabled || g.ledgerBuiltAt) return;
     if (backfill.running) return await backfill.running;
-    if (Date.now() - backfill.emptyCheckedAt < EMPTY_RECHECK_MS) return;
+    if (backfill.failedSource === db.points && Date.now() < backfill.retryAt) return;
     backfill.running = (async () => {
       try {
         const added = await mutate((d) => {
-          if (d.points.length > 0 || !d.settings.gamification.enabled) return -1;
-          const entries = buildLedgerFromHistory(d);
-          d.points.push(...entries);
-          return entries.length;
+          const gg = d.settings.gamification;
+          if (!gg.enabled || gg.ledgerBuiltAt) return -1;
+          const plan = planHistoryMerge(d);
+          applyMerge(d, plan);
+          gg.ledgerBuiltAt = new Date().toISOString();
+          return plan.add.length;
         });
-        if (added === 0) backfill.emptyCheckedAt = Date.now();
-        else if (added > 0) console.info(`[points] backfilled ${added} ledger entries from history`);
+        backfill.error = null;
+        backfill.failedSource = null;
+        if (added > 0) console.info(`[points] backfilled ${added} ledger entries from history`);
       } catch (err) {
-        backfill.emptyCheckedAt = Date.now();
-        console.error("[points] automatic backfill failed:", err instanceof Error ? err.message : err);
+        const message = err instanceof Error ? err.message : String(err);
+        backfill.error = message;
+        backfill.failedAt = Date.now();
+        backfill.retryAt = Date.now() + BACKFILL_RETRY_MS;
+        backfill.failedSource = (await getDb()).points;
+        console.error("[points] automatic backfill failed:", message);
       } finally {
         backfill.running = null;
       }
@@ -417,6 +992,27 @@ export async function ensurePointsLedger(): Promise<void> {
   } catch (err) {
     console.error("[points] could not check the ledger:", err instanceof Error ? err.message : err);
   }
+}
+
+export interface LedgerStatus {
+  /** The one-time fill from history has succeeded (or a recalculation ran). */
+  built: boolean;
+  builtAt: string | null;
+  /** Why the last automatic attempt failed (null when it did not). */
+  error: string | null;
+  failedAt: string | null;
+}
+
+/** State of the one-time backfill, for the admin page. */
+export async function getLedgerStatus(): Promise<LedgerStatus> {
+  const db = await getDb();
+  const builtAt = db.settings.gamification.ledgerBuiltAt ?? null;
+  return {
+    built: !!builtAt,
+    builtAt,
+    error: builtAt ? null : backfill.error,
+    failedAt: !builtAt && backfill.error && backfill.failedAt ? new Date(backfill.failedAt).toISOString() : null,
+  };
 }
 
 export interface ReasonTotal {
@@ -434,7 +1030,7 @@ export interface RecalculateResult {
   byReason: ReasonTotal[];
 }
 
-function breakdown(entries: PointsEntry[]): ReasonTotal[] {
+function breakdown(entries: Iterable<PointsEntry>): ReasonTotal[] {
   const map = new Map<PointsReason, ReasonTotal>();
   for (const e of entries) {
     const row = map.get(e.reason) ?? { reason: e.reason, count: 0, points: 0 };
@@ -447,19 +1043,28 @@ function breakdown(entries: PointsEntry[]): ReasonTotal[] {
 
 /**
  * Rebuild the whole ledger from history with the current point values,
- * keeping manual adjustments. Throws on storage errors (admin action).
+ * keeping manual adjustments (and earlier exercise passes). Throws on
+ * storage errors (admin action); nothing changes when building fails.
  */
 export async function recalculatePointsLedger(): Promise<RecalculateResult> {
   const result = await mutate((d) => {
     const previousEntries = d.points.length;
     const manual = d.points.filter((p) => p.reason === "manual");
-    const rebuilt = buildLedgerFromHistory(d);
-    d.points = [...rebuilt, ...manual].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const members = new Set(d.points.map((p) => p.userId)).size;
-    const totalPoints = d.points.reduce((sum, p) => sum + p.points, 0);
-    return { entries: d.points.length, members, totalPoints, manualKept: manual.length, previousEntries, byReason: breakdown(d.points) };
+    const rebuilt = buildLedgerFromHistory(d, { previous: d.points });
+    const next = rebuilt.concat(manual).sort(byCreatedAt);
+    d.points = next;
+    d.settings.gamification.ledgerBuiltAt = new Date().toISOString();
+    invalidateIndex();
+    let totalPoints = 0;
+    const members = new Set<string>();
+    for (const p of next) {
+      totalPoints += p.points;
+      members.add(p.userId);
+    }
+    return { entries: next.length, members: members.size, totalPoints, manualKept: manual.length, previousEntries, byReason: breakdown(next) };
   });
-  backfill.emptyCheckedAt = result.entries === 0 ? Date.now() : 0;
+  backfill.error = null;
+  backfill.failedSource = null;
   return result;
 }
 
@@ -493,13 +1098,6 @@ export function startOfMonth(d: Date = new Date()): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 }
 
-interface TimeWindow {
-  /** Inclusive start (ms), or null for "since the beginning". */
-  start: number | null;
-  /** Exclusive end (ms). */
-  end: number;
-}
-
 export interface PeriodWindows {
   current: TimeWindow;
   previous: TimeWindow;
@@ -515,8 +1113,8 @@ export function periodWindows(period: LeaderboardPeriod, now: Date = new Date())
     const start = startOfWeek(now);
     const prevStart = addDays(start, -7);
     return {
-      current: { start: start.getTime(), end },
-      previous: { start: prevStart.getTime(), end: start.getTime() },
+      current: { start: start.getTime(), end, open: true },
+      previous: { start: prevStart.getTime(), end: start.getTime(), open: false },
       label: `Since Monday, ${shortDate(start)}`,
       trendLabel: "vs. last week",
     };
@@ -525,23 +1123,21 @@ export function periodWindows(period: LeaderboardPeriod, now: Date = new Date())
     const start = startOfMonth(now);
     const prevStart = new Date(start.getFullYear(), start.getMonth() - 1, 1);
     return {
-      current: { start: start.getTime(), end },
-      previous: { start: prevStart.getTime(), end: start.getTime() },
+      current: { start: start.getTime(), end, open: true },
+      previous: { start: prevStart.getTime(), end: start.getTime(), open: false },
       label: start.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
       trendLabel: "vs. last month",
     };
   }
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
   return {
-    current: { start: null, end },
-    previous: { start: null, end: now.getTime() - 7 * DAY_MS },
+    current: { start: null, end, open: true },
+    // Standings as they were at the start of the day a week ago.
+    previous: { start: null, end: addDays(today, -7).getTime(), open: false },
     label: "All points ever earned",
     trendLabel: "vs. 7 days ago",
   };
-}
-
-function inWindow(iso: string, w: TimeWindow): boolean {
-  const t = time(iso);
-  return (w.start === null || t >= w.start) && t < w.end;
 }
 
 /* ------------------------------------------------------------------ */
@@ -556,33 +1152,67 @@ interface Standing {
   rank: number;
 }
 
-/** Members who may appear on a leaderboard. */
-function eligibleMembers(db: Database): Map<string, User> {
-  const exclude = db.settings.gamification.excludeStaff;
-  const map = new Map<string, User>();
-  for (const u of db.users) {
-    if (!u.enabled) continue;
-    if (exclude && isLeaderboardStaff(u)) continue;
-    map.set(u.id, u);
-  }
-  return map;
+interface StandingSet {
+  list: Standing[];
+  byUser: Map<string, Standing>;
 }
 
-/** Rank members by points in a window (competition ranking: 1, 2, 2, 4). Members at 0 or below are not ranked. */
-function computeStandings(db: Database, eligible: Map<string, User>, window: TimeWindow, courseId: string | null): Standing[] {
-  const totals = new Map<string, { points: number; lastAt: number }>();
-  for (const p of db.points) {
-    if (!eligible.has(p.userId)) continue;
-    if (courseId && p.courseId !== courseId) continue;
-    if (!inWindow(p.createdAt, window)) continue;
-    const row = totals.get(p.userId) ?? { points: 0, lastAt: 0 };
-    row.points += p.points;
-    row.lastAt = Math.max(row.lastAt, time(p.createdAt));
-    totals.set(p.userId, row);
+interface CachedStandings extends StandingSet {
+  version: number;
+  start: number | null;
+  end: number;
+  users: User[];
+  userCount: number;
+  excludeStaff: boolean;
+  at: number;
+}
+
+const standingsGlobal = globalThis as unknown as { __llPointsStandings?: Map<string, CachedStandings> };
+const standingsCache: Map<string, CachedStandings> = (standingsGlobal.__llPointsStandings ??= new Map());
+
+/** The member when they may appear on a leaderboard (enabled; not staff while staff are excluded). */
+function rankable(db: Database, userId: string): User | null {
+  const user = lookup(db.users, userId);
+  if (!user || !user.enabled) return null;
+  if (db.settings.gamification.excludeStaff && isLeaderboardStaff(user)) return null;
+  return user;
+}
+
+/**
+ * Rank members by points in a window (competition ranking: 1, 2, 2, 4).
+ * Members at 0 or below are not ranked. Results are shared between the
+ * leaderboard and the dashboard and reused for a short time while neither
+ * the ledger nor the member list changes.
+ */
+function standingsFor(db: Database, idx: LedgerIndex, courseId: string | null, window: TimeWindow): StandingSet {
+  const key = `${courseId ?? ""}|${window.start ?? "all"}|${window.open ? "open" : window.end}`;
+  const now = Date.now();
+  const excludeStaff = db.settings.gamification.excludeStaff;
+  const exact = !(window.open && idx.maxTime >= window.end);
+  const cached = standingsCache.get(key);
+  if (
+    exact &&
+    cached &&
+    cached.version === idx.version &&
+    cached.users === db.users &&
+    cached.userCount === db.users.length &&
+    cached.excludeStaff === excludeStaff &&
+    now - cached.at < STANDINGS_TTL_MS
+  ) {
+    return cached;
   }
-  const list = Array.from(totals, ([userId, v]) => ({ userId, points: v.points, lastAt: v.lastAt, rank: 0 }))
-    .filter((s) => s.points > 0)
-    .sort((a, b) => b.points - a.points || a.lastAt - b.lastAt || (eligible.get(a.userId)?.name ?? "").localeCompare(eligible.get(b.userId)?.name ?? ""));
+
+  const totals = windowTotals(idx, courseId, window);
+  const names = new Map<string, string>();
+  const list: Standing[] = [];
+  for (const [userId, a] of totals) {
+    if (a.points <= 0) continue;
+    const user = rankable(db, userId);
+    if (!user) continue;
+    names.set(userId, user.name);
+    list.push({ userId, points: a.points, lastAt: a.lastAt, rank: 0 });
+  }
+  list.sort((a, b) => b.points - a.points || a.lastAt - b.lastAt || (names.get(a.userId) ?? "").localeCompare(names.get(b.userId) ?? ""));
   let rank = 0;
   let prevPoints: number | null = null;
   list.forEach((s, i) => {
@@ -590,13 +1220,28 @@ function computeStandings(db: Database, eligible: Map<string, User>, window: Tim
     s.rank = rank;
     prevPoints = s.points;
   });
-  return list;
+  const set: StandingSet = { list, byUser: new Map(list.map((s) => [s.userId, s])) };
+  if (exact) {
+    if (standingsCache.size > 200) {
+      for (const [k, v] of standingsCache) if (now - v.at >= STANDINGS_TTL_MS) standingsCache.delete(k);
+      if (standingsCache.size > 200) standingsCache.clear();
+    }
+    standingsCache.set(key, { ...set, version: idx.version, start: window.start, end: window.end, users: db.users, userCount: db.users.length, excludeStaff, at: now });
+  }
+  return set;
 }
 
-function allTimeTotals(db: Database): Map<string, number> {
-  const totals = new Map<string, number>();
-  for (const p of db.points) totals.set(p.userId, (totals.get(p.userId) ?? 0) + p.points);
-  return totals;
+/** A member's ledger entries. */
+function ownEntries(idx: LedgerIndex, userId: string): Set<PointsEntry> {
+  return idx.users.get(userId) ?? new Set();
+}
+
+/** All-time points of a member (levels). */
+function allTimePoints(idx: LedgerIndex, userId: string, now = Date.now()): number {
+  if (idx.maxTime <= now) return idx.all.totals.get(userId)?.points ?? 0;
+  let sum = 0;
+  for (const e of ownEntries(idx, userId)) if ((idx.times.get(e) ?? 0) <= now) sum += e.points;
+  return sum;
 }
 
 /* ------------------------------------------------------------------ */
@@ -664,23 +1309,32 @@ function trendFor(rank: number, previousRank: number | undefined): LeaderboardTr
   return { kind: change > 0 ? "up" : change < 0 ? "down" : "same", change, previousRank };
 }
 
+/** Points a member earned in a window (optionally one course), from their own entries. */
+function memberWindowPoints(idx: LedgerIndex, userId: string, courseId: string | null, w: TimeWindow): number {
+  let sum = 0;
+  for (const e of ownEntries(idx, userId)) {
+    if (courseId && e.courseId !== courseId) continue;
+    const t = idx.times.get(e) ?? 0;
+    if ((w.start === null || t >= w.start) && t < w.end) sum += e.points;
+  }
+  return sum;
+}
+
 export async function getLeaderboard(input: { viewer: User | null; period: LeaderboardPeriod; courseId?: string | null; limit?: number }): Promise<LeaderboardResult> {
   await ensurePointsLedger();
   const db = await getDb();
+  const idx = ledgerIndex(db);
   const limit = Math.max(1, Math.min(200, input.limit ?? 50));
-  const course = input.courseId ? (db.courses.find((c) => c.id === input.courseId) ?? null) : null;
+  const course = input.courseId ? (lookup(db.courses, input.courseId) ?? null) : null;
   const courseId = course && canViewCourse(input.viewer, course) ? course.id : null;
   const windows = periodWindows(input.period);
-  const eligible = eligibleMembers(db);
-  const current = computeStandings(db, eligible, windows.current, courseId);
-  const previous = computeStandings(db, eligible, windows.previous, courseId);
-  const previousRanks = new Map(previous.map((s) => [s.userId, s.rank]));
-  const totals = allTimeTotals(db);
+  const current = standingsFor(db, idx, courseId, windows.current);
+  const previous = standingsFor(db, idx, courseId, windows.previous);
   const viewerId = input.viewer?.id ?? null;
 
   const toRow = (s: Standing): LeaderboardRow => {
-    const user = eligible.get(s.userId)!;
-    const level = getLevelInfo(totals.get(s.userId) ?? 0);
+    const user = lookup(db.users, s.userId)!;
+    const level = getLevelInfo(allTimePoints(idx, s.userId));
     return {
       rank: s.rank,
       member: toMember(user),
@@ -688,24 +1342,22 @@ export async function getLeaderboard(input: { viewer: User | null; period: Leade
       level: level.level,
       tier: level.tier,
       tierTone: level.tierTone,
-      trend: trendFor(s.rank, previousRanks.get(s.userId)),
+      trend: trendFor(s.rank, previous.byUser.get(s.userId)?.rank),
       isViewer: s.userId === viewerId,
     };
   };
 
-  const rows = current.slice(0, limit).map(toRow);
+  const rows = current.list.slice(0, limit).map(toRow);
   let status: ViewerStanding = "guest";
   let viewerRow: LeaderboardRow | null = null;
   let pinned = false;
   let periodPoints = 0;
   if (input.viewer) {
     const viewer = input.viewer;
-    for (const p of db.points) {
-      if (p.userId === viewer.id && (!courseId || p.courseId === courseId) && inWindow(p.createdAt, windows.current)) periodPoints += p.points;
-    }
-    if (!eligible.has(viewer.id)) status = "excluded";
+    periodPoints = memberWindowPoints(idx, viewer.id, courseId, windows.current);
+    if (!rankable(db, viewer.id)) status = "excluded";
     else {
-      const standing = current.find((s) => s.userId === viewer.id);
+      const standing = current.byUser.get(viewer.id);
       if (standing) {
         status = "ranked";
         viewerRow = rows.find((r) => r.isViewer) ?? toRow(standing);
@@ -714,21 +1366,23 @@ export async function getLeaderboard(input: { viewer: User | null; period: Leade
     }
   }
 
+  let totalPoints = 0;
+  for (const s of current.list) totalPoints += s.points;
   return {
     period: input.period,
     course: course && courseId ? { id: course.id, title: course.title, slug: course.slug } : null,
     rangeLabel: windows.label,
     trendLabel: windows.trendLabel,
     rows,
-    rankedCount: current.length,
-    totalPoints: current.reduce((sum, s) => sum + s.points, 0),
+    rankedCount: current.list.length,
+    totalPoints,
     excludeStaff: db.settings.gamification.excludeStaff,
     viewer: {
       status,
       row: viewerRow,
       pinned,
       periodPoints,
-      level: input.viewer ? getLevelInfo(totals.get(input.viewer.id) ?? 0) : null,
+      level: input.viewer ? getLevelInfo(allTimePoints(idx, input.viewer.id)) : null,
     },
   };
 }
@@ -736,11 +1390,10 @@ export async function getLeaderboard(input: { viewer: User | null; period: Leade
 /** Courses offered in the leaderboard filter: those the viewer can see, with points first. */
 export async function getLeaderboardCourses(viewer: User | null): Promise<{ id: string; title: string; hasPoints: boolean }[]> {
   const db = await getDb();
-  const withPoints = new Set<string>();
-  for (const p of db.points) if (p.courseId) withPoints.add(p.courseId);
+  const idx = ledgerIndex(db);
   return db.courses
     .filter((c: Course) => canViewCourse(viewer, c))
-    .map((c) => ({ id: c.id, title: c.title, hasPoints: withPoints.has(c.id) }))
+    .map((c) => ({ id: c.id, title: c.title, hasPoints: (idx.courses.get(c.id)?.totals.size ?? 0) > 0 }))
     .sort((a, b) => Number(b.hasPoints) - Number(a.hasPoints) || a.title.localeCompare(b.title));
 }
 
@@ -754,16 +1407,18 @@ export interface PointsTotals {
   month: number;
 }
 
-function totalsFor(db: Database, userId: string, now = new Date()): PointsTotals {
+/** A member's totals; entries dated after `now` are left out everywhere, like on the boards. */
+function totalsFor(idx: LedgerIndex, userId: string, now = new Date()): PointsTotals {
   const week = startOfWeek(now).getTime();
   const month = startOfMonth(now).getTime();
+  const end = now.getTime();
   const out: PointsTotals = { all: 0, week: 0, month: 0 };
-  for (const p of db.points) {
-    if (p.userId !== userId) continue;
-    out.all += p.points;
-    const t = time(p.createdAt);
-    if (t >= week) out.week += p.points;
-    if (t >= month) out.month += p.points;
+  for (const e of ownEntries(idx, userId)) {
+    const t = idx.times.get(e) ?? 0;
+    if (t > end) continue;
+    out.all += e.points;
+    if (t >= week) out.week += e.points;
+    if (t >= month) out.month += e.points;
   }
   return out;
 }
@@ -778,7 +1433,7 @@ export interface MemberLevel {
 export async function getMemberLevel(userId: string): Promise<MemberLevel> {
   await ensurePointsLedger();
   const db = await getDb();
-  const totals = totalsFor(db, userId);
+  const totals = totalsFor(ledgerIndex(db), userId);
   return { enabled: db.settings.gamification.enabled, totals, level: getLevelInfo(totals.all) };
 }
 
@@ -800,32 +1455,40 @@ export interface RankSummary {
 export async function getRankSummary(user: User): Promise<RankSummary> {
   await ensurePointsLedger();
   const db = await getDb();
+  const idx = ledgerIndex(db);
   const g = db.settings.gamification;
-  const totals = totalsFor(db, user.id);
-  const eligible = eligibleMembers(db);
-  const excluded = !eligible.has(user.id);
-  const weekWindows = periodWindows("week");
-  const weekStandings = computeStandings(db, eligible, weekWindows.current, null);
-  const prevWeek = computeStandings(db, eligible, weekWindows.previous, null);
-  const allStandings = computeStandings(db, eligible, periodWindows("all").current, null);
-  const mineWeek = weekStandings.find((s) => s.userId === user.id) ?? null;
-  const mineAll = allStandings.find((s) => s.userId === user.id) ?? null;
-  const prevRank = prevWeek.find((s) => s.userId === user.id)?.rank;
+  const now = new Date();
+  const totals = totalsFor(idx, user.id, now);
+  const excluded = !rankable(db, user.id);
+  const weekWindows = periodWindows("week", now);
+  const week = standingsFor(db, idx, null, weekWindows.current);
+  const prevWeek = standingsFor(db, idx, null, weekWindows.previous);
+  const all = standingsFor(db, idx, null, periodWindows("all", now).current);
+  const mineWeek = week.byUser.get(user.id) ?? null;
+  const mineAll = all.byUser.get(user.id) ?? null;
   let gap: number | null = null;
   if (mineWeek && mineWeek.rank > 1) {
-    const above = weekStandings.filter((s) => s.points > mineWeek.points).at(-1);
-    if (above) gap = above.points - mineWeek.points + 1;
+    const above = week.list[mineWeek.rank - 2];
+    if (above && above.points > mineWeek.points) gap = above.points - mineWeek.points + 1;
   }
   let last: PointsEntry | null = null;
-  for (const p of db.points) if (p.userId === user.id && (!last || p.createdAt > last.createdAt)) last = p;
+  let lastAt = -Infinity;
+  const end = now.getTime();
+  for (const p of ownEntries(idx, user.id)) {
+    const t = idx.times.get(p) ?? 0;
+    if (t <= end && t > lastAt) {
+      last = p;
+      lastAt = t;
+    }
+  }
   return {
     enabled: g.enabled,
     showLeaderboard: g.showLeaderboard,
     excluded,
     totals,
     level: getLevelInfo(totals.all),
-    week: { rank: mineWeek?.rank ?? null, ranked: weekStandings.length, trend: mineWeek ? trendFor(mineWeek.rank, prevRank) : null },
-    allTime: { rank: mineAll?.rank ?? null, ranked: allStandings.length },
+    week: { rank: mineWeek?.rank ?? null, ranked: week.list.length, trend: mineWeek ? trendFor(mineWeek.rank, prevWeek.byUser.get(user.id)?.rank) : null },
+    allTime: { rank: mineAll?.rank ?? null, ranked: all.list.length },
     weekGapToNext: gap,
     lastEarned: last ? { reason: last.reason, points: last.points, createdAt: last.createdAt } : null,
   };
@@ -865,16 +1528,16 @@ export interface PointsHistory {
 }
 
 /** Resolves ledger entries to titles and links, caching lesson positions per course. */
-function createEntryDescriber(db: Database) {
+function createEntryDescriber(db: Database, userId: string) {
   const courses = new Map(db.courses.map((c) => [c.id, c]));
   const lessons = new Map(db.lessons.map((l) => [l.id, l]));
   const quizzes = new Map(db.quizzes.map((q) => [q.id, q]));
   const assignments = new Map(db.assignments.map((a) => [a.id, a]));
   const exercises = new Map(db.exercises.map((x) => [x.id, x]));
-  const certificates = new Map(db.certificates.map((c) => [c.id, c]));
   const batches = new Map(db.batches.map((b) => [b.id, b]));
   const topics = new Map(db.discussionTopics.map((t) => [t.id, t]));
   const replies = new Map(db.discussionReplies.map((r) => [r.id, r]));
+  const mine = db.certificates.filter((c) => c.userId === userId);
   const lessonHrefs = new Map<string, string | null>();
 
   const lessonLink = (lessonId: string): string | null => {
@@ -922,10 +1585,15 @@ function createEntryDescriber(db: Database) {
         return { title: exercise?.title ?? null, context: courseTitle(entry.courseId ?? exercise?.courseId), href: exercise ? `/exercises/${exercise.id}` : null };
       }
       case "certificate": {
-        const cert = certificates.get(ref);
-        if (!cert) return { title: null, context: null, href: null };
-        const subject = cert.courseId ? courses.get(cert.courseId)?.title : cert.batchId ? batches.get(cert.batchId)?.title : undefined;
-        return { title: subject ?? null, context: null, href: cert.published ? `/certificates/${cert.code}` : null };
+        const subject = parseCertificateRef(ref);
+        const cert =
+          subject.kind === "legacy"
+            ? mine.find((c) => c.id === subject.id)
+            : mine.find((c) => (subject.kind === "course" ? c.courseId === subject.id : !c.courseId && c.batchId === subject.id));
+        const courseId = subject.kind === "course" ? subject.id : cert?.courseId;
+        const batchId = subject.kind === "batch" ? subject.id : cert?.batchId;
+        const title = courseId ? courseTitle(courseId) : batchId ? (batches.get(batchId)?.title ?? null) : null;
+        return { title, context: null, href: cert?.published ? `/certificates/${cert.code}` : null };
       }
       case "discussion_reply": {
         const reply = replies.get(ref);
@@ -952,13 +1620,14 @@ function createEntryDescriber(db: Database) {
 export async function getPointsHistory(userId: string, opts: { page?: number; pageSize?: number; reason?: PointsReason | null } = {}): Promise<PointsHistory> {
   await ensurePointsLedger();
   const db = await getDb();
-  const mine = db.points.filter((p) => p.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  const idx = ledgerIndex(db);
+  const mine = Array.from(ownEntries(idx, userId)).sort((a, b) => byCreatedAt(b, a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   const reason = opts.reason && isPointsReason(opts.reason) ? opts.reason : null;
   const filtered = reason ? mine.filter((p) => p.reason === reason) : mine;
   const pageSize = Math.max(5, Math.min(100, opts.pageSize ?? 25));
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const page = Math.min(pageCount, Math.max(1, Math.floor(opts.page ?? 1) || 1));
-  const describe = createEntryDescriber(db);
+  const describe = createEntryDescriber(db, userId);
   const items = filtered.slice((page - 1) * pageSize, page * pageSize).map((p): PointsHistoryItem => {
     const d = describe(p);
     return {
@@ -973,7 +1642,7 @@ export async function getPointsHistory(userId: string, opts: { page?: number; pa
       note: p.reason === "manual" ? undefined : p.note,
     };
   });
-  const totals = totalsFor(db, userId);
+  const totals = totalsFor(idx, userId);
   return {
     items,
     page,
@@ -1005,27 +1674,18 @@ export interface LedgerStats {
 
 export async function getLedgerStats(): Promise<LedgerStats> {
   const db = await getDb();
-  const month = startOfMonth().getTime();
-  let totalPoints = 0;
+  const idx = ledgerIndex(db);
+  const now = new Date();
   let pointsThisMonth = 0;
-  let manual = 0;
-  let last: string | null = null;
-  const members = new Set<string>();
-  for (const p of db.points) {
-    totalPoints += p.points;
-    if (time(p.createdAt) >= month) pointsThisMonth += p.points;
-    if (p.reason === "manual") manual++;
-    members.add(p.userId);
-    if (!last || p.createdAt > last) last = p.createdAt;
-  }
+  for (const a of windowTotals(idx, null, periodWindows("month", now).current).values()) pointsThisMonth += a.points;
   return {
     entries: db.points.length,
-    members: members.size,
-    totalPoints,
+    members: idx.users.size,
+    totalPoints: idx.totalPoints,
     pointsThisMonth,
-    manualAdjustments: manual,
-    lastEntryAt: last,
-    byReason: breakdown(db.points),
+    manualAdjustments: idx.manual.size,
+    lastEntryAt: idx.maxTime > 0 ? new Date(Math.min(idx.maxTime, now.getTime())).toISOString() : null,
+    byReason: POINTS_REASONS.filter((r) => idx.reasons.has(r)).map((r) => ({ reason: r, ...idx.reasons.get(r)! })),
   };
 }
 
@@ -1039,13 +1699,12 @@ export interface ManualAdjustmentRow {
 
 export async function getRecentManualAdjustments(limit = 15): Promise<ManualAdjustmentRow[]> {
   const db = await getDb();
-  const users = new Map(db.users.map((u) => [u.id, u]));
-  return db.points
-    .filter((p) => p.reason === "manual")
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const idx = ledgerIndex(db);
+  return Array.from(idx.manual)
+    .sort((a, b) => byCreatedAt(b, a))
     .slice(0, Math.max(1, limit))
     .map((p) => {
-      const u = users.get(p.userId);
+      const u = lookup(db.users, p.userId);
       return { id: p.id, points: p.points, note: p.note ?? "", createdAt: p.createdAt, member: u ? toMember(u) : null };
     });
 }
@@ -1053,21 +1712,34 @@ export async function getRecentManualAdjustments(limit = 15): Promise<ManualAdju
 /** Remove one manual adjustment (admin undo). Returns the removed entry. */
 export async function removeManualAdjustment(entryId: string): Promise<PointsEntry | null> {
   return mutate((d) => {
+    const idx = ledgerIndex(d);
     const index = d.points.findIndex((p) => p.id === entryId && p.reason === "manual");
     if (index === -1) return null;
     const [removed] = d.points.splice(index, 1);
-    return removed ?? null;
+    if (!removed) return null;
+    indexRemove(idx, removed);
+    adoptSource(idx, d.points);
+    return removed;
   });
 }
 
-/** Points each member earned from discussions since a moment (used by the community hub). */
-export async function getDiscussionPointsSince(since: Date): Promise<Map<string, number>> {
+/**
+ * Discussion points earned for specific replies, per member (the community
+ * hub sums only replies the viewer can see).
+ */
+export async function getReplyPoints(replyIds: Iterable<string>): Promise<Map<string, number>> {
   const db = await getDb();
-  const from = since.getTime();
+  const idx = ledgerIndex(db);
   const out = new Map<string, number>();
-  for (const p of db.points) {
-    if (p.reason !== "discussion_reply" || time(p.createdAt) < from) continue;
-    out.set(p.userId, (out.get(p.userId) ?? 0) + p.points);
+  for (const id of replyIds) {
+    const e = idx.replies.get(id);
+    if (e) out.set(e.userId, (out.get(e.userId) ?? 0) + e.points);
   }
   return out;
 }
+
+/** Test/diagnostic hook: drop cached standings (the ledger index is kept). */
+export function clearStandingsCache(): void {
+  standingsCache.clear();
+}
+

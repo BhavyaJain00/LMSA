@@ -26,6 +26,7 @@ import {
   hasPaidForCourse,
 } from "@/lib/data/catalog";
 import { getPublicUser } from "@/lib/data/users";
+import { ensureDripNotifications } from "@/lib/services/drip";
 import { Icon } from "@/components/ui/icons";
 import { CourseHero } from "@/components/catalog/course-hero";
 import { CourseOutline } from "@/components/catalog/course-outline";
@@ -203,6 +204,8 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   if (!course.published && !manager && !enrollment) notFound();
   if (!settings.features.courses && !manager) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/courses/${course.slug}`)}`);
+  // No scheduler: announce drip content released since the learner's last visit (never throws).
+  if (user && enrollment) await ensureDripNotifications(user.id);
 
   const [summary, outline, reviews, breakdown, related, content, announcements, certificate, batches, alreadyPaid, instructorStats, evaluator] =
     await Promise.all([

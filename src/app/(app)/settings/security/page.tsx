@@ -7,6 +7,8 @@ import { hasPendingTwoFactorSetup, isEmailVerified, isTwoFactorActive, mustSetUp
 import { getLoginEventsForUser } from "@/lib/auth/login-events";
 import { openTotpSecret, otpauthUriFor } from "@/lib/auth/two-factor";
 import { formatSecretForDisplay } from "@/lib/auth/totp";
+import { safeRedirectPath } from "@/lib/auth/redirects";
+import { tryEncodeQr } from "@/lib/qr";
 import { describeUserAgent } from "@/lib/auth/user-agent";
 import { clampMinLength } from "@/lib/auth/password-policy";
 import { Badge } from "@/components/ui/badge";
@@ -24,10 +26,6 @@ import { TwoFactorManage } from "@/components/security/two-factor-manage";
 import { cn, formatDate, formatDateTime, relativeTime } from "@/lib/utils";
 
 export const metadata = { title: "Security" };
-
-function safeNext(value: unknown): string | undefined {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") ? value : undefined;
-}
 
 async function sessionRows(user: User): Promise<SecuritySessionRow[]> {
   const now = Date.now();
@@ -68,7 +66,7 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
   const user = await requireUser("/settings/security");
   const sp = await props.searchParams;
   const settings = await getSettings();
-  const next = safeNext(sp.next);
+  const next = safeRedirectPath(sp.next, undefined);
   const requiredNow = mustSetUpTwoFactor(user, settings.security);
 
   const verified = isEmailVerified(user);
@@ -83,6 +81,8 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
   // Setup material is only derived while a setup is pending.
   const pendingSecret = pendingSetup ? openTotpSecret(user) : null;
   const otpauth = pendingSecret ? otpauthUriFor(user, pendingSecret, brand) : null;
+  // Never let an unencodable URI break the page: setup then falls back to the typed key.
+  const qrMatrix = otpauth ? tryEncodeQr(otpauth) : null;
 
   const canDisable = twoFactorOn && !mustSetUpTwoFactor({ ...user, twoFactorEnabled: false }, settings.security);
   const minLength = clampMinLength(settings.security.passwordMinLength);
@@ -221,7 +221,7 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
               </div>
             ) : pendingSetup && otpauth && pendingSecret ? (
               <TwoFactorSetup
-                qr={<QrCode value={otpauth} title={`QR code to add ${brand} to your authenticator app`} />}
+                qr={qrMatrix ? <QrCode code={qrMatrix} title={`QR code to add ${brand} to your authenticator app`} /> : null}
                 secret={formatSecretForDisplay(pendingSecret)}
                 brand={brand}
                 email={user.email}

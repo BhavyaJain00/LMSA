@@ -29,6 +29,8 @@ export {
   pruneOutbox,
   redactForView,
   isSensitiveCategory,
+  isLinkExpired,
+  linkExpiresAt,
   MAX_ATTEMPTS,
   RETRY_DELAYS_MS,
   DEFAULT_RUN_LIMIT,
@@ -43,12 +45,16 @@ export { htmlToText, escapeHtml } from "./html";
 export { markdownToEmailHtml, markdownToText, escapeMarkdown } from "./markdown";
 export { brandFromSettings, getEmailBrand } from "./context";
 export { getTransportStatus, verifySmtpConnection, resolveSender, type TransportStatus, type SenderIdentity } from "./transport";
-export { unsubscribeUrl, preferencesUrl, verifyUnsubscribeToken, isUnsubscribeScope, cronKey, cronUrl, verifyCronKey, type UnsubscribeScope } from "./signing";
+export { unsubscribeUrl, oneClickUnsubscribeUrl, preferencesUrl, verifyUnsubscribeToken, isUnsubscribeScope, cronKey, cronUrl, verifyCronKey, type UnsubscribeScope } from "./signing";
 export { emailNotifications } from "./notifications";
 export {
   sendBatchAnnouncementEmails,
   sendCourseAnnouncementEmails,
+  queueBatchAnnouncementEmails,
+  queueCourseAnnouncementEmails,
   sendBatchMessage,
+  queueBatchMessage,
+  nextLiveClass,
   sendBatchConfirmationEmail,
   batchAudienceText,
   courseAudienceText,
@@ -58,7 +64,10 @@ export {
   type BulkEmailResult,
   type BatchMessageInput,
   type BatchMessageResult,
+  type QueueAnnouncementOptions,
 } from "./batch";
+export { prepareMarkdown, personalize, markdownSafeUrl, MEMBER_PLACEHOLDERS, URL_PLACEHOLDERS, type PreparedMarkdown } from "./personalize";
+export { reserveExternalRecipients, reserveCcOnlySend, externalRecipientLimitMessage, type QuotaResult } from "./quota";
 export {
   sendWelcomeEmail,
   sendPasswordResetEmail,

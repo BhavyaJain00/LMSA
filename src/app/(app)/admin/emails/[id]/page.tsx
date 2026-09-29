@@ -118,7 +118,7 @@ export default async function OutboxEmailPage(props: PageProps<"/admin/emails/[i
             </dl>
           </div>
           <p className="mt-3 px-1 text-xs text-ink-faint">
-            Failed attempts are retried after 1 minute, 5 minutes, 30 minutes and 2 hours; after {email.maxAttempts} attempts the email is marked failed.
+            Failed attempts are retried after 1 minute, 5 minutes, 30 minutes, 2 hours and 12 hours; after {email.maxAttempts} attempts the email is marked failed. Password-reset and verification emails are never sent once their link has expired.
           </p>
         </aside>
       </div>

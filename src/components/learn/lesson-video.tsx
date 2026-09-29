@@ -52,6 +52,8 @@ export interface LessonVideoProps {
   nextTitle?: string;
   /** Dock into a floating mini-player when scrolled away while playing. */
   miniPlayer?: boolean;
+  /** Lifetime (seconds) of the pre-signed `src`: renewals are scheduled from it rather than the browser clock. */
+  signedUrlTtlSeconds?: number | null;
 }
 
 /**
@@ -90,12 +92,13 @@ export function LessonVideo({
   autoplayNext,
   nextTitle,
   miniPlayer,
+  signedUrlTtlSeconds,
 }: LessonVideoProps) {
   const [completed, setCompleted] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Never store signed tokens in watch records.
   const source = useMemo(() => stripMediaToken(src), [src]);
-  const mediaContext = useMemo(() => ({ lessonId }), [lessonId]);
+  const mediaContext = useMemo(() => ({ lessonId, ttlSeconds: signedUrlTtlSeconds ?? null }), [lessonId, signedUrlTtlSeconds]);
 
   const heartbeat = useCallback(
     (data: HeartbeatPayload) => {

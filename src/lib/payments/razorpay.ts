@@ -141,6 +141,15 @@ export function parseRazorpayPayment(raw: Record<string, unknown>): RazorpayPaym
   };
 }
 
+/**
+ * Whether money of this payment went back to the payer. A refunded payment
+ * keeps `captured: true`, and a partly refunded one keeps `status: "captured"`,
+ * so neither of those alone proves the order was paid.
+ */
+export function isRazorpayPaymentReversed(p: Pick<RazorpayPayment, "status" | "amountRefunded" | "refundStatus">): boolean {
+  return p.status === "refunded" || p.amountRefunded > 0 || p.refundStatus === "partial" || p.refundStatus === "full";
+}
+
 export async function fetchRazorpayPayment(paymentId: string, opts: GatewayRequestOptions = {}): Promise<RazorpayPayment> {
   if (!isRazorpayPaymentId(paymentId)) throw new GatewayError("Razorpay", "Invalid Razorpay payment id.", 400);
   return parseRazorpayPayment(await razorpayRequest("GET", `/payments/${encodeURIComponent(paymentId)}`, undefined, opts));
@@ -199,6 +208,19 @@ export async function createRazorpayRefund(input: { paymentId: string; amount?: 
   if (!refund.id) throw new GatewayError("Razorpay", "Razorpay did not return a refund id.");
   if (refund.status === "failed") throw new GatewayError("Razorpay", "Razorpay could not complete the refund.");
   return refund;
+}
+
+/** Refunds that return money (failed refunds do not). */
+export function isActiveRazorpayRefund(refund: Pick<RazorpayRefund, "status">): boolean {
+  return refund.status !== "failed";
+}
+
+/** Refunds of a payment (up to 100). */
+export async function listRazorpayRefunds(paymentId: string, opts: GatewayRequestOptions = {}): Promise<RazorpayRefund[]> {
+  if (!isRazorpayPaymentId(paymentId)) throw new GatewayError("Razorpay", "This order has no Razorpay payment to refund.");
+  const json = await razorpayRequest("GET", `/payments/${encodeURIComponent(paymentId)}/refunds?count=100`, undefined, opts);
+  const items = Array.isArray(json.items) ? json.items : [];
+  return items.map((i) => parseRazorpayRefund(obj(i))).filter((r) => r.id);
 }
 
 /* ------------------------------------------------------------------ */

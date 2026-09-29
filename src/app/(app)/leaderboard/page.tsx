@@ -123,7 +123,7 @@ export default async function LeaderboardPage(props: PageProps<"/leaderboard">) 
                 {formatPoints(board.rankedCount)} ranked {board.rankedCount === 1 ? "member" : "members"} · {formatPoints(board.totalPoints)} points
               </span>
             )}
-            {board.excludeStaff && <span>Admins and moderators are not ranked.</span>}
+            {board.excludeStaff && <span>Staff (admins, moderators, instructors and evaluators) are not ranked.</span>}
           </p>
 
           <ViewerStanding board={board} loginHref={`/login?next=${encodeURIComponent(selfHref)}`} />

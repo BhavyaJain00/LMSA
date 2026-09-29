@@ -87,6 +87,18 @@ const nextConfig: NextConfig = {
   async redirects() {
     return legacyRedirects;
   },
+  async headers() {
+    return [
+      {
+        // The service worker must always be revalidated so a new VERSION reaches browsers promptly.
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

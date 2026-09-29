@@ -23,13 +23,14 @@ export async function enrollUserInCourse(
   const db = await getDb();
   const existing = db.enrollments.find((e) => e.userId === userId && e.courseId === courseId);
   if (existing) {
-    if ((opts.paymentId && !existing.paymentId) || (opts.batchId && !existing.batchId)) {
+    // `batchId` is set only on enrollments a batch creates. It moves the drip anchor to the batch
+    // start (see dripAnchor), so writing it onto a course the learner was already taking would
+    // re-lock lessons they had been given (or release a whole schedule at once): joining a batch
+    // never changes the schedule of an existing enrollment.
+    if (opts.paymentId && !existing.paymentId) {
       await mutate((d) => {
         const row = d.enrollments.find((e) => e.id === existing.id);
-        if (row) {
-          if (opts.paymentId && !row.paymentId) row.paymentId = opts.paymentId;
-          if (opts.batchId && !row.batchId) row.batchId = opts.batchId;
-        }
+        if (row && !row.paymentId) row.paymentId = opts.paymentId;
       });
     }
     return existing;
@@ -45,7 +46,13 @@ export async function enrollUserInCourse(
     paymentId: opts.paymentId,
     batchId: opts.batchId,
   };
-  await mutate((d) => {
+  const raced = await mutate((d) => {
+    // Re-check inside the serialized write: a concurrent request (e.g. a double submit) may have enrolled meanwhile.
+    const current = d.enrollments.find((e) => e.userId === userId && e.courseId === courseId);
+    if (current) {
+      if (opts.paymentId && !current.paymentId) current.paymentId = opts.paymentId;
+      return current;
+    }
     d.enrollments.push(enrollment);
     for (const program of d.programs) {
       if (!program.courseIds.includes(courseId)) continue;
@@ -53,7 +60,9 @@ export async function enrollUserInCourse(
       const member = d.programMembers.find((m) => m.programId === program.id && m.userId === userId);
       if (member) member.progress = computeProgramProgress(d, program, userId);
     }
+    return null;
   });
+  if (raced) return raced;
   await logActivity(userId, "enroll", courseId);
   const course = db.courses.find((c) => c.id === courseId);
   const user = db.users.find((u) => u.id === userId);
@@ -89,7 +98,11 @@ export async function enrollUserInBatch(userId: string, batchId: string, opts: {
   const count = db.batchEnrollments.filter((e) => e.batchId === batchId).length;
   if (batch.seatCount > 0 && count >= batch.seatCount) return { ok: false, error: "This batch is full." };
 
-  await mutate((d) => {
+  // Seat and duplicate checks are repeated inside the serialized write so concurrent requests cannot overbook.
+  const outcome = await mutate((d): "joined" | "already" | "full" => {
+    if (d.batchEnrollments.some((e) => e.batchId === batchId && e.userId === userId)) return "already";
+    const taken = d.batchEnrollments.filter((e) => e.batchId === batchId).length;
+    if (batch.seatCount > 0 && taken >= batch.seatCount) return "full";
     d.batchEnrollments.push({
       id: uid("ben"),
       batchId,
@@ -99,7 +112,10 @@ export async function enrollUserInBatch(userId: string, batchId: string, opts: {
       confirmationEmailSent: false,
       enrolledAt: new Date().toISOString(),
     });
+    return "joined";
   });
+  if (outcome === "already") return { ok: true };
+  if (outcome === "full") return { ok: false, error: "This batch is full." };
   for (const courseId of batch.courseIds) {
     await enrollUserInCourse(userId, courseId, { batchId, paymentId: opts.paymentId, notifyInstructors: false });
   }

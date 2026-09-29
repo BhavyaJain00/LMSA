@@ -1,4 +1,6 @@
 import { isAdmin, requireRole } from "@/lib/auth/session";
+import { getSettings } from "@/lib/db/store";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { PageHeader } from "@/components/ui/card";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { CreateMemberForm } from "@/components/admin/settings/member-forms";
@@ -6,7 +8,7 @@ import { CreateMemberForm } from "@/components/admin/settings/member-forms";
 export const metadata = { title: "Add New Member" };
 
 export default async function NewMemberPage() {
-  const viewer = await requireRole(["moderator"], "/admin/members/new");
+  const [viewer, settings] = await Promise.all([requireRole(["moderator"], "/admin/members/new"), getSettings()]);
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
@@ -22,7 +24,7 @@ export default async function NewMemberPage() {
           />
         }
       />
-      <CreateMemberForm canGrantAdmin={isAdmin(viewer)} />
+      <CreateMemberForm canGrantAdmin={isAdmin(viewer)} minPasswordLength={clampMinLength(settings.security.passwordMinLength)} />
     </div>
   );
 }

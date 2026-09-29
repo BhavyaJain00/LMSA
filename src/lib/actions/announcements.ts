@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Announcement } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
-import { getCurrentUser } from "@/lib/auth/session";
+import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { canManageBatch } from "@/lib/data/batches";
 import { notifyMany } from "@/lib/services/notifications";
-import { batchAudienceText, sendBatchAnnouncementEmails } from "@/lib/email";
+import { batchAudienceText, externalRecipientLimitMessage, queueBatchAnnouncementEmails, reserveExternalRecipients } from "@/lib/email";
 import { fd, isValidEmail, splitList, stripMarkdown, truncate, uid } from "@/lib/utils";
 
 /**
@@ -36,6 +36,11 @@ export async function createAnnouncementAction(_prev: ActionResult | null, formD
   const invalid = cc.filter((e) => !isValidEmail(e));
   if (invalid.length) fieldErrors.cc = `Invalid email address${invalid.length > 1 ? "es" : ""}: ${invalid.join(", ")}`;
   else if (cc.length > 50) fieldErrors.cc = "Add at most 50 CC addresses.";
+  if (!fieldErrors.cc && cc.length) {
+    // CC addresses are external recipients of real email: limited per author.
+    const quota = reserveExternalRecipients(user.id, new Set(cc).size);
+    if (!quota.ok) fieldErrors.cc = externalRecipientLimitMessage(quota);
+  }
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
 
   const announcement: Announcement = {
@@ -62,13 +67,15 @@ export async function createAnnouncementAction(_prev: ActionResult | null, formD
       email: false,
     },
   );
-  const mail = await sendBatchAnnouncementEmails(announcement.id);
+  // Emails are rendered and queued after the response; the outbox delivers them.
+  const mail = await queueBatchAnnouncementEmails(announcement.id, { allowCcOnly: isModerator(user) });
   revalidatePath(`/batches/${batch.slug}`);
   revalidatePath(`/admin/batches/${batch.id}`);
   revalidatePath("/", "layout");
   revalidatePath("/admin/emails");
-  const emailed = mail.disabled ? "" : mail.queued ? ` and emailed to ${mail.queued} ${mail.queued === 1 ? "student" : "students"}` : "";
-  return { ok: true, data: undefined, message: `Announcement has been sent successfully${emailed}` };
+  const emailed = mail.disabled ? "" : mail.queued ? ` and is being emailed to ${mail.queued} ${mail.queued === 1 ? "student" : "students"}` : "";
+  const ccNote = mail.ccSkipped ? " The CC copy wasn't sent because no student receives this email." : "";
+  return { ok: true, data: undefined, message: `Announcement has been sent successfully${emailed}.${ccNote}` };
 }
 
 export async function deleteAnnouncementAction(announcementId: string): Promise<ActionResult> {

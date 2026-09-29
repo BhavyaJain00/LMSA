@@ -58,7 +58,7 @@ export function BatchEmailComposer({ batches, initialBatchId }: { batches: Compo
   const [templateId, setTemplateId] = useState(batch?.templates[0]?.id ?? "");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [audience, setAudience] = useState<"all" | "some">("all");
+  const [audience, setAudience] = useState<"all" | "selected">("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [cc, setCc] = useState("");
@@ -142,14 +142,17 @@ export function BatchEmailComposer({ batches, initialBatchId }: { batches: Compo
       return next;
     });
 
-  const canSend = !!batch && !!effectiveSubject.trim() && !!effectiveBody.trim() && (recipients.length > 0 || !!cc.trim());
+  // CC addresses alone never make a send: at least one student must be a recipient.
+  const canSend = !!batch && !!effectiveSubject.trim() && !!effectiveBody.trim() && recipients.length > 0;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <form action={action} className="min-w-0 space-y-5" noValidate>
         <input type="hidden" name="batchId" value={batchId} />
         {mode === "template" && template && <input type="hidden" name="templateId" value={template.id} />}
-        {audience === "some" && Array.from(selected).map((id) => <input key={id} type="hidden" name="userId" value={id} />)}
+        {/* Always explicit: an empty selection must never be read as "everyone". */}
+        <input type="hidden" name="audience" value={audience} />
+        {audience === "selected" && Array.from(selected).map((id) => <input key={id} type="hidden" name="userId" value={id} />)}
         <FormError message={state && !state.ok && !Object.keys(errors).length ? state.error : null} />
         {state?.ok && (
           <FormSuccess message={`${state.message ?? "Email sent"}. Delivery status is in the outbox.`} />
@@ -228,11 +231,11 @@ export function BatchEmailComposer({ batches, initialBatchId }: { batches: Compo
               onChange={setAudience}
               options={[
                 { value: "all", label: `All students (${batch?.students.length ?? 0})` },
-                { value: "some", label: "Choose students" },
+                { value: "selected", label: "Choose students" },
               ]}
             />
           </div>
-          {audience === "some" && (
+          {audience === "selected" && (
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Input type="search" aria-label="Search students" placeholder="Search students" value={search} onChange={(e) => setSearch(e.target.value)} className="min-w-0 flex-1" />
@@ -252,11 +255,11 @@ export function BatchEmailComposer({ batches, initialBatchId }: { batches: Compo
                   ))
                 )}
               </div>
-              <p className="text-xs text-ink-muted">{selected.size} selected</p>
+              <p className={selected.size ? "text-xs text-ink-muted" : "text-xs text-warning"}>{selected.size ? `${selected.size} selected` : "Select at least one student to send this email."}</p>
             </div>
           )}
           {errors.recipients && <p className="text-xs text-danger">{errors.recipients}</p>}
-          <Field label="CC" htmlFor="compose-cc" error={errors.cc} hint="Optional. Comma-separated addresses receive one copy of the message.">
+          <Field label="CC" htmlFor="compose-cc" error={errors.cc} hint="Optional. Comma-separated addresses receive one copy of the message, sent along with the students' emails.">
             <Input id="compose-cc" name="cc" value={cc} onChange={(e) => setCc(e.target.value)} invalid={!!errors.cc} placeholder="mentor@example.com, coordinator@example.com" />
           </Field>
           <p className="text-xs text-ink-muted">Students who turned off announcement emails are skipped automatically. Every email includes an unsubscribe link.</p>
@@ -264,7 +267,11 @@ export function BatchEmailComposer({ batches, initialBatchId }: { batches: Compo
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button type="submit" loading={pending} disabled={!canSend} leftIcon={<Icon.Send className="size-4" />}>
-            {audience === "all" ? `Send to ${batch?.students.length ?? 0} ${batch?.students.length === 1 ? "student" : "students"}` : `Send to ${selected.size} selected`}
+            {audience === "all"
+              ? `Send to ${batch?.students.length ?? 0} ${batch?.students.length === 1 ? "student" : "students"}`
+              : selected.size
+                ? `Send to ${selected.size} selected`
+                : "Select students to send"}
           </Button>
         </div>
       </form>

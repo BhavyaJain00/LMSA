@@ -70,6 +70,25 @@ export function PwaClient({ enabled, installPrompt, offlinePage, authenticated, 
     let lastCheck = Date.now();
     const offered = new WeakSet<ServiceWorker>();
 
+    /**
+     * The toast's "Reload". Decides from the registration's state at click
+     * time, not from the worker the toast was offered for: another tab may
+     * already have activated that worker (its `controllerchange` does not
+     * reload this tab), or a newer build may have replaced it meanwhile.
+     */
+    const applyUpdate = (offeredWorker: ServiceWorker) => {
+      const waiting = cancelled ? null : (registration?.waiting ?? (offeredWorker.state === "installed" ? offeredWorker : null));
+      if (waiting) {
+        // Reloads on `controllerchange`, once the new worker has taken over.
+        reloadRequested.current = true;
+        waiting.postMessage({ type: "SKIP_WAITING" });
+        return;
+      }
+      // Nothing left to activate: the new worker already controls this tab
+      // (or is taking over), but the page still runs the previous build.
+      window.location.reload();
+    };
+
     const offerUpdate = (worker: ServiceWorker) => {
       // No controller means this is the first install, not an update.
       if (cancelled || offered.has(worker) || !navigator.serviceWorker.controller) return;
@@ -79,13 +98,7 @@ export function PwaClient({ enabled, installPrompt, offlinePage, authenticated, 
         description: "Reload to get the latest improvements.",
         tone: "info",
         duration: 0,
-        action: {
-          label: "Reload",
-          onClick: () => {
-            reloadRequested.current = true;
-            worker.postMessage({ type: "SKIP_WAITING" });
-          },
-        },
+        action: { label: "Reload", onClick: () => applyUpdate(worker) },
       });
     };
 

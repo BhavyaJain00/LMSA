@@ -2,12 +2,12 @@ import Link from "next/link";
 import { getCurrentUser, requireUser } from "@/lib/auth/session";
 import { findById, getSettings } from "@/lib/db/store";
 import { preferenceLabel, resolveEmailPreferences } from "@/lib/email/preferences";
-import { applySignedSubscription } from "@/lib/email/subscriptions";
+import { readSignedSubscription, readUnsubscribeReceipt, type SignedSubscription } from "@/lib/email/subscriptions";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { EmailPreferencesForm } from "./preferences-form";
-import { UnsubscribeResult } from "./unsubscribe-result";
+import { UnsubscribeConfirm, UnsubscribeResult } from "./unsubscribe-result";
 
 export const metadata = { title: "Email notifications" };
 
@@ -15,11 +15,18 @@ function one(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? "";
 }
 
+function scopeLabel(sub: SignedSubscription): string {
+  return `${preferenceLabel(sub.scope).toLowerCase()} emails`;
+}
+
 /**
  * Email preferences. Also the landing page of one-click unsubscribe links
  * (`?unsubscribe=<category>&u=<userId>&t=<signature>`), which work without
  * logging in: the HMAC signature proves the link was issued for that member
- * and category. Opening the link applies it; the page offers Undo.
+ * and category. Rendering never changes anything — the link only shows a
+ * confirmation, the member confirms with a POST, and the action redirects to
+ * `?confirmed=1` (no token in the URL; the outcome comes from a short-lived
+ * receipt cookie and the current database state).
  */
 export default async function EmailNotificationsPage(props: PageProps<"/settings/notifications">) {
   const sp = await props.searchParams;
@@ -28,8 +35,12 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
   const token = one(sp.t);
   const hasLink = !!(scope || userId || token);
 
-  const unsubscribed = hasLink ? await applySignedSubscription(userId, scope, token, false) : null;
-  const viewer = hasLink ? await getCurrentUser() : await requireUser("/settings/notifications");
+  const linkState = hasLink ? await readSignedSubscription(userId, scope, token) : null;
+  const receipt = !hasLink && one(sp.confirmed) === "1" ? await readUnsubscribeReceipt() : null;
+  const receiptState = receipt ? await readSignedSubscription(receipt.userId, receipt.scope, receipt.token) : null;
+  const signed = hasLink || !!receiptState;
+
+  const viewer = signed ? await getCurrentUser() : await requireUser("/settings/notifications");
   const settings = await getSettings();
   const fresh = viewer ? await findById("users", viewer.id) : null;
 
@@ -52,14 +63,28 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
       />
 
       <div className="space-y-6">
-        {hasLink && unsubscribed && (
+        {hasLink && linkState && (
           <Card>
             <CardBody>
-              <UnsubscribeResult userId={userId} scope={unsubscribed.scope} token={token} label={`${preferenceLabel(unsubscribed.scope).toLowerCase()} emails`} email={unsubscribed.email} />
+              <UnsubscribeConfirm userId={userId} scope={linkState.scope} token={token} label={scopeLabel(linkState)} email={linkState.email} subscribed={linkState.subscribed} />
             </CardBody>
           </Card>
         )}
-        {hasLink && !unsubscribed && (
+        {receipt && receiptState && (
+          <Card>
+            <CardBody>
+              <UnsubscribeResult
+                userId={receipt.userId}
+                scope={receiptState.scope}
+                token={receipt.token}
+                label={scopeLabel(receiptState)}
+                email={receiptState.email}
+                subscribed={receiptState.subscribed}
+              />
+            </CardBody>
+          </Card>
+        )}
+        {hasLink && !linkState && (
           <Card>
             <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-start">
               <span className="rounded-full bg-danger/12 p-2.5 text-danger">
@@ -91,12 +116,11 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
           <Card>
             <CardHeader title="Email categories" description={`Emails are sent to ${fresh.email}.`} />
             <CardBody>
-              <EmailPreferencesForm initial={resolveEmailPreferences(fresh)} />
+              <EmailPreferencesForm key={JSON.stringify(resolveEmailPreferences(fresh))} initial={resolveEmailPreferences(fresh)} />
             </CardBody>
           </Card>
         ) : (
-          hasLink &&
-          unsubscribed && (
+          (linkState || receiptState) && (
             <p className="text-center text-sm text-ink-muted">
               <Link href="/login?next=%2Fsettings%2Fnotifications" className="font-medium text-accent hover:underline">
                 Log in

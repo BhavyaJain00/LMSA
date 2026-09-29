@@ -56,7 +56,7 @@ function downloadCsv(fileName: string, csv: string) {
  * Bulk member import (Frappe: Data Import for users): upload a CSV, review
  * a validated preview, import the valid rows and download the results.
  */
-export function MemberImport({ canGrantAdmin }: { canGrantAdmin: boolean }) {
+export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdmin: boolean; minPasswordLength: number }) {
   const toast = useToast();
   const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -338,7 +338,7 @@ export function MemberImport({ canGrantAdmin }: { canGrantAdmin: boolean }) {
             </div>
             <div>
               <dt className="font-mono text-xs font-semibold text-ink">password</dt>
-              <dd className="mt-0.5 text-ink-muted">At least 8 characters with letters and numbers. Leave empty to generate one; generated passwords are shown once after the import.</dd>
+              <dd className="mt-0.5 text-ink-muted">At least {minPasswordLength} characters with letters and numbers. Leave empty to generate one; generated passwords are shown once after the import.</dd>
             </div>
           </dl>
         </CardBody>

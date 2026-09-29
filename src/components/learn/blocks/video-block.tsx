@@ -14,6 +14,8 @@ export interface VideoBlockPlayerOptions {
   watermark: { text: string; opacity: number } | null;
   seekThumbnails: boolean;
   autoplayNext: boolean;
+  /** Lifetime of the pre-signed URLs (seconds) while protection is on. */
+  signedUrlTtlSeconds?: number | null;
 }
 
 export interface VideoBlockProps {
@@ -160,6 +162,7 @@ export function VideoBlock({
         autoplayNext={!!player?.autoplayNext && lastVideo && !active}
         watermark={player?.watermark ?? null}
         seekThumbnails={player?.seekThumbnails ?? false}
+        signedUrlTtlSeconds={player?.signedUrlTtlSeconds ?? null}
         miniPlayer
         theater={theater}
         onToggleTheater={toggleTheater}

@@ -62,7 +62,7 @@ export function ViewerStanding({ board, loginHref, className }: { board: Leaderb
     headline = <span className="text-base font-semibold text-ink">Staff accounts are not ranked</span>;
     detail = (
       <>
-        Admins and moderators are hidden from this leaderboard. The {formatPoints(Math.max(0, viewer.periodPoints))} points you earned {periodPhrase[board.period]}
+        Admins, moderators, instructors and evaluators are hidden from this leaderboard. The {formatPoints(Math.max(0, viewer.periodPoints))} points you earned {periodPhrase[board.period]}
         still count toward your level.
       </>
     );

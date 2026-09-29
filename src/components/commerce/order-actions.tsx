@@ -17,7 +17,7 @@ export function PrintButton({ label = "Print / Save as PDF", variant = "outline"
 }
 
 /** Lets the buyer cancel an order that is still awaiting payment. */
-export function CancelOrderButton({ orderId, online = false }: { orderId: string; online?: boolean }) {
+export function CancelOrderButton({ orderId, online = false, gateway }: { orderId: string; online?: boolean; gateway?: string }) {
   const [open, setOpen] = useState(false);
   const { submit, pending } = useFormAction(cancelOrderAction, { onSuccess: () => setOpen(false) });
   return (
@@ -37,9 +37,11 @@ export function CancelOrderButton({ orderId, online = false }: { orderId: string
         destructive
         title="Cancel this order?"
         description={
-          online
-            ? "The open payment page is closed so nothing can be charged for this order. You can place a new order at any time."
-            : "Only cancel if you haven't paid yet. You can place a new order at any time."
+          !online
+            ? "Only cancel if you haven't paid yet. You can place a new order at any time."
+            : gateway === "razorpay"
+              ? "Close any Razorpay payment window you still have open: Razorpay can't cancel it for us. If a payment still goes through, it is matched to this order. You can place a new order at any time."
+              : "The open payment page is closed so nothing can be charged for this order. You can place a new order at any time."
         }
         confirmLabel="Cancel order"
         cancelLabel="Keep order"

@@ -100,7 +100,7 @@ export default async function PaymentCancelledPage(props: PageProps<"/billing/ca
                 </ButtonLink>
               </>
             )}
-            {payment?.status === "pending" && <CancelOrderButton orderId={payment.orderId} online={online} />}
+            {payment?.status === "pending" && <CancelOrderButton orderId={payment.orderId} online={online} gateway={payment.gateway} />}
           </div>
         </section>
         <p className="mt-4 text-center text-xs text-ink-muted">

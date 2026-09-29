@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import type { Role } from "@/lib/types";
 import { isAdmin, requireRole } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { roleLabels } from "@/lib/config";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader, PageHeader } from "@/components/ui/card";
@@ -121,7 +122,13 @@ export default async function MemberDetailPage(props: PageProps<"/admin/members/
             readOnly={readOnly}
           />
           <MemberRolesForm memberId={member.id} roles={member.roles} canGrantAdmin={viewerIsAdmin} readOnly={readOnly} lockedRoles={lockedRoles} />
-          {viewerIsAdmin && <MemberAccountPanel member={{ id: member.id, name: member.name, enabled: member.enabled }} isSelf={isSelf} />}
+          {viewerIsAdmin && (
+            <MemberAccountPanel
+              member={{ id: member.id, name: member.name, enabled: member.enabled }}
+              isSelf={isSelf}
+              minPasswordLength={clampMinLength(db.settings.security.passwordMinLength)}
+            />
+          )}
         </div>
 
         <aside className="space-y-4">
@@ -260,10 +267,15 @@ export default async function MemberDetailPage(props: PageProps<"/admin/members/
                       <p className="font-mono text-xs text-ink-muted">
                         {p.orderId} · {formatDate(p.createdAt)}
                       </p>
+                      {viewerIsAdmin && p.invoiceNumber && (
+                        <Link href={`/billing/invoice/${encodeURIComponent(p.orderId)}`} className="text-xs font-medium text-accent hover:underline">
+                          Invoice {p.invoiceNumber}
+                        </Link>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       <span className="tabular-nums">{formatPrice(p.amount, p.currency)}</span>
-                      <PaymentStatusBadge status={p.status} />
+                      <PaymentStatusBadge status={p.status} failureReason={p.failureReason} refundedAmount={p.refundedAmount} amount={p.amount} />
                     </div>
                   </li>
                 ))}

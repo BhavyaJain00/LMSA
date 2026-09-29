@@ -20,7 +20,7 @@
  *    admin or auth routes. The offline page is fetched without cookies.
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const PREFIX = "ll-";
 const CACHES = {
   shell: `${PREFIX}shell-${VERSION}`,
@@ -392,14 +392,28 @@ async function readHtml(response, wantBody) {
 }
 
 /**
+ * Navigation responses that rememberPage reads: complete same-origin HTML
+ * pages. Only these are cloned. A clone tees the body, so an unread copy of
+ * anything else (a PDF, ZIP or CSV opened in a tab) would be buffered in the
+ * worker for as long as the download runs.
+ */
+function isHtmlPage(res) {
+  return (
+    !!res &&
+    res.status === 200 &&
+    res.type === "basic" &&
+    !res.redirected &&
+    /text\/html/i.test(res.headers.get("content-type") || "")
+  );
+}
+
+/**
  * Store a navigation response for offline use — only when the HTML carries
  * the signed-out marker and the route is safe to keep. Also keeps the
  * "is a member signed in" hint fresh for the slow-network path.
  */
 async function rememberPage(url, copy) {
-  if (!copy || copy.status !== 200 || copy.type !== "basic" || copy.redirected) return;
-  const type = copy.headers.get("content-type") || "";
-  if (!type.includes("text/html")) return;
+  if (!isHtmlPage(copy)) return;
   const cacheable = isCacheablePage(url);
   const { head, html } = await readHtml(copy, (h) => cacheable && CACHEABLE_MARKER.test(h));
   const anonymous = CACHEABLE_MARKER.test(head);
@@ -427,8 +441,9 @@ async function handleNavigation(event, url) {
   const network = (async () => {
     const preloaded = await event.preloadResponse;
     const res = preloaded || (await fetch(event.request));
-    // Clone before the browser starts reading the body.
-    return { res, copy: res.clone() };
+    // Clone before the browser starts reading the body, and only what
+    // rememberPage will read (see isHtmlPage).
+    return { res, copy: isHtmlPage(res) ? res.clone() : null };
   })();
   event.waitUntil(
     network.then(({ copy }) => rememberPage(url, copy)).catch(() => undefined),

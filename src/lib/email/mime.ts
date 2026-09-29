@@ -110,7 +110,8 @@ export function chunkUtf8(value: string, maxBytes: number): string[] {
  */
 export function encodeWords(value: string): string {
   const clean = sanitizeHeaderValue(value);
-  if (isPrintableAscii(clean)) return clean;
+  // ASCII text that contains "=?" could be mistaken for an encoded-word by decoders, so encode it too.
+  if (isPrintableAscii(clean) && !clean.includes("=?")) return clean;
   return chunkUtf8(clean, 45)
     .map((chunk) => `=?UTF-8?B?${Buffer.from(chunk, "utf8").toString("base64")}?=`)
     .join(" ");
@@ -180,7 +181,7 @@ export function formatAddress(addr: MailAddress): string {
   const name = addr.name ? sanitizeHeaderValue(addr.name) : "";
   if (!name) return address;
   let display: string;
-  if (!isPrintableAscii(name)) display = encodeWords(name);
+  if (!isPrintableAscii(name) || name.includes("=?")) display = encodeWords(name);
   else if (SPECIALS.test(name)) display = `"${name.replace(/(["\\])/g, "\\$1")}"`;
   else display = name;
   return `${display} <${address}>`;
@@ -305,8 +306,13 @@ export function chooseEncoding(text: string): TransferEncoding {
   return high / bytes.length > 0.2 ? "base64" : "quoted-printable";
 }
 
-function encodeBody(text: string, encoding: TransferEncoding): string {
-  return encoding === "base64" ? encodeBase64Lines(text) : encodeQuotedPrintable(text);
+/**
+ * Encode a text/* body. Line breaks must be canonical CRLF before encoding
+ * (RFC 2045 §6.8, RFC 2046 §4.1.1): quoted-printable emits CRLF itself, and
+ * base64 bodies are converted first so decoders get CRLF, not bare LF.
+ */
+export function encodeBody(text: string, encoding: TransferEncoding): string {
+  return encoding === "base64" ? encodeBase64Lines(toCrlf(text)) : encodeQuotedPrintable(text);
 }
 
 /* ------------------------------------------------------------------ */

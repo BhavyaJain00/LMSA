@@ -3,23 +3,29 @@ import type { Database, Payment, Settings } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { siteConfig } from "@/lib/config";
 import { maskSecret, razorpayEnv, stripeEnv } from "@/lib/server-env";
-import { formatPrice } from "@/lib/utils";
-import { notifyMany } from "@/lib/services/notifications";
+import { formatPrice, toDateKey } from "@/lib/utils";
+import { notifyMany, type NotifyInput } from "@/lib/services/notifications";
 import { amountMatches, fromGatewayAmount, toGatewayAmount } from "./amounts";
 import { GatewayError } from "./http";
 import { verifyRazorpayPaymentSignature } from "./signatures";
+import { couponProblem } from "./coupon-rules";
 import {
   createStripeCheckoutSession,
   createStripeRefund,
   expireStripeCheckoutSession,
+  isActiveStripeRefund,
   isStripeConfigured,
+  isStripePaymentIntentId,
   isStripeSessionId,
   isStripeSessionPaid,
   isStripeWebhookConfigured,
+  listStripeRefunds,
   pingStripe,
   retrieveStripeCheckoutSession,
+  retrieveStripePaymentIntent,
   stripeDashboardPaymentUrl,
   stripeMode,
+  stripeSettlement,
   type StripeCheckoutSession,
 } from "./stripe";
 import {
@@ -29,9 +35,12 @@ import {
   fetchRazorpayOrder,
   fetchRazorpayOrderPayments,
   fetchRazorpayPayment,
+  isActiveRazorpayRefund,
   isRazorpayConfigured,
   isRazorpayOrderId,
+  isRazorpayPaymentReversed,
   isRazorpayWebhookConfigured,
+  listRazorpayRefunds,
   pingRazorpay,
   razorpayDashboardPaymentUrl,
   razorpayMode,
@@ -39,7 +48,14 @@ import {
   type RazorpayOrder,
   type RazorpayPayment,
 } from "./razorpay";
-import { fulfillPayment, isGatewayPaymentReference, markPaymentFailed, type FulfillmentSource } from "./fulfillment";
+import {
+  closeReversedPayment,
+  fulfillPayment,
+  isGatewayPaymentReference,
+  markPaymentFailed,
+  type FulfillmentOutcome,
+  type FulfillmentSource,
+} from "./fulfillment";
 import type { CheckoutNext, GatewayStatusView, RazorpayLaunchOptions, RealGateway } from "./types";
 
 /**
@@ -223,8 +239,11 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
         if (state.state === "paid") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your payment went through." };
         if (state.state === "processing") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your payment is still being processed." };
         if (state.state === "error") return { ok: false, error: state.message };
+        // A completed session whose payment was refunded or disputed closed the order for good.
+        if (state.state === "failed" && session.status !== "expired") return { ok: false, error: closedMessage(state.reason) };
         // The session expired (which failed the order): reopen the order for a new attempt.
-        if (!(await reopenFailedOrder(payment.id))) return { ok: false, error: "This order was closed. Start a new checkout to buy it again." };
+        const reopened = await reopenFailedOrder(payment.id);
+        if (!reopened.ok) return { ok: false, error: reopened.error };
       }
       const current = (await getFreshPayment(payment.id)) ?? payment;
       return { ok: true, next: await createCheckout(current, checkoutUrls(current)) };
@@ -235,6 +254,7 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
       const state = await syncRazorpayOrder(payment, "sync");
       if (state.state === "paid") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your payment went through." };
       if (state.state === "error") return { ok: false, error: state.message };
+      if (state.state === "failed") return { ok: false, error: closedMessage(state.reason) };
       const order = await fetchRazorpayOrder(payment.gatewayOrderId);
       if (order.status !== "paid" && amountMatches(payment.amount, payment.currency, order.amount, order.currency)) {
         const db = await getDb();
@@ -253,16 +273,36 @@ async function getFreshPayment(paymentId: string): Promise<Payment | null> {
   return row ? { ...row } : null;
 }
 
-/** A Stripe session that merely expired leaves the order resumable. */
-async function reopenFailedOrder(paymentId: string): Promise<boolean> {
-  return mutate((d) => {
+const ORDER_CLOSED = "This order was closed. Start a new checkout to buy it again.";
+
+function closedMessage(reason: string | undefined): string {
+  return reason ? `${reason} Start a new checkout to buy it again.` : ORDER_CLOSED;
+}
+
+/**
+ * A Stripe session that merely expired leaves the order resumable. Reopening
+ * reserves the order's coupon use again, so the coupon is re-checked in the
+ * same serialized write (another checkout may have taken the last use while
+ * the order was closed).
+ */
+export async function reopenFailedOrder(paymentId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return mutate((d): { ok: true } | { ok: false; error: string } => {
     const row = d.payments.find((p) => p.id === paymentId);
-    if (!row) return false;
-    if (row.status === "pending") return true;
-    if (row.status !== "failed") return false;
+    if (!row) return { ok: false, error: ORDER_CLOSED };
+    if (row.status === "pending") return { ok: true };
+    if (row.status !== "failed") return { ok: false, error: ORDER_CLOSED };
+    if (row.couponId) {
+      const problem = couponProblem(
+        d.coupons.find((c) => c.id === row.couponId),
+        { type: row.itemType, id: row.itemId, currency: row.currency },
+        { payments: d.payments, defaultCurrency: d.settings.commerce.defaultCurrency, today: toDateKey() },
+        row.couponCode,
+      );
+      if (problem) return { ok: false, error: closedMessage(problem) };
+    }
     row.status = "pending";
     row.failureReason = undefined;
-    return true;
+    return { ok: true };
   });
 }
 
@@ -278,23 +318,71 @@ export function gatewayErrorMessage(error: unknown): string {
 /* ------------------------------------------------------------------ */
 
 export type SyncState =
-  | { state: "paid"; payment: Payment }
+  /** `accessFailed`: the order is paid but granting access failed; confirming it again retries. */
+  | { state: "paid"; payment: Payment; accessFailed?: boolean }
   | { state: "processing" }
   | { state: "pending" }
   | { state: "failed"; reason?: string }
   | { state: "error"; message: string };
 
-async function reportAmountMismatch(payment: Payment, received: string): Promise<SyncState> {
+async function alertAdmins(input: NotifyInput): Promise<void> {
   const db = await getDb();
   const admins = db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id);
+  await notifyMany(admins, input);
+}
+
+async function reportAmountMismatch(payment: Payment, received: string): Promise<SyncState> {
   console.error(`[payments] amount mismatch on order ${payment.orderId}: expected ${payment.amount} ${payment.currency}, received ${received}`);
-  await notifyMany(admins, {
+  await alertAdmins({
     type: "system",
     subject: `Payment amount mismatch on order ${payment.orderId}`,
     message: `Expected ${formatPrice(payment.amount, payment.currency)} but the gateway reported ${received}. The order was not fulfilled; review it in the gateway dashboard.`,
     link: `/admin/settings/transactions?search=${encodeURIComponent(payment.orderId)}`,
+    dedupeKey: `amount-mismatch:${payment.id}:${received}`,
   });
   return { state: "error", message: "The payment amount did not match this order. Our team has been notified." };
+}
+
+/**
+ * Money arrived through a gateway for a checkout that matches no order here
+ * (the order was deleted while the learner could still pay). Administrators
+ * are told once per payment so it can be refunded or recorded by hand.
+ */
+export async function reportUnmatchedPayment(info: { gateway: RealGateway; paymentRef: string; checkoutRef?: string; amount?: number; currency?: string }): Promise<void> {
+  const name = GATEWAY_NAMES[info.gateway];
+  const amount =
+    info.amount !== undefined && info.currency ? formatPrice(fromGatewayAmount(info.amount, info.currency), info.currency.toUpperCase()) : "a payment";
+  console.warn(`[payments] ${name} payment ${info.paymentRef} matches no order`);
+  await alertAdmins({
+    type: "system",
+    subject: `${name} payment without an order`,
+    message: `${name} received ${amount} (${info.paymentRef}${info.checkoutRef && info.checkoutRef !== info.paymentRef ? `, checkout ${info.checkoutRef}` : ""}) for a checkout that no longer matches an order here; it may have been deleted. Refund it from the ${name} dashboard or record it under Transactions.`,
+    link: "/admin/settings/transactions",
+    dedupeKey: `unmatched-payment:${info.paymentRef}`,
+  });
+}
+
+function paidState(res: FulfillmentOutcome): SyncState {
+  if (!res.ok) return { state: "error", message: res.error };
+  return { state: "paid", payment: res.data.payment, accessFailed: res.data.accessFailed };
+}
+
+async function currentRow(payment: Payment): Promise<Payment> {
+  return (await getFreshPayment(payment.id)) ?? payment;
+}
+
+/** Orders a gateway payment may still turn into paid ones (fulfilment moves pending and failed orders to paid). */
+function isSettling(row: Payment): boolean {
+  return row.status === "pending" || row.status === "failed";
+}
+
+/** The gateway payment of an unpaid order was refunded or disputed: close the order instead of fulfilling it. */
+async function closeReversed(payment: Payment, gateway: RealGateway, reason: string, gatewayPaymentId: string | undefined): Promise<SyncState> {
+  const res = await closeReversedPayment(payment.id, { reason, gatewayName: GATEWAY_NAMES[gateway], gatewayPaymentId });
+  if (res.status === "paid" && res.payment) return { state: "paid", payment: res.payment };
+  if (res.status === "missing") return { state: "error", message: "Order not found." };
+  if (res.status === "refunded") return { state: "failed", reason: "This order was refunded." };
+  return { state: "failed", reason };
 }
 
 /** Apply what a Stripe Checkout Session says about `payment`. */
@@ -306,9 +394,17 @@ export async function reconcileStripeSession(payment: Payment, session: StripeCh
     if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
       return reportAmountMismatch(payment, `${session.amountTotal ?? "?"} ${(session.currency ?? "?").toUpperCase()} (smallest unit)`);
     }
-    const res = await fulfillPayment(payment.id, session.paymentIntentId, { gatewayOrderId: session.id, source });
-    if (!res.ok) return { state: "error", message: res.error };
-    return { state: "paid", payment: res.data.payment };
+    if (isSettling(await currentRow(payment))) {
+      // The session keeps saying "paid" after a refund or a dispute (and Stripe resends old
+      // snapshots for days), so only a PaymentIntent whose money is still here unlocks the order.
+      if (!isStripePaymentIntentId(session.paymentIntentId)) return { state: "processing" };
+      const settlement = stripeSettlement(await retrieveStripePaymentIntent(session.paymentIntentId, { timeoutMs: 15_000 }));
+      if (settlement.kind === "reversed") {
+        return closeReversed(payment, "stripe", `${settlement.reason} The order was not completed.`, session.paymentIntentId);
+      }
+      if (settlement.kind === "incomplete") return { state: "processing" };
+    }
+    return paidState(await fulfillPayment(payment.id, session.paymentIntentId, { gatewayOrderId: session.id, source }));
   }
   if (session.status === "complete") return { state: "processing" };
   if (session.status === "expired") {
@@ -319,13 +415,46 @@ export async function reconcileStripeSession(payment: Payment, session: StripeCh
   return { state: "pending" };
 }
 
-/** Apply what a Razorpay payment says about `payment` (captures authorized payments). */
-export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPayment, source: FulfillmentSource): Promise<SyncState> {
+function reversedReason(rp: RazorpayPayment): string {
+  const full = rp.status === "refunded" || rp.refundStatus === "full";
+  return `${full ? "The payment was refunded." : "The payment was partially refunded."} The order was not completed.`;
+}
+
+/**
+ * Apply what a Razorpay payment says about `payment` (captures authorized
+ * payments). `live` means `rp` was just read from the API; webhook payloads
+ * are snapshots, so they are read again before they may unlock an order.
+ */
+export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPayment, source: FulfillmentSource, opts: { live?: boolean } = {}): Promise<SyncState> {
   const belongs = (!!rp.orderId && rp.orderId === payment.gatewayOrderId) || rp.notes.paymentId === payment.id;
   if (!belongs) return { state: "error", message: "This Razorpay payment does not belong to the order." };
 
+  const row = await currentRow(payment);
+  const settling = isSettling(row);
   let current = rp;
+  // A redelivered "payment.captured" can describe a payment that was refunded since.
+  if (settling && !opts.live && current.status !== "failed") current = await fetchRazorpayPayment(current.id);
+
+  if (isRazorpayPaymentReversed(current)) {
+    // Money that went back to the payer never unlocks an order (a refunded payment stays `captured: true`).
+    if (settling) return closeReversed(payment, "razorpay", reversedReason(current), current.id);
+    return row.status === "paid" ? { state: "paid", payment: row } : { state: "failed", reason: "This order was refunded." };
+  }
   if (current.status === "authorized") {
+    if (!settling) {
+      // The order was settled meanwhile (confirmed by hand, refunded): don't capture a second payment.
+      // Razorpay releases uncaptured authorizations to the payer on its own.
+      if (row.gatewayPaymentId !== current.id) {
+        await alertAdmins({
+          type: "system",
+          subject: `Extra Razorpay payment on order ${row.orderId} was not captured`,
+          message: `${row.billingName} authorized another payment (${current.id}) for an order that is already ${row.status}. It was not captured, so Razorpay releases it back to the payer automatically.`,
+          link: `/admin/settings/transactions?search=${encodeURIComponent(row.orderId)}`,
+          dedupeKey: `uncaptured-extra:${current.id}`,
+        });
+      }
+      return row.status === "paid" ? { state: "paid", payment: row } : { state: "failed", reason: "This order was refunded." };
+    }
     if (!amountMatches(payment.amount, payment.currency, current.amount, current.currency)) {
       return reportAmountMismatch(payment, `${current.amount} ${current.currency} (smallest unit)`);
     }
@@ -336,14 +465,13 @@ export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPay
       if (error instanceof GatewayError && error.status === 400) current = await fetchRazorpayPayment(current.id);
       else throw error;
     }
+    if (isRazorpayPaymentReversed(current)) return closeReversed(payment, "razorpay", reversedReason(current), current.id);
   }
-  if (current.status === "captured" || current.status === "refunded" || current.captured) {
+  if (current.status === "captured") {
     if (!amountMatches(payment.amount, payment.currency, current.amount, current.currency)) {
       return reportAmountMismatch(payment, `${current.amount} ${current.currency} (smallest unit)`);
     }
-    const res = await fulfillPayment(payment.id, current.id, { gatewayOrderId: current.orderId, source });
-    if (!res.ok) return { state: "error", message: res.error };
-    return { state: "paid", payment: res.data.payment };
+    return paidState(await fulfillPayment(payment.id, current.id, { gatewayOrderId: current.orderId, source }));
   }
   if (current.status === "failed") {
     const reason = current.errorDescription ?? "The payment was declined.";
@@ -353,12 +481,18 @@ export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPay
   return { state: "pending" };
 }
 
-/** Check a Razorpay order's payments and settle the order when one succeeded. Failed attempts leave it resumable. */
+/**
+ * Check a Razorpay order's payments and settle the order when one succeeded.
+ * Failed attempts leave it resumable; a payment that was refunded closes it.
+ */
 async function syncRazorpayOrder(payment: Payment, source: FulfillmentSource, timeoutMs?: number): Promise<SyncState> {
   if (!isRazorpayOrderId(payment.gatewayOrderId)) return { state: "pending" };
   const attempts = await fetchRazorpayOrderPayments(payment.gatewayOrderId, { timeoutMs });
-  const good = attempts.find((p) => p.status === "captured") ?? attempts.find((p) => p.status === "authorized");
-  if (good) return reconcileRazorpayPayment(payment, good, source);
+  const pick =
+    attempts.find((p) => p.status === "captured" && !isRazorpayPaymentReversed(p)) ??
+    attempts.find((p) => p.status === "authorized") ??
+    attempts.find((p) => isRazorpayPaymentReversed(p));
+  if (pick) return reconcileRazorpayPayment(payment, pick, source, { live: true });
   return { state: "pending" };
 }
 
@@ -409,35 +543,40 @@ export async function closeGatewayCheckout(payment: Payment): Promise<{ paid: bo
   }
 }
 
+/** Whether Razorpay Checkout's `razorpay_signature` is genuine for this order/payment pair. */
+export function isValidRazorpayCheckoutSignature(input: { razorpayOrderId: string; razorpayPaymentId: string; signature: string }): boolean {
+  if (!isRazorpayConfigured()) return false;
+  return verifyRazorpayPaymentSignature({ orderId: input.razorpayOrderId, paymentId: input.razorpayPaymentId, signature: input.signature }, razorpayEnv.keySecret);
+}
+
 /**
  * Handle the signature Razorpay Checkout hands the browser after a
  * successful payment. The HMAC proves Razorpay accepted a payment for our
  * order (whose amount we fixed server-side); the payment is then read back
- * to capture it when needed and double-check the amount.
+ * to capture it when needed, double-check the amount and make sure it was
+ * not refunded. The signature alone never fulfils an order.
  */
 export async function confirmRazorpayCheckout(
   payment: Payment,
   input: { razorpayOrderId: string; razorpayPaymentId: string; signature: string },
 ): Promise<SyncState> {
   if (!isRazorpayConfigured()) return { state: "error", message: "Razorpay is not configured." };
-  if (payment.gateway !== "razorpay" || !payment.gatewayOrderId || payment.gatewayOrderId !== input.razorpayOrderId) {
+  // Bound by the Razorpay order id, whatever the order is labelled now (an order confirmed by hand
+  // becomes "manual" while the learner may still pay in an open Razorpay window).
+  if (!payment.gatewayOrderId || payment.gatewayOrderId !== input.razorpayOrderId) {
     return { state: "error", message: "This payment does not belong to the order." };
   }
-  const valid = verifyRazorpayPaymentSignature(
-    { orderId: input.razorpayOrderId, paymentId: input.razorpayPaymentId, signature: input.signature },
-    razorpayEnv.keySecret,
-  );
-  if (!valid) return { state: "error", message: "We couldn't verify this payment. If you were charged, contact support with your order ID." };
+  if (!isValidRazorpayCheckoutSignature(input)) {
+    return { state: "error", message: "We couldn't verify this payment. If you were charged, contact support with your order ID." };
+  }
 
   try {
     const rp = await fetchRazorpayPayment(input.razorpayPaymentId, { timeoutMs: 10_000 });
-    return await reconcileRazorpayPayment(payment, rp, "razorpay_checkout");
+    return await reconcileRazorpayPayment(payment, rp, "razorpay_checkout", { live: true });
   } catch (error) {
-    if (error instanceof GatewayError && error.transient) {
-      // Razorpay is briefly unreachable, but the signature already proves the payment for this order.
-      const res = await fulfillPayment(payment.id, input.razorpayPaymentId, { gatewayOrderId: input.razorpayOrderId, source: "razorpay_checkout" });
-      return res.ok ? { state: "paid", payment: res.data.payment } : { state: "error", message: res.error };
-    }
+    // Razorpay is briefly unreachable: the signature proves a payment was made, not that it was
+    // captured or kept. The order page asks Razorpay again (capturing and fulfilling it then).
+    if (error instanceof GatewayError && error.transient) return { state: "processing" };
     return { state: "error", message: gatewayErrorMessage(error) };
   }
 }
@@ -446,47 +585,82 @@ export async function confirmRazorpayCheckout(
 /* Refunds                                                             */
 /* ------------------------------------------------------------------ */
 
-export interface GatewayRefundResult {
-  /** Gateway refund id; undefined when nothing was sent through a gateway. */
-  refundId?: string;
-  /** Amount refunded now, in app units. */
-  amount: number;
-  viaGateway: boolean;
+function gatewayNotConfigured(gateway: RealGateway): GatewayError {
+  const name = GATEWAY_NAMES[gateway];
+  return new GatewayError(name, `${name} is not configured, so the refund cannot be sent. Refund it in the ${name} dashboard and record it here.`);
+}
+
+/** What the gateway knows about the refunds of an order's payment. Amounts are in app units. */
+export interface GatewayRefundLedger {
+  /** Everything refunded on the payment so far (failed and cancelled refunds excluded). */
+  total: number;
+  /** Refunds this app sent for the order that are not recorded on it (e.g. the request timed out). */
+  unrecorded: { id: string; amount: number }[];
+  /** Refunds the gateway knows for the payment, whatever their status. */
+  count: number;
 }
 
 /**
- * Refund `amount` (app units; default: everything not refunded yet). Orders
- * paid through Stripe/Razorpay are refunded through the gateway API; manual
- * and free orders only need the local record (the admin returns the money).
+ * Read the refunds of a Stripe/Razorpay-paid order from the gateway. Checked
+ * before every refund from the app, so a retry after a timed-out request
+ * records the refund that went through instead of sending a second one.
  */
-export async function refund(payment: Payment, amount?: number): Promise<GatewayRefundResult> {
-  const remaining = Math.max(0, payment.amount - (payment.refundedAmount ?? 0));
-  const value = amount ?? remaining;
-  if (value <= 0 && payment.amount > 0) throw new GatewayError(payment.gateway, "Nothing is left to refund on this order.");
-  if (value > remaining) throw new GatewayError(payment.gateway, `You can refund at most ${formatPrice(remaining, payment.currency)}.`);
+export async function readGatewayRefunds(payment: Payment): Promise<GatewayRefundLedger> {
+  if (!refundsViaGateway(payment) || !isRealGateway(payment.gateway)) return { total: 0, unrecorded: [], count: 0 };
+  const known = new Set((payment.refunds ?? []).map((r) => r.id));
+  if (payment.refundId) known.add(payment.refundId);
+  const toApp = (amount: number) => fromGatewayAmount(amount, payment.currency);
 
-  if (!isGatewayPaymentReference(payment.gateway, payment.gatewayPaymentId) || value <= 0) {
-    return { amount: value, viaGateway: false };
-  }
-  const full = value === remaining;
   if (payment.gateway === "stripe") {
-    if (!isStripeConfigured()) throw new GatewayError("Stripe", "Stripe is not configured, so the refund cannot be sent. Refund it in the Stripe dashboard and record it here.");
+    if (!isStripeConfigured()) throw gatewayNotConfigured("stripe");
+    const refunds = await listStripeRefunds(payment.gatewayPaymentId!, { timeoutMs: 15_000 });
+    const active = refunds.filter(isActiveStripeRefund);
+    return {
+      total: active.reduce((sum, r) => sum + toApp(r.amount), 0),
+      unrecorded: active.filter((r) => r.paymentId === payment.id && !known.has(r.id)).map((r) => ({ id: r.id, amount: toApp(r.amount) })),
+      count: refunds.length,
+    };
+  }
+  if (!isRazorpayConfigured()) throw gatewayNotConfigured("razorpay");
+  const refunds = await listRazorpayRefunds(payment.gatewayPaymentId!, { timeoutMs: 15_000 });
+  const active = refunds.filter(isActiveRazorpayRefund);
+  return {
+    total: active.reduce((sum, r) => sum + toApp(r.amount), 0),
+    unrecorded: active.filter((r) => r.notes.paymentId === payment.id && !known.has(r.id)).map((r) => ({ id: r.id, amount: toApp(r.amount) })),
+    count: refunds.length,
+  };
+}
+
+/**
+ * Send a refund of `amount` (app units) for a Stripe/Razorpay-paid order.
+ * `ledger` is what `readGatewayRefunds` returned just before: the refund
+ * count it carries makes the Stripe idempotency key, so a request retried in
+ * the same state returns the first result instead of refunding twice.
+ */
+export async function sendGatewayRefund(payment: Payment, amount: number, ledger: GatewayRefundLedger): Promise<{ refundId: string; amount: number }> {
+  if (!isRealGateway(payment.gateway) || !refundsViaGateway(payment)) throw new GatewayError(payment.gateway, "This order was not paid through a payment gateway.");
+  const remaining = Math.max(0, payment.amount - Math.max(payment.refundedAmount ?? 0, ledger.total));
+  if (remaining <= 0) throw new GatewayError(payment.gateway, "Nothing is left to refund on this order.");
+  if (!Number.isFinite(amount) || amount <= 0) throw new GatewayError(payment.gateway, "The refund amount must be greater than zero.");
+  if (amount > remaining) throw new GatewayError(payment.gateway, `You can refund at most ${formatPrice(remaining, payment.currency)}.`);
+  const full = amount === remaining;
+  const gatewayAmount = full ? undefined : toGatewayAmount(amount, payment.currency);
+  const received = (value: number) => (value > 0 ? Math.min(remaining, fromGatewayAmount(value, payment.currency)) : amount);
+
+  if (payment.gateway === "stripe") {
+    if (!isStripeConfigured()) throw gatewayNotConfigured("stripe");
     const r = await createStripeRefund({
       paymentIntentId: payment.gatewayPaymentId!,
-      amount: full ? undefined : toGatewayAmount(value, payment.currency),
+      amount: gatewayAmount,
       paymentId: payment.id,
       orderId: payment.orderId,
+      idempotencyKey: `refund-${payment.id}-${gatewayAmount ?? "full"}-${ledger.count}`,
     });
-    return { refundId: r.id, amount: r.amount > 0 ? Math.min(remaining, fromGatewayAmount(r.amount, payment.currency)) : value, viaGateway: true };
+    return { refundId: r.id, amount: received(r.amount) };
   }
-  if (!isRazorpayConfigured()) throw new GatewayError("Razorpay", "Razorpay is not configured, so the refund cannot be sent. Refund it in the Razorpay dashboard and record it here.");
-  const r = await createRazorpayRefund({
-    paymentId: payment.gatewayPaymentId!,
-    amount: full ? undefined : toGatewayAmount(value, payment.currency),
-    ourPaymentId: payment.id,
-    orderId: payment.orderId,
-  });
-  return { refundId: r.id, amount: r.amount > 0 ? Math.min(remaining, fromGatewayAmount(r.amount, payment.currency)) : value, viaGateway: true };
+  if (!isRazorpayConfigured()) throw gatewayNotConfigured("razorpay");
+  const r = await createRazorpayRefund({ paymentId: payment.gatewayPaymentId!, amount: gatewayAmount, ourPaymentId: payment.id, orderId: payment.orderId });
+  return { refundId: r.id, amount: received(r.amount) };
 }
 
 /** Whether refunding this order goes through a gateway API. */

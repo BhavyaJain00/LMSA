@@ -10,8 +10,10 @@ import {
   toAssignmentView,
   toSubmissionView,
 } from "@/lib/data/assessments";
+import { getAssessmentAccess } from "@/lib/data/lessons";
 import { PageHeader } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/skeleton";
 import { Icon } from "@/components/ui/icons";
 import { AssignmentPanel } from "@/components/assessments/assignment-panel";
 import { Breadcrumbs, type Crumb } from "@/components/assessments/breadcrumbs";
@@ -26,9 +28,9 @@ export async function generateMetadata(props: PageProps<"/assignments/[id]">): P
 export default async function AssignmentPage(props: PageProps<"/assignments/[id]">) {
   const { id } = await props.params;
   const sp = await props.searchParams;
-  const lessonId = param(sp.lesson);
+  const lessonParam = param(sp.lesson);
   const courseIdParam = param(sp.course);
-  const user = await requireUser(`/assignments/${id}${lessonQuery(lessonId, courseIdParam)}`);
+  const user = await requireUser(`/assignments/${id}${lessonQuery(lessonParam, courseIdParam)}`);
 
   const assignment = await getAssignment(id);
   if (!assignment) notFound();
@@ -36,9 +38,32 @@ export default async function AssignmentPage(props: PageProps<"/assignments/[id]
   const db = await getDb();
   const courseId = courseIdParam ?? assignment.courseId;
   const course = courseId ? db.courses.find((c) => c.id === courseId) : undefined;
+  const privileged = canManageAssessments(user);
+
+  // Learners reach an assignment through a lesson they can open (drip schedule, enforced order and
+  // prerequisites apply) or a batch that lists it; staff always can.
+  const gate = privileged ? null : await getAssessmentAccess(user, "assignment", assignment.id);
+  if (gate && !gate.ok) {
+    return (
+      <div className="animate-fade-in">
+        <PageHeader
+          breadcrumbs={<Breadcrumbs items={[course ? { label: course.title, href: `/courses/${course.slug}` } : { label: "Courses", href: "/courses" }, { label: assignment.title }]} />}
+          title={assignment.title}
+        />
+        <EmptyState
+          icon={<Icon.Lock />}
+          title="This assignment is locked"
+          description={gate.message}
+          action={<ButtonLink href={gate.courseHref ?? "/courses"}>{gate.courseHref ? "View course" : "Browse courses"}</ButtonLink>}
+        />
+      </div>
+    );
+  }
+  // A lesson named in the URL only counts while the learner can open it.
+  const lessonId = lessonParam && (privileged || gate?.openLessonIds.includes(lessonParam)) ? lessonParam : undefined;
+
   const own = await getOwnAssignmentSubmission(user.id, assignment.id);
   const back = await getReturnLink(lessonId ?? own?.lessonId, courseId);
-  const privileged = canManageAssessments(user);
 
   const crumbs: Crumb[] = privileged
     ? [

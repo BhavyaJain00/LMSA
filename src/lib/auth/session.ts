@@ -8,6 +8,7 @@ import { siteConfig } from "@/lib/config";
 import { findById, findOne, getSettings, insert, mutate, removeWhere, update } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
 import { mustSetUpTwoFactor } from "./account-status";
+import { safeRedirectPath } from "./redirects";
 
 const COOKIE = siteConfig.sessionCookie;
 const SESSION_MS = siteConfig.sessionDays * 24 * 60 * 60 * 1000;
@@ -24,8 +25,11 @@ export function hashSessionToken(token: string): string {
 /**
  * Public-safe projection of a user. Besides the password hash it also drops
  * the account-security secrets (encrypted TOTP seed, replay step, recovery
- * code hashes) and the private calendar feed token, so profiles and lists
- * rendered for other people never carry them.
+ * code hashes), the account-security state (whether two-step verification is
+ * on, the failed sign-in count, the lock expiry, pending email verification)
+ * and the private calendar feed token, so profiles and lists rendered for
+ * other people never carry them. The member's own security pages and the
+ * admin tools read the full `User` instead.
  */
 export function toPublicUser(user: User): PublicUser {
   const {
@@ -34,6 +38,10 @@ export function toPublicUser(user: User): PublicUser {
     twoFactorLastStep: _step,
     recoveryCodeHashes: _codes,
     calendarToken: _calendar,
+    twoFactorEnabled: _twoFactor,
+    failedLoginCount: _failures,
+    lockedUntil: _locked,
+    emailVerificationRequired: _verification,
     ...rest
   } = user;
   void _omit;
@@ -41,6 +49,10 @@ export function toPublicUser(user: User): PublicUser {
   void _step;
   void _codes;
   void _calendar;
+  void _twoFactor;
+  void _failures;
+  void _locked;
+  void _verification;
   return rest;
 }
 
@@ -151,7 +163,8 @@ async function enforceStaffTwoFactor(user: User, nextPath?: string): Promise<voi
   const settings = await getSettings();
   if (!mustSetUpTwoFactor(user, settings.security)) return;
   const query = new URLSearchParams({ required: "2fa" });
-  if (nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//")) query.set("next", nextPath);
+  const next = safeRedirectPath(nextPath);
+  if (next) query.set("next", next);
   redirect(`/settings/security?${query.toString()}`);
 }
 
@@ -167,7 +180,8 @@ function isStaffAreaPath(nextPath?: string): boolean {
 export async function requireUser(nextPath?: string): Promise<User> {
   const user = await getCurrentUser();
   if (!user) {
-    const target = nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login";
+    const next = safeRedirectPath(nextPath);
+    const target = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
     redirect(target);
   }
   if (isStaffAreaPath(nextPath)) await enforceStaffTwoFactor(user, nextPath);

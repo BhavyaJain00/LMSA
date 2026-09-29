@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import type { Batch, BatchSummary, User } from "@/lib/types";
-import { requireUser } from "@/lib/auth/session";
+import { isModerator, requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import {
   buildAssessmentRows,
@@ -259,7 +259,7 @@ async function TabBody({ tab, batch, summary, user }: { tab: AdminBatchTab; batc
         instructors: summary.instructors.map((i) => i.name).join(", ") || "The instructors",
         site_name: db.settings.brand.name,
       };
-      return <EmailTemplatesPanel batchId={batch.id} templates={templates} sample={sample} />;
+      return <EmailTemplatesPanel batchId={batch.id} templates={templates} sample={sample} studentCount={summary.studentCount} canCompose={isModerator(user)} />;
     }
     case "timetable": {
       const [preview, refOptions] = await Promise.all([getBatchTimetable(batch, null), getTimetableRefOptions(batch)]);

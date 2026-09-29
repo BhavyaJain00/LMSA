@@ -5,12 +5,13 @@ import { cn } from "@/lib/utils";
 import { LevelBadge } from "./level-chip";
 import { formatPoints } from "./levels";
 import { TrendIndicator } from "./trend-indicator";
+import { MEDAL_CHIP } from "./medals";
 
-/** Medal colours are decorative, so they use fixed palette hues that read in both themes. */
+/** Medal styling from the design tokens, so both themes work. */
 const medal: Record<number, { ring: string; chip: string; block: string; label: string }> = {
-  1: { ring: "ring-amber-400", chip: "bg-amber-400 text-amber-950", block: "h-24 sm:h-28 bg-amber-400/15 border-amber-400/40", label: "Gold" },
-  2: { ring: "ring-slate-300", chip: "bg-slate-300 text-slate-800", block: "h-16 sm:h-20 bg-slate-300/20 border-slate-300/50", label: "Silver" },
-  3: { ring: "ring-orange-400", chip: "bg-orange-400 text-orange-950", block: "h-12 sm:h-14 bg-orange-400/15 border-orange-400/40", label: "Bronze" },
+  1: { ring: "ring-warning", chip: MEDAL_CHIP[0]!, block: "h-24 sm:h-28 bg-warning/15 border-warning/40", label: "Gold" },
+  2: { ring: "ring-border-strong", chip: MEDAL_CHIP[1]!, block: "h-16 sm:h-20 bg-surface-3 border-border-strong", label: "Silver" },
+  3: { ring: "ring-accent", chip: MEDAL_CHIP[2]!, block: "h-12 sm:h-14 bg-accent/10 border-accent/30", label: "Bronze" },
 };
 
 function medalFor(rank: number) {

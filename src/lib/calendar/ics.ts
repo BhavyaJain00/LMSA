@@ -18,7 +18,7 @@
  *  - Optional VALARM reminders (e.g. 15 minutes before a live class).
  */
 
-import { addDaysToKey, formatDateValue, formatUtcStamp, isDateKey, zonedTimeToUtc } from "./time";
+import { addDaysToKey, clockToMinutes, formatDateValue, formatUtcStamp, isDateKey, zonedTimeToUtc } from "./time";
 
 export type IcsTime = { kind: "utc"; epochMs: number } | { kind: "date"; dateKey: string };
 
@@ -294,7 +294,12 @@ export function zonedRange(
   const startMs = zonedTimeToUtc(dateKey, startTime, timeZone);
   if (Number.isNaN(startMs)) return null;
   let endMs = endTime ? zonedTimeToUtc(dateKey, endTime, timeZone) : NaN;
-  if (!Number.isNaN(endMs) && endMs <= startMs) endMs = zonedTimeToUtc(addDaysToKey(dateKey, 1), endTime!, timeZone);
+  if (!Number.isNaN(endMs) && endMs <= startMs) {
+    // Only an end time at or before the start time crosses midnight; a later end time whose instant
+    // collapsed onto the start (a DST gap moved the start forward) keeps its scheduled length.
+    const scheduled = clockToMinutes(endTime!) - clockToMinutes(startTime || "00:00");
+    endMs = scheduled > 0 ? startMs + scheduled * 60_000 : zonedTimeToUtc(addDaysToKey(dateKey, 1), endTime!, timeZone);
+  }
   if (Number.isNaN(endMs) && fallbackMinutes > 0) endMs = startMs + fallbackMinutes * 60_000;
   return {
     start: { kind: "utc", epochMs: startMs },

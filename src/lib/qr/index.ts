@@ -1,15 +1,16 @@
 /**
  * A small, dependency-free QR Code encoder (ISO/IEC 18004).
  *
- * Scope (all that the app needs for authenticator URIs and short links):
+ * Scope (all that the app needs for authenticator URIs and links):
  *  - byte mode (UTF-8),
  *  - error correction levels L / M / Q / H (M is the default),
- *  - versions 1–10 (21×21 up to 57×57 modules, up to 213 bytes at level M),
+ *  - every version, 1–40 (21×21 up to 177×177 modules; up to 2,331 bytes at
+ *    level M), always the smallest one that fits the payload,
  *  - Reed–Solomon error correction over GF(256) with the 0x11D polynomial,
- *  - block splitting + interleaving,
+ *  - block splitting + interleaving (ISO/IEC 18004 table 9),
  *  - all eight mask patterns, picking the one with the lowest penalty score
  *    (rules N1–N4 of the specification),
- *  - BCH-coded format and version information.
+ *  - BCH-coded format information and, from version 7, version information.
  *
  * The module is pure and isomorphic (no Node or DOM APIs), so it can run on
  * the server or in the browser. `qrToSvg` / `qrToPath` turn the matrix into a
@@ -19,7 +20,7 @@
 export type QrErrorCorrection = "L" | "M" | "Q" | "H";
 
 export interface QrCode {
-  /** 1–10 */
+  /** 1–40 */
   version: number;
   /** Modules per side (4 × version + 17). */
   size: number;
@@ -46,24 +47,26 @@ export class QrCapacityError extends Error {
 }
 
 export const QR_MIN_VERSION = 1;
-export const QR_MAX_VERSION = 10;
+export const QR_MAX_VERSION = 40;
 
 /* ------------------------------------------------------------------ */
-/* Tables (index 0 unused, versions 1–10)                              */
+/* Tables (index 0 unused, versions 1–40; ISO/IEC 18004 table 9)       */
 /* ------------------------------------------------------------------ */
 
 const ECC_CODEWORDS_PER_BLOCK: Record<QrErrorCorrection, readonly number[]> = {
-  L: [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18],
-  M: [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26],
-  Q: [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24],
-  H: [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28],
+  //  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40
+  L: [-1,  7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  M: [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28],
+  Q: [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  H: [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
 };
 
 const NUM_ERROR_CORRECTION_BLOCKS: Record<QrErrorCorrection, readonly number[]> = {
-  L: [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4],
-  M: [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5],
-  Q: [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8],
-  H: [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8],
+  //  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40
+  L: [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2,  4,  4,  4,  4,  4,  6,  6,  6,  6,  7,  8,  8,  9,  9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25],
+  M: [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5,  5,  5,  8,  9,  9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49],
+  Q: [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8,  8,  8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68],
+  H: [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8,  8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81],
 };
 
 /** Two-bit error correction indicator used in the format information. */
@@ -95,7 +98,7 @@ export function dataCodewords(version: number, ecl: QrErrorCorrection): number {
   return Math.floor(rawDataModules(version) / 8) - ECC_CODEWORDS_PER_BLOCK[ecl][version]! * NUM_ERROR_CORRECTION_BLOCKS[ecl][version]!;
 }
 
-/** Bits of the character count indicator in byte mode. */
+/** Bits of the character count indicator in byte mode (8 for versions 1–9, 16 for 10–40). */
 function byteModeCountBits(version: number): number {
   return version <= 9 ? 8 : 16;
 }
@@ -248,19 +251,32 @@ export function formatInformationBits(ecl: QrErrorCorrection, mask: number): num
   return ((data << 10) | rem) ^ 0x5412;
 }
 
-/** 18-bit version information (versions 7+). */
+/**
+ * 18-bit version information for versions 7–40: the 6-bit version number
+ * followed by the 12-bit remainder of the BCH(18,6) code with generator
+ * x^12+x^11+x^10+x^9+x^8+x^5+x^2+1 (0x1F25). It is not masked.
+ */
 export function versionInformationBits(version: number): number {
+  if (!Number.isInteger(version) || version < 7 || version > QR_MAX_VERSION) {
+    throw new RangeError(`Version information exists for versions 7 to ${QR_MAX_VERSION}.`);
+  }
   let rem = version;
   for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
-  return (version << 12) | rem;
+  return (version << 12) | (rem & 0xfff);
 }
 
-/** Centre coordinates of alignment patterns for a version. */
+/**
+ * Centre coordinates (on both axes) of the alignment patterns of a version
+ * (ISO/IEC 18004 annex E): 6, then evenly spaced even positions ending at
+ * size − 7. The spacing formula matches the table for every version,
+ * including version 32 (step 26), which a plain ceil((4v + 4) / …) misses.
+ */
 export function alignmentPatternPositions(version: number): number[] {
+  assertVersion(version);
   if (version === 1) return [];
   const numAlign = Math.floor(version / 7) + 2;
   const size = version * 4 + 17;
-  const step = Math.ceil((version * 4 + 4) / (numAlign * 2 - 2)) * 2;
+  const step = Math.floor((version * 8 + numAlign * 3 + 5) / (numAlign * 4 - 4)) * 2;
   const result = [6];
   for (let pos = size - 7; result.length < numAlign; pos -= step) result.splice(1, 0, pos);
   return result;
@@ -529,6 +545,15 @@ export function encodeQrBytes(bytes: readonly number[], options: QrEncodeOptions
 /** Encode text (UTF-8, byte mode) as a QR code. */
 export function encodeQr(text: string, options: QrEncodeOptions = {}): QrCode {
   return encodeQrBytes(utf8Bytes(text), options);
+}
+
+/** Like `encodeQr`, but returns null instead of throwing when the text can't be encoded (e.g. too long). */
+export function tryEncodeQr(text: string, options: QrEncodeOptions = {}): QrCode | null {
+  try {
+    return encodeQr(text, options);
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -120,19 +120,29 @@ export function verifyTotp(secret: string, code: string, options: TotpVerifyOpti
   return matched;
 }
 
+/** Longest issuer / account name put in the otpauth label (apps only display them). */
+export const OTPAUTH_ISSUER_MAX = 32;
+export const OTPAUTH_ACCOUNT_MAX = 64;
+
+/** Shorten to `max` characters (code points), ending with "…" when cut. */
+function shorten(value: string, max: number): string {
+  const chars = [...value];
+  return chars.length <= max ? value : `${chars.slice(0, max - 1).join("").trimEnd()}…`;
+}
+
 /**
  * `otpauth://totp/Issuer:account?secret=…&issuer=…` (Key URI format used by
  * Google Authenticator, 1Password, Authy, Microsoft Authenticator…).
+ *
+ * Kept short so the QR code stays small and easy to scan: the issuer and the
+ * account name are capped (they are display labels only), and the
+ * algorithm/digits/period parameters are left out because this app uses the
+ * values every authenticator assumes by default (SHA-1, 6 digits, 30 s).
  */
 export function buildOtpauthUri({ issuer, account, secret }: { issuer: string; account: string; secret: string }): string {
-  const cleanIssuer = issuer.replace(/:/g, "").trim() || "LearnLoop";
-  const label = `${encodeURIComponent(cleanIssuer)}:${encodeURIComponent(account)}`;
-  const params = new URLSearchParams({
-    secret,
-    issuer: cleanIssuer,
-    algorithm: "SHA1",
-    digits: String(TOTP_DIGITS),
-    period: String(TOTP_PERIOD_SECONDS),
-  });
+  const cleanIssuer = shorten(issuer.replace(/:/g, "").replace(/\s+/g, " ").trim(), OTPAUTH_ISSUER_MAX) || "LearnLoop";
+  const cleanAccount = shorten(account.replace(/:/g, "").trim(), OTPAUTH_ACCOUNT_MAX);
+  const label = `${encodeURIComponent(cleanIssuer)}:${encodeURIComponent(cleanAccount)}`;
+  const params = new URLSearchParams({ secret, issuer: cleanIssuer });
   return `otpauth://totp/${label}?${params.toString().replace(/\+/g, "%20")}`;
 }

@@ -297,15 +297,15 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
 
   // Prerequisites are saved only when the form rendered that section (the marker field), so a
   // submission from a form that never loaded them cannot wipe them.
-  let prerequisiteCourseIds: string[] | undefined;
-  if (fd(formData, "prerequisitesField") === "1") {
-    const parsed = parsePrerequisites(getList(formData, "prerequisiteCourseIds"), course, db);
+  const prerequisiteInput = fd(formData, "prerequisitesField") === "1" ? getList(formData, "prerequisiteCourseIds") : null;
+  if (prerequisiteInput) {
+    // Early answer for the form; the rules are checked again inside the write below.
+    const parsed = parsePrerequisites(prerequisiteInput, course, db);
     if ("error" in parsed) fieldErrors.prerequisiteCourseIds = parsed.error;
-    else prerequisiteCourseIds = parsed.ids;
   }
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the highlighted settings.", fieldErrors };
 
-  const next = await update("courses", course.id, {
+  const changes: Partial<Course> = {
     featured,
     upcoming,
     disableSelfLearning,
@@ -319,11 +319,27 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
     evaluatorId,
     metaDescription: metaDescription || undefined,
     metaKeywords: metaKeywords || undefined,
-    ...(prerequisiteCourseIds !== undefined ? { prerequisiteCourseIds: prerequisiteCourseIds.length ? prerequisiteCourseIds : undefined } : {}),
     updatedAt: new Date().toISOString(),
+  };
+  // The prerequisite rules (courses exist and are published, no cycle) are applied inside the
+  // serialized write, against the courses as they are at that moment: two saves racing ("A requires
+  // B" and "B requires A") can't both pass against a graph that lacks the other's pending write.
+  const saved = await mutate((d): { course: Course } | { error: string } | null => {
+    const index = d.courses.findIndex((c) => c.id === course.id);
+    const current = d.courses[index];
+    if (!current) return null;
+    const next: Course = { ...current, ...changes };
+    if (prerequisiteInput) {
+      const parsed = parsePrerequisites(prerequisiteInput, current, d);
+      if ("error" in parsed) return { error: parsed.error };
+      next.prerequisiteCourseIds = parsed.ids.length ? parsed.ids : undefined;
+    }
+    d.courses[index] = next;
+    return { course: next };
   });
-  if (!next) return { ok: false, error: "This course no longer exists." };
-  revalidateCourse(next);
+  if (!saved) return { ok: false, error: "This course no longer exists." };
+  if ("error" in saved) return { ok: false, error: "Please fix the highlighted settings.", fieldErrors: { prerequisiteCourseIds: saved.error } };
+  revalidateCourse(saved.course);
   return { ok: true, data: undefined, message: "Course settings saved" };
 }
 

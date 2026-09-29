@@ -421,7 +421,9 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
         title="Mark this order as paid?"
         description={
           online && tx.status === "pending"
-            ? `Only do this if you received ${money(tx.amount, tx.currency)} outside ${gatewayName}. The learner's open ${gatewayName} checkout is closed first so they can't pay twice; ${tx.userName} then gets access to “${tx.itemTitle}”.`
+            ? tx.gateway === "razorpay"
+              ? `Only do this if you received ${money(tx.amount, tx.currency)} outside Razorpay. Razorpay checkouts can't be closed, so a learner who still has the payment window open could pay again; you are alerted if that happens. ${tx.userName} then gets access to “${tx.itemTitle}”.`
+              : `Only do this if you received ${money(tx.amount, tx.currency)} outside ${gatewayName}. The learner's open ${gatewayName} checkout is closed first so they can't pay twice; ${tx.userName} then gets access to “${tx.itemTitle}”.`
             : `${tx.userName} will get access to “${tx.itemTitle}” right away and be notified.`
         }
         confirmLabel="Mark as paid"
@@ -445,7 +447,9 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
         title="Delete this transaction?"
         description={
           online && tx.status === "pending"
-            ? `The learner's open ${gatewayName} checkout is closed and this payment record, including its billing details, is permanently deleted.`
+            ? tx.gateway === "razorpay"
+              ? "This payment record, including its billing details, is permanently deleted. Razorpay checkouts can't be closed: if the learner still pays in an open window, you are alerted so you can refund it."
+              : `The learner's open ${gatewayName} checkout is closed and this payment record, including its billing details, is permanently deleted.`
             : "This will permanently delete this payment record, including its billing details. This cannot be undone."
         }
         confirmLabel="Delete"

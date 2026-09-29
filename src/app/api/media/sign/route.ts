@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { SlidingWindowRateLimiter } from "@/lib/auth/rate-limit";
-import { parseClientIp } from "@/lib/auth/request-info";
+import { perIpLimit, SlidingWindowRateLimiter } from "@/lib/auth/rate-limit";
+import { clientIpFromHeaders } from "@/lib/auth/request-info";
 import { getSettings } from "@/lib/db/store";
 import { authorizeMediaAccess, siteOrigins } from "@/lib/media/access";
 import { parseMediaSrc } from "@/lib/media/paths";
-import { playerOptionsFor, signMediaForSubject } from "@/lib/media/sign";
+import { playerOptionsFor, signMediaForSubject, signedUrlTtlSeconds } from "@/lib/media/sign";
+import { MediaSigningUnavailableError } from "@/lib/media/token";
 
 /**
  * GET /api/media/sign?src=<upload url>&lesson=<lessonId>
@@ -22,6 +23,8 @@ import { playerOptionsFor, signMediaForSubject } from "@/lib/media/sign";
 const g = globalThis as unknown as { __llMediaSignLimiter?: SlidingWindowRateLimiter };
 const limiter: SlidingWindowRateLimiter = (g.__llMediaSignLimiter ??= new SlidingWindowRateLimiter({ maxKeys: 20_000 }));
 const RULE = { limit: 90, windowMs: 60_000 };
+/** Guests whose IP is not known (no trusted proxy, TRUST_PROXY_HOPS=0) share one bucket. */
+const SHARED_GUEST_RULE = { limit: 900, windowMs: 60_000 };
 const LESSON_ID = /^[\w-]{1,64}$/;
 
 const NO_STORE = { "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex" };
@@ -42,8 +45,8 @@ export async function GET(req: NextRequest) {
   if (!parsed || !parsed.isUpload) return fail(400, "Only videos uploaded to this site can be signed.");
 
   const user = await getCurrentUser();
-  const ip = parseClientIp(req.headers.get("x-forwarded-for"), req.headers.get("x-real-ip"));
-  const limited = limiter.hit(`media-sign:${user ? `u:${user.id}` : `ip:${ip}`}`, RULE);
+  const bucket = user ? { key: `media-sign:u:${user.id}`, rule: RULE } : perIpLimit("media-sign:ip", clientIpFromHeaders(req.headers), RULE, SHARED_GUEST_RULE);
+  const limited = limiter.hit(bucket.key, bucket.rule);
   if (!limited.ok) {
     return fail(429, "Too many requests. Please wait a moment.", { "Retry-After": String(Math.max(1, Math.ceil(limited.retryAfterMs / 1000))) });
   }
@@ -59,9 +62,17 @@ export async function GET(req: NextRequest) {
   const decision = await authorizeMediaAccess(user, parsed.path, { lessonId: lessonParam || null, requestOrigin: origin });
   if (!decision.ok) return fail(decision.status, decision.error);
 
-  const signed = signMediaForSubject(parsed.path, user?.id ?? null, settings, origin);
+  let signed: ReturnType<typeof signMediaForSubject>;
+  try {
+    signed = signMediaForSubject(parsed.path, user?.id ?? null, settings, origin);
+  } catch (err) {
+    // No usable APP_SECRET: the player shows "video unavailable" with a retry button.
+    if (err instanceof MediaSigningUnavailableError) return fail(503, "This video is unavailable right now. Please try again later.", { "Retry-After": "300" });
+    throw err;
+  }
+  // `ttlSeconds` lets the player schedule renewals from the lifetime, independent of its own clock.
   return NextResponse.json(
-    { ok: true, src: signed.src, expiresAt: signed.expiresAt, ttlSeconds: signed.expiresAt ? signed.expiresAt - Math.floor(Date.now() / 1000) : null, player },
+    { ok: true, src: signed.src, expiresAt: signed.expiresAt, ttlSeconds: signed.expiresAt ? signedUrlTtlSeconds(settings) : null, player },
     { headers: NO_STORE },
   );
 }

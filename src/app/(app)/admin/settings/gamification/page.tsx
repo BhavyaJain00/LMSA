@@ -1,7 +1,7 @@
 import { requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { listUsers } from "@/lib/data/users";
-import { ensurePointsLedger, getLedgerStats, getRecentManualAdjustments } from "@/lib/services/points";
+import { ensurePointsLedger, getLedgerStats, getLedgerStatus, getRecentManualAdjustments } from "@/lib/services/points";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { SettingsPanelHeader, SettingsSection } from "@/components/admin/settings/settings-ui";
@@ -11,7 +11,7 @@ import { RecalculatePoints } from "@/components/gamification/admin/recalculate-p
 import { formatPoints, formatSignedPoints } from "@/components/gamification/levels";
 import { LevelTiersCard } from "@/components/gamification/how-points-work";
 import { REASON_META } from "@/components/gamification/reasons";
-import { relativeTime } from "@/lib/utils";
+import { formatDateTime, relativeTime } from "@/lib/utils";
 
 export const metadata = { title: "Points & leaderboard settings" };
 
@@ -19,7 +19,7 @@ export default async function GamificationSettingsPage() {
   await requireRole(["admin"], "/admin/settings/gamification");
   // Opening the settings on a fresh ledger fills it from history, so the numbers below are real.
   await ensurePointsLedger();
-  const [settings, stats, recent, users] = await Promise.all([getSettings(), getLedgerStats(), getRecentManualAdjustments(15), listUsers()]);
+  const [settings, stats, recent, users, status] = await Promise.all([getSettings(), getLedgerStats(), getRecentManualAdjustments(15), listUsers(), getLedgerStatus()]);
   const g = settings.gamification;
   const members = users.filter((u) => u.enabled).map((u) => ({ id: u.id, name: u.name, email: u.email, username: u.username, avatarUrl: u.avatarUrl }));
   const topReasons = [...stats.byReason].sort((a, b) => b.points - a.points).slice(0, 4);
@@ -39,6 +39,19 @@ export default async function GamificationSettingsPage() {
       />
 
       <div className="space-y-6">
+        {g.enabled && !status.built && (
+          <div role="alert" className="flex items-start gap-3 rounded-card border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-ink">
+            <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="font-medium">Past activity has not been added to the points yet</p>
+              <p className="mt-0.5 text-ink-muted">
+                {status.error
+                  ? `The automatic fill from history failed${status.failedAt ? ` (${formatDateTime(status.failedAt)} server time)` : ""}: ${status.error}. It is retried automatically; you can also run "Recalculate points from history" below.`
+                  : "Points from earlier lessons, quizzes and certificates are being added. Reload in a moment, or run \"Recalculate points from history\" below."}
+              </p>
+            </div>
+          </div>
+        )}
         <SettingsSection
           title="Ledger"
           description={stats.lastEntryAt ? `Last points awarded ${relativeTime(stats.lastEntryAt)}.` : "No points have been awarded yet."}

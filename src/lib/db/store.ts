@@ -90,6 +90,7 @@ export const COLLECTIONS: CollectionName[] = [
   "authTokens",
   "loginEvents",
   "points",
+  "loginThrottles",
 ];
 
 /** Make sure every collection exists and settings have all keys. */

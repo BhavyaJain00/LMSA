@@ -58,8 +58,8 @@ export default async function VideoSettingsPage() {
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <p>
             <span className="font-medium">APP_SECRET is not set.</span> Video links are signed with a key generated for this development machine. Set a long random{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">APP_SECRET</code> in <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env</code> before going to production (the
-            app refuses to start without it there).
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs">APP_SECRET</code> (at least 32 characters) in <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env</code> before going
+            to production: without it there, protected videos cannot be signed and learners see them as unavailable.
           </p>
         </div>
       )}

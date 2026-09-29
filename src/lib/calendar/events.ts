@@ -3,7 +3,7 @@ import type { Batch, CertificateRequest, Database, LiveClass, Settings, Timetabl
 import { isModerator } from "@/lib/auth/session";
 import { canManageBatch, canViewBatch, lessonHrefFromDb } from "@/lib/data/batches";
 import { platformTimeZone } from "@/lib/data/certificates";
-import { addDaysToKey, clockInZone, dateKeyInZone, isClock, isDateKey, safeTimeZone, zonedTimeToUtc } from "./time";
+import { addDaysToKey, clockInZone, clockToMinutes, dateKeyInZone, isClock, isDateKey, liveClassRange, safeTimeZone, zonedTimeToUtc } from "./time";
 import { buildIcs, type IcsEvent } from "./ics";
 
 /**
@@ -114,7 +114,12 @@ function timedRange(dateKey: string, startTime: string, endTime: string | undefi
   const start = zonedTimeToUtc(dateKey, startTime, tz);
   if (Number.isNaN(start)) return null;
   let end = endTime && isClock(endTime) ? zonedTimeToUtc(dateKey, endTime, tz) : NaN;
-  if (!Number.isNaN(end) && end <= start) end = zonedTimeToUtc(addDaysToKey(dateKey, 1), endTime!, tz);
+  if (!Number.isNaN(end) && end <= start) {
+    // Only an end time at or before the start time crosses midnight; a later end time whose instant
+    // collapsed onto the start (a DST gap moved the start forward) keeps its scheduled length.
+    const scheduled = clockToMinutes(endTime!) - clockToMinutes(startTime);
+    end = scheduled > 0 ? start + scheduled * MINUTE : zonedTimeToUtc(addDaysToKey(dateKey, 1), endTime!, tz);
+  }
   if (Number.isNaN(end) || end <= start) end = start + Math.max(1, fallbackMinutes) * MINUTE;
   return { start, end };
 }
@@ -133,12 +138,11 @@ function allDayRange(firstDay: string, lastDay: string, tz: string) {
 /* ------------------------------------------------------------------ */
 
 export function liveClassEvent(db: Database, batch: Batch, c: LiveClass): CalendarEvent | null {
-  if (!isDateKey(c.date) || !isClock(c.time)) return null;
-  const tz = safeTimeZone(c.timezone || batch.timezone);
-  const duration = c.durationMinutes > 0 ? c.durationMinutes : 60;
-  const start = zonedTimeToUtc(c.date, c.time, tz);
-  if (Number.isNaN(start)) return null;
-  const end = start + duration * MINUTE;
+  // Shared with the timetable's add-to-calendar links (TimetableEntry.classRange).
+  const range = liveClassRange(c, batch.timezone);
+  if (!range) return null;
+  const { start, end, timeZone: tz } = range;
+  const duration = Math.round((end - start) / MINUTE);
   const host = userName(db, c.hostId);
   const joinDetails = [
     c.joinUrl ? `Join: ${c.joinUrl}` : "",
@@ -344,12 +348,15 @@ export function evaluationEvent(db: Database, r: CertificateRequest, perspective
 /* ------------------------------------------------------------------ */
 
 export interface CollectOptions {
+  /** The current instant (epoch ms) for the default window and for `limit`. Default: `Date.now()`. */
+  now?: number;
   /** Keep events that end at or after this instant (epoch ms). Default: 90 days ago. */
   from?: number;
   /** Keep events that start at or before this instant (epoch ms). Default: 400 days ahead. */
   to?: number;
   /** Drop cancelled events (used for "next events" lists). */
   excludeCancelled?: boolean;
+  /** Maximum number of events (default 1,500), upcoming ones first (see `capEvents`). */
   limit?: number;
 }
 
@@ -357,9 +364,26 @@ function sortEvents(events: CalendarEvent[]): CalendarEvent[] {
   return events.sort((a, b) => a.start - b.start || Number(b.allDay) - Number(a.allDay) || a.title.localeCompare(b.title));
 }
 
+/**
+ * At most `limit` events of a sorted list, favouring the future: every event
+ * that has not ended at `now` is kept first (the earliest ones when there are
+ * too many), then the remaining room is filled with the most recent past
+ * events. The result keeps the input order. A crowded feed therefore loses
+ * its oldest history, never its upcoming classes and deadlines.
+ */
+export function capEvents(sorted: CalendarEvent[], limit: number, now: number): CalendarEvent[] {
+  const max = Math.max(0, Math.floor(limit));
+  if (sorted.length <= max) return sorted;
+  const upcoming = sorted.filter((ev) => ev.end >= now).slice(0, max);
+  const room = max - upcoming.length;
+  const past = room > 0 ? sorted.filter((ev) => ev.end < now).slice(-room) : [];
+  const keep = new Set([...past, ...upcoming]);
+  return sorted.filter((ev) => keep.has(ev));
+}
+
 /** Every calendar event of a member (see module docs), honoring feature toggles. */
 export function collectUserEvents(db: Database, user: User, settings: Settings, opts: CollectOptions = {}): CalendarEvent[] {
-  const now = Date.now();
+  const now = opts.now ?? Date.now();
   const from = opts.from ?? now - 90 * DAY;
   const to = opts.to ?? now + 400 * DAY;
   const out: CalendarEvent[] = [];
@@ -414,12 +438,12 @@ export function collectUserEvents(db: Database, user: User, settings: Settings, 
   }
 
   sortEvents(out);
-  return out.slice(0, opts.limit ?? MAX_FEED_EVENTS);
+  return capEvents(out, opts.limit ?? MAX_FEED_EVENTS, now);
 }
 
 /** The next `limit` events that have not ended yet. */
 export function upcomingUserEvents(db: Database, user: User, settings: Settings, limit = 10, now = Date.now()): CalendarEvent[] {
-  return collectUserEvents(db, user, settings, { from: now, excludeCancelled: true, limit });
+  return collectUserEvents(db, user, settings, { now, from: now, excludeCancelled: true, limit });
 }
 
 /* ------------------------------------------------------------------ */

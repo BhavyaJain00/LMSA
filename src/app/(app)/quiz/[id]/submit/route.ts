@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { recordQuizSubmission, revalidateQuizAttempt } from "@/lib/data/quiz";
+import { awardQuizPoints } from "@/lib/services/points";
 import type { SubmitQuizInput } from "@/components/quiz/types";
 
 /**
@@ -34,6 +35,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/quiz/[id]/submi
     preview: false,
   });
   if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 400 });
+  await awardQuizPoints(result.data.submission.id);
 
   await revalidateQuizAttempt({ quizId: id, submissionId: result.data.submission.id });
   return NextResponse.json({ ok: true, id: result.data.submission.id });

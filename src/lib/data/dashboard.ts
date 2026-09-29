@@ -2,7 +2,7 @@ import "server-only";
 import type { ActivityType, Batch, Course, Database, LiveClass, PaymentItemType, PublicUser, Role, Settings, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { isCreator, isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
-import { canManageCourse, getCourseSummaries, getNextLesson, lessonHref } from "@/lib/data/courses";
+import { canManageCourse, computeViewerLessons, getCourseSummaries, getNextLesson, lessonHref } from "@/lib/data/courses";
 import { getUserBadges } from "@/lib/services/badges";
 import { classWindow, slotWindow } from "@/components/dashboard/time";
 import { addDays, percent, sum, toDateKey } from "@/lib/utils";
@@ -526,6 +526,10 @@ function collectPendingWork(db: Database, user: User, courseIds: string[], batch
     const course = db.courses.find((c) => c.id === courseId);
     if (!course) continue;
     const numbers = lessonNumbers(db, courseId);
+    // Lessons the learner can't open yet (drip schedule, enforced order) have no workable to-dos, and
+    // the titles of scheduled assessments stay private until release.
+    const now = Date.now();
+    const locked = new Set(computeViewerLessons(db, course, user, now).lessons.filter((l) => l.lock).map((l) => l.lesson.id));
     const lessons = db.lessons
       .filter((l) => l.courseId === courseId && numbers.has(l.id))
       .sort((a, b) => {
@@ -534,6 +538,7 @@ function collectPendingWork(db: Database, user: User, courseIds: string[], batch
         return na.chapterNumber - nb.chapterNumber || na.lessonNumber - nb.lessonNumber;
       });
     for (const lesson of lessons) {
+      if (locked.has(lesson.id)) continue;
       const n = numbers.get(lesson.id)!;
       for (const block of lesson.blocks) {
         let kind: PendingKind | null = null;

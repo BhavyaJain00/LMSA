@@ -6,18 +6,23 @@ import { isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
 import { canViewCourse } from "@/lib/data/courses";
 import { canManageBatch } from "@/lib/data/batches";
 import { getLessonAccess, type LessonAccess } from "@/lib/data/lessons";
-import { parseMediaSrc } from "./paths";
+import { parseMediaSrc, sameMediaPath } from "./paths";
 
 /**
  * Who may receive a signed URL for an uploaded video.
  *
- *  - Lesson videos: viewers who can open the lesson (enrolled learners on
- *    unlocked lessons, course managers, anyone on a free-preview lesson of a
- *    published course when guest access is on).
+ *  - Lesson videos: viewers who can open the lesson (`getLessonAccess`):
+ *    enrolled learners on released, unlocked lessons, course managers, and
+ *    anyone on an open free-preview lesson of a published course when guest
+ *    access is on. Drip dates and enforced order apply to previews too.
  *  - Course promo videos: anyone who can see the course page.
  *  - Live class recordings: learners of the batch, its managers and evaluators.
  *  - Files not referenced anywhere yet (fresh uploads in an editor): staff.
  *  - Moderators and admins: everything.
+ *
+ * Paths are compared by `mediaPathKey` (case-insensitive), so a different
+ * spelling of a lesson's file is still "referenced" by that lesson and never
+ * falls through to the staff rule for unreferenced uploads.
  */
 
 export type MediaAccessDecision =
@@ -51,16 +56,25 @@ export function lessonVideoSrcs(lesson: Pick<Lesson, "blocks">): string[] {
   return out;
 }
 
-/** Whether a lesson plays the upload at `path`. */
-export function lessonReferencesPath(lesson: Pick<Lesson, "blocks">, path: string, origins: readonly string[] = siteOrigins()): boolean {
-  return lessonVideoSrcs(lesson).some((src) => uploadPathOf(src, origins) === path);
+/** Whether a stored src is the upload at `path` (same file in any letter case). */
+function srcIsUpload(src: string | undefined | null, path: string, origins: readonly string[]): boolean {
+  const own = uploadPathOf(src, origins);
+  return own !== null && sameMediaPath(own, path);
 }
 
-/** The lesson is open to this viewer for playback purposes. */
-export function canPlayLessonMedia(access: LessonAccess): boolean {
-  if (access.manager || access.canView) return true;
-  const { lesson, course, settings } = access;
-  return lesson.includeInPreview && course.published && settings.learning.allowGuestAccess;
+/** Whether a lesson plays the upload at `path`. */
+export function lessonReferencesPath(lesson: Pick<Lesson, "blocks">, path: string, origins: readonly string[] = siteOrigins()): boolean {
+  return lessonVideoSrcs(lesson).some((src) => srcIsUpload(src, path, origins));
+}
+
+/**
+ * The lesson is open to this viewer for playback purposes: exactly when the
+ * lesson page opens (`getLessonAccess`). A free preview is already `canView`
+ * while previews are allowed; when it is not, the preview is held back by a
+ * drip date or enforced order and its video must stay locked as well.
+ */
+export function canPlayLessonMedia(access: Pick<LessonAccess, "manager" | "canView">): boolean {
+  return access.manager || access.canView;
 }
 
 function deny(user: User | null, message: string): MediaAccessDecision {
@@ -74,6 +88,8 @@ async function checkLesson(user: User | null, lessonId: string, path: string, or
   if (!access) return { ok: false, status: 404, error: "This lesson no longer exists." };
   if (!lessonReferencesPath(access.lesson, path, origins)) return { ok: false, status: 403, error: "This video is not part of the lesson." };
   if (canPlayLessonMedia(access)) return { ok: true, via: "lesson" };
+  // Scheduled (drip) lessons wait for their release date whoever asks, signed in or not.
+  if (access.lock?.reason === "drip") return { ok: false, status: 403, error: "This video is not available yet." };
   if (access.lockReason === "sequential") return deny(user, "Complete the previous lessons to unlock this video.");
   return deny(user, access.enrolled ? "This lesson is not available yet." : "Enroll in the course to watch this video.");
 }
@@ -113,13 +129,13 @@ export async function authorizeMediaAccess(
   }
 
   for (const course of db.courses) {
-    if (uploadPathOf(course.videoUrl, origins) !== path) continue;
+    if (!srcIsUpload(course.videoUrl, path, origins)) continue;
     referenced = true;
     if (canViewCourse(user, course)) return { ok: true, via: "course" };
   }
 
   for (const liveClass of db.liveClasses) {
-    if (uploadPathOf(liveClass.recordingUrl, origins) !== path) continue;
+    if (!srcIsUpload(liveClass.recordingUrl, path, origins)) continue;
     referenced = true;
     if (recordingAllowed(db, user, liveClass.batchId)) return { ok: true, via: "recording" };
   }

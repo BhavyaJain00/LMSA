@@ -9,6 +9,7 @@ import type {
   ProgramCourseView,
   ProgramListTab,
   ProgramMemberView,
+  ProgramPaidCourse,
   ProgramSummary,
 } from "@/components/programs/types";
 import type { Option } from "@/components/batches/types";
@@ -21,6 +22,16 @@ type Viewer = Pick<User, "id" | "roles"> | null | undefined;
 
 export type ProgramCourseAccess = { ok: true; paymentId?: string } | { ok: false; reason: "unpublished" | "payment" };
 
+/** A course learners have to buy before they can enroll. */
+export function isPaidCourse(course: Pick<Course, "paidCourse" | "price">): boolean {
+  return course.paidCourse && course.price > 0;
+}
+
+/** The user's completed order for a course, if any. */
+function paidCourseOrder(db: Database, userId: string, courseId: string) {
+  return db.payments.find((p) => p.userId === userId && p.itemType === "course" && p.itemId === courseId && p.status === "paid");
+}
+
 /**
  * Whether a program member may enroll themselves in one of the program's
  * courses. Joining a program never bypasses a course's own gates: unpublished
@@ -32,11 +43,43 @@ export function programCourseAccess(db: Database, user: Viewer, course: Course):
   if (db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) return { ok: true };
   if (isModerator(user) || canManageCourse(user, course)) return { ok: true };
   if (!course.published) return { ok: false, reason: "unpublished" };
-  if (course.paidCourse && course.price > 0) {
-    const payment = db.payments.find((p) => p.userId === user.id && p.itemType === "course" && p.itemId === course.id && p.status === "paid");
+  if (isPaidCourse(course)) {
+    const payment = paidCourseOrder(db, user.id, course.id);
     return payment ? { ok: true, paymentId: payment.id } : { ok: false, reason: "payment" };
   }
   return { ok: true };
+}
+
+/**
+ * Who may enroll program members in a paid course without payment ("Grant
+ * access without payment"): the course's own managers, i.e. the people who
+ * can already enroll learners from the course's admin page. A course creator
+ * who adds someone else's paid course to their program cannot give it away.
+ */
+export function canGrantCourseAccess(actor: Viewer, course: Course): boolean {
+  return canManageCourse(actor, course);
+}
+
+export type ManagedCourseAccess = { ok: true; paymentId?: string; granted?: true } | { ok: false; reason: "payment" };
+
+/**
+ * Whether a program manager's change (adding a member or a course, lifting
+ * the course order) may enroll `member` in `course`. Program membership is not
+ * a purchase: a paid course needs the member's paid order (the enrollment is
+ * linked to it), unless the manager explicitly grants access without payment
+ * (`grantPaidAccess`) and may do so for this course (`canGrantCourseAccess`).
+ * Members already enrolled, moderators and the course's own staff are never
+ * asked to pay. Free courses are open; the manager chose to enroll the member
+ * (prerequisites are checked separately by the caller).
+ */
+export function managedCourseAccess(db: Database, actor: Viewer, member: Pick<User, "id" | "roles">, course: Course, grantPaidAccess: boolean): ManagedCourseAccess {
+  if (db.enrollments.some((e) => e.userId === member.id && e.courseId === course.id)) return { ok: true };
+  if (!isPaidCourse(course)) return { ok: true };
+  const payment = paidCourseOrder(db, member.id, course.id);
+  if (payment) return { ok: true, paymentId: payment.id };
+  if (isModerator(member) || canManageCourse(member, course)) return { ok: true };
+  if (grantPaidAccess && canGrantCourseAccess(actor, course)) return { ok: true, granted: true };
+  return { ok: false, reason: "payment" };
 }
 
 /** Moderators and course creators can author programs. */
@@ -237,7 +280,19 @@ export async function getProgramCourseOptions(program: Program, viewer: User): P
     .filter((c) => !program.courseIds.includes(c.id))
     .filter((c) => c.published || isModerator(viewer) || c.instructorIds.includes(viewer.id) || c.createdById === viewer.id)
     .sort((a, b) => a.title.localeCompare(b.title))
-    .map((c) => ({ value: c.id, label: c.title, hint: c.published ? undefined : "Unpublished" }));
+    .map((c) => ({ value: c.id, label: c.title, hint: [c.published ? "" : "Unpublished", isPaidCourse(c) ? "Paid" : ""].filter(Boolean).join(" · ") || undefined }));
+}
+
+/**
+ * Paid courses of the program and paid courses the viewer could add to it, in
+ * program order then by title, with whether the viewer may grant members
+ * access to them without payment.
+ */
+export async function getProgramPaidCourses(program: Program, viewer: User): Promise<ProgramPaidCourse[]> {
+  const db = await getDb();
+  const inProgram = program.courseIds.map((id) => db.courses.find((c) => c.id === id)).filter((c): c is Course => !!c);
+  const others = db.courses.filter((c) => !program.courseIds.includes(c.id)).sort((a, b) => a.title.localeCompare(b.title));
+  return [...inProgram, ...others].filter(isPaidCourse).map((c) => ({ id: c.id, title: c.title, grantable: canGrantCourseAccess(viewer, c) }));
 }
 
 /** Enabled users who are not yet members. */

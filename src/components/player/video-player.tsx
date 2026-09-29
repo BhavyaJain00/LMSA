@@ -84,8 +84,12 @@ export interface VideoPlayerProps {
   sources?: VideoSource[];
   /** Label of the main `src` in the Quality menu (default "Original"). */
   sourceLabel?: string;
-  /** Lesson the video belongs to: scopes signed-URL refreshes of protected uploads. */
-  mediaContext?: { lessonId?: string };
+  /**
+   * Lesson the video belongs to (scopes signed-URL refreshes of protected
+   * uploads) and the lifetime of pre-signed URLs in seconds (renewals are
+   * scheduled from it instead of the browser clock).
+   */
+  mediaContext?: { lessonId?: string; ttlSeconds?: number | null };
   /**
    * Viewer watermark. `null` turns it off; when omitted, the server's
    * setting is used for protected uploads the player signs itself.
@@ -176,12 +180,10 @@ export function VideoPlayer({
   /* ------------------------------ quality ------------------------------ */
   const qualityOptions = useMemo(() => buildQualityOptions(src, sources, sourceLabel), [src, sources, sourceLabel]);
   const hasQualityChoice = qualityOptions.length > 1;
-  const [quality, setQuality] = useState<{ pref: string; activeId: string | null }>(() => {
-    if (!hasQualityChoice) return { pref: AUTO_QUALITY, activeId: "main" };
-    const stored = typeof window === "undefined" ? undefined : loadPlayerPrefs().quality;
-    const match = stored && stored !== AUTO_QUALITY ? qualityOptions.find((o) => o.label === stored) : undefined;
-    return match ? { pref: match.id, activeId: match.id } : { pref: AUTO_QUALITY, activeId: null };
-  });
+  // Same initial state on the server and during hydration; the saved preference is applied after mount.
+  const [quality, setQuality] = useState<{ pref: string; activeId: string | null }>(() =>
+    hasQualityChoice ? { pref: AUTO_QUALITY, activeId: null } : { pref: AUTO_QUALITY, activeId: "main" },
+  );
   const activeOption: QualityOption | null = hasQualityChoice
     ? quality.activeId === null
       ? null
@@ -193,12 +195,19 @@ export function VideoPlayer({
     return pickAutoQuality(qualityOptions, { ...connectionInfo(), width, devicePixelRatio: typeof window !== "undefined" ? window.devicePixelRatio : 1 });
   }, [qualityOptions]);
 
-  // "Auto": choose a rendition once the player can measure itself.
+  // After mount: the viewer's saved quality, else "Auto" once the player can measure itself.
   useEffect(() => {
     if (quality.activeId !== null || !hasQualityChoice) return;
-    const raf = window.requestAnimationFrame(() => setQuality((q) => (q.activeId !== null ? q : { ...q, activeId: pickAuto().id })));
+    const raf = window.requestAnimationFrame(() =>
+      setQuality((q) => {
+        if (q.activeId !== null) return q;
+        const stored = loadPlayerPrefs().quality;
+        const match = stored && stored !== AUTO_QUALITY ? qualityOptions.find((o) => o.label === stored) : undefined;
+        return match ? { pref: match.id, activeId: match.id } : { ...q, activeId: pickAuto().id };
+      }),
+    );
     return () => window.cancelAnimationFrame(raf);
-  }, [quality.activeId, hasQualityChoice, pickAuto]);
+  }, [quality.activeId, hasQualityChoice, pickAuto, qualityOptions]);
 
   const selectQuality = useCallback(
     (id: string) => {
@@ -216,7 +225,7 @@ export function VideoPlayer({
   );
 
   /* --------------------------- protected source --------------------------- */
-  const media = useMediaSource(activeOption?.src ?? "", mediaContext?.lessonId);
+  const media = useMediaSource(activeOption?.src ?? "", mediaContext?.lessonId, mediaContext?.ttlSeconds);
   const watermarkOptions = watermark !== undefined ? watermark : (media.config?.watermark ?? null);
   const thumbnailsOn = seekThumbnails ?? media.config?.seekThumbnails ?? false;
 

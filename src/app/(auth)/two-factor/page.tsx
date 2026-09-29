@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
+import { safeRedirectPath } from "@/lib/auth/redirects";
 import { getSettings } from "@/lib/db/store";
 import { checkAuthToken } from "@/lib/auth/tokens";
 import { readTwoFactorChallengeCookie } from "@/lib/auth/two-factor";
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 
 export default async function TwoFactorPage(props: PageProps<"/two-factor">) {
   const sp = await props.searchParams;
-  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") && !sp.next.startsWith("/\\") ? sp.next : undefined;
+  const next = safeRedirectPath(sp.next, undefined);
   const [viewer, raw, settings] = await Promise.all([getCurrentUser(), readTwoFactorChallengeCookie(), getSettings()]);
   const check = await checkAuthToken(raw, "two_factor_login");
 

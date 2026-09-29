@@ -4,12 +4,13 @@ import { getDb } from "@/lib/db/store";
 import { listEvaluators } from "@/lib/data/users";
 import { getWorkflowFlags } from "@/lib/data/admin-courses";
 import { currencies } from "@/lib/config";
+import { loadPrerequisiteSettingsAction } from "@/lib/actions/drip";
 import { CourseSettingsForm } from "@/components/admin/courses/course-settings-form";
 import { CourseWorkflow } from "@/components/admin/courses/course-workflow";
 import { DeleteCourseCard } from "@/components/admin/courses/delete-course-card";
 
 export async function SettingsTab({ course, user }: { course: Course; user: User }) {
-  const [db, evaluators] = await Promise.all([getDb(), listEvaluators()]);
+  const [db, evaluators, prerequisites] = await Promise.all([getDb(), listEvaluators(), loadPrerequisiteSettingsAction(course.id)]);
   const flags = getWorkflowFlags(user, course);
   const lessonCount = db.lessons.filter((l) => l.courseId === course.id).length;
   const counts = {
@@ -31,6 +32,7 @@ export async function SettingsTab({ course, user }: { course: Course; user: User
           canManagePayments={isAdmin(user)}
           canCreateMembers={isModerator(user)}
           canGrantAdmin={isAdmin(user)}
+          prerequisites={prerequisites.ok ? prerequisites.data : null}
           initial={{
             published: course.published,
             featured: course.featured,

@@ -6,8 +6,9 @@
  *
  * Signed media URLs look like `/uploads/videos/<file>?t=<expiresUnix>.<sig>`
  * where `sig` is base64url(HMAC-SHA256(APP_SECRET, `${path}|${subject}|${expires}`)).
- * `path` is the canonical, decoded pathname (see `canonicalMediaPath`) and
- * `subject` the viewer's user id (or `guest` for signed-out visitors).
+ * `path` is the case-folded key (`mediaPathKey`) of the canonical, decoded
+ * pathname (see `canonicalMediaPath`) and `subject` the viewer's user id (or
+ * `guest` for signed-out visitors).
  */
 
 export const UPLOADS_PREFIX = "/uploads/";
@@ -22,6 +23,81 @@ export const GUEST_MEDIA_SUBJECT = "guest";
 export const MEDIA_TOKEN_PATTERN = /^(\d{9,11})\.([A-Za-z0-9_-]{43})$/;
 
 const PLACEHOLDER_BASE = "http://media.invalid";
+
+/* ------------------------------------------------------------------ */
+/* Upload path safety and identity                                      */
+/* ------------------------------------------------------------------ */
+
+/** Reserved DOS device names (`CON`, `NUL.mp4`, `COM1`…), which Windows resolves to devices, not files. */
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])[ ]*(?:\..*)?$/i;
+/** Separators, NUL/control characters and the characters Windows forbids in names (":" selects NTFS streams). */
+const FORBIDDEN_SEGMENT_CHARS = /[\u0000-\u001f\u007f<>:"|?*\\/]/;
+const MAX_SEGMENT_LENGTH = 255;
+
+/**
+ * Whether one decoded path segment of an upload URL can only name a regular
+ * entry of the upload directory. Uploads are stored under generated names
+ * (`slug-uid.ext`, lower-case ASCII), so everything rejected here only comes
+ * from crafted URLs:
+ *  - `:` selects NTFS alternate data streams (`videos::$INDEX_ALLOCATION` is
+ *    the `videos` folder itself) and drive letters;
+ *  - Windows drops trailing dots and spaces (`videos.` opens `videos`);
+ *  - reserved device names and characters Windows forbids never name a file;
+ *  - separators (an encoded `%2F`/`%5C`), NUL, `.`/`..` would escape the
+ *    segment, and dot-files (in-progress `.part` uploads, `.app-secret` when
+ *    the upload dir is misconfigured) are never public.
+ */
+export function isSafeUploadSegment(segment: string): boolean {
+  if (!segment || segment.length > MAX_SEGMENT_LENGTH) return false;
+  if (segment.startsWith(".")) return false;
+  if (segment.endsWith(".") || segment.endsWith(" ")) return false;
+  if (FORBIDDEN_SEGMENT_CHARS.test(segment)) return false;
+  return !WINDOWS_RESERVED_NAME.test(segment);
+}
+
+/**
+ * Case- and width-folded identity of a canonical media path. Signatures and
+ * "which lesson plays this file" checks compare keys, never raw paths:
+ * `/uploads/Videos/INTRO.MP4` and `/uploads/videos/intro.mp4` name the same
+ * file on case-insensitive filesystems (NTFS, APFS), so they must share one
+ * token and one set of permissions. Generated upload names are lower-case
+ * ASCII, for which the key is the path itself.
+ */
+export function mediaPathKey(path: string): string {
+  return path.normalize("NFKC").toUpperCase().toLowerCase();
+}
+
+/** Whether two canonical media paths name the same resource. */
+export function sameMediaPath(a: string, b: string): boolean {
+  return mediaPathKey(a) === mediaPathKey(b);
+}
+
+/** Path below `/uploads/` is inside the protected video directory (case-insensitive, like the filesystem). */
+function inProtectedVideoDir(uploadRelative: string): boolean {
+  const key = mediaPathKey(uploadRelative);
+  return key.startsWith(`${PROTECTED_VIDEO_DIR}/`) && key.length > PROTECTED_VIDEO_DIR.length + 1;
+}
+
+export interface UploadRequestPath {
+  /** "/"-separated name relative to the upload directory, e.g. `videos/intro-abc.mp4`. */
+  name: string;
+  /** Canonical media path, e.g. `/uploads/videos/intro-abc.mp4`. */
+  path: string;
+  /** The URL points into the protected video directory (compared case-insensitively). */
+  inVideoDir: boolean;
+}
+
+/**
+ * Validate the decoded segments of a `/uploads/[...path]` request. Returns
+ * null when any segment is unsafe (see `isSafeUploadSegment`), so crafted
+ * names never reach the filesystem.
+ */
+export function parseUploadRequestPath(parts: readonly string[]): UploadRequestPath | null {
+  if (!parts.length || parts.length > 32) return null;
+  if (!parts.every((p) => typeof p === "string" && isSafeUploadSegment(p))) return null;
+  const name = parts.join("/");
+  return { name, path: `${UPLOADS_PREFIX}${name}`, inVideoDir: inProtectedVideoDir(name) };
+}
 
 export interface ParsedMediaSrc {
   /** Canonical decoded pathname, e.g. `/uploads/videos/intro-abc.mp4`. */
@@ -94,14 +170,17 @@ export function parseMediaSrc(src: string, siteOrigins: readonly string[] = []):
   }
   const path = canonicalMediaPath(url.pathname);
   if (!path) return null;
-  const isUpload = path.startsWith(UPLOADS_PREFIX) && path.length > UPLOADS_PREFIX.length;
-  const isProtectedVideo = isUpload && path.startsWith(PROTECTED_VIDEO_PREFIX) && path.length > PROTECTED_VIDEO_PREFIX.length;
+  const uploadName = path.startsWith(UPLOADS_PREFIX) ? path.slice(UPLOADS_PREFIX.length) : "";
+  // The route prefix is matched as-is (URL routing is case-sensitive); the rest names files, so
+  // the video directory is recognised in any letter case. Unsafe names are never uploads.
+  const isUpload = uploadName.length > 0 && uploadName.split("/").every(isSafeUploadSegment);
+  const isProtectedVideo = isUpload && inProtectedVideoDir(uploadName);
   return { path, token: url.searchParams.get(MEDIA_TOKEN_PARAM), isUpload, isProtectedVideo };
 }
 
-/** Whether a canonical path lives in the protected video directory. */
+/** Whether a canonical path lives in the protected video directory (any letter case). */
 export function isProtectedVideoPath(path: string): boolean {
-  return path.startsWith(PROTECTED_VIDEO_PREFIX) && path.length > PROTECTED_VIDEO_PREFIX.length;
+  return path.startsWith(UPLOADS_PREFIX) && inProtectedVideoDir(path.slice(UPLOADS_PREFIX.length));
 }
 
 /** Build `/uploads/videos/x.mp4?t=<token>` from a canonical path. */
@@ -153,6 +232,6 @@ export function sameMediaSource(a: string | undefined | null, b: string | undefi
   if (!a || !b) return false;
   const pa = parseMediaSrc(a, siteOrigins);
   const pb = parseMediaSrc(b, siteOrigins);
-  if (pa && pb) return pa.path === pb.path;
+  if (pa && pb) return pa.isUpload && pb.isUpload ? sameMediaPath(pa.path, pb.path) : pa.path === pb.path;
   return stripMediaToken(a) === stripMediaToken(b);
 }

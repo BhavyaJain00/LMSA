@@ -108,7 +108,13 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           <div className="mx-auto w-full max-w-(--lesson-w)">
             <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={locked ? data.lesson.title : "Lesson not found"} />
           </div>
-          <LockedLessonNotice variant={locked ? "locked" : "not_found"} href={data.resume?.href ?? null} targetTitle={data.resume?.title} courseHref={courseHref} />
+          <LockedLessonNotice
+            variant={locked ? "locked" : "not_found"}
+            href={data.resume?.href ?? null}
+            targetTitle={data.resume?.title}
+            courseHref={courseHref}
+            lock={locked ? data.lockState : undefined}
+          />
         </main>
       </LessonFrame>
     );

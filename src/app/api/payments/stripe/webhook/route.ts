@@ -19,8 +19,8 @@ import { handleStripeEvent } from "@/lib/payments/webhooks";
 /** Stripe events are a few KB; refuse anything absurdly large before reading it. */
 const MAX_BODY_BYTES = 512 * 1024;
 
-function reply(body: Record<string, unknown>, status: number): Response {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+function reply(body: Record<string, unknown>, status: number, headers: Record<string, string> = {}): Response {
+  return Response.json(body, { status, headers: { "Cache-Control": "no-store", ...headers } });
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
@@ -43,6 +43,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   try {
     const outcome = await handleStripeEvent(event);
     console.info(`[payments] stripe ${event.type} ${event.id}: ${outcome.message}`);
+    // Retryable answer: the gateway delivers the (idempotent) event again later.
+    if (outcome.retry) return reply({ received: true, retry: true }, 503, { "Retry-After": "120" });
     return reply({ received: true, handled: outcome.handled }, 200);
   } catch (error) {
     console.error(`[payments] stripe webhook ${event.id} (${event.type}) failed:`, error instanceof Error ? error.message : "unknown error");

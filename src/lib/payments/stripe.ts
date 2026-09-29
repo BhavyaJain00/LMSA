@@ -113,9 +113,97 @@ export function parseStripeSession(raw: Record<string, unknown>): StripeCheckout
   };
 }
 
-/** Whether a completed session means the money was received. */
+/**
+ * Whether a completed session says the money was received. The session's
+ * `payment_status` never changes after a refund or a dispute, so fulfilment
+ * also checks the PaymentIntent (`stripeSettlement`).
+ */
 export function isStripeSessionPaid(session: Pick<StripeCheckoutSession, "status" | "paymentStatus">): boolean {
   return session.status === "complete" && session.paymentStatus === "paid";
+}
+
+/* ------------------------------------------------------------------ */
+/* Payment Intents                                                     */
+/* ------------------------------------------------------------------ */
+
+export interface StripeChargeState {
+  id: string;
+  /** "succeeded" | "pending" | "failed" */
+  status: string;
+  paid: boolean;
+  amountRefunded: number;
+  /** True once the charge is fully refunded. */
+  refunded: boolean;
+  disputed: boolean;
+}
+
+export interface StripePaymentIntent {
+  id: string;
+  /** "succeeded", "processing", "requires_payment_method", "canceled", … */
+  status: string;
+  amount: number;
+  amountReceived: number;
+  currency: string;
+  /** The latest charge, when it was expanded. */
+  latestCharge: StripeChargeState | null;
+  metadata: Record<string, string>;
+}
+
+function parseChargeState(raw: unknown): StripeChargeState | null {
+  const o = obj(raw);
+  const id = str(o.id);
+  if (!id) return null;
+  return {
+    id,
+    status: str(o.status) ?? "",
+    paid: o.paid === true,
+    amountRefunded: num(o.amount_refunded) ?? 0,
+    refunded: o.refunded === true,
+    disputed: o.disputed === true,
+  };
+}
+
+export function parseStripePaymentIntent(raw: Record<string, unknown>): StripePaymentIntent {
+  return {
+    id: str(raw.id) ?? "",
+    status: str(raw.status) ?? "",
+    amount: num(raw.amount) ?? 0,
+    amountReceived: num(raw.amount_received) ?? 0,
+    currency: str(raw.currency) ?? "",
+    latestCharge: raw.latest_charge && typeof raw.latest_charge === "object" ? parseChargeState(raw.latest_charge) : null,
+    metadata: stringMap(raw.metadata),
+  };
+}
+
+/** Read a PaymentIntent with its latest charge (refund and dispute state). */
+export async function retrieveStripePaymentIntent(paymentIntentId: string, opts: GatewayRequestOptions = {}): Promise<StripePaymentIntent> {
+  if (!isStripePaymentIntentId(paymentIntentId)) throw new GatewayError("Stripe", "Invalid payment id.", 400);
+  const json = await stripeRequest("GET", `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand%5B%5D=latest_charge`, undefined, opts);
+  return parseStripePaymentIntent(json);
+}
+
+export type StripeSettlement =
+  /** The money is with the merchant: the order may be fulfilled. */
+  | { kind: "succeeded" }
+  /** The payment was refunded (fully or partly) or disputed: never fulfil it. */
+  | { kind: "reversed"; reason: string }
+  /** Not settled yet (still processing, or the charge could not be read). */
+  | { kind: "incomplete" };
+
+/**
+ * Whether the money behind a paid Checkout Session is still with the
+ * merchant. Stripe resends old `checkout.session.completed` snapshots and the
+ * session keeps `payment_status: "paid"` after a refund, so every path that
+ * fulfils an unpaid order asks the PaymentIntent first.
+ */
+export function stripeSettlement(pi: Pick<StripePaymentIntent, "status" | "latestCharge">): StripeSettlement {
+  const charge = pi.latestCharge;
+  if (charge?.disputed) return { kind: "reversed", reason: "The payment was disputed with the bank." };
+  if (charge && (charge.refunded || charge.amountRefunded > 0)) {
+    return { kind: "reversed", reason: charge.refunded ? "The payment was refunded." : "The payment was partially refunded." };
+  }
+  if (pi.status !== "succeeded" || !charge || !charge.paid || charge.status !== "succeeded") return { kind: "incomplete" };
+  return { kind: "succeeded" };
 }
 
 export interface CreateStripeSessionInput {
@@ -197,10 +285,29 @@ export async function expireStripeCheckoutSession(sessionId: string): Promise<St
 export interface StripeRefund {
   id: string;
   amount: number;
+  /** "pending" | "requires_action" | "succeeded" | "failed" | "canceled" */
   status: string;
+  /** Our payment id, when the refund was sent by this app (refund metadata). */
+  paymentId?: string;
 }
 
-export async function createStripeRefund(input: { paymentIntentId: string; amount?: number; paymentId: string; orderId: string }): Promise<StripeRefund> {
+export function parseStripeRefund(raw: Record<string, unknown>): StripeRefund {
+  return { id: str(raw.id) ?? "", amount: num(raw.amount) ?? 0, status: str(raw.status) ?? "", paymentId: stringMap(raw.metadata).paymentId };
+}
+
+/** Refunds that return money (failed and canceled refunds do not). */
+export function isActiveStripeRefund(refund: Pick<StripeRefund, "status">): boolean {
+  return refund.status !== "failed" && refund.status !== "canceled";
+}
+
+export async function createStripeRefund(input: {
+  paymentIntentId: string;
+  amount?: number;
+  paymentId: string;
+  orderId: string;
+  /** Same key for the same refund attempt: a retried request returns the first result instead of refunding twice. */
+  idempotencyKey: string;
+}): Promise<StripeRefund> {
   if (!isStripePaymentIntentId(input.paymentIntentId)) {
     throw new GatewayError("Stripe", "This order has no Stripe payment to refund.");
   }
@@ -216,15 +323,22 @@ export async function createStripeRefund(input: { paymentIntentId: string; amoun
       reason: "requested_by_customer",
       metadata: { paymentId: input.paymentId, orderId: input.orderId },
     },
-    // A retry of the same refund within ten minutes (a timed-out request retried by the admin) returns the first result.
-    { idempotencyKey: `refund-${input.paymentId}-${input.amount ?? "full"}-${Math.floor(Date.now() / 600_000)}` },
+    { idempotencyKey: input.idempotencyKey },
   );
-  const refund: StripeRefund = { id: str(json.id) ?? "", amount: num(json.amount) ?? 0, status: str(json.status) ?? "" };
+  const refund = parseStripeRefund(json);
   if (!refund.id) throw new GatewayError("Stripe", "Stripe did not return a refund id.");
   if (refund.status === "failed" || refund.status === "canceled") {
     throw new GatewayError("Stripe", `Stripe could not complete the refund (status: ${refund.status}).`);
   }
   return refund;
+}
+
+/** Refunds of a PaymentIntent, newest first (up to 100). */
+export async function listStripeRefunds(paymentIntentId: string, opts: GatewayRequestOptions = {}): Promise<StripeRefund[]> {
+  if (!isStripePaymentIntentId(paymentIntentId)) throw new GatewayError("Stripe", "This order has no Stripe payment to refund.");
+  const json = await stripeRequest("GET", `/refunds?payment_intent=${encodeURIComponent(paymentIntentId)}&limit=100`, undefined, opts);
+  const data = Array.isArray(json.data) ? json.data : [];
+  return data.map((r) => parseStripeRefund(obj(r))).filter((r) => r.id);
 }
 
 /* ------------------------------------------------------------------ */

@@ -113,13 +113,13 @@ export function useActionForm<T = undefined>(action: FormAction<T>, options: Act
 export function useServerAction() {
   const toast = useToast();
   const [pending, start] = useTransition();
-  const run = <T,>(fn: () => Promise<ActionResult<T>>, opts: { onSuccess?: (data: T) => void; toast?: boolean } = {}) => {
+  const run = <T,>(fn: () => Promise<ActionResult<T>>, opts: { onSuccess?: (data: T, message?: string) => void; toast?: boolean } = {}) => {
     start(async () => {
       try {
         const result = await fn();
         if (result.ok) {
           if (opts.toast !== false && result.message) toast.success(result.message);
-          opts.onSuccess?.(result.data);
+          opts.onSuccess?.(result.data, result.message);
         } else {
           toast.error(result.error);
         }

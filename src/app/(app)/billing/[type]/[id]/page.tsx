@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
 import { getSettings } from "@/lib/db/store";
-import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, parseItemType, validateCoupon } from "@/lib/data/commerce";
+import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, parseItemType, validateCouponForBuyer } from "@/lib/data/commerce";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -79,7 +79,8 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   let coupon = null;
   let couponError: string | null = null;
   if (submittedCode) {
-    const check = await validateCoupon(submittedCode, item);
+    // Rate limited per buyer and IP, so codes cannot be guessed by trying them one after another.
+    const check = await validateCouponForBuyer(submittedCode, item, { userId: user.id });
     if (check.ok) coupon = check.coupon;
     else couponError = check.error;
   }

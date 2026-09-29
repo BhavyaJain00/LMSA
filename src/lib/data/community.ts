@@ -1,10 +1,11 @@
 import "server-only";
-import type { Batch, Course, Database, DiscussionReply, DiscussionTopic, User } from "@/lib/types";
+import type { Batch, Chapter, Course, Database, DiscussionReply, DiscussionTopic, Enrollment, Lesson, ProgressStatus, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
-import { canManageCourse } from "@/lib/data/courses";
-import { getLearnContext, lessonHasQuiz } from "@/lib/data/lessons";
+import { canManageCourse, lessonHref } from "@/lib/data/courses";
+import { lessonHasQuiz } from "@/lib/data/lessons";
 import { canManageBatch } from "@/lib/data/batches";
-import { getDiscussionPointsSince, startOfMonth } from "@/lib/services/points";
+import { getReplyPoints, startOfMonth } from "@/lib/services/points";
+import { computeLessonLocks, dripAnchor } from "@/components/learn/drip-shared";
 import { stripMarkdown, truncate } from "@/lib/utils";
 
 /**
@@ -15,7 +16,8 @@ import { stripMarkdown, truncate } from "@/lib/utils";
  *  - lesson topics of courses the viewer is enrolled in or manages, on
  *    lessons the viewer can open (locked lessons stay hidden) and that do not
  *    contain a quiz (those lessons keep discussions closed);
- *  - batch topics of batches the viewer is enrolled in or manages.
+ *  - batch topics of batches the viewer is enrolled in or manages (only
+ *    while the Batches feature is on).
  * Links go to the thread itself: the lesson's Discussion tab
  * (`?tab=discussion&topic=<id>`) or the batch's Discussions tab.
  */
@@ -135,18 +137,112 @@ function toMember(user: User | undefined): CommunityMember | null {
   return user ? { id: user.id, name: user.name, username: user.username, avatarUrl: user.avatarUrl } : null;
 }
 
+/**
+ * Lesson links and open lessons of several courses in one pass over one
+ * database snapshot: chapters, lessons and the viewer's progress are grouped
+ * once, and locks come from the same rules as the lesson player
+ * (`computeLessonLocks`). Nothing here creates drip notifications.
+ *
+ * Courses in the hub are either managed by the viewer (nothing is locked, so
+ * no progress is needed) or courses the viewer is enrolled in.
+ */
+function openLessonsOf(
+  db: Database,
+  viewer: User,
+  courses: Map<string, Course>,
+  enrollments: Map<string, Enrollment>,
+  now: number,
+): Map<string, { href: string; title: string; course: Course }> {
+  const out = new Map<string, { href: string; title: string; course: Course }>();
+  if (!courses.size) return out;
+  const managed = new Set<string>();
+  for (const course of courses.values()) if (canManageCourse(viewer, course)) managed.add(course.id);
+
+  const chaptersByCourse = new Map<string, Chapter[]>();
+  for (const c of db.chapters) {
+    if (!courses.has(c.courseId)) continue;
+    const list = chaptersByCourse.get(c.courseId) ?? [];
+    list.push(c);
+    chaptersByCourse.set(c.courseId, list);
+  }
+  const lessonsByChapter = new Map<string, Lesson[]>();
+  for (const l of db.lessons) {
+    if (!courses.has(l.courseId)) continue;
+    const list = lessonsByChapter.get(l.chapterId) ?? [];
+    list.push(l);
+    lessonsByChapter.set(l.chapterId, list);
+  }
+  // The viewer's progress, only for enrolled courses they do not manage.
+  const progress = new Map<string, Map<string, ProgressStatus>>();
+  if (managed.size < courses.size) {
+    for (const p of db.progress) {
+      if (p.userId !== viewer.id || !courses.has(p.courseId) || managed.has(p.courseId)) continue;
+      const map = progress.get(p.courseId) ?? new Map<string, ProgressStatus>();
+      map.set(p.lessonId, p.status);
+      progress.set(p.courseId, map);
+    }
+  }
+  const batches = new Map(db.batches.map((b) => [b.id, b]));
+
+  for (const course of courses.values()) {
+    const chapters = (chaptersByCourse.get(course.id) ?? []).sort((a, b) => a.order - b.order);
+    const ordered: { lesson: Lesson; chapter: Chapter; ci: number; li: number }[] = [];
+    chapters.forEach((chapter, ci) =>
+      (lessonsByChapter.get(chapter.id) ?? []).sort((a, b) => a.order - b.order).forEach((lesson, li) => ordered.push({ lesson, chapter, ci, li })),
+    );
+    let locked: boolean[];
+    if (managed.has(course.id)) locked = ordered.map(() => false);
+    else {
+      const enrollment = enrollments.get(course.id);
+      if (!enrollment) continue;
+      const statuses = progress.get(course.id);
+      const batch = enrollment.batchId ? batches.get(enrollment.batchId) : undefined;
+      const anchor = dripAnchor(enrollment, batch);
+      locked = computeLessonLocks(
+        ordered.map(({ lesson, chapter }) => ({
+          id: lesson.id,
+          status: statuses?.get(lesson.id) ?? "incomplete",
+          includeInPreview: lesson.includeInPreview,
+          dripDays: lesson.dripDays,
+          availableFrom: lesson.availableFrom,
+          chapter: { dripDays: chapter.dripDays, availableFrom: chapter.availableFrom },
+        })),
+        {
+          manager: false,
+          enrolled: true,
+          previewAllowed: course.published && db.settings.learning.allowGuestAccess,
+          enforceOrder: course.enforceLessonCompletion,
+          anchor: Number.isFinite(anchor) ? anchor : null,
+          prerequisitesPending: false,
+          now,
+        },
+      ).map((lock) => !!lock);
+    }
+    ordered.forEach(({ lesson, ci, li }, i) => {
+      if (locked[i]) return;
+      out.set(lesson.id, { href: lessonHref(course.slug, { chapterNumber: ci + 1, lessonNumber: li + 1 }), title: lesson.title, course });
+    });
+  }
+  return out;
+}
+
 /** Resolve every topic the viewer may read, with its thread link and space. */
-async function collectVisibleTopics(db: Database, viewer: User): Promise<{ topics: VisibleTopic[]; spaces: { courses: number; batches: number } }> {
-  const enrolledCourses = new Set(db.enrollments.filter((e) => e.userId === viewer.id).map((e) => e.courseId));
-  const enrolledBatches = new Set(db.batchEnrollments.filter((e) => e.userId === viewer.id).map((e) => e.batchId));
+function collectVisibleTopics(db: Database, viewer: User): { topics: VisibleTopic[]; spaces: { courses: number; batches: number } } {
+  const enrollments = new Map<string, Enrollment>();
+  for (const e of db.enrollments) if (e.userId === viewer.id) enrollments.set(e.courseId, e);
+  const batchesOn = db.settings.features.batches;
 
   const courseSpaces = new Map<string, Course>();
   for (const course of db.courses) {
-    if (enrolledCourses.has(course.id) || canManageCourse(viewer, course)) courseSpaces.set(course.id, course);
+    if (enrollments.has(course.id) || canManageCourse(viewer, course)) courseSpaces.set(course.id, course);
   }
+  // Batch discussions live on the batch page, which does not exist while the Batches feature is off.
   const batchSpaces = new Map<string, Batch>();
-  for (const batch of db.batches) {
-    if (enrolledBatches.has(batch.id) || canManageBatch(viewer, batch)) batchSpaces.set(batch.id, batch);
+  if (batchesOn) {
+    const enrolledBatches = new Set(db.batchEnrollments.filter((e) => e.userId === viewer.id).map((e) => e.batchId));
+    for (const batch of db.batches) {
+      if (enrolledBatches.has(batch.id) || canManageBatch(viewer, batch)) batchSpaces.set(batch.id, batch);
+    }
   }
 
   const lessons = new Map(db.lessons.map((l) => [l.id, l]));
@@ -157,24 +253,15 @@ async function collectVisibleTopics(db: Database, viewer: User): Promise<{ topic
     repliesByTopic.set(r.topicId, list);
   }
 
-  // Lesson links and locks come from the learn context, so drip/sequential locks match the player.
-  const coursesWithTopics = new Set<string>();
+  // Lesson links and locks for the courses that have topics, computed once for all of them.
+  const coursesWithTopics = new Map<string, Course>();
   for (const t of db.discussionTopics) {
     if (t.refType !== "lesson") continue;
     const lesson = lessons.get(t.refId);
-    if (lesson && courseSpaces.has(lesson.courseId)) coursesWithTopics.add(lesson.courseId);
+    const course = lesson ? courseSpaces.get(lesson.courseId) : undefined;
+    if (course) coursesWithTopics.set(course.id, course);
   }
-  const openLessons = new Map<string, { href: string; title: string; course: Course }>();
-  for (const courseId of coursesWithTopics) {
-    const course = courseSpaces.get(courseId)!;
-    try {
-      const ctx = await getLearnContext(course, viewer);
-      for (const l of ctx.flat) if (!l.locked) openLessons.set(l.id, { href: l.href, title: l.title, course });
-    } catch (err) {
-      // Fail closed: without a context we cannot tell which lessons are open.
-      console.error("[community] could not resolve lessons for a course:", err instanceof Error ? err.message : err);
-    }
-  }
+  const openLessons = openLessonsOf(db, viewer, coursesWithTopics, enrollments, Date.now());
 
   const topics: VisibleTopic[] = [];
   for (const topic of db.discussionTopics) {
@@ -242,9 +329,24 @@ function buildTopic(v: VisibleTopic, viewer: User, users: Map<string, User>): Co
   };
 }
 
+/** Lower-cased search text per topic, reused while the topic and its replies are unchanged. */
+const searchTextCache = new Map<string, { stamp: string; text: string }>();
+
+function searchText(v: VisibleTopic, t: CommunityTopic): string {
+  let latest = v.topic.updatedAt;
+  for (const r of v.replies) if (r.updatedAt > latest) latest = r.updatedAt;
+  const stamp = `${v.replies.length}|${latest}|${t.title}|${t.where.title}|${t.lessonTitle ?? ""}|${t.author?.name ?? ""}`;
+  const hit = searchTextCache.get(v.topic.id);
+  if (hit && hit.stamp === stamp) return hit.text;
+  const text = [t.title, t.where.title, t.lessonTitle ?? "", t.author?.name ?? "", ...v.replies.map((r) => r.content)].join("\n").toLowerCase();
+  if (searchTextCache.size > 5000) searchTextCache.clear();
+  searchTextCache.set(v.topic.id, { stamp, text });
+  return text;
+}
+
 function matchesSearch(v: VisibleTopic, t: CommunityTopic, terms: string[]): boolean {
   if (!terms.length) return true;
-  const hay = [t.title, t.where.title, t.lessonTitle ?? "", t.author?.name ?? "", ...v.replies.map((r) => r.content)].join("\n").toLowerCase();
+  const hay = searchText(v, t);
   return terms.every((term) => hay.includes(term));
 }
 
@@ -255,7 +357,7 @@ export async function getCommunityHub(
 ): Promise<CommunityHub> {
   const db = await getDb();
   const users = new Map(db.users.map((u) => [u.id, u]));
-  const { topics: visible, spaces } = await collectVisibleTopics(db, viewer);
+  const { topics: visible, spaces } = collectVisibleTopics(db, viewer);
   const built = visible.map((v) => ({ v, t: buildTopic(v, viewer, users) }));
 
   // Spaces with at least one visible topic, for the filter.
@@ -291,7 +393,10 @@ export async function getCommunityHub(
   const monthStart = startOfMonth();
   const monthIso = monthStart.toISOString();
   const pointsEnabled = db.settings.gamification.enabled;
-  const discussionPoints = pointsEnabled ? await getDiscussionPointsSince(monthStart) : new Map<string, number>();
+  // Points only for the replies counted here (threads the viewer can see), never site-wide totals.
+  const monthReplies: string[] = [];
+  for (const v of visible) for (const r of v.replies.slice(1)) if (r.createdAt >= monthIso) monthReplies.push(r.id);
+  const discussionPoints = pointsEnabled ? await getReplyPoints(monthReplies) : new Map<string, number>();
   const tally = new Map<string, CommunityContributor>();
   for (const v of visible) {
     for (const r of v.replies.slice(1)) {
