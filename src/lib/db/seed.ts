@@ -41,6 +41,7 @@ import type {
 } from "@/lib/types";
 import { hashPassword } from "@/lib/auth/password";
 import { defaultSettings } from "./defaults";
+import { buildSeedBlogPosts, buildSeedLegalPages } from "./seed-round3";
 import { readingTimeSeconds, toDateKey, addDays } from "@/lib/utils";
 
 /**
@@ -1712,6 +1713,20 @@ export async function buildSeedDatabase(): Promise<Database> {
     loginEvents: [],
     points: [],
     loginThrottles: [],
+    // round 3
+    uploadSessions: [],
+    transcodeJobs: [],
+    transcripts: [],
+    blogPosts: buildSeedBlogPosts(NOW),
+    slugRedirects: [],
+    leads: [],
+    legalPages: buildSeedLegalPages(NOW),
+    consents: [],
+    auditEvents: [],
+    errorEvents: [],
+    dataRequests: [],
+    aiConversations: [],
+    aiMessages: [],
     settings: defaultSettings(),
   };
 }

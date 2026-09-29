@@ -1,5 +1,8 @@
 import type { Settings } from "@/lib/types";
 
+const BRAND_DESCRIPTION =
+  "A self-hosted learning platform with courses, cohorts, quizzes, assignments, live classes and certificates.";
+
 /** Settings used on first run and as a fallback for missing keys. */
 export function defaultSettings(): Settings {
   return {
@@ -9,8 +12,7 @@ export function defaultSettings(): Settings {
       logoUrl: undefined,
       faviconUrl: undefined,
       accentColor: "#4f46e5",
-      metaDescription:
-        "A self-hosted learning platform with courses, cohorts, quizzes, assignments, live classes and certificates.",
+      metaDescription: BRAND_DESCRIPTION,
       metaImageUrl: undefined,
       metaKeywords: "lms, courses, learning, training",
       footerText: "",
@@ -108,8 +110,51 @@ export function defaultSettings(): Settings {
         manual: 0,
       },
     },
+    seo: {
+      siteTitleTemplate: "%s · LearnLoop",
+      defaultDescription: BRAND_DESCRIPTION,
+      defaultOgImageUrl: undefined,
+      twitterHandle: undefined,
+      googleVerification: undefined,
+      bingVerification: undefined,
+      organizationName: "LearnLoop Academy",
+      organizationLogoUrl: undefined,
+      sameAs: [],
+      indexNowKey: undefined,
+      blogEnabled: true,
+      noindexSite: false,
+      ga4Id: undefined,
+      metaPixelId: undefined,
+    },
+    legal: {
+      cookieBanner: true,
+      companyName: "LearnLoop Academy",
+      companyAddress: undefined,
+      contactEmail: undefined,
+      dataRetentionDays: 365,
+    },
+    ai: {
+      enabled: false,
+      model: "claude-sonnet-5",
+      dailyMessageLimit: 30,
+      systemPrompt: undefined,
+      reviewQueue: true,
+    },
+    storage: {
+      cdnBaseUrl: undefined,
+      transcodeToHls: true,
+      renditions: [1080, 720, 480],
+      autoTranscribe: false,
+    },
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
+}
+
+/** Keep only sensible rendition heights (144p–2160p), unique, highest first. */
+function normalizeRenditions(value: unknown, fallback: number[]): number[] {
+  if (!Array.isArray(value)) return fallback;
+  const heights = [...new Set(value.map(Number).filter((h) => Number.isInteger(h) && h >= 144 && h <= 2160))].sort((a, b) => b - a);
+  return heights.length ? heights : fallback;
 }
 
 /** Deep-merge stored settings over defaults so new keys always exist. */
@@ -133,6 +178,18 @@ export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
       ...d.gamification,
       ...(stored.gamification ?? {}),
       points: { ...d.gamification.points, ...(stored.gamification?.points ?? {}) },
+    },
+    seo: {
+      ...d.seo,
+      ...(stored.seo ?? {}),
+      sameAs: Array.isArray(stored.seo?.sameAs) ? stored.seo.sameAs.filter((u): u is string => typeof u === "string") : d.seo.sameAs,
+    },
+    legal: { ...d.legal, ...(stored.legal ?? {}) },
+    ai: { ...d.ai, ...(stored.ai ?? {}) },
+    storage: {
+      ...d.storage,
+      ...(stored.storage ?? {}),
+      renditions: normalizeRenditions(stored.storage?.renditions, d.storage.renditions),
     },
     updatedAt: stored.updatedAt ?? d.updatedAt,
   };

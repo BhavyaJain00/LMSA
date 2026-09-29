@@ -31,6 +31,8 @@ export function buildNavigation(user: PublicUser | null, settings: Settings, cou
   if (f.programs) main.push({ label: "Programs", href: "/programs", icon: "Layers", prefix: true });
   if (user && f.certifications && f.certifiedMembers) main.push({ label: "Certified Members", href: "/certified-members", icon: "Award" });
   if (f.jobs) main.push({ label: "Jobs", href: "/jobs", icon: "Briefcase", prefix: true });
+  // Round 3: public blog (articles are always readable by guests; the switch lives in SEO settings).
+  if (settings.seo.blogEnabled) main.push({ label: "Blog", href: "/blog", icon: "FileText", prefix: true });
   // Aggregate statistics are open to every member, and to guests when guest access is on; drill-downs stay staff-only on the page.
   if (f.statistics && (user || settings.learning.allowGuestAccess)) main.push({ label: "Statistics", href: "/statistics", icon: "BarChart" });
   // Round 2: the community hub gathers course/batch discussions for members; the leaderboard needs points on and
@@ -60,6 +62,10 @@ export function buildNavigation(user: PublicUser | null, settings: Settings, cou
     if (f.programmingExercises && has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Exercises", href: "/admin/exercises", icon: "Code", prefix: true });
     if (f.certifications && has(user, "moderator", "batch_evaluator")) manage.push({ label: "Certificates", href: "/admin/certificates", icon: "Certificate", prefix: true });
     if (f.jobs && has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Job Openings", href: "/admin/jobs", icon: "Briefcase", prefix: true });
+    // Round 3: staff can draft posts even while the public blog is switched off; the AI review queue only
+    // matters once the tutor is on.
+    if (has(user, "moderator", "course_creator")) manage.push({ label: "Blog", href: "/admin/blog", icon: "FileText", prefix: true });
+    if (settings.ai.enabled && has(user, "moderator", "course_creator")) manage.push({ label: "AI review", href: "/admin/ai", icon: "Sparkles", prefix: true });
     if (has(user, "moderator")) manage.push({ label: "Members", href: "/admin/members", icon: "UserPlus", prefix: true });
     if (has(user, "moderator")) manage.push({ label: "Email outbox", href: "/admin/emails", icon: "Send", prefix: true });
     if (has(user, "admin")) manage.push({ label: "Settings", href: "/admin/settings", icon: "Settings", prefix: true });

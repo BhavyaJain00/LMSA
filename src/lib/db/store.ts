@@ -91,6 +91,20 @@ export const COLLECTIONS: CollectionName[] = [
   "loginEvents",
   "points",
   "loginThrottles",
+  // round 3
+  "uploadSessions",
+  "transcodeJobs",
+  "transcripts",
+  "blogPosts",
+  "slugRedirects",
+  "leads",
+  "legalPages",
+  "consents",
+  "auditEvents",
+  "errorEvents",
+  "dataRequests",
+  "aiConversations",
+  "aiMessages",
 ];
 
 /** Make sure every collection exists and settings have all keys. */

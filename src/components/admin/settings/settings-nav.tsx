@@ -22,7 +22,16 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "Features", href: "/admin/settings/features", icon: "Sliders" },
       { label: "Learning", href: "/admin/settings/learning", icon: "GraduationCap" },
       { label: "Video", href: "/admin/settings/video", icon: "Video" },
+      { label: "Storage & video", href: "/admin/settings/storage", icon: "Database" },
+      { label: "AI tutor", href: "/admin/settings/ai", icon: "Sparkles" },
       { label: "Installable app", href: "/admin/settings/pwa", icon: "Smartphone" },
+    ],
+  },
+  {
+    group: "Content & marketing",
+    items: [
+      { label: "Blog", href: "/admin/blog", icon: "FileText" },
+      { label: "Leads", href: "/admin/leads", icon: "Inbox" },
     ],
   },
   {
@@ -59,6 +68,14 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
   {
     group: "Customization",
     items: [{ label: "Sidebar", href: "/admin/settings/sidebar", icon: "Menu" }],
+  },
+  {
+    group: "Legal & compliance",
+    items: [
+      { label: "Legal pages", href: "/admin/settings/legal", icon: "ShieldCheck" },
+      { label: "Audit log", href: "/admin/audit", icon: "ListChecks" },
+      { label: "Error log", href: "/admin/errors", icon: "AlertTriangle" },
+    ],
   },
   {
     group: "Data",

@@ -136,6 +136,11 @@ export interface Category {
   id: string;
   name: string;
   slug: string;
+  /* ----- round 3: category landing pages ----- */
+  /** Markdown introduction shown at the top of the category page. */
+  intro?: string;
+  seoTitle?: string;
+  seoDescription?: string;
 }
 
 export type CourseStatus = "in_progress" | "under_review" | "approved";
@@ -201,9 +206,61 @@ export interface Course {
   metaKeywords?: string;
   /** Round 2: courses that must be completed before enrolling. */
   prerequisiteCourseIds?: string[];
+  /* ----- round 3: sales page, SEO, AI tutor ----- */
+  /** Long-form landing page content rendered on the public course page. */
+  salesPage?: CourseSalesPage;
+  /** Overrides the `<title>` of the course page (falls back to the course title). */
+  seoTitle?: string;
+  /** Social share image (falls back to `imageUrl`, then a generated card). */
+  ogImageUrl?: string;
+  /** Lets enrolled learners chat with the AI tutor about this course (requires `settings.ai.enabled`). */
+  aiTutorEnabled?: boolean;
   createdById: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Round 3: one block of a course sales page. */
+export interface SalesSection {
+  id: string;
+  type: "text" | "features" | "curriculum" | "instructor" | "testimonials" | "faq" | "pricing" | "video" | "cta";
+  title?: string;
+  /** Markdown */
+  body?: string;
+  /** Bullet/feature items (used by "features", optional elsewhere). */
+  items?: { title: string; body?: string; icon?: string }[];
+}
+
+/** Round 3: a learner quote on a course sales page. */
+export interface SalesTestimonial {
+  name: string;
+  role?: string;
+  avatarUrl?: string;
+  quote: string;
+  /** 1-5 */
+  rating?: number;
+}
+
+/** Round 3: question/answer pair (sales pages, blog posts; rendered as FAQPage JSON-LD). */
+export interface FaqItem {
+  question: string;
+  /** Markdown */
+  answer: string;
+}
+
+/** Round 3: course sales page (hero, sections, FAQ, testimonials, guarantee, countdown). */
+export interface CourseSalesPage {
+  heroHeadline?: string;
+  heroSubheadline?: string;
+  sections: SalesSection[];
+  faq: FaqItem[];
+  testimonials: SalesTestimonial[];
+  /** Markdown, e.g. "30-day money-back guarantee". */
+  guarantee?: string;
+  /** ISO date; shows an offer countdown until then. */
+  countdownEndsAt?: string;
+  /** Show enrollment/rating/lesson stats in the hero. */
+  showStats: boolean;
 }
 
 export interface Chapter {
@@ -263,6 +320,15 @@ export type LessonBlock =
       title?: string;
       /** Round 2: alternative renditions for the quality selector (the main `src` is the default). */
       sources?: VideoSource[];
+      /* ----- round 3: adaptive streaming, transcripts, object storage ----- */
+      /** HLS master playlist URL (adaptive bitrate); `src` stays the progressive fallback. */
+      hlsUrl?: string;
+      /** State of the HLS conversion of an uploaded video. */
+      transcode?: VideoTranscodeState;
+      /** Id of the `Transcript` used for the transcript panel, search and the AI tutor. */
+      transcriptId?: string;
+      /** Storage-driver key of the original upload (local path or S3 object key). */
+      storageKey?: string;
     }
   | {
       id: string;
@@ -328,6 +394,17 @@ export type LessonBlock =
     };
 
 export type LessonBlockType = LessonBlock["type"];
+
+/** Round 3: HLS conversion state stored on a video block. */
+export interface VideoTranscodeState {
+  status: "pending" | "processing" | "ready" | "failed" | "unavailable";
+  /** 0-100 */
+  progress?: number;
+  error?: string;
+  /** Renditions present in the master playlist. */
+  renditions?: { height: number; bandwidth: number }[];
+  updatedAt: string;
+}
 
 export interface Lesson {
   id: string;
@@ -1226,6 +1303,61 @@ export interface Settings {
     /** Round 2 fix: when the ledger was first filled from history (unset = the one-time backfill has not succeeded yet). */
     ledgerBuiltAt?: string;
   };
+  /* ----- round 3 ----- */
+  seo: {
+    /** `%s` is replaced by the page title, e.g. "%s · LearnLoop". */
+    siteTitleTemplate: string;
+    defaultDescription: string;
+    defaultOgImageUrl?: string;
+    /** "@handle" for Twitter/X cards. */
+    twitterHandle?: string;
+    /** Google Search Console verification token. */
+    googleVerification?: string;
+    /** Bing Webmaster Tools verification token. */
+    bingVerification?: string;
+    /** Organization name used in structured data. */
+    organizationName: string;
+    organizationLogoUrl?: string;
+    /** Official profile URLs for Organization.sameAs. */
+    sameAs: string[];
+    /** IndexNow key (enables pinging search engines when content is published). */
+    indexNowKey?: string;
+    blogEnabled: boolean;
+    /** Ask search engines not to index the whole site (e.g. staging). */
+    noindexSite: boolean;
+    /** Google Analytics 4 measurement id (loaded only after analytics consent). */
+    ga4Id?: string;
+    /** Meta Pixel id (loaded only after marketing consent). */
+    metaPixelId?: string;
+  };
+  legal: {
+    cookieBanner: boolean;
+    companyName: string;
+    companyAddress?: string;
+    contactEmail?: string;
+    /** Days to keep logs and inactive personal data before purging. */
+    dataRetentionDays: number;
+  };
+  ai: {
+    enabled: boolean;
+    model: string;
+    /** Messages per learner per day (0 = unlimited). */
+    dailyMessageLimit: number;
+    /** Extra instructions added to the tutor's system prompt. */
+    systemPrompt?: string;
+    /** Collect flagged/unhelpful answers for instructor review. */
+    reviewQueue: boolean;
+  };
+  storage: {
+    /** Public CDN origin placed in front of stored media, e.g. "https://cdn.example.com". */
+    cdnBaseUrl?: string;
+    /** Convert uploaded lesson videos to adaptive HLS with ffmpeg. */
+    transcodeToHls: boolean;
+    /** Target rendition heights, e.g. [1080, 720, 480]. */
+    renditions: number[];
+    /** Generate captions automatically with the configured transcription API. */
+    autoTranscribe: boolean;
+  };
   updatedAt: string;
 }
 
@@ -1334,6 +1466,240 @@ export interface PointsEntry {
 }
 
 /* ------------------------------------------------------------------ */
+/* Round 3: uploads, transcoding, transcripts                          */
+/* ------------------------------------------------------------------ */
+
+export type UploadKind = "video" | "image" | "document";
+
+/** A resumable (chunked) upload in progress. */
+export interface UploadSession {
+  id: string;
+  userId: string;
+  kind: UploadKind;
+  fileName: string;
+  mimeType: string;
+  /** Total size in bytes declared when the upload started. */
+  size: number;
+  /** Bytes received so far (the offset the next chunk must start at). */
+  received: number;
+  /** Storage-driver key the bytes are written to. */
+  storageKey: string;
+  status: "uploading" | "complete" | "aborted";
+  createdAt: string;
+  updatedAt: string;
+  /** URL of the finished file once the upload completed. */
+  completedUrl?: string;
+}
+
+/** A queued ffmpeg job converting an uploaded video to HLS. */
+export interface TranscodeJob {
+  id: string;
+  lessonId: string;
+  blockId: string;
+  /** Storage key of the source video. */
+  sourceKey: string;
+  status: "queued" | "running" | "done" | "failed";
+  /** 0-100 */
+  progress: number;
+  attempts: number;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface TranscriptCue {
+  /** Seconds from the start of the video. */
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** Timed transcript of a lesson video (captions, transcript panel, AI tutor context). */
+export interface Transcript {
+  id: string;
+  lessonId: string;
+  blockId: string;
+  /** BCP 47 language tag, e.g. "en". */
+  language: string;
+  cues: TranscriptCue[];
+  source: "upload" | "auto" | "manual";
+  status: "ready" | "processing" | "failed";
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3: blog, SEO, leads                                           */
+/* ------------------------------------------------------------------ */
+
+export type BlogPostStatus = "draft" | "scheduled" | "published";
+
+export interface BlogPost {
+  id: string;
+  slug: string;
+  title: string;
+  /** Plain-text summary for cards and meta descriptions. */
+  excerpt: string;
+  /** Markdown */
+  content: string;
+  coverImageUrl?: string;
+  authorId: string;
+  /** Uses the shared course categories. */
+  categoryIds: string[];
+  tags: string[];
+  status: BlogPostStatus;
+  /** Publication time (in the future for scheduled posts). */
+  publishedAt?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  canonicalUrl?: string;
+  noindex?: boolean;
+  focusKeyword?: string;
+  faq?: FaqItem[];
+  relatedCourseIds: string[];
+  readingTimeSeconds: number;
+  views: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Permanent (308) redirect kept when a course, post or page slug changes. */
+export interface SlugRedirect {
+  id: string;
+  /** Absolute path, e.g. "/courses/old-slug". */
+  fromPath: string;
+  toPath: string;
+  createdAt: string;
+}
+
+/** Marketing lead (newsletter, free lesson, waitlist, …). */
+export interface Lead {
+  id: string;
+  /** Lower-cased email address. */
+  email: string;
+  name?: string;
+  /** Where the lead was captured, e.g. "blog", "course:crs_js", "footer". */
+  source: string;
+  courseId?: string;
+  /** Explicit marketing consent given when subscribing. */
+  consent: boolean;
+  /** Double opt-in confirmation time. */
+  confirmedAt?: string;
+  unsubscribedAt?: string;
+  createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3: legal, compliance, observability                           */
+/* ------------------------------------------------------------------ */
+
+export interface LegalPage {
+  id: string;
+  /** "privacy" | "terms" | "refunds" | "cookies" | a custom slug */
+  slug: string;
+  title: string;
+  /** Markdown */
+  content: string;
+  updatedAt: string;
+  /** Incremented on every published change. */
+  version: number;
+  published: boolean;
+}
+
+/** A visitor's cookie-consent decision (anonymous until they sign in). */
+export interface ConsentRecord {
+  id: string;
+  userId?: string;
+  /** Random visitor id from the `ll_anon` cookie, so anonymous decisions can be evidenced. */
+  anonId: string;
+  analytics: boolean;
+  marketing: boolean;
+  createdAt: string;
+}
+
+/** Security-relevant action recorded for the admin audit log. */
+export interface AuditEvent {
+  id: string;
+  actorId?: string;
+  /** Dotted verb, e.g. "course.publish", "user.roles", "settings.update". */
+  action: string;
+  targetType?: string;
+  targetId?: string;
+  meta?: Record<string, string | number | boolean | null>;
+  ip?: string;
+  createdAt: string;
+}
+
+/** Server error captured for the admin error log (deduplicated by message + digest + path). */
+export interface ErrorEvent {
+  id: string;
+  message: string;
+  stack?: string;
+  digest?: string;
+  path?: string;
+  method?: string;
+  userId?: string;
+  createdAt: string;
+  /** Occurrences since first seen. */
+  count: number;
+  lastSeenAt: string;
+  resolved?: boolean;
+}
+
+/** Personal-data export or erasure request. */
+export interface DataRequest {
+  id: string;
+  userId: string;
+  type: "export" | "delete";
+  status: "pending" | "completed" | "cancelled";
+  createdAt: string;
+  completedAt?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3: AI tutor                                                   */
+/* ------------------------------------------------------------------ */
+
+export interface AiConversation {
+  id: string;
+  userId: string;
+  courseId: string;
+  lessonId?: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A lesson passage an AI answer is grounded in. */
+export interface AiCitation {
+  lessonId: string;
+  title: string;
+  snippet: string;
+  /** Video timestamp of the passage when it comes from a transcript. */
+  seconds?: number;
+}
+
+export interface AiMessage {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: AiCitation[];
+  /** The learner flagged the answer as wrong or inappropriate. */
+  flagged?: boolean;
+  /** Learner feedback: thumbs up (true) / down (false). */
+  helpful?: boolean;
+  reviewStatus?: "pending" | "approved" | "corrected";
+  /** Instructor correction or comment shown to the learner. */
+  instructorNote?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
 /* Persisted database                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1386,6 +1752,20 @@ export interface Database {
   points: PointsEntry[];
   /** Round 2 fix: persisted sign-in failure counters (account security). */
   loginThrottles: LoginThrottle[];
+  /* round 3 */
+  uploadSessions: UploadSession[];
+  transcodeJobs: TranscodeJob[];
+  transcripts: Transcript[];
+  blogPosts: BlogPost[];
+  slugRedirects: SlugRedirect[];
+  leads: Lead[];
+  legalPages: LegalPage[];
+  consents: ConsentRecord[];
+  auditEvents: AuditEvent[];
+  errorEvents: ErrorEvent[];
+  dataRequests: DataRequest[];
+  aiConversations: AiConversation[];
+  aiMessages: AiMessage[];
   settings: Settings;
 }
 

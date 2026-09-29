@@ -72,6 +72,67 @@ export const razorpayEnv = {
   webhookSecret: read("RAZORPAY_WEBHOOK_SECRET"),
 };
 
+/* ------------------------------------------------------------------ */
+/* Round 3                                                             */
+/* ------------------------------------------------------------------ */
+
+function readBool(name: string, fallback = false): boolean {
+  const v = read(name).toLowerCase();
+  if (["true", "1", "yes", "on"].includes(v)) return true;
+  if (["false", "0", "no", "off"].includes(v)) return false;
+  return fallback;
+}
+
+export type StorageDriver = "local" | "s3";
+
+/** Where uploaded media is stored: the local upload folder, or any S3-compatible bucket (AWS, R2, MinIO, …). */
+export const storageEnv = {
+  driver: (read("STORAGE_DRIVER").toLowerCase() === "s3" ? "s3" : "local") as StorageDriver,
+  /** e.g. "https://<account>.r2.cloudflarestorage.com" or "http://localhost:9000"; empty = AWS S3 for `region`. */
+  endpoint: read("S3_ENDPOINT").replace(/\/+$/, ""),
+  region: read("S3_REGION") || "auto",
+  bucket: read("S3_BUCKET"),
+  accessKeyId: read("S3_ACCESS_KEY_ID"),
+  secretAccessKey: read("S3_SECRET_ACCESS_KEY"),
+  /** Public (or CDN) origin serving the bucket's objects; empty = serve through the app with signed URLs. */
+  publicBaseUrl: read("S3_PUBLIC_BASE_URL").replace(/\/+$/, ""),
+  /** Use path-style URLs (`endpoint/bucket/key`), needed by MinIO and some providers. */
+  forcePathStyle: readBool("S3_FORCE_PATH_STYLE"),
+};
+
+/** True when the S3 driver is selected and has everything it needs. */
+export function isS3Configured(): boolean {
+  return storageEnv.driver === "s3" && Boolean(storageEnv.bucket && storageEnv.accessKeyId && storageEnv.secretAccessKey);
+}
+
+/** ffmpeg/ffprobe binaries used for HLS transcoding and thumbnails. */
+export const mediaEnv = {
+  ffmpegPath: read("FFMPEG_PATH") || "ffmpeg",
+  ffprobePath: read("FFPROBE_PATH") || "ffprobe",
+};
+
+/** OpenAI-compatible speech-to-text endpoint used for automatic captions. */
+export const transcribeEnv = {
+  /** e.g. "https://api.openai.com/v1/audio/transcriptions" */
+  apiUrl: read("TRANSCRIBE_API_URL"),
+  apiKey: read("TRANSCRIBE_API_KEY"),
+  model: read("TRANSCRIBE_MODEL") || "whisper-1",
+};
+
+/** Anthropic API credentials for the AI tutor. */
+export const aiEnv = {
+  anthropicApiKey: read("ANTHROPIC_API_KEY"),
+};
+
+export type DatabaseDriver = "json" | "sqlite";
+
+/** Which database backend the store uses. */
+export const databaseEnv = {
+  driver: (read("DB_DRIVER").toLowerCase() === "json" ? "json" : "sqlite") as DatabaseDriver,
+  /** Relative to the project root, or absolute. */
+  sqlitePath: read("SQLITE_PATH") || "storage/lms.sqlite",
+};
+
 /** Mask a secret for display in admin screens: "sk_live_…a1b2". */
 export function maskSecret(value: string, visible = 4): string {
   if (!value) return "";
