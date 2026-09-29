@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import type { ViolationType } from "@/lib/types";
-import { checkAnswerAction, getQuizQuestionsAction, logQuizViolationAction, submitQuizAction } from "@/lib/actions/quiz";
+import { checkAnswerAction, logQuizViolationAction, startQuizAttemptAction, submitQuizAction } from "@/lib/actions/quiz";
+import { useOptionalLessonRuntime } from "@/components/learn/lesson-runtime";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn, seededShuffle, uid } from "@/lib/utils";
@@ -49,25 +52,37 @@ function hasAnswer(value: string[] | undefined): boolean {
 }
 
 /** Errors after which the attempt can't continue and the learner goes back to the intro. */
-const TERMINAL_ERRORS = /maximum number of attempts|schedule for|opens on|no longer exists|not authorized|updated while you were taking it/i;
+const TERMINAL_ERRORS =
+  /maximum number of attempts|schedule for|opens on|no longer exists|not authorized|updated while you were taking it|could not be verified|already been submitted/i;
+
+/** A message shown inside the runner while it is fullscreen, where page toasts are not painted. */
+interface InlineMessage {
+  id: number;
+  title: string;
+  tone: "warning" | "error";
+}
 
 /**
  * The learner quiz experience: intro card → one question at a time (timer,
  * proctoring, navigator, live answer checks) → results with breakdown and
  * attempt history. Used by the lesson QuizBlock, the standalone /quiz/[id]
  * page and the builder's preview tab.
+ *
+ * Live attempts are issued by the server (`startQuizAttemptAction`): it picks
+ * the questions and signs the start time, and the returned token goes back
+ * with every proctoring event, answer check and the submission.
  */
 export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHref, backLabel, inVideo, className }: QuizRunnerProps) {
   const live = mode === "live";
   const meta = payload.quiz;
   const { toast } = useToast();
+  const router = useRouter();
+  // Present when the runner is embedded in the lesson player (QuizBlock / in-video quiz).
+  const lessonRuntime = useOptionalLessonRuntime();
   const rootRef = useRef<HTMLElement>(null);
 
-  // Quiz content (questions can arrive later when a schedule opens).
-  const [questions, setQuestions] = useState<RunnerQuestion[]>(meta.questions);
-  const [withheld, setWithheld] = useState(meta.questionsWithheld);
   const [schedule, setSchedule] = useState<ScheduleState>(() => getScheduleState(meta, payload.serverTime));
-  const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   // Attempt state.
   const [phase, setPhase] = useState<Phase>("intro");
@@ -85,6 +100,9 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   const [attempts, setAttempts] = useState<AttemptSummary[]>(payload.attempts);
   const [startError, setStartError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<{ message: string; reason: SubmissionReason } | null>(null);
+  const [leaveHref, setLeaveHref] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const [inline, setInline] = useState<InlineMessage | null>(null);
 
   // Keep attempts in sync with fresh server data while no attempt is running.
   const [attemptsProp, setAttemptsProp] = useState(payload.attempts);
@@ -98,12 +116,12 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   const answersRef = useRef<Record<string, string[]>>({});
   const orderRef = useRef<RunnerQuestion[]>([]);
   const startRef = useRef<{ iso: string; ms: number } | null>(null);
+  const tokenRef = useRef<string | null>(null);
   const violationsRef = useRef<ViolationEvent[]>([]);
   const submittingRef = useRef(false);
   const pendingLogs = useRef<Promise<unknown>[]>([]);
-  const loadingRef = useRef(false);
+  const inlineSeq = useRef(0);
 
-  const quiz = useMemo(() => ({ ...meta, questions, questionsWithheld: withheld }), [meta, questions, withheld]);
   const proctored = live && meta.enableProctoring;
   const isFullscreen = useIsFullscreen();
 
@@ -121,42 +139,69 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     });
   };
 
+  /**
+   * Toast, mirrored inside the runner while it is fullscreen: page toasts
+   * live outside the fullscreen element and would not be painted.
+   */
+  const say = (title: string, tone: InlineMessage["tone"]) => {
+    toast({ title, tone });
+    if (document.fullscreenElement && rootRef.current?.contains(document.fullscreenElement)) {
+      inlineSeq.current += 1;
+      setInline({ id: inlineSeq.current, title, tone });
+    }
+  };
+
+  // Inline messages fade out after a few seconds.
+  useEffect(() => {
+    if (!inline) return;
+    const t = window.setTimeout(() => setInline((cur) => (cur?.id === inline.id ? null : cur)), 6000);
+    return () => window.clearTimeout(t);
+  }, [inline]);
+
   const buildInput = (reason: SubmissionReason): SubmitQuizInput | null => {
     const start = startRef.current;
     if (!start) return null;
-    return {
+    const base = {
       quizId: meta.id,
       lessonId,
       courseId,
-      questionIds: orderRef.current.map((q) => q.id),
       answers: answersRef.current,
-      startedAt: start.iso,
-      timeTakenSeconds: Math.max(0, Math.round((Date.now() - start.ms) / 1000)),
       violationCount: violationsRef.current.length,
       submissionReason: reason,
-      preview: !live,
     };
+    if (!live) return { ...base, preview: true, questionIds: orderRef.current.map((q) => q.id), startedAt: start.iso };
+    if (!tokenRef.current) return null;
+    return { ...base, attemptToken: tokenRef.current };
   };
 
   /* ---------------------------- Submitting ---------------------------- */
 
   const submit = async (reason: SubmissionReason) => {
-    if (submittingRef.current || phaseRef.current !== "active") return;
-    const input = buildInput(reason);
-    if (!input) return;
+    if (submittingRef.current || phaseRef.current !== "active" || !startRef.current) return;
     submittingRef.current = true;
     setConfirmOpen(false);
     setSubmitError(null);
     changePhase("submitting");
     if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+    // Proctoring events still being logged must be stored first, so they are linked to this submission.
+    await Promise.allSettled(pendingLogs.current);
+    const input = buildInput(reason);
+    if (!input) {
+      failSubmit("This attempt could not be verified. Reload the page and start the quiz again.", reason);
+      return;
+    }
     try {
       const res = await submitQuizAction(input);
       if (res.ok) {
         setResult(res.data);
-        if (!res.data.preview) setAttempts(res.data.attempts);
         setDeadline(null);
+        tokenRef.current = null;
         changePhase("results");
         scrollToTop();
+        if (!res.data.preview) {
+          setAttempts(res.data.attempts);
+          onRecorded(res.data);
+        }
         return;
       }
       failSubmit(res.error, reason);
@@ -165,49 +210,44 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     }
   };
 
+  /**
+   * After a stored attempt: a passing attempt inside a lesson has already
+   * completed the lesson on the server, so flip the lesson player's status
+   * right away (its completion panel, badge and "Next" unlock follow) and
+   * re-render the server components (outline, progress, attempts).
+   */
+  const onRecorded = (data: SubmitResult) => {
+    if (data.lessonCompleted) {
+      toast({ title: "Lesson completed", description: "You passed the quiz, so this lesson is now marked as complete.", tone: "success" });
+      if (lessonRuntime && lessonId && lessonRuntime.lessonId === lessonId && lessonRuntime.status !== "complete") {
+        void lessonRuntime.attemptComplete({ silent: true });
+      }
+    }
+    router.refresh();
+  };
+
   const failSubmit = (message: string, reason: SubmissionReason) => {
-    toast({ title: message, tone: "error" });
+    say(message, "error");
+    submittingRef.current = false;
     if (TERMINAL_ERRORS.test(message)) {
-      submittingRef.current = false;
       setDeadline(null);
+      tokenRef.current = null;
       setStartError(message);
       changePhase("intro");
+      router.refresh();
       return;
     }
-    submittingRef.current = false;
     setSubmitError({ message, reason });
     changePhase("active");
   };
 
   /* ---------------------------- Schedule ---------------------------- */
 
-  const loadQuestions = async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoadingQuestions(true);
-    try {
-      const res = await getQuizQuestionsAction(meta.id);
-      if (res.ok) {
-        setQuestions(res.data);
-        setWithheld(false);
-        setStartError(null);
-      } else {
-        setStartError(res.error);
-      }
-    } catch {
-      setStartError("Could not load the quiz. Check your connection and try again.");
-    } finally {
-      loadingRef.current = false;
-      setLoadingQuestions(false);
-    }
-  };
-
-  // Re-check the schedule window every 15s and fetch the questions once it opens.
+  // Re-check the schedule window every 15s while the intro is showing.
   useInterval(
     () => {
       const next = getScheduleState(meta, Date.now());
       setSchedule((prev) => (prev.state === next.state ? prev : next));
-      if (next.state === "open" && withheld && live) void loadQuestions();
     },
     15000,
     meta.enableScheduling && phase === "intro",
@@ -215,18 +255,9 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
 
   /* ---------------------------- Starting ---------------------------- */
 
-  const start = () => {
-    if (!questions.length) return;
-    setStartError(null);
-    const seed = uid("attempt");
-    const pool = meta.shuffleQuestions ? seededShuffle(questions, seed) : questions;
-    const count = Math.min(Math.max(1, meta.questionCount || pool.length), pool.length);
-    const list = pool.slice(0, count);
-    const startedMs = Date.now();
-    const iso = new Date(startedMs).toISOString();
-
+  const begin = (list: RunnerQuestion[], start: { iso: string; ms: number }, localDeadline: number | null) => {
     orderRef.current = list;
-    startRef.current = { iso, ms: startedMs };
+    startRef.current = start;
     answersRef.current = {};
     violationsRef.current = [];
     pendingLogs.current = [];
@@ -240,7 +271,8 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     setViolations([]);
     setResult(null);
     setSubmitError(null);
-    setDeadline(live && meta.durationSeconds > 0 ? startedMs + meta.durationSeconds * 1000 : null);
+    setInline(null);
+    setDeadline(localDeadline);
     changePhase("active");
 
     if (proctored) {
@@ -251,9 +283,52 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     scrollToTop();
   };
 
+  const start = async () => {
+    if (starting || meta.poolSize === 0) return;
+    setStartError(null);
+
+    if (!live) {
+      // Preview: the builder hands over every question and nothing is stored.
+      const pool = meta.shuffleQuestions ? seededShuffle(meta.questions, uid("attempt")) : meta.questions;
+      const count = Math.min(Math.max(1, meta.questionCount || pool.length), pool.length);
+      const startedMs = Date.now();
+      tokenRef.current = null;
+      begin(pool.slice(0, count), { iso: new Date(startedMs).toISOString(), ms: startedMs }, null);
+      return;
+    }
+
+    setStarting(true);
+    try {
+      const res = await startQuizAttemptAction(meta.id);
+      if (!res.ok) {
+        setStartError(res.error);
+        return;
+      }
+      if (!res.data.questions.length) {
+        setStartError("This quiz has no questions available yet.");
+        return;
+      }
+      const { token, startedAt, serverTime, questions } = res.data;
+      const startedServerMs = Date.parse(startedAt);
+      // Map the server-side start onto the local clock so clock skew doesn't shorten or extend the timer.
+      const localStart = Date.now() - Math.max(0, serverTime - startedServerMs);
+      tokenRef.current = token;
+      begin(
+        questions,
+        { iso: startedAt, ms: localStart },
+        meta.durationSeconds > 0 ? localStart + meta.durationSeconds * 1000 : null,
+      );
+    } catch {
+      setStartError("Could not start the quiz. Check your connection and try again.");
+    } finally {
+      setStarting(false);
+    }
+  };
+
   const retake = () => {
     submittingRef.current = false;
     startRef.current = null;
+    tokenRef.current = null;
     setResult(null);
     setOrder([]);
     setStartError(null);
@@ -268,13 +343,13 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   /* ---------------------------- Timer & proctoring ---------------------------- */
 
   const remaining = useCountdown(phase === "active" ? deadline : null, () => {
-    toast({ title: "Time's up — submitting your answers.", tone: "warning" });
+    say("Time's up — submitting your answers.", "warning");
     void submit("timer_expired");
   });
 
   const handleViolation = (type: ViolationType) => {
     if (phaseRef.current !== "active" || submittingRef.current) return;
-    const start = startRef.current;
+    const token = tokenRef.current;
     const max = Math.max(1, meta.maxViolations);
     const count = violationsRef.current.length + 1;
     const local: ViolationEvent = {
@@ -285,9 +360,10 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     };
     violationsRef.current = [...violationsRef.current, local];
     setViolations(violationsRef.current);
+    // The in-tree ViolationBanner already shows this while fullscreen.
     toast({ title: `${violationLabels[type]}. Remaining: ${Math.max(0, max - count)}`, tone: "warning" });
-    if (start) {
-      const logged = logQuizViolationAction({ quizId: meta.id, eventType: type, startedAt: start.iso })
+    if (token) {
+      const logged = logQuizViolationAction({ quizId: meta.id, eventType: type, attemptToken: token })
         .then((res) => {
           if (!res.ok) return;
           violationsRef.current = violationsRef.current.map((e) => (e.id === local.id ? res.data.event : e));
@@ -296,14 +372,26 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
         .catch(() => undefined);
       pendingLogs.current.push(logged);
     }
-    if (count >= max) {
-      void Promise.allSettled(pendingLogs.current).then(() => submit("max_violations"));
-    }
+    if (count >= max) void submit("max_violations");
   };
 
   useProctoring(proctored && phase === "active", handleViolation);
 
+  /** Submit the running attempt with a beacon (survives the page going away). */
+  const sendBeacon = (): boolean => {
+    if (!live || submittingRef.current || !navigator.sendBeacon) return false;
+    const body = buildInput("browser_closed");
+    if (!body) return false;
+    submittingRef.current = true;
+    return navigator.sendBeacon(`/quiz/${encodeURIComponent(meta.id)}/submit`, new Blob([JSON.stringify(body)], { type: "application/json" }));
+  };
+  const sendBeaconRef = useRef(sendBeacon);
+  useEffect(() => {
+    sendBeaconRef.current = sendBeacon;
+  });
+
   // Leaving the page mid-attempt: warn first, then submit with a beacon if the learner leaves anyway.
+  // In-app links are intercepted too (they would unmount the runner without any prompt).
   useEffect(() => {
     if (phase !== "active" || !live) return;
     let beaconSent = false;
@@ -312,36 +400,65 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
       e.returnValue = "";
     };
     const onPageHide = () => {
-      if (submittingRef.current || !navigator.sendBeacon) return;
-      const start = startRef.current;
-      if (!start) return;
-      const body: SubmitQuizInput = {
-        quizId: meta.id,
-        lessonId,
-        courseId,
-        questionIds: orderRef.current.map((q) => q.id),
-        answers: answersRef.current,
-        startedAt: start.iso,
-        timeTakenSeconds: Math.max(0, Math.round((Date.now() - start.ms) / 1000)),
-        violationCount: violationsRef.current.length,
-        submissionReason: "browser_closed",
-      };
-      submittingRef.current = true;
-      beaconSent = navigator.sendBeacon(`/quiz/${encodeURIComponent(meta.id)}/submit`, new Blob([JSON.stringify(body)], { type: "application/json" }));
+      beaconSent = sendBeaconRef.current() || beaconSent;
     };
     const onPageShow = (e: PageTransitionEvent) => {
       // Restored from the back/forward cache after the beacon submitted the attempt.
       if (e.persisted && beaconSent) window.location.reload();
     };
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = e.target instanceof Element ? e.target.closest("a[href]") : null;
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setLeaveHref(`${url.pathname}${url.search}${url.hash}`);
+    };
     window.addEventListener("beforeunload", onBeforeUnload);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("pageshow", onPageShow);
+    document.addEventListener("click", onClick, true);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
+      document.removeEventListener("click", onClick, true);
     };
-  }, [phase, live, meta.id, lessonId, courseId]);
+  }, [phase, live]);
+
+  // Unmounted mid-attempt by a navigation we could not intercept (browser back, programmatic
+  // routing): hand the attempt in rather than letting it vanish.
+  useEffect(() => {
+    return () => {
+      if (phaseRef.current === "active") sendBeaconRef.current();
+    };
+  }, []);
+
+  /** The learner confirmed leaving through an in-app link: hand the attempt in, then navigate. */
+  const leaveAttempt = async () => {
+    const href = leaveHref;
+    if (!href || leaving) return;
+    setLeaving(true);
+    const input = submittingRef.current ? null : buildInput("browser_closed");
+    if (input) {
+      submittingRef.current = true;
+      changePhase("submitting");
+      await Promise.allSettled(pendingLogs.current);
+      try {
+        await submitQuizAction({ ...input, violationCount: violationsRef.current.length });
+      } catch {
+        // Navigating anyway: the learner chose to leave.
+      }
+    }
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+    setLeaveHref(null);
+    setLeaving(false);
+    router.push(href);
+  };
 
   /* ---------------------------- Answering ---------------------------- */
 
@@ -361,16 +478,16 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     if (!q) return;
     const ans = answersRef.current[q.id] ?? [];
     if (!hasAnswer(ans)) {
-      toast({ title: q.type === "choices" ? "Please select an option" : "Please type an answer", tone: "warning" });
+      say(q.type === "choices" ? "Please select an option" : "Please type an answer", "warning");
       return;
     }
     setChecking(true);
     try {
-      const res = await checkAnswerAction({ quizId: meta.id, questionId: q.id, answer: ans });
+      const res = await checkAnswerAction({ quizId: meta.id, questionId: q.id, answer: ans, attemptToken: tokenRef.current ?? undefined });
       if (res.ok) setChecks((prev) => ({ ...prev, [q.id]: res.data }));
-      else toast({ title: res.error, tone: "error" });
+      else say(res.error, "error");
     } catch {
-      toast({ title: "Could not check the answer. Please try again.", tone: "error" });
+      say("Could not check the answer. Please try again.", "error");
     } finally {
       setChecking(false);
     }
@@ -400,19 +517,16 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
         {phase === "intro" && (
           <div className="space-y-4">
             <QuizIntro
-              quiz={quiz}
+              quiz={meta}
               mode={mode}
               inVideo={inVideo}
               schedule={schedule}
               attemptsUsed={attempts.length}
               canManage={payload.canManage}
-              loadingQuestions={loadingQuestions}
+              loadingQuestions={starting}
               latestPending={latestPending}
               startError={startError}
-              onStart={() => {
-                if (withheld) void loadQuestions();
-                else start();
-              }}
+              onStart={() => void start()}
             />
             {live && meta.showSubmissionHistory && attempts.length > 0 && <AttemptHistory attempts={attempts} />}
           </div>
@@ -433,6 +547,19 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
               <p className="sr-only" aria-live="assertive">
                 {remaining <= 10 ? `${remaining} seconds left` : "Less than a minute left"}
               </p>
+            )}
+
+            {inline && isFullscreen && (
+              <div
+                role={inline.tone === "error" ? "alert" : "status"}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl border px-4 py-3 text-sm text-ink",
+                  inline.tone === "error" ? "border-danger/30 bg-danger/8" : "border-warning/40 bg-warning/10",
+                )}
+              >
+                <Icon.AlertCircle className={cn("size-5 shrink-0", inline.tone === "error" ? "text-danger" : "text-warning")} />
+                <p className="min-w-0 flex-1">{inline.title}</p>
+              </div>
             )}
 
             {proctored && (
@@ -512,13 +639,25 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
               review={review.length}
               preview={!live}
             />
+
+            <ConfirmDialog
+              open={leaveHref !== null}
+              onClose={() => setLeaveHref(null)}
+              onConfirm={leaveAttempt}
+              loading={leaving}
+              destructive
+              confirmLabel="Submit and leave"
+              cancelLabel="Stay on the quiz"
+              title="Leave the quiz?"
+              description="Your attempt is still running. If you leave now, your current answers are submitted and the attempt counts towards your limit."
+            />
           </div>
         )}
 
         {phase === "results" && result && (
           <div className="space-y-4">
             <QuizResults
-              quiz={quiz}
+              quiz={meta}
               mode={mode}
               result={result}
               attempts={attempts}

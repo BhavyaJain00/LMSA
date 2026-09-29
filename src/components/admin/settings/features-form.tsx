@@ -62,7 +62,7 @@ export function FeaturesForm({ initial }: { initial: Settings["features"] }) {
         </SettingsSection>
       ))}
       <p className="text-xs text-ink-muted">Turning a feature off hides it from navigation and blocks its pages. Existing data is kept and reappears when you turn it back on.</p>
-      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} />
+      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} failed={state?.ok === false} />
     </form>
   );
 }

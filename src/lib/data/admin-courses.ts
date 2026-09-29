@@ -61,6 +61,37 @@ export function getWorkflowFlags(user: Pick<User, "id" | "roles"> | null, course
   };
 }
 
+/** Course slugs that would collide with the /courses/... and /admin/courses/... routes. */
+export const RESERVED_COURSE_SLUGS: readonly string[] = ["new", "import", "edit", "learn"];
+
+/** Roles allowed to evaluate certificates for a course. */
+export function canEvaluateCertificates(user: Pick<User, "roles"> | undefined | null): boolean {
+  return !!user && user.roles.some((r) => r === "batch_evaluator" || r === "moderator" || r === "admin");
+}
+
+/** Appended to success messages when a content edit sent the course back to "in_progress". */
+export const REVIEW_RESET_NOTE = "The course moved back to In progress, so submit it for review again when you're ready.";
+
+/**
+ * Record a content change on a course inside a mutate() call. Edits by a
+ * non-moderator to an unpublished course invalidate a pending or granted
+ * review, so the course goes back to "in_progress" and must be re-submitted.
+ * Returns true when the review was reset.
+ */
+export function touchCourseContent(db: Pick<Database, "courses">, courseId: string, user: Pick<User, "roles">): boolean {
+  const row = db.courses.find((c) => c.id === courseId);
+  if (!row) return false;
+  row.updatedAt = new Date().toISOString();
+  if (isModerator(user) || row.published || row.status === "in_progress") return false;
+  row.status = "in_progress";
+  return true;
+}
+
+/** Success message, plus the review-reset note when it applies. */
+export function withReviewNote(message: string, reviewReset: boolean): string {
+  return reviewReset ? `${message}. ${REVIEW_RESET_NOTE}` : message;
+}
+
 /** Whether the viewer may create courses at all. */
 export function canCreateCourses(user: Pick<User, "roles"> | null): boolean {
   if (!user) return false;

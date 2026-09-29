@@ -1,4 +1,5 @@
 import "server-only";
+import { revalidatePath } from "next/cache";
 import type {
   Assignment,
   AssignmentStatus,
@@ -6,6 +7,7 @@ import type {
   AssignmentType,
   Course,
   ExerciseLanguage,
+  Lesson,
   ExerciseSubmission,
   ProgrammingExercise,
   PublicUser,
@@ -13,10 +15,11 @@ import type {
 } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { canManageCourse, getLessonHref } from "@/lib/data/courses";
+import { getLessonAccess } from "@/lib/data/lessons";
+import { completeLesson } from "@/lib/services/progress";
 import { hasRole, isModerator, isStaff, toPublicUser } from "@/lib/auth/session";
 import {
   DEFAULT_STARTER_CODE,
-  hashOutput,
   type AssignmentSubmissionView,
   type AssignmentView,
   type ExerciseSubmissionView,
@@ -126,6 +129,53 @@ export async function getAssessmentUsage(kind: "assignment" | "exercise", refId:
   const batches = db.batches.filter((b) => b.assessments.some((a) => a.type === kind && a.refId === refId));
   for (const b of batches) out.push({ lessonId: b.id, lessonTitle: `Batch assessment`, courseTitle: b.title, href: `/batches/${b.slug}` });
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lesson completion from an embedded assessment                       */
+/* ------------------------------------------------------------------ */
+
+export interface AssessmentLessonOutcome {
+  /** The lesson is complete after this call. */
+  completed: boolean;
+  /** Requirements that still block completion (e.g. an unwatched video). */
+  missing: string[];
+  lessonHref: string | null;
+}
+
+/**
+ * Called by the assignment / exercise actions after a learner records a
+ * submission (assignment) or a passing submission (exercise) from a lesson.
+ * Completes the lesson through the shared progress service (dwell time is
+ * treated as met) and revalidates the lesson page, the course page and the
+ * dashboard so the lesson player shows the new status immediately.
+ *
+ * Only enrolled learners who can open the lesson make progress; staff
+ * previewing a lesson are left untouched.
+ */
+export async function completeLessonFromAssessment(user: User, lesson: Lesson): Promise<AssessmentLessonOutcome> {
+  const access = await getLessonAccess(user, lesson.id);
+  if (!access || !access.enrolled || !access.canView) return { completed: false, missing: [], lessonHref: access?.href ?? null };
+  let outcome: AssessmentLessonOutcome;
+  if (access.status === "complete") {
+    outcome = { completed: true, missing: [], lessonHref: access.href };
+  } else {
+    const result = await completeLesson(user, lesson, 9999);
+    outcome = { completed: result.completed, missing: result.completed ? [] : result.requirements.missing, lessonHref: access.href };
+  }
+  revalidateLessonRoutes(access.href, access.course.slug);
+  return outcome;
+}
+
+/** Refresh the lesson player (page + sidebar outline), the course page and the dashboard. */
+export function revalidateLessonRoutes(lessonHref: string | null, courseSlug: string | null) {
+  // Route patterns (with and without the route group) cover every lesson page; the literal href refreshes this one.
+  revalidatePath("/(learn)/courses/[slug]/learn/[ref]", "page");
+  revalidatePath("/courses/[slug]/learn/[ref]", "page");
+  revalidatePath("/(learn)/courses/[slug]/learn", "layout");
+  if (lessonHref) revalidatePath(lessonHref);
+  if (courseSlug) revalidatePath(`/courses/${courseSlug}`);
+  revalidatePath("/dashboard");
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,8 +392,9 @@ export async function getExercise(id: string): Promise<ProgrammingExercise | nul
 }
 
 /**
- * Runner payload. Learners get hidden tests with a hash of the expected
- * output only; staff (`revealHidden`) receive everything.
+ * Runner payload. Learners get hidden tests without input or expected output
+ * (they are graded by the server sandbox on submit); staff (`revealHidden`)
+ * receive everything.
  */
 export function toRunnerExercise(ex: ProgrammingExercise, opts: { revealHidden: boolean }): RunnerExercise {
   return {
@@ -356,7 +407,7 @@ export function toRunnerExercise(ex: ProgrammingExercise, opts: { revealHidden: 
     tests: ex.testCases.map((t, i) => {
       const hidden = !!t.hidden;
       if (hidden && !opts.revealHidden) {
-        return { id: t.id, index: i + 1, hidden, input: t.input, expectedHash: hashOutput(t.expectedOutput) };
+        return { id: t.id, index: i + 1, hidden, serverOnly: true };
       }
       return { id: t.id, index: i + 1, hidden, input: t.input, expectedOutput: t.expectedOutput };
     }),

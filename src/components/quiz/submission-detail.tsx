@@ -113,14 +113,14 @@ export function SubmissionDetailView({ data, context }: { data: SubmissionDetail
           </Notice>
         )}
         {!data.revealed && (
-          <Notice tone="info">Correct answers and per-question marks are hidden for this quiz.</Notice>
+          <Notice tone="info">Correct answers and the marks for automatically graded questions are hidden for this quiz.</Notice>
         )}
         {s.pendingGrading && !data.canGrade && (
           <Notice tone="warning" title="Awaiting grading">
             Your instructor will review your written answers. You&apos;ll get a notification when your final score is ready.
           </Notice>
         )}
-        <div className="overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
+        <div className="overflow-clip rounded-card border border-border bg-surface-1 shadow-card">
           <div className="border-b border-border px-4 py-4 sm:px-5">
             <h2 className="text-lg font-semibold text-ink">{quiz?.title ?? s.quizTitle}</h2>
             <p className="mt-0.5 text-sm text-ink-muted">

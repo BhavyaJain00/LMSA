@@ -1,6 +1,7 @@
 import { hasRole, isAdmin, isModerator, requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getAdminOverview } from "@/lib/data/dashboard";
+import { runAutomaticPaymentReminders } from "@/lib/data/commerce";
 import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -37,13 +38,10 @@ function money(cents: number, currency: string): string {
   }
 }
 
-function countUpcoming(classes: { endsAt: string }[]): number {
-  const now = Date.now();
-  return classes.filter((c) => new Date(c.endsAt).getTime() > now).length;
-}
-
 export default async function AdminOverviewPage() {
   const user = await requireRole(["course_creator", "moderator", "batch_evaluator"], "/admin");
+  // Daily payment reminders (no scheduler): idempotent, at most once per unpaid order per day.
+  if (isAdmin(user)) await runAutomaticPaymentReminders();
   const [settings, data] = await Promise.all([getSettings(), getAdminOverview(user)]);
   const f = settings.features;
   const moderator = isModerator(user);
@@ -106,7 +104,6 @@ export default async function AdminOverviewPage() {
     links.push({ label: "Settings", description: "Branding, features and learning rules", href: "/admin/settings", icon: "Settings" });
   }
 
-  const upcomingLive = countUpcoming(data.liveClasses);
   const showEmptyState = data.createdCourses.length === 0 && data.upcomingBatches.length === 0;
 
   return (
@@ -116,7 +113,7 @@ export default async function AdminOverviewPage() {
           <h1 className="text-2xl font-bold tracking-tight text-ink">
             Hey, {user.name} <span aria-hidden="true">👋</span>
           </h1>
-          <p className="mt-1 text-base text-ink-muted">{subtitleFor(upcomingLive, data.evaluations.length)}</p>
+          <p className="mt-1 text-base text-ink-muted">{subtitleFor(data.upcomingCounts.liveClasses, data.upcomingCounts.evaluations)}</p>
           {data.scope === "mine" && (
             <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-ink-muted">
               <Icon.Info className="size-3.5" /> Numbers cover the courses and batches you teach.
@@ -175,7 +172,13 @@ export default async function AdminOverviewPage() {
           />
         )}
         <KpiCard
-          href={pendingGrading ? (k.pendingAssignments ? "/admin/assignments/submissions?status=not_graded" : "/admin/quizzes/submissions") : undefined}
+          href={
+            k.pendingAssignments
+              ? "/admin/assignments/submissions?status=not_graded"
+              : k.pendingQuizzes && creator
+                ? "/admin/quizzes/submissions"
+                : undefined
+          }
           label="Pending grading"
           value={formatNumber(pendingGrading)}
           hint={`${k.pendingAssignments} assignments · ${k.pendingQuizzes} quizzes`}

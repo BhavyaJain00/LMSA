@@ -1,17 +1,16 @@
 import "server-only";
-import type { Batch, Coupon, Course, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
+import type { Batch, Coupon, Course, Database, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
-import { enrollUserInBatch, enrollUserInCourse, unenrollUserFromCourse } from "@/lib/services/enrollment";
-import { issueCertificate } from "@/lib/services/progress";
-import { notify, notifyMany } from "@/lib/services/notifications";
-import { formatPrice, shortCode, toDateKey } from "@/lib/utils";
+import { notifyMany } from "@/lib/services/notifications";
+import { formatPrice, shortCode, toDateKey, uid } from "@/lib/utils";
 
 /**
  * Commerce domain logic: billing items, access checks, coupons, order
- * summaries, fulfillment (enrollment after payment), refunds and the admin
- * transaction queries. Server Actions in `src/lib/actions/payments.ts` and
+ * summaries, reminders and the admin transaction queries. Fulfilment
+ * (access after payment), refunds, gateways and invoices live in
+ * `src/lib/payments/*`. Server Actions in `src/lib/actions/payments.ts` and
  * `src/lib/actions/coupons.ts` are thin, permission-checked wrappers around
  * these helpers.
  */
@@ -43,6 +42,17 @@ export const GATEWAY_LABELS: Record<Settings["commerce"]["paymentGateway"], stri
 export function gatewayLabel(gateway: string): string {
   if (gateway === "free") return "Free order";
   return (GATEWAY_LABELS as Record<string, string>)[gateway] ?? gateway;
+}
+
+/**
+ * Status wording for one order: failed orders with a gateway reason read as
+ * "Payment failed", otherwise "Cancelled"; partial refunds are called out.
+ */
+export function paymentStatusLabel(p: Pick<Payment, "status" | "failureReason" | "refundedAmount" | "amount">): string {
+  if (p.status === "failed") return p.failureReason ? "Payment failed" : "Cancelled";
+  if (p.status === "refunded") return p.refundedAmount !== undefined && p.refundedAmount > 0 && p.refundedAmount < p.amount ? "Partially refunded" : "Refunded";
+  if (p.status === "pending") return "Awaiting payment";
+  return p.refundedAmount ? "Paid · partially refunded" : "Paid";
 }
 
 export function parseItemType(raw: string | undefined | null): PaymentItemType | null {
@@ -130,6 +140,25 @@ export type BillingAccess =
   | { status: "denied"; message: string; backHref: string; backLabel: string };
 
 /**
+ * Published prerequisite courses (Course.prerequisiteCourseIds) the user has
+ * not completed yet. Deleted or unpublished prerequisites are ignored so a
+ * course can never become impossible to buy.
+ */
+export function missingPrerequisites(db: Database, userId: string, course: Course): Course[] {
+  const ids = course.prerequisiteCourseIds ?? [];
+  if (!ids.length) return [];
+  const missing: Course[] = [];
+  for (const id of ids) {
+    if (id === course.id) continue;
+    const prereq = db.courses.find((c) => c.id === id);
+    if (!prereq || !prereq.published) continue;
+    const done = db.enrollments.some((e) => e.userId === userId && e.courseId === id && !!e.completedAt);
+    if (!done) missing.push(prereq);
+  }
+  return missing;
+}
+
+/**
  * Mirrors Frappe's validate_billing_access + order summary preconditions:
  * item exists and is published, the viewer is not already enrolled, batch
  * seats and start date, certificate not already purchased.
@@ -151,6 +180,18 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     if (!course.paidCourse || course.price <= 0) return { status: "free", redirectTo: `/courses/${course.slug}` };
     if (course.disableSelfLearning && !hasRole(user, "moderator", "course_creator", "batch_evaluator")) {
       return { status: "denied", message: "This course is only available through a batch. Please contact the Administrator.", ...back };
+    }
+    if (!manager) {
+      const missing = missingPrerequisites(db, user.id, course);
+      if (missing.length) {
+        const names = missing.map((c) => `“${c.title}”`).join(", ");
+        return {
+          status: "denied",
+          message: `Complete ${missing.length === 1 ? "the prerequisite course" : "the prerequisite courses"} ${names} before buying this course.`,
+          backHref: `/courses/${missing[0]!.slug}`,
+          backLabel: missing.length === 1 ? "Go to the prerequisite" : "Go to the first prerequisite",
+        };
+      }
     }
     if (pending) return { status: "pending", payment: pending };
     return { status: "ok" };
@@ -207,19 +248,37 @@ export function couponAppliesTo(coupon: Coupon, item: Pick<BillingItem, "type" |
 
 export type CouponCheck = { ok: true; coupon: Coupon } | { ok: false; error: string };
 
-/** Validate a coupon code for an item (enabled, not expired, under usage limit, applicable). */
-export async function validateCoupon(rawCode: string, item: Pick<BillingItem, "type" | "id">): Promise<CouponCheck> {
+/**
+ * Redemptions a coupon has used up: paid orders (`redemptionCount`) plus
+ * orders still awaiting confirmation, which reserve a use so a limited code
+ * cannot be over-redeemed while the manual gateway queue is unconfirmed.
+ */
+export function couponUsesTaken(coupon: Coupon, payments: Payment[]): number {
+  const reserved = payments.filter((p) => p.status === "pending" && p.couponId === coupon.id).length;
+  return coupon.redemptionCount + reserved;
+}
+
+/**
+ * Validate a coupon code for an item (enabled, not expired, under usage limit,
+ * applicable). Fixed-amount coupons are stored in the platform's default
+ * currency and only apply to items priced in that currency.
+ */
+export async function validateCoupon(rawCode: string, item: Pick<BillingItem, "type" | "id" | "currency">): Promise<CouponCheck> {
   const code = normalizeCouponCode(rawCode);
   if (!code) return { ok: false, error: "Please enter a coupon code" };
   const db = await getDb();
   const coupon = db.coupons.find((c) => c.code.toUpperCase() === code);
   if (!coupon || !coupon.enabled) return { ok: false, error: `The coupon code '${code}' is invalid.` };
   if (coupon.expiresOn && coupon.expiresOn < toDateKey()) return { ok: false, error: "This coupon has expired." };
-  if (coupon.usageLimit > 0 && coupon.redemptionCount >= coupon.usageLimit) {
+  if (coupon.usageLimit > 0 && couponUsesTaken(coupon, db.payments) >= coupon.usageLimit) {
     return { ok: false, error: "This coupon has reached its maximum usage limit." };
   }
   if (!couponAppliesTo(coupon, item)) {
     return { ok: false, error: `This coupon is not applicable to this ${ITEM_TYPE_LABELS[item.type]}.` };
+  }
+  const defaultCurrency = db.settings.commerce.defaultCurrency.toUpperCase();
+  if (coupon.discountType === "fixed" && item.currency.toUpperCase() !== defaultCurrency) {
+    return { ok: false, error: `This coupon can only be used for prices in ${defaultCurrency}.` };
   }
   return { ok: true, coupon };
 }
@@ -312,6 +371,25 @@ export async function generateOrderId(): Promise<string> {
   return id;
 }
 
+/**
+ * Insert a new order unless the buyer already has an open (pending) order
+ * for the same item — checked and written in one serialized mutation so a
+ * double-submitted checkout cannot create two orders. The order id is made
+ * unique inside the same mutation.
+ */
+export async function insertPendingOrder(draft: Omit<Payment, "orderId">): Promise<{ payment: Payment; existing: boolean }> {
+  return mutate((d) => {
+    const open = d.payments.find((p) => p.userId === draft.userId && p.itemType === draft.itemType && p.itemId === draft.itemId && p.status === "pending");
+    if (open) return { payment: { ...open }, existing: true };
+    const taken = new Set(d.payments.map((p) => p.orderId));
+    let orderId = `ORD-${shortCode(2, 4)}`;
+    while (taken.has(orderId)) orderId = `ORD-${shortCode(2, 4)}`;
+    const payment: Payment = { ...draft, orderId };
+    d.payments.push(payment);
+    return { payment: { ...payment }, existing: false };
+  });
+}
+
 export async function getPaymentByOrderId(orderId: string): Promise<Payment | null> {
   const db = await getDb();
   return db.payments.find((p) => p.orderId === orderId || p.id === orderId) ?? null;
@@ -325,151 +403,6 @@ export async function getSavedBillingDetails(userId: string): Promise<Pick<Payme
   return { billingName: last.billingName, address: last.address, gstin: last.gstin, pan: last.pan, source: last.source };
 }
 
-export interface FulfillmentResult {
-  payment: Payment;
-  /** Human readable note (e.g. the batch was full so the seat could not be allocated). */
-  notice?: string;
-  certificateCode?: string;
-}
-
-/**
- * Mark a payment as paid and grant what was bought. Idempotent: calling it
- * again for an already-paid order re-applies access without double counting
- * coupon redemptions or notifications.
- */
-export async function fulfillPayment(
-  paymentId: string,
-  opts: { gatewayPaymentId?: string } = {},
-): Promise<{ ok: true; data: FulfillmentResult } | { ok: false; error: string }> {
-  const db = await getDb();
-  const existing = db.payments.find((p) => p.id === paymentId);
-  if (!existing) return { ok: false, error: "Payment not found." };
-  if (existing.status === "refunded") return { ok: false, error: "Refunded orders cannot be marked as paid." };
-  const wasPaid = existing.status === "paid";
-  const now = new Date().toISOString();
-
-  const payment = await mutate((d) => {
-    const row = d.payments.find((p) => p.id === paymentId)!;
-    row.status = "paid";
-    row.paidAt = row.paidAt ?? now;
-    if (opts.gatewayPaymentId && !row.gatewayPaymentId) row.gatewayPaymentId = opts.gatewayPaymentId;
-    if (!wasPaid && row.couponId) {
-      const coupon = d.coupons.find((c) => c.id === row.couponId);
-      if (coupon) coupon.redemptionCount += 1;
-    }
-    return { ...row };
-  });
-
-  const user = db.users.find((u) => u.id === payment.userId);
-  if (!user) return { ok: true, data: { payment, notice: "The learner account no longer exists, so no access was granted." } };
-
-  let notice: string | undefined;
-  let certificateCode: string | undefined;
-
-  if (payment.itemType === "course") {
-    const course = db.courses.find((c) => c.id === payment.itemId);
-    if (course) await enrollUserInCourse(user.id, course.id, { paymentId: payment.id });
-    else notice = "The course no longer exists, so no enrollment was created.";
-  } else if (payment.itemType === "batch") {
-    const batch = db.batches.find((b) => b.id === payment.itemId);
-    if (batch) {
-      const res = await enrollUserInBatch(user.id, batch.id, { paymentId: payment.id, source: payment.source });
-      if (!res.ok) notice = `${res.error} The payment was recorded but the seat could not be allocated.`;
-    } else {
-      notice = "The batch no longer exists, so no enrollment was created.";
-    }
-  } else {
-    const course = db.courses.find((c) => c.id === payment.itemId);
-    if (course) {
-      let enrollment = db.enrollments.find((e) => e.userId === user.id && e.courseId === course.id);
-      if (!enrollment) enrollment = await enrollUserInCourse(user.id, course.id, { notifyInstructors: false });
-      const enrollmentId = enrollment.id;
-      const complete = await mutate((d) => {
-        const row = d.enrollments.find((e) => e.id === enrollmentId);
-        if (!row) return false;
-        row.purchasedCertificate = true;
-        return !!row.completedAt || row.progress >= 100;
-      });
-      if (complete && db.settings.features.certifications) {
-        const cert = await issueCertificate(user, course);
-        await mutate((d) => {
-          const row = d.certificates.find((c) => c.id === cert.id);
-          if (row && !row.published) row.published = true;
-        });
-        certificateCode = cert.code;
-      }
-    } else {
-      notice = "The course no longer exists, so no certificate could be issued.";
-    }
-  }
-
-  if (!wasPaid) {
-    await notify(user.id, {
-      type: payment.itemType === "certificate" ? "certificate" : "enrollment",
-      subject: payment.amount > 0 ? `Payment received for ${payment.itemTitle}` : `You're enrolled: ${payment.itemTitle}`,
-      message: `Order ${payment.orderId} · ${formatPrice(payment.amount, payment.currency)}`,
-      link: `/billing/success/${payment.orderId}`,
-    });
-  }
-
-  return { ok: true, data: { payment, notice, certificateCode } };
-}
-
-/** Refund a paid order: mark it refunded and remove the access it granted. */
-export async function refundPayment(paymentId: string): Promise<{ ok: true; data: Payment } | { ok: false; error: string }> {
-  const db = await getDb();
-  const existing = db.payments.find((p) => p.id === paymentId);
-  if (!existing) return { ok: false, error: "Payment not found." };
-  if (existing.status !== "paid") return { ok: false, error: "Only paid orders can be refunded." };
-
-  const payment = await mutate((d) => {
-    const row = d.payments.find((p) => p.id === paymentId)!;
-    row.status = "refunded";
-    return { ...row };
-  });
-
-  if (payment.itemType === "course") {
-    const enrollment = db.enrollments.find((e) => e.userId === payment.userId && e.courseId === payment.itemId);
-    if (enrollment) {
-      if (enrollment.batchId) {
-        // Access also comes from a batch: keep it, just detach the refunded payment.
-        await mutate((d) => {
-          const row = d.enrollments.find((e) => e.id === enrollment.id);
-          if (row && row.paymentId === payment.id) row.paymentId = undefined;
-        });
-      } else {
-        await unenrollUserFromCourse(payment.userId, payment.itemId);
-      }
-    }
-  } else if (payment.itemType === "batch") {
-    const batch = db.batches.find((b) => b.id === payment.itemId);
-    await mutate((d) => {
-      d.batchEnrollments = d.batchEnrollments.filter((e) => !(e.batchId === payment.itemId && e.userId === payment.userId));
-    });
-    if (batch) {
-      const viaBatch = (await getDb()).enrollments.filter((e) => e.userId === payment.userId && e.batchId === batch.id && batch.courseIds.includes(e.courseId));
-      for (const e of viaBatch) await unenrollUserFromCourse(payment.userId, e.courseId);
-    }
-  } else {
-    await mutate((d) => {
-      const enrollment = d.enrollments.find((e) => e.userId === payment.userId && e.courseId === payment.itemId);
-      if (enrollment) enrollment.purchasedCertificate = false;
-      const course = d.courses.find((c) => c.id === payment.itemId);
-      const cert = d.certificates.find((c) => c.userId === payment.userId && c.courseId === payment.itemId);
-      // Paid certificates are revoked (unpublished) with the refund; free ones stay.
-      if (cert && course?.paidCertificate) cert.published = false;
-    });
-  }
-
-  await notify(payment.userId, {
-    type: "system",
-    subject: `Your payment for ${payment.itemTitle} was refunded`,
-    message: `Order ${payment.orderId} · ${formatPrice(payment.amount, payment.currency)}`,
-    link: `/billing/success/${payment.orderId}`,
-  });
-  return { ok: true, data: payment };
-}
-
 /** Tell admins that a manual order is waiting for confirmation. */
 export async function notifyAdminsOfPendingOrder(payment: Payment, buyerName: string): Promise<void> {
   const db = await getDb();
@@ -481,6 +414,198 @@ export async function notifyAdminsOfPendingOrder(payment: Payment, buyerName: st
     link: `/admin/settings/transactions?status=pending`,
     fromUserId: payment.userId,
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Payment reminders                                                   */
+/* ------------------------------------------------------------------ */
+
+export const PAYMENT_REMINDER_SUBJECT = "Complete Your Enrollment - Don't miss out!";
+/** A learner is reminded about the same order at most once per day. */
+const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+/** Unpaid orders older than this are considered abandoned and no longer reminded in bulk. */
+const REMINDER_WINDOW_DAYS = 7;
+const REMINDER_WINDOW_MS = REMINDER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+/**
+ * Automatic reminders wait this long after the order was placed, so a
+ * learner who is still on the checkout page is not nudged right away
+ * (Frappe reminds about unpaid orders on the following day).
+ */
+const AUTO_REMINDER_GRACE_MS = 60 * 60 * 1000;
+
+export type ReminderSkipReason = "not_pending" | "has_access" | "sold_out" | "recently_reminded" | "no_user";
+export type ReminderCheck = { ok: true } | { ok: false; reason: ReminderSkipReason; message: string };
+
+function reminderLink(payment: Pick<Payment, "orderId">): string {
+  return `/billing/success/${payment.orderId}`;
+}
+
+/** When this order was last reminded: the recorded stamp, or the newest reminder notification for older data. */
+function lastReminderTime(db: Database, payment: Payment): number | null {
+  if (payment.lastReminderAt) {
+    const t = new Date(payment.lastReminderAt).getTime();
+    if (Number.isFinite(t)) return t;
+  }
+  const link = reminderLink(payment);
+  let latest: number | null = null;
+  for (const n of db.notifications) {
+    if (n.userId !== payment.userId || n.link !== link || n.subject !== PAYMENT_REMINDER_SUBJECT) continue;
+    const t = new Date(n.createdAt).getTime();
+    if (latest === null || t > latest) latest = t;
+  }
+  return latest;
+}
+
+/** Pure eligibility check against a database snapshot (safe to call inside `mutate`). */
+function evaluateReminder(db: Database, payment: Payment, now: number): ReminderCheck {
+  if (payment.status !== "pending") return { ok: false, reason: "not_pending", message: "Only unpaid orders can be reminded." };
+  const user = db.users.find((u) => u.id === payment.userId && u.enabled);
+  if (!user) return { ok: false, reason: "no_user", message: "The learner account no longer exists or is disabled." };
+
+  if (payment.itemType === "course") {
+    if (db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId)) {
+      return { ok: false, reason: "has_access", message: "The learner is already enrolled in this course." };
+    }
+  } else if (payment.itemType === "batch") {
+    if (db.batchEnrollments.some((e) => e.userId === payment.userId && e.batchId === payment.itemId)) {
+      return { ok: false, reason: "has_access", message: "The learner is already enrolled in this batch." };
+    }
+    const batch = db.batches.find((b) => b.id === payment.itemId);
+    const taken = db.batchEnrollments.filter((e) => e.batchId === payment.itemId).length;
+    if (batch && batch.seatCount > 0 && taken >= batch.seatCount) return { ok: false, reason: "sold_out", message: "This batch is sold out." };
+  } else if (db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId && e.purchasedCertificate)) {
+    return { ok: false, reason: "has_access", message: "The learner already purchased this certificate." };
+  }
+
+  const last = lastReminderTime(db, payment);
+  if (last !== null && now - last < REMINDER_COOLDOWN_MS) {
+    return { ok: false, reason: "recently_reminded", message: "A reminder for this order was already sent in the last 24 hours." };
+  }
+  return { ok: true };
+}
+
+/**
+ * Whether an unpaid order should get a reminder (Frappe: payment reminder
+ * job). Skips learners who already got access another way, sold-out
+ * batches and orders reminded within the last day.
+ */
+export async function checkReminderEligibility(payment: Payment): Promise<ReminderCheck> {
+  const db = await getDb();
+  return evaluateReminder(db, payment, Date.now());
+}
+
+function reminderNotification(payment: Payment, now: Date): Notification {
+  return {
+    id: uid("ntf"),
+    userId: payment.userId,
+    type: "system",
+    subject: PAYMENT_REMINDER_SUBJECT,
+    message: `Your order ${payment.orderId} for ${payment.itemTitle} (${formatPrice(payment.amount, payment.currency)}) is still awaiting payment. Complete it to secure your spot.`,
+    link: reminderLink(payment),
+    read: false,
+    dedupeKey: `payment-reminder:${payment.id}:${toDateKey(now)}`,
+    createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * Remind every eligible order among `paymentIds` in one serialized write:
+ * eligibility is re-checked against the live data inside `mutate`, and the
+ * notification and the `lastReminderAt` stamp are written together, so two
+ * concurrent runs can never remind the same order twice in a day.
+ */
+async function remindPayments(paymentIds: string[], now: Date): Promise<{ sent: number; skipped: number; firstError: string | null }> {
+  if (!paymentIds.length) return { sent: 0, skipped: 0, firstError: null };
+  const wanted = new Set(paymentIds);
+  return mutate((d) => {
+    let sent = 0;
+    let skipped = 0;
+    let firstError: string | null = null;
+    const stamp = now.toISOString();
+    for (const payment of d.payments) {
+      if (!wanted.has(payment.id)) continue;
+      const check = evaluateReminder(d, payment, now.getTime());
+      if (!check.ok) {
+        skipped++;
+        firstError ??= check.message;
+        continue;
+      }
+      d.notifications.push(reminderNotification(payment, now));
+      payment.lastReminderAt = stamp;
+      sent++;
+    }
+    return { sent, skipped, firstError };
+  });
+}
+
+/** Send the in-app payment reminder for one unpaid order (eligibility re-checked atomically). */
+export async function sendPaymentReminder(payment: Payment): Promise<ReminderCheck> {
+  const result = await remindPayments([payment.id], new Date());
+  if (result.sent) return { ok: true };
+  return { ok: false, reason: "recently_reminded", message: result.firstError ?? "This order can no longer be reminded." };
+}
+
+function remindableCandidates(db: Database, now: number, minAgeMs = 0): Payment[] {
+  return db.payments.filter((p) => {
+    if (p.status !== "pending") return false;
+    const created = new Date(p.createdAt).getTime();
+    return created >= now - REMINDER_WINDOW_MS && created <= now - minAgeMs;
+  });
+}
+
+/** Remind every eligible learner with an unpaid order from the last week. Returns counts. */
+export async function sendPendingPaymentReminders(now: Date = new Date()): Promise<{ sent: number; skipped: number }> {
+  const db = await getDb();
+  const ids = remindableCandidates(db, now.getTime()).map((p) => p.id);
+  const { sent, skipped } = await remindPayments(ids, now);
+  return { sent, skipped };
+}
+
+/**
+ * Daily automatic payment reminders (Frappe runs this as a scheduled job).
+ * There is no scheduler here, so admin pages call it on load. It is
+ * idempotent and cheap: nothing is written unless an order is due, and each
+ * unpaid order is reminded at most once per day (tracked by `lastReminderAt`).
+ * Orders younger than an hour are left alone. Does nothing while
+ * "Send payment reminders" is off.
+ */
+export async function runAutomaticPaymentReminders(now: Date = new Date()): Promise<number> {
+  try {
+    const db = await getDb();
+    if (!db.settings.commerce.sendPaymentReminders) return 0;
+    const at = now.getTime();
+    const due = remindableCandidates(db, at, AUTO_REMINDER_GRACE_MS).filter((p) => evaluateReminder(db, p, at).ok);
+    if (!due.length) return 0;
+    const { sent } = await remindPayments(
+      due.map((p) => p.id),
+      now,
+    );
+    return sent;
+  } catch (error) {
+    // A reminder failure must never break the admin page that triggered it.
+    console.error("Automatic payment reminders failed", error);
+    return 0;
+  }
+}
+
+/** Number of unpaid orders from the last week (shown next to "Send reminders"). */
+export async function countRemindableOrders(): Promise<number> {
+  const db = await getDb();
+  return remindableCandidates(db, Date.now()).length;
+}
+
+/** Unpaid orders from the last week whose reminder was sent automatically or manually today, and the latest send time. */
+export async function getReminderActivity(): Promise<{ remindedToday: number; lastSentAt: string | null }> {
+  const db = await getDb();
+  const today = toDateKey(new Date());
+  let remindedToday = 0;
+  let lastSentAt: string | null = null;
+  for (const p of db.payments) {
+    if (!p.lastReminderAt) continue;
+    if (toDateKey(new Date(p.lastReminderAt)) === today) remindedToday++;
+    if (!lastSentAt || p.lastReminderAt > lastSentAt) lastSentAt = p.lastReminderAt;
+  }
+  return { remindedToday, lastSentAt };
 }
 
 /* ------------------------------------------------------------------ */
@@ -542,7 +667,7 @@ export async function getTransactions(filter: TransactionFilter): Promise<Transa
       if (filter.to && day > filter.to) return false;
       if (q) {
         const u = users.get(p.userId);
-        const hay = `${p.orderId} ${p.billingName} ${p.itemTitle} ${u?.email ?? ""} ${u?.name ?? ""} ${p.couponCode ?? ""}`.toLowerCase();
+        const hay = `${p.orderId} ${p.billingName} ${p.itemTitle} ${u?.email ?? ""} ${u?.name ?? ""} ${p.couponCode ?? ""} ${p.invoiceNumber ?? ""} ${p.gatewayPaymentId ?? ""} ${p.gatewayOrderId ?? ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -550,15 +675,46 @@ export async function getTransactions(filter: TransactionFilter): Promise<Transa
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((p) => {
       const u = users.get(p.userId);
-      let itemHref: string | null = null;
-      if (p.itemType === "batch") {
-        const b = batches.get(p.itemId);
-        itemHref = b ? `/batches/${b.slug}` : null;
-      } else {
-        const c = courses.get(p.itemId);
-        itemHref = c ? (p.itemType === "certificate" ? `/courses/${c.slug}/certification` : `/courses/${c.slug}`) : null;
-      }
-      return { ...p, userName: u?.name ?? "Deleted user", userEmail: u?.email ?? "", username: u?.username ?? null, itemHref };
+      return { ...p, userName: u?.name ?? "Deleted user", userEmail: u?.email ?? "", username: u?.username ?? null, itemHref: itemHrefFor(p, courses, batches) };
+    });
+}
+
+function itemHrefFor(p: Pick<Payment, "itemType" | "itemId">, courses: Map<string, Course>, batches: Map<string, Batch>): string | null {
+  if (p.itemType === "batch") {
+    const b = batches.get(p.itemId);
+    return b ? `/batches/${b.slug}` : null;
+  }
+  const c = courses.get(p.itemId);
+  return c ? (p.itemType === "certificate" ? `/courses/${c.slug}/certification` : `/courses/${c.slug}`) : null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Learner: order history                                              */
+/* ------------------------------------------------------------------ */
+
+export interface OrderHistoryRow extends Payment {
+  itemHref: string | null;
+  imageUrl?: string;
+  gradient?: string;
+}
+
+/** A learner's orders, newest first, with links to what they bought. */
+export async function getOrderHistory(userId: string): Promise<OrderHistoryRow[]> {
+  const db = await getDb();
+  const courses = new Map(db.courses.map((c) => [c.id, c]));
+  const batches = new Map(db.batches.map((b) => [b.id, b]));
+  return db.payments
+    .filter((p) => p.userId === userId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((p) => {
+      const course = p.itemType === "batch" ? undefined : courses.get(p.itemId);
+      const batch = p.itemType === "batch" ? batches.get(p.itemId) : undefined;
+      return {
+        ...p,
+        itemHref: itemHrefFor(p, courses, batches),
+        imageUrl: course?.imageUrl ?? batch?.imageUrl,
+        gradient: course?.cardGradient ?? (batch ? "violet" : undefined),
+      };
     });
 }
 
@@ -567,31 +723,36 @@ export interface TransactionStats {
   pendingCount: number;
   refundedCount: number;
   failedCount: number;
-  /** Revenue from paid orders per currency (smallest unit). */
+  /** Net revenue per currency (smallest unit): paid orders minus anything refunded on them, plus what was kept on partially refunded orders. */
   revenue: { currency: string; amount: number }[];
+  /** Money returned to buyers per currency (smallest unit). */
+  refunded: { currency: string; amount: number }[];
+}
+
+function refundedOn(p: Payment): number {
+  if (p.status === "refunded") return Math.min(p.amount, p.refundedAmount ?? p.amount);
+  return Math.min(p.amount, p.refundedAmount ?? 0);
 }
 
 export function summarizeTransactions(rows: Payment[]): TransactionStats {
   const revenue = new Map<string, number>();
+  const refunded = new Map<string, number>();
   let paidCount = 0;
   let pendingCount = 0;
   let refundedCount = 0;
   let failedCount = 0;
   for (const p of rows) {
-    if (p.status === "paid") {
-      paidCount++;
-      revenue.set(p.currency, (revenue.get(p.currency) ?? 0) + p.amount);
+    if (p.status === "paid" || p.status === "refunded") {
+      const back = refundedOn(p);
+      revenue.set(p.currency, (revenue.get(p.currency) ?? 0) + p.amount - back);
+      if (back > 0) refunded.set(p.currency, (refunded.get(p.currency) ?? 0) + back);
+      if (p.status === "paid") paidCount++;
+      else refundedCount++;
     } else if (p.status === "pending") pendingCount++;
-    else if (p.status === "refunded") refundedCount++;
     else failedCount++;
   }
-  return {
-    paidCount,
-    pendingCount,
-    refundedCount,
-    failedCount,
-    revenue: Array.from(revenue, ([currency, amount]) => ({ currency, amount })).sort((a, b) => b.amount - a.amount),
-  };
+  const list = (m: Map<string, number>) => Array.from(m, ([currency, amount]) => ({ currency, amount })).sort((a, b) => b.amount - a.amount);
+  return { paidCount, pendingCount, refundedCount, failedCount, revenue: list(revenue).filter((r) => r.amount > 0), refunded: list(refunded) };
 }
 
 function csvCell(value: string | number | undefined | null): string {
@@ -620,8 +781,14 @@ export function transactionsToCsv(rows: TransactionRow[]): string {
     "Total",
     "Coupon",
     "Gateway",
+    "Gateway order ID",
     "Gateway payment ID",
     "Paid at",
+    "Invoice number",
+    "Refunded amount",
+    "Refunded at",
+    "Refund ID",
+    "Failure reason",
     "Address line 1",
     "Address line 2",
     "City",
@@ -638,7 +805,7 @@ export function transactionsToCsv(rows: TransactionRow[]): string {
       [
         r.orderId,
         r.createdAt,
-        PAYMENT_STATUS_LABELS[r.status],
+        paymentStatusLabel(r),
         r.billingName,
         r.userName,
         r.userEmail,
@@ -651,8 +818,14 @@ export function transactionsToCsv(rows: TransactionRow[]): string {
         decimal(r.amount),
         r.couponCode ?? "",
         gatewayLabel(r.gateway),
+        r.gatewayOrderId ?? "",
         r.gatewayPaymentId ?? "",
         r.paidAt ?? "",
+        r.invoiceNumber ?? "",
+        refundedOn(r) > 0 ? decimal(refundedOn(r)) : "",
+        r.refundedAt ?? "",
+        r.refundId ?? "",
+        r.failureReason ?? "",
         r.address?.line1 ?? "",
         r.address?.line2 ?? "",
         r.address?.city ?? "",
@@ -717,4 +890,30 @@ export async function getCoupons(search?: string): Promise<CouponRow[]> {
       expired: !!c.expiresOn && c.expiresOn < today,
       exhausted: c.usageLimit > 0 && c.redemptionCount >= c.usageLimit,
     }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin: manually recorded transactions                               */
+/* ------------------------------------------------------------------ */
+
+export interface RecordableItem {
+  type: PaymentItemType;
+  id: string;
+  title: string;
+  /** Default price in the smallest currency unit. */
+  price: number;
+  currency: string;
+}
+
+/** Everything an admin can record a payment against: courses, batches and paid certificates. */
+export async function getRecordableItems(): Promise<RecordableItem[]> {
+  const db = await getDb();
+  const byTitle = (a: { title: string }, b: { title: string }) => a.title.localeCompare(b.title);
+  const courses = db.courses.map((c) => ({ type: "course" as const, id: c.id, title: c.title, price: c.paidCourse ? c.price : 0, currency: c.currency || "USD" })).sort(byTitle);
+  const batches = db.batches.map((b) => ({ type: "batch" as const, id: b.id, title: b.title, price: b.paidBatch ? b.amount : 0, currency: b.currency || "USD" })).sort(byTitle);
+  const certificates = db.courses
+    .filter((c) => c.paidCertificate)
+    .map((c) => ({ type: "certificate" as const, id: c.id, title: `Certificate for ${c.title}`, price: c.certificatePrice, currency: c.currency || "USD" }))
+    .sort(byTitle);
+  return [...courses, ...batches, ...certificates];
 }

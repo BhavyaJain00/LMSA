@@ -13,13 +13,46 @@ import { PAGE_SIZES } from "./shared";
 export interface FilterDef {
   /** Query-string key. */
   param: string;
-  kind: "search" | "select";
+  /** "toggle" renders a chip that sets the param to "true" while pressed. */
+  kind: "search" | "select" | "toggle";
   label: string;
   placeholder?: string;
   options?: { value: string; label: string }[];
   /** Locked filters are shown but cannot be changed. */
   disabled?: boolean;
   className?: string;
+  /** Toggle chips: tone of the leading dot while pressed. */
+  tone?: "success" | "accent" | "info" | "warning";
+}
+
+const TOGGLE_TONES: Record<NonNullable<FilterDef["tone"]>, string> = {
+  success: "bg-success",
+  accent: "bg-accent",
+  info: "bg-info",
+  warning: "bg-warning",
+};
+
+function ToggleFilter({ def, pressed, onToggle }: { def: FilterDef; pressed: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      disabled={def.disabled}
+      onClick={onToggle}
+      className={cn(
+        "inline-flex h-9 items-center gap-2 self-start rounded-full border px-3.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto",
+        pressed ? "border-accent/40 bg-accent/10 text-ink" : "border-border bg-surface-1 text-ink-muted hover:border-border-strong hover:text-ink",
+        def.className,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn("size-2 rounded-full transition-colors", pressed ? TOGGLE_TONES[def.tone ?? "accent"] : "bg-border-strong")}
+      />
+      {def.label}
+      {pressed && <Icon.Check className="size-3.5 text-accent" />}
+    </button>
+  );
 }
 
 function useQueryUpdater() {
@@ -89,7 +122,14 @@ export function FilterBar({ filters, children, className }: { filters: FilterDef
   return (
     <div className={cn("mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center", className)}>
       {filters.map((def) =>
-        def.kind === "search" ? (
+        def.kind === "toggle" ? (
+          <ToggleFilter
+            key={def.param}
+            def={def}
+            pressed={search.get(def.param) === "true"}
+            onToggle={() => update({ [def.param]: search.get(def.param) === "true" ? null : "true" })}
+          />
+        ) : def.kind === "search" ? (
           <SearchFilter
             key={`${def.param}-${resetKey}`}
             def={def}

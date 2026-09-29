@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import type { NoteColor } from "@/lib/types";
 import { createHighlightAction, deleteNoteAction } from "@/lib/actions/notes";
 import { cn } from "@/lib/utils";
@@ -210,8 +210,8 @@ export function SelectableContent({ children, className }: { children: ReactNode
       return;
     }
     const rect = range.getBoundingClientRect();
-    const width = 260;
-    const left = Math.min(Math.max(rect.left + rect.width / 2, width / 2 + 8), window.innerWidth - width / 2 - 8);
+    // Centre on the selection; the layout effect below keeps the rendered toolbar inside the viewport.
+    const left = rect.left + rect.width / 2;
     const placement = rect.top > 64 ? "above" : "below";
     setMenu({ text, left, top: placement === "above" ? rect.top - 8 : rect.bottom + 8, placement });
   }, []);
@@ -253,6 +253,19 @@ export function SelectableContent({ children, className }: { children: ReactNode
   };
 
   const existing = menu ? notes.find((n) => n.highlightedText && n.highlightedText === menu.text) : undefined;
+  const hasRemove = !!existing;
+
+  // Clamp the centred toolbar using its real rendered width (it grows when "Remove highlight" shows).
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!menu || !el) return;
+    const margin = 8;
+    const width = el.offsetWidth;
+    const half = width / 2;
+    const max = window.innerWidth - half - margin;
+    const left = max < half + margin ? window.innerWidth / 2 : Math.min(Math.max(menu.left, half + margin), max);
+    el.style.left = `${left}px`;
+  }, [menu, hasRemove]);
 
   const highlight = (color: NoteColor) => {
     if (!menu) return;
@@ -303,9 +316,10 @@ export function SelectableContent({ children, className }: { children: ReactNode
         <div
           ref={menuRef}
           role="toolbar"
+          data-selection-toolbar=""
           aria-label="Selected text actions"
           className={cn(
-            "fixed z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
+            "fixed z-50 flex max-w-[calc(100vw-16px)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
             menu.placement === "above" ? "-translate-y-full" : "",
           )}
           style={{ top: menu.top, left: menu.left }}

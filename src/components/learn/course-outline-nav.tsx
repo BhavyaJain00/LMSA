@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn, formatDuration } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
 import { CircleHalfIcon, MonitorPlayIcon, NotebookPenIcon } from "./learn-icons";
+import { lockExplanation, lockOf } from "./drip-shared";
+import { UnlockLabel, useRefreshWhenUnlocked } from "./unlock-time";
 import type { LessonKind, OutlineChapterItem, OutlineLessonItem } from "./types";
 
 const KIND_META: Record<LessonKind, { label: string; icon: (props: { className?: string }) => ReactNode }> = {
@@ -16,15 +18,30 @@ const KIND_META: Record<LessonKind, { label: string; icon: (props: { className?:
 };
 
 function lockTitle(lesson: OutlineLessonItem): string {
+  const lock = lockOf(lesson);
+  if (lock) return lockExplanation(lock);
   return lesson.lockReason === "sequential" ? "Complete the previous lesson to unlock this one" : "Enroll in the course to unlock this lesson";
+}
+
+/** Earliest drip unlock among the chapter's lessons when every lesson of it is still scheduled. */
+function chapterUnlocksAt(chapter: OutlineChapterItem): string | null {
+  if (!chapter.lessons.length) return null;
+  let earliest: string | null = null;
+  for (const lesson of chapter.lessons) {
+    const lock = lockOf(lesson);
+    if (lock?.reason !== "drip" || !lock.unlocksAt) return null;
+    if (!earliest || Date.parse(lock.unlocksAt) < Date.parse(earliest)) earliest = lock.unlocksAt;
+  }
+  return earliest;
 }
 
 function StatusIcon({ lesson, tracking }: { lesson: OutlineLessonItem; tracking: boolean }) {
   if (lesson.locked) {
+    const scheduled = lockOf(lesson)?.reason === "drip";
     return (
       <span className="flex shrink-0 text-ink-faint" title={lockTitle(lesson)}>
-        <Icon.Lock className="size-4" />
-        <span className="sr-only">Locked</span>
+        {scheduled ? <Icon.Clock className="size-4" /> : <Icon.Lock className="size-4" />}
+        <span className="sr-only">{scheduled ? "Scheduled" : "Locked"}</span>
       </span>
     );
   }
@@ -70,6 +87,19 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
   const [open, setOpen] = useState<Set<string>>(() => new Set(currentChapterId ? [currentChapterId] : []));
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Scheduled lessons open on time: refresh the route when the next one is released.
+  const unlockTimes = useMemo(
+    () =>
+      outline.flatMap((c) =>
+        c.lessons.flatMap((l) => {
+          const lock = lockOf(l);
+          return lock?.reason === "drip" && lock.unlocksAt ? [Date.parse(lock.unlocksAt)] : [];
+        }),
+      ),
+    [outline],
+  );
+  useRefreshWhenUnlocked(unlockTimes);
+
   // Keep the current lesson visible inside the scrollable list (without scrolling the page).
   useEffect(() => {
     const list = listRef.current;
@@ -105,6 +135,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
         const isOpen = open.has(chapter.id);
         const done = chapter.lessons.filter((l) => l.status === "complete").length;
         const panelId = `outline-chapter-${chapter.id}`;
+        const chapterUnlock = chapterUnlocksAt(chapter);
         return (
           <div key={chapter.id}>
             <button
@@ -118,6 +149,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
               <span className="min-w-0 flex-1">
                 <span className="block text-[11px] font-medium uppercase tracking-wider text-ink-faint">Chapter {chapter.number}</span>
                 <span className="block truncate text-sm font-semibold text-ink">{chapter.title}</span>
+                {chapterUnlock && <UnlockLabel at={chapterUnlock} icon className="mt-0.5 text-[11px] font-medium text-accent" />}
               </span>
               <span className="shrink-0 text-xs tabular-nums text-ink-muted">
                 {tracking ? `${done}/${chapter.lessons.length}` : `${chapter.lessons.length} ${chapter.lessons.length === 1 ? "lesson" : "lessons"}`}
@@ -128,6 +160,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                 {chapter.lessons.map((lesson) => {
                   const current = lesson.id === currentLessonId;
                   const kind = KIND_META[lesson.kind];
+                  const lock = lockOf(lesson);
                   const inner = (
                     <>
                       <span className={cn("flex shrink-0", current ? "text-accent" : "text-ink-faint")} title={kind.label}>
@@ -143,6 +176,9 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                           {lesson.durationSeconds > 0 && <span>{formatDuration(lesson.durationSeconds)}</span>}
                           {showPreview && lesson.preview && <span className="rounded bg-info/12 px-1 font-medium text-info">Preview</span>}
                         </span>
+                        {lock?.reason === "drip" && lock.unlocksAt && !chapterUnlock && (
+                          <UnlockLabel at={lock.unlocksAt} className="mt-0.5 text-[11px] font-medium text-accent" />
+                        )}
                       </span>
                       <StatusIcon lesson={lesson} tracking={tracking} />
                     </>

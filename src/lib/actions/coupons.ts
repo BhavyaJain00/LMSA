@@ -66,18 +66,31 @@ export async function saveCouponAction(_prev: ActionResult<{ id: string }> | nul
     else usageLimit = n;
   }
 
+  /*
+   * Deliberate deviation from Frappe (where "Applicable For" is required): an
+   * empty list means the coupon applies to every course and batch, which the
+   * form explains next to the picker. Fixed amounts are stored in the default
+   * currency, so a fixed coupon may only target items priced in it (checkout
+   * enforces the same rule for "all items" coupons).
+   */
+  const defaultCurrency = db.settings.commerce.defaultCurrency.toUpperCase();
   const applicableItems: Coupon["applicableItems"] = [];
   const seen = new Set<string>();
+  const otherCurrency: string[] = [];
   for (const raw of rawItems) {
     const [type, itemId] = raw.split(":");
     if ((type !== "course" && type !== "batch") || !itemId || seen.has(raw)) continue;
-    const exists = type === "course" ? db.courses.some((c) => c.id === itemId) : db.batches.some((b) => b.id === itemId);
-    if (!exists) {
+    const target = type === "course" ? db.courses.find((c) => c.id === itemId) : db.batches.find((b) => b.id === itemId);
+    if (!target) {
       errors.items = "One of the selected courses or batches no longer exists.";
       continue;
     }
+    if (discountType === "fixed" && (target.currency || "USD").toUpperCase() !== defaultCurrency) otherCurrency.push(target.title);
     seen.add(raw);
     applicableItems.push({ type, id: itemId });
+  }
+  if (otherCurrency.length && !errors.items) {
+    errors.items = `Fixed-amount coupons only work for items priced in ${defaultCurrency}. Remove ${otherCurrency.join(", ")} or use a percentage discount.`;
   }
 
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };

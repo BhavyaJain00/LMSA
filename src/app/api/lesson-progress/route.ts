@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { getLessonAccess } from "@/lib/data/lessons";
+import { getLessonAccess, lockedLessonError } from "@/lib/data/lessons";
 import { getCompletionRequirements, setLessonStatus } from "@/lib/services/progress";
 import { clamp } from "@/lib/utils";
 
@@ -41,7 +41,13 @@ export async function POST(req: NextRequest) {
   const access = await getLessonAccess(user, lessonId);
   if (!access) return NextResponse.json({ ok: false, error: "Lesson not found" }, { status: 404 });
   if (!access.enrolled) return NextResponse.json({ ok: false, error: "Not enrolled in this course" }, { status: 403 });
-  if (!access.canView) return NextResponse.json({ ok: false, error: "This lesson is locked" }, { status: 403 });
+  // Locked lessons (scheduled/drip, enforced order, prerequisites) never record progress.
+  if (!access.canView) {
+    return NextResponse.json(
+      { ok: false, error: lockedLessonError(access), lockReason: access.lock?.reason ?? "locked", unlocksAt: access.lock?.unlocksAt ?? null },
+      { status: 403 },
+    );
+  }
 
   const status = await setLessonStatus(user, access.lesson, "partial", dwellDelta);
 

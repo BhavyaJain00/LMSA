@@ -11,6 +11,7 @@ import { Field, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import type { WorkflowFlags } from "./types";
+import { hasUnsavedChanges } from "./unsaved-registry";
 
 export interface CourseWorkflowProps {
   courseId: string;
@@ -24,6 +25,13 @@ export interface CourseWorkflowProps {
 
 const STEPS = ["In progress", "Under review", "Approved", "Published"] as const;
 
+type RunFn = () => Promise<{ ok: boolean; message?: string; error?: string }>;
+interface PendingRun {
+  key: string;
+  fn: RunFn;
+  after?: () => void;
+}
+
 function stepIndex(status: CourseStatus, published: boolean): number {
   if (published) return 3;
   return status === "approved" ? 2 : status === "under_review" ? 1 : 0;
@@ -36,8 +44,18 @@ export function CourseWorkflow({ courseId, status, published, publishedOn, flags
   const [confirm, setConfirm] = useState<"publish" | "unpublish" | null>(null);
   const [changesOpen, setChangesOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [blocked, setBlocked] = useState<PendingRun | null>(null);
 
-  const run = (key: string, fn: () => Promise<{ ok: boolean; message?: string; error?: string }>, after?: () => void) => {
+  // These actions refresh the page from the server, which resets the Details and Settings forms.
+  const run = (key: string, fn: RunFn, after?: () => void) => {
+    if (hasUnsavedChanges()) {
+      setBlocked({ key, fn, after });
+      return;
+    }
+    execute(key, fn, after);
+  };
+
+  const execute = (key: string, fn: RunFn, after?: () => void) => {
     setBusy(key);
     startTransition(async () => {
       const res = await fn();
@@ -98,6 +116,20 @@ export function CourseWorkflow({ courseId, status, published, publishedOn, flags
 
   const dialogs = (
     <>
+      <ConfirmDialog
+        open={blocked !== null}
+        onClose={() => setBlocked(null)}
+        onConfirm={() => {
+          const next = blocked;
+          setBlocked(null);
+          if (next) execute(next.key, next.fn, next.after);
+        }}
+        title="Discard unsaved changes?"
+        description="You have unsaved edits on this page. Save them first to include them, or continue and they will be discarded."
+        confirmLabel="Discard and continue"
+        cancelLabel="Keep editing"
+        destructive
+      />
       <ConfirmDialog
         open={confirm === "publish"}
         onClose={() => setConfirm(null)}

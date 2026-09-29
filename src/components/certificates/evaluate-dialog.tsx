@@ -13,7 +13,9 @@ import { Tooltip } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { LocalDateTime } from "@/components/assessments/client-time";
+import { submitWithoutReset } from "@/components/assessments/form-submit";
 import { StarRatingInput } from "./star-rating";
+import { CertificateTemplateField } from "./template-field";
 import { formatClock12, formatShortDate } from "./time";
 
 type EvalStatus = CertificateEvaluation["status"];
@@ -148,7 +150,7 @@ export function EvaluateDialog({ event, open, onClose, canEdit, today }: { event
                   Save
                 </Button>
               </div>
-              <p className="text-[11px] text-ink-faint">Paste your own video-call link to replace the generated one. The learner is notified.</p>
+              <p className="text-[11px] text-ink-faint">Paste your own video-call link to replace the generated one. The learner is notified, and your next bookings reuse this link.</p>
             </div>
           )}
 
@@ -178,7 +180,7 @@ export function EvaluateDialog({ event, open, onClose, canEdit, today }: { event
           />
 
           {tab === "evaluation" || !showCertificationTab ? (
-            <form action={evalAction} className="mt-4 space-y-4">
+            <form onSubmit={submitWithoutReset(evalAction)} className="mt-4 space-y-4">
               <input type="hidden" name="requestId" value={event.id} />
               <FormError message={evalState && !evalState.ok && !evalState.fieldErrors ? evalState.error : null} />
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -215,7 +217,7 @@ export function EvaluateDialog({ event, open, onClose, canEdit, today }: { event
               )}
             </form>
           ) : (
-            <form action={certAction} className="mt-4 space-y-4">
+            <form onSubmit={submitWithoutReset(certAction)} className="mt-4 space-y-4">
               <input type="hidden" name="requestId" value={event.id} />
               <FormError message={certState && !certState.ok && !certState.fieldErrors ? certState.error : null} />
               <Switch
@@ -226,6 +228,7 @@ export function EvaluateDialog({ event, open, onClose, canEdit, today }: { event
                 label="Published"
                 description="Make this certificate visible to the participant."
               />
+              <CertificateTemplateField id={`template-${event.id}`} defaultValue={event.certificate?.templateId} disabled={!canEdit} error={certErrors?.templateId} />
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Issue Date" htmlFor={`issue-${event.id}`} error={certErrors?.issueDate}>
                   <Input id={`issue-${event.id}`} type="date" name="issueDate" defaultValue={event.certificate?.issueDate ?? today} disabled={!canEdit} />

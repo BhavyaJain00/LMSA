@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import type { ActionResult, LessonBlock } from "@/lib/types";
 import { saveLessonAction, type SavedLesson } from "@/lib/actions/lessons";
+import type { LessonReleaseInfo } from "@/lib/actions/drip";
 import { cn, formatDuration, relativeTime, slugify } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
@@ -18,6 +19,8 @@ import { BlockEditor } from "./block-editor";
 import { MarkdownEditor } from "./markdown-editor";
 import { UnsavedChangesGuard } from "./unsaved-changes-guard";
 import { VideoStatsDialog } from "./video-stats-dialog";
+import { LessonHelpDialog } from "./lesson-help-dialog";
+import { LessonReleaseSection, useLessonRelease } from "./lesson-release-section";
 
 export interface LessonEditorProps {
   courseId: string;
@@ -39,6 +42,11 @@ export interface LessonEditorProps {
   nav: LessonEditorNavChapter[];
   assessments: AssessmentOptions;
   videoStats: VideoStat[];
+  /**
+   * Current release schedule (drip) of the lesson and its chapter. When the
+   * page does not pass it, the "Release schedule" section loads it itself.
+   */
+  release?: LessonReleaseInfo | null;
 }
 
 interface Draft {
@@ -51,7 +59,30 @@ interface Draft {
 
 const serialize = (d: Draft) => JSON.stringify([d.title.trim(), d.slug.trim(), d.includeInPreview, d.instructorNotes.trim(), d.blocks]);
 
-export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref, outlineHref, prevHref, nextHref, nav, assessments, videoStats }: LessonEditorProps) {
+/**
+ * Video and audio editors fill in a missing duration from the file's metadata
+ * as soon as they mount. That is not an edit by the author, so a duration that
+ * appeared on an unchanged media block does not make the lesson dirty (it is
+ * still saved with the next real save).
+ */
+function withoutDetectedDurations(blocks: LessonBlock[], baseline: LessonBlock[]): LessonBlock[] {
+  const before = new Map(baseline.map((b) => [b.id, b]));
+  return blocks.map((b) => {
+    if ((b.type !== "video" && b.type !== "audio") || !b.duration) return b;
+    const prev = before.get(b.id);
+    if (!prev || prev.type !== b.type || prev.duration || prev.src !== b.src) return b;
+    return { ...b, duration: undefined };
+  });
+}
+
+/**
+ * Server Action request bodies are capped at 1 MB by Next.js. Stay safely below
+ * that (the form also carries the title, slug and multipart overhead) so an
+ * oversized lesson gets a clear message instead of a failed request.
+ */
+const MAX_LESSON_PAYLOAD_BYTES = 900 * 1024;
+
+export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref, outlineHref, prevHref, nextHref, nav, assessments, videoStats, release: providedRelease }: LessonEditorProps) {
   const toast = useToast();
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -66,13 +97,22 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
   const [revision, setRevision] = useState(0);
   const [savedAt, setSavedAt] = useState(lesson.updatedAt);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  const [sizeError, setSizeError] = useState<string | null>(null);
+  const release = useLessonRelease(lesson.id, providedRelease);
 
   const draft: Draft = { title, slug, includeInPreview, instructorNotes, blocks };
-  const snapshot = serialize(draft);
-  const [baseline, setBaseline] = useState(() =>
-    serialize({ title: lesson.title, slug: lesson.slug, includeInPreview: lesson.includeInPreview, instructorNotes: lesson.instructorNotes, blocks: lesson.blocks }),
-  );
-  const dirty = snapshot !== baseline;
+  const [baselineDraft, setBaselineDraft] = useState<Draft>(() => ({
+    title: lesson.title,
+    slug: lesson.slug,
+    includeInPreview: lesson.includeInPreview,
+    instructorNotes: lesson.instructorNotes,
+    blocks: lesson.blocks,
+  }));
+  const baseline = serialize(baselineDraft);
+  const snapshot = serialize({ ...draft, blocks: withoutDetectedDurations(blocks, baselineDraft.blocks) });
+  const dirty = snapshot !== baseline || release.dirty;
 
   const [state, formAction, pending] = useActionState(async (prev: ActionResult<SavedLesson> | null, formData: FormData): Promise<ActionResult<SavedLesson> | null> => {
     const result = await saveLessonAction(null, formData);
@@ -90,8 +130,9 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
       setSlug(saved.slug);
       setBlocks(saved.blocks);
       setRevision((r) => r + 1);
-      setBaseline(serialize(saved));
+      setBaselineDraft(saved);
       setSavedAt(result.data.updatedAt);
+      if (release.status === "ready") release.markSaved({ dripDays: result.data.dripDays, availableFrom: result.data.availableFrom });
       toast.success(result.message ?? "Lesson saved");
     } else {
       toast.error(result.error);
@@ -100,6 +141,8 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
   }, null);
 
   const fieldErrors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
+  const [releaseReveal, setReleaseReveal] = useState(0);
+  const releaseErrors = { dripDays: fieldErrors.dripDays, availableFrom: fieldErrors.availableFrom };
   const blockErrors: Record<string, string> = {};
   for (const [key, message] of Object.entries(fieldErrors)) if (key.startsWith("block.")) blockErrors[key.slice(6)] = message;
 
@@ -121,7 +164,23 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
     <form
       ref={formRef}
       action={formAction}
-      onSubmit={() => {
+      onSubmit={(e) => {
+        if (release.invalid) {
+          e.preventDefault();
+          setReleaseReveal((n) => n + 1);
+          toast.error("Check the release schedule before saving");
+          return;
+        }
+        const bytes = new Blob([JSON.stringify(blocks), instructorNotes, title, slug]).size;
+        if (bytes > MAX_LESSON_PAYLOAD_BYTES) {
+          // Cancels the form action: the request would be rejected by the server anyway.
+          e.preventDefault();
+          const message = `This lesson is too large to save (${Math.ceil(bytes / 1024)} KB of content; max ${MAX_LESSON_PAYLOAD_BYTES / 1024} KB). Split it into several lessons or move long text into an uploaded PDF or file.`;
+          setSizeError(message);
+          toast.error("This lesson is too large to save");
+          return;
+        }
+        setSizeError(null);
         submitted.current = draft;
       }}
       onKeyDown={(e) => {
@@ -168,13 +227,19 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
                 Not Saved
               </Badge>
             ) : (
-              <span className="hidden text-xs text-ink-muted md:inline">Saved {relativeTime(savedAt)}</span>
+              // Relative time depends on the clock, so server and client can render different text.
+              <span className="hidden text-xs text-ink-muted md:inline" suppressHydrationWarning>
+                Saved {relativeTime(savedAt)}
+              </span>
             )}
             {hasVideo && (
               <Button variant="ghost" size="sm" onClick={() => setStatsOpen(true)} leftIcon={<Icon.TrendingUp className="size-4" />} title="Video Statistics">
                 <span className="hidden sm:inline">Video Statistics</span>
               </Button>
             )}
+            <Button variant="ghost" size="sm" onClick={() => setHelpOpen(true)} leftIcon={<Icon.Question className="size-4" />} title="How to edit a lesson" className="hidden md:inline-flex">
+              <span className="sr-only">How to edit a lesson</span>
+            </Button>
             {learnHref && (
               <a
                 href={learnHref}
@@ -196,7 +261,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
         <div className="min-w-0 space-y-6">
-          <FormError message={state && !state.ok ? state.error : null} />
+          <FormError message={sizeError ?? (state && !state.ok ? state.error : null)} />
           <Card>
             <CardBody className="space-y-5">
               <div>
@@ -259,6 +324,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
                   {fieldErrors.instructorNotes && <p className="mt-1 text-xs text-danger">{fieldErrors.instructorNotes}</p>}
                 </div>
               </details>
+              <LessonReleaseSection state={release} errors={releaseErrors} reveal={releaseReveal} preview={includeInPreview} />
             </CardBody>
           </Card>
 
@@ -322,6 +388,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
         </aside>
       </div>
 
+      <LessonHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
       {hasVideo && <VideoStatsDialog open={statsOpen} onClose={() => setStatsOpen(false)} stats={videoStats} />}
     </form>
   );

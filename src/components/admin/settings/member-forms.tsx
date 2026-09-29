@@ -148,7 +148,7 @@ export function MemberProfileForm({ member, canEditEmail, readOnly }: { member: 
           <Textarea id="profile-bio" name="bio" rows={3} defaultValue={member.bio} maxLength={2000} placeholder="A line or two about this person" invalid={!!errors.bio} />
         </Field>
       </fieldset>
-      {!readOnly && <SaveBar dirty={dirty} pending={pending} saved={state?.ok} className="mx-0 mt-5 shadow-none" />}
+      {!readOnly && <SaveBar dirty={dirty} pending={pending} saved={state?.ok} failed={state?.ok === false} className="mx-0 mt-5 shadow-none" />}
     </form>
   );
 }
@@ -167,7 +167,7 @@ export function MemberRolesForm({ memberId, roles, canGrantAdmin, readOnly, lock
         {readOnly ? "Only administrators can change an administrator's roles." : "Roles decide what this member can see and manage."}
       </p>
       <RoleSwitches defaultRoles={roles} canGrantAdmin={canGrantAdmin} disabled={readOnly} lockedRoles={lockedRoles} className="mt-4" idPrefix={`role-${memberId}`} />
-      {!readOnly && <SaveBar dirty={dirty} pending={pending} saved={state?.ok} className="mx-0 mt-5 shadow-none" />}
+      {!readOnly && <SaveBar dirty={dirty} pending={pending} saved={state?.ok} failed={state?.ok === false} className="mx-0 mt-5 shadow-none" />}
     </form>
   );
 }
@@ -278,7 +278,7 @@ export function MemberAccountPanel({ member, isSelf }: { member: { id: string; n
           <div>
             <h2 className="text-base font-semibold text-ink">Delete member</h2>
             <p className="mt-0.5 max-w-xl text-sm text-ink-muted">
-              Permanently removes the account with its enrollments, progress, submissions and badges. Payment records are kept for accounting. Members who own courses or other content must be
+              Permanently removes the account with its enrollments, progress, submissions, badges and discussion posts. Payment records are kept for accounting. Members who own courses or other content must be
               disabled instead.
             </p>
           </div>

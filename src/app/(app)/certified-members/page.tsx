@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getCertificationCategories, getCertifiedMembers } from "@/lib/data/certificates";
 import { PageHeader } from "@/components/ui/card";
@@ -19,14 +20,19 @@ export const metadata: Metadata = {
 export default async function CertifiedMembersPage(props: PageProps<"/certified-members">) {
   const settings = await getSettings();
   if (!settings.features.certifications || !settings.features.certifiedMembers) notFound();
+  // The directory is for logged-in members; guests are sent to the course catalog.
+  const viewer = await getCurrentUser();
+  if (!viewer) redirect("/courses");
   const sp = await props.searchParams;
   const name = param(sp.name);
   const category = param(sp.category);
+  const openToWork = param(sp["open-to-work"]) === "true";
+  const hiring = param(sp.hiring) === "true";
   const { size, pages, limit } = parsePaging(sp.size, sp.pages);
 
-  const [members, categories] = await Promise.all([getCertifiedMembers({ name, category }), getCertificationCategories()]);
+  const [members, categories] = await Promise.all([getCertifiedMembers({ name, category, openToWork, hiring }), getCertificationCategories()]);
   const shown = members.slice(0, limit);
-  const filtered = !!(name || category);
+  const filtered = !!(name || category || openToWork || hiring);
 
   return (
     <div className="animate-fade-in">
@@ -44,6 +50,8 @@ export default async function CertifiedMembersPage(props: PageProps<"/certified-
         filters={[
           { param: "name", kind: "search", label: "Search", placeholder: "Search" },
           { param: "category", kind: "select", label: "Category", placeholder: "Category", options: categories.map((c) => ({ value: c, label: c })), className: "sm:w-72" },
+          { param: "open-to-work", kind: "toggle", label: "Open to Work", tone: "success" },
+          { param: "hiring", kind: "toggle", label: "Hiring", tone: "accent" },
         ]}
       />
       {members.length === 0 ? (
@@ -52,7 +60,9 @@ export default async function CertifiedMembersPage(props: PageProps<"/certified-
           title={filtered ? "No certified members match these filters" : "No Certified Members Found"}
           description={
             filtered
-              ? "Try another name or category."
+              ? openToWork || hiring
+                ? "Try another name or category, or turn off the Open to Work and Hiring filters."
+                : "Try another name or category."
               : "There are no certified members currently. Keep an eye out, fresh learning experiences are on the way!"
           }
           action={

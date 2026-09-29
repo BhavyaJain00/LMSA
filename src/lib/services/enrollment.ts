@@ -5,6 +5,7 @@ import { uid } from "@/lib/utils";
 import { notify, notifyMany } from "./notifications";
 import { evaluateBadges } from "./badges";
 import { logActivity } from "./activity";
+import { computeProgramProgress } from "@/lib/data/programs";
 
 /**
  * Enroll a user in a course (idempotent). Handles the side effects every
@@ -46,7 +47,7 @@ export async function enrollUserInCourse(
       if (!program.courseIds.includes(courseId)) continue;
       // Joining a course that belongs to a program the user is in keeps program progress accurate.
       const member = d.programMembers.find((m) => m.programId === program.id && m.userId === userId);
-      if (member) member.progress = Math.round(program.courseIds.map((cid) => d.enrollments.find((e) => e.userId === userId && e.courseId === cid)?.progress ?? 0).reduce((a, b) => a + b, 0) / program.courseIds.length);
+      if (member) member.progress = computeProgramProgress(d, program, userId);
     }
   });
   await logActivity(userId, "enroll", courseId);

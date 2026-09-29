@@ -29,9 +29,15 @@ export function buildNavigation(user: PublicUser | null, settings: Settings, cou
   if (f.courses) main.push({ label: "Courses", href: "/courses", icon: "BookOpen", prefix: true });
   if (f.batches) main.push({ label: "Batches", href: "/batches", icon: "Users", prefix: true });
   if (f.programs) main.push({ label: "Programs", href: "/programs", icon: "Layers", prefix: true });
-  if (f.certifications && f.certifiedMembers) main.push({ label: "Certified Members", href: "/certified-members", icon: "Award" });
+  if (user && f.certifications && f.certifiedMembers) main.push({ label: "Certified Members", href: "/certified-members", icon: "Award" });
   if (f.jobs) main.push({ label: "Jobs", href: "/jobs", icon: "Briefcase", prefix: true });
-  if (f.statistics && has(user, "moderator", "course_creator")) main.push({ label: "Statistics", href: "/statistics", icon: "BarChart" });
+  // Aggregate statistics are open to every member, and to guests when guest access is on; drill-downs stay staff-only on the page.
+  if (f.statistics && (user || settings.learning.allowGuestAccess)) main.push({ label: "Statistics", href: "/statistics", icon: "BarChart" });
+  // Round 2: the community hub gathers course/batch discussions for members; the leaderboard needs points on and
+  // visible (guests only with guest access). Points history lives under /leaderboard/points (linked from the profile).
+  if (user && f.discussions && (f.courses || f.batches)) main.push({ label: "Community", href: "/community", icon: "MessageSquare", prefix: true });
+  if (settings.gamification.enabled && settings.gamification.showLeaderboard && (user || settings.learning.allowGuestAccess))
+    main.push({ label: "Leaderboard", href: "/leaderboard", icon: "Trophy", prefix: true });
 
   const sections: NavSection[] = [{ items: main }];
 
@@ -47,13 +53,15 @@ export function buildNavigation(user: PublicUser | null, settings: Settings, cou
     manage.push({ label: "Overview", href: "/admin", icon: "Layout" });
     if (has(user, "moderator", "course_creator")) manage.push({ label: "Manage Courses", href: "/admin/courses", icon: "Book", prefix: true });
     if (f.batches && has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Manage Batches", href: "/admin/batches", icon: "Users", prefix: true });
-    if (f.programs && has(user, "moderator")) manage.push({ label: "Manage Programs", href: "/admin/programs", icon: "Layers", prefix: true });
+    if (f.programs && has(user, "moderator", "course_creator")) manage.push({ label: "Manage Programs", href: "/admin/programs", icon: "Layers", prefix: true });
     if (has(user, "moderator", "course_creator")) manage.push({ label: "Quizzes", href: "/admin/quizzes", icon: "ListChecks", prefix: true });
+    if (has(user, "moderator", "course_creator")) manage.push({ label: "Question Bank", href: "/admin/questions", icon: "Question", prefix: true });
     if (has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Assignments", href: "/admin/assignments", icon: "ClipboardList", prefix: true, badge: counts.grading });
-    if (f.programmingExercises && has(user, "moderator", "course_creator")) manage.push({ label: "Exercises", href: "/admin/exercises", icon: "Code", prefix: true });
+    if (f.programmingExercises && has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Exercises", href: "/admin/exercises", icon: "Code", prefix: true });
     if (f.certifications && has(user, "moderator", "batch_evaluator")) manage.push({ label: "Certificates", href: "/admin/certificates", icon: "Certificate", prefix: true });
-    if (f.jobs && has(user, "moderator")) manage.push({ label: "Job Openings", href: "/admin/jobs", icon: "Briefcase", prefix: true });
+    if (f.jobs && has(user, "moderator", "course_creator", "batch_evaluator")) manage.push({ label: "Job Openings", href: "/admin/jobs", icon: "Briefcase", prefix: true });
     if (has(user, "moderator")) manage.push({ label: "Members", href: "/admin/members", icon: "UserPlus", prefix: true });
+    if (has(user, "moderator")) manage.push({ label: "Email outbox", href: "/admin/emails", icon: "Send", prefix: true });
     if (has(user, "admin")) manage.push({ label: "Settings", href: "/admin/settings", icon: "Settings", prefix: true });
     sections.push({ title: "Manage", items: manage });
   }

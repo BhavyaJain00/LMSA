@@ -4,12 +4,21 @@ import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn, initials, pluralize, relativeTime } from "@/lib/utils";
 import { jobTypes } from "@/lib/config";
+import { WORK_MODE_LABEL, formatJobLocation, resolveWorkMode } from "./work-mode";
 
 export const JOB_TYPE_LABEL: Record<JobType, string> = Object.fromEntries(jobTypes.map((t) => [t.value, t.label])) as Record<JobType, string>;
 
-export function workModeLabel(remote: boolean): string {
-  return remote ? "Remote" : "On-site";
+export function workModeLabel(job: Pick<JobOpening, "remote" | "workMode">): string {
+  return WORK_MODE_LABEL[resolveWorkMode(job)];
 }
+
+/** Badge tone per work mode: remote stands out, hybrid is outlined, on-site is neutral. */
+export function workModeTone(job: Pick<JobOpening, "remote" | "workMode">): "info" | "outline" | "neutral" {
+  const mode = resolveWorkMode(job);
+  return mode === "remote" ? "info" : mode === "hybrid" ? "outline" : "neutral";
+}
+
+export { formatJobLocation };
 
 const LOGO_SIZES = { sm: "size-10 text-sm rounded-lg", md: "size-12 text-base rounded-xl", lg: "size-16 text-lg rounded-2xl" } as const;
 
@@ -26,7 +35,7 @@ export function CompanyLogo({ company, logoUrl, size = "md", className }: { comp
   );
 }
 
-export interface JobCardData extends Pick<JobOpening, "slug" | "title" | "company" | "companyLogoUrl" | "location" | "remote" | "type" | "salaryRange" | "status" | "createdAt"> {
+export interface JobCardData extends Pick<JobOpening, "slug" | "title" | "company" | "companyLogoUrl" | "location" | "country" | "remote" | "workMode" | "type" | "salaryRange" | "status" | "createdAt"> {
   applicantCount: number;
 }
 
@@ -47,7 +56,7 @@ export function JobCard({ job, showApplicants }: { job: JobCardData; showApplica
       <div className="mt-3 space-y-1 text-sm text-ink-muted">
         <p className="flex items-center gap-1.5">
           <Icon.MapPin className="size-4 shrink-0 text-ink-faint" />
-          <span className="truncate">{job.location}</span>
+          <span className="truncate">{formatJobLocation(job)}</span>
         </p>
         {job.salaryRange && (
           <p className="flex items-center gap-1.5">
@@ -64,7 +73,7 @@ export function JobCard({ job, showApplicants }: { job: JobCardData; showApplica
       </div>
       <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-4">
         <Badge tone="accent">{JOB_TYPE_LABEL[job.type]}</Badge>
-        <Badge tone={job.remote ? "info" : "neutral"}>{workModeLabel(job.remote)}</Badge>
+        <Badge tone={workModeTone(job)}>{workModeLabel(job)}</Badge>
         {job.status === "closed" && <Badge tone="danger">Closed</Badge>}
         <span className="ml-auto text-xs text-ink-faint">{relativeTime(job.createdAt)}</span>
       </div>

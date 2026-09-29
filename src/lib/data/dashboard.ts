@@ -1,12 +1,11 @@
 import "server-only";
-import type { Batch, Course, Database, LiveClass, PaymentItemType, PublicUser, Role, Settings, User } from "@/lib/types";
+import type { ActivityType, Batch, Course, Database, LiveClass, PaymentItemType, PublicUser, Role, Settings, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
-import { isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
+import { isCreator, isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
 import { canManageCourse, getCourseSummaries, getNextLesson, lessonHref } from "@/lib/data/courses";
-import { getActivityHeatmap, getStreak } from "@/lib/services/activity";
 import { getUserBadges } from "@/lib/services/badges";
 import { classWindow, slotWindow } from "@/components/dashboard/time";
-import { percent, sum, toDateKey } from "@/lib/utils";
+import { addDays, percent, sum, toDateKey } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* Shared view models                                                  */
@@ -175,6 +174,8 @@ export interface StudentDashboard {
   completedCourses: { id: string; slug: string; title: string; completedAt: string; certificateCode: string | null }[];
   liveClasses: DashboardLiveClass[];
   evaluations: DashboardEvaluation[];
+  /** Totals behind the capped `liveClasses` / `evaluations` lists. */
+  upcomingCounts: { liveClasses: number; evaluations: number };
   batches: DashboardBatch[];
   programs: DashboardProgram[];
   pending: { items: PendingItem[]; total: number };
@@ -296,19 +297,32 @@ export function toDashboardBatch(db: Database, batch: Batch): DashboardBatch {
   };
 }
 
-function collectLiveClasses(db: Database, batchIds: Set<string>, viewer: User, limit: number): DashboardLiveClass[] {
-  if (!db.settings.features.liveClasses || batchIds.size === 0) return [];
+/**
+ * Live classes of the given batches that end today or later (capped at `limit`),
+ * plus the total number that have not ended yet (for the greeting subtitle).
+ */
+function collectLiveClasses(
+  db: Database,
+  batchIds: Set<string>,
+  viewer: User,
+  limit: number,
+): { items: DashboardLiveClass[]; upcomingTotal: number } {
+  if (!db.settings.features.liveClasses || batchIds.size === 0) return { items: [], upcomingTotal: 0 };
   const todayStart = startOfToday();
+  const now = Date.now();
   const batches = new Map(db.batches.map((b) => [b.id, b]));
   const users = new Map(db.users.map((u) => [u.id, u]));
-  return db.liveClasses
+  const windows = db.liveClasses
     .filter((lc) => batchIds.has(lc.batchId) && batches.get(lc.batchId)?.showLiveClass !== false)
     .map((lc) => ({ lc, win: classWindow(lc) }))
     .filter(({ win }) => Number.isFinite(win.end.getTime()) && win.end.getTime() >= todayStart)
-    .sort((a, b) => a.win.start.getTime() - b.win.start.getTime())
+    .sort((a, b) => a.win.start.getTime() - b.win.start.getTime());
+  const upcomingTotal = windows.filter(({ win }) => win.end.getTime() > now).length;
+  const items = windows
     .slice(0, limit)
     .map(({ lc, win }) => {
       const batch = batches.get(lc.batchId)!;
+      const canStart = lc.hostId === viewer.id || batch.instructorIds.includes(viewer.id) || isModerator(viewer) || isEvaluator(viewer);
       return {
         id: lc.id,
         title: lc.title,
@@ -319,27 +333,29 @@ function collectLiveClasses(db: Database, batchIds: Set<string>, viewer: User, l
         timezone: lc.timezone,
         provider: lc.provider,
         joinUrl: lc.joinUrl,
-        startUrl: lc.startUrl,
+        startUrl: canStart ? lc.startUrl : undefined,
         recordingUrl: lc.recordingUrl,
         startsAt: win.start.toISOString(),
         endsAt: win.end.toISOString(),
         batch: { id: batch.id, slug: batch.slug, title: batch.title },
         host: toMiniUser(users.get(lc.hostId)),
-        canStart: lc.hostId === viewer.id || batch.instructorIds.includes(viewer.id) || isModerator(viewer) || isEvaluator(viewer),
+        canStart,
       };
     });
+  return { items, upcomingTotal };
 }
 
 function collectEvaluations(
   db: Database,
   predicate: (r: Database["certificateRequests"][number]) => boolean,
   limit: number,
-): DashboardEvaluation[] {
+): { items: DashboardEvaluation[]; total: number } {
   const today = toDateKey();
   const users = new Map(db.users.map((u) => [u.id, u]));
-  return db.certificateRequests
+  const upcoming = db.certificateRequests
     .filter((r) => r.status === "upcoming" && r.date >= today && predicate(r))
-    .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`))
+    .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+  const items = upcoming
     .slice(0, limit)
     .map((r) => {
       const course = db.courses.find((c) => c.id === r.courseId);
@@ -362,6 +378,79 @@ function collectEvaluations(
         cancellable: r.date > today,
       };
     });
+  return { items, total: upcoming.length };
+}
+
+/* ------------------------------------------------------------------ */
+/* Learning streak                                                     */
+/* ------------------------------------------------------------------ */
+
+/** Only real learning counts towards the streak and heatmap (not logins or enrollments). */
+const LEARNING_ACTIVITY: ReadonlySet<ActivityType> = new Set<ActivityType>([
+  "lesson_view",
+  "lesson_complete",
+  "quiz_submit",
+  "assignment_submit",
+  "exercise_submit",
+]);
+
+function isWeekend(d: Date): boolean {
+  const day = d.getDay();
+  return day === 0 || day === 6;
+}
+
+function dateFromKey(key: string): Date {
+  return new Date(`${key}T00:00:00`);
+}
+
+/**
+ * Learning streak per the spec: consecutive days with lesson progress or a quiz,
+ * assignment or exercise submission. A weekend day without activity does not
+ * break the streak (weekend activity still counts), and today only breaks it
+ * once it is over.
+ */
+function computeLearningStreak(db: Database, userId: string, weeks: number): StreakSummary {
+  const counts = new Map<string, number>();
+  for (const a of db.activities) {
+    if (a.userId !== userId || !LEARNING_ACTIVITY.has(a.type)) continue;
+    counts.set(a.date, (counts.get(a.date) ?? 0) + 1);
+  }
+  const now = new Date();
+  const today = toDateKey(now);
+  const activeToday = counts.has(today);
+
+  let current = 0;
+  for (let cursor = activeToday ? now : addDays(now, -1); ; cursor = addDays(cursor, -1)) {
+    if (counts.has(toDateKey(cursor))) current++;
+    else if (!isWeekend(cursor)) break;
+  }
+
+  let longest = 0;
+  const first = Array.from(counts.keys()).sort()[0];
+  if (first) {
+    let run = 0;
+    for (let cursor = dateFromKey(first); toDateKey(cursor) <= today; cursor = addDays(cursor, 1)) {
+      const key = toDateKey(cursor);
+      if (counts.has(key)) run++;
+      else if (!isWeekend(cursor) && key !== today) run = 0;
+      longest = Math.max(longest, run);
+    }
+  }
+
+  const heatmap: { date: string; count: number }[] = [];
+  const start = addDays(now, -(weeks * 7 - 1));
+  for (let i = 0; i < weeks * 7; i++) {
+    const key = toDateKey(addDays(start, i));
+    heatmap.push({ date: key, count: counts.get(key) ?? 0 });
+  }
+
+  return {
+    current,
+    longest: Math.max(longest, current),
+    activeToday,
+    activeDays: heatmap.filter((d) => d.count > 0).length,
+    heatmap,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -495,11 +584,8 @@ function collectPendingWork(db: Database, user: User, courseIds: string[], batch
 
 export async function getStudentDashboard(user: User, settings: Settings): Promise<StudentDashboard> {
   const db = await getDb();
-  const [streak, heatmap, badges] = await Promise.all([
-    getStreak(user.id),
-    getActivityHeatmap(user.id, 16),
-    settings.features.badges ? getUserBadges(user.id) : Promise.resolve([]),
-  ]);
+  const badges = settings.features.badges ? await getUserBadges(user.id) : [];
+  const streak = computeLearningStreak(db, user.id, 16);
 
   const users = new Map(db.users.map((u) => [u.id, u]));
   const enrollments = db.enrollments.filter((e) => e.userId === user.id);
@@ -570,10 +656,10 @@ export async function getStudentDashboard(user: User, settings: Settings): Promi
   /* Live classes: my batches + batches I teach */
   const liveBatchIds = new Set(myBatchIds);
   for (const b of db.batches) if (b.instructorIds.includes(user.id)) liveBatchIds.add(b.id);
-  const liveClasses = settings.features.batches ? collectLiveClasses(db, liveBatchIds, user, 4) : [];
+  const live = settings.features.batches ? collectLiveClasses(db, liveBatchIds, user, 4) : { items: [], upcomingTotal: 0 };
 
   /* Evaluations I booked */
-  const evaluations = settings.features.certifications ? collectEvaluations(db, (r) => r.userId === user.id, 4) : [];
+  const evals = settings.features.certifications ? collectEvaluations(db, (r) => r.userId === user.id, 4) : { items: [], total: 0 };
 
   /* Programs */
   const programs: DashboardProgram[] = settings.features.programs
@@ -657,17 +743,12 @@ export async function getStudentDashboard(user: User, settings: Settings): Promi
   }
 
   return {
-    streak: {
-      current: streak.current,
-      longest: streak.longest,
-      activeToday: streak.activeToday,
-      activeDays: heatmap.filter((d) => d.count > 0).length,
-      heatmap,
-    },
+    streak,
     continueLearning,
     completedCourses,
-    liveClasses,
-    evaluations,
+    liveClasses: live.items,
+    evaluations: evals.items,
+    upcomingCounts: { liveClasses: live.upcomingTotal, evaluations: evals.total },
     batches,
     programs,
     pending,
@@ -709,7 +790,8 @@ export interface ActivityFeedItem {
   kind: ActivityKind;
   actor: MiniUser | null;
   verb: string;
-  target: { label: string; href: string } | null;
+  /** `href` is omitted when the viewer cannot open the target page. */
+  target: { label: string; href?: string } | null;
   detail?: string;
   at: string;
 }
@@ -761,6 +843,8 @@ export interface AdminOverview {
   activity: ActivityFeedItem[];
   evaluations: DashboardEvaluation[];
   liveClasses: DashboardLiveClass[];
+  /** Totals behind the capped `liveClasses` / `evaluations` lists. */
+  upcomingCounts: { liveClasses: number; evaluations: number };
   createdCourses: CourseCardData[];
   upcomingBatches: DashboardBatch[];
   counts: {
@@ -788,6 +872,7 @@ function formatMoney(cents: number, currency: string): string {
 export async function getAdminOverview(user: User): Promise<AdminOverview> {
   const db = await getDb();
   const moderator = isModerator(user);
+  const creator = isCreator(user);
   const scope: AdminOverview["scope"] = moderator ? "site" : "mine";
   const now = Date.now();
   const weekAgo = now - 7 * 86_400_000;
@@ -937,7 +1022,8 @@ export async function getAdminOverview(user: User): Promise<AdminOverview> {
       kind: "quiz",
       actor: toMiniUser(users.get(s.userId)),
       verb: s.pendingGrading ? "submitted the quiz" : s.passed ? "passed the quiz" : "attempted the quiz",
-      target: { label: s.quizTitle, href: `/admin/quizzes/submissions/${s.id}` },
+      // Quiz submission review is limited to course creators and moderators.
+      target: { label: s.quizTitle, href: creator ? `/admin/quizzes/submissions/${s.id}` : undefined },
       detail: s.pendingGrading ? "Awaiting grading" : `Scored ${s.percentage}%`,
       at: s.submittedAt,
     });
@@ -986,10 +1072,10 @@ export async function getAdminOverview(user: User): Promise<AdminOverview> {
   activity.sort((a, b) => b.at.localeCompare(a.at));
 
   /* Spec "admin home" blocks */
-  const evaluations = db.settings.features.certifications ? collectEvaluations(db, (r) => r.evaluatorId === user.id, 4) : [];
+  const evals = db.settings.features.certifications ? collectEvaluations(db, (r) => r.evaluatorId === user.id, 4) : { items: [], total: 0 };
   const hostedBatchIds = new Set(db.batches.filter((b) => b.instructorIds.includes(user.id)).map((b) => b.id));
   for (const lc of db.liveClasses) if (lc.hostId === user.id) hostedBatchIds.add(lc.batchId);
-  const liveClasses = collectLiveClasses(db, hostedBatchIds, user, 4);
+  const live = collectLiveClasses(db, hostedBatchIds, user, 4);
 
   let created = db.courses
     .filter((c) => c.instructorIds.includes(user.id) || c.createdById === user.id)
@@ -1027,8 +1113,9 @@ export async function getAdminOverview(user: User): Promise<AdminOverview> {
     recentEnrollments,
     recentSignups,
     activity: activity.slice(0, 12),
-    evaluations,
-    liveClasses,
+    evaluations: evals.items,
+    liveClasses: live.items,
+    upcomingCounts: { liveClasses: live.upcomingTotal, evaluations: evals.total },
     createdCourses,
     upcomingBatches,
     counts: {

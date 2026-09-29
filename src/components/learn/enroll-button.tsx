@@ -7,12 +7,17 @@ import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 
-/** "Start learning" button: enrolls the viewer in a free course (redirects to the lesson on success). */
-export function EnrollButton({ slug, label = "Start learning" }: { slug: string; label?: string }) {
+/**
+ * "Start learning" button: enrolls the viewer in a free course. On success the
+ * action redirects to `returnTo` (a lesson of the same course) or, without it,
+ * to the first unlocked lesson.
+ */
+export function EnrollButton({ slug, returnTo, label = "Start learning" }: { slug: string; returnTo?: string; label?: string }) {
   const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(enrollAction, null);
   return (
     <form action={formAction} className="flex flex-col items-center gap-3">
       <input type="hidden" name="slug" value={slug} />
+      {returnTo && <input type="hidden" name="next" value={returnTo} />}
       <Button type="submit" loading={pending} size="lg" leftIcon={<Icon.Play className="size-4" />}>
         {label}
       </Button>

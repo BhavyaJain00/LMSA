@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { LessonBlock, LessonBlockType } from "@/lib/types";
 import { cn, stripMarkdown, truncate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -136,6 +136,29 @@ function BlockPalette({ onPick, startOpen }: { onPick: (type: LessonBlockType) =
   );
 }
 
+/** Drag-and-drop wiring for one block card (mouse); the move buttons are the keyboard fallback. */
+interface BlockDnd {
+  dragging: boolean;
+  indicator: "before" | "after" | null;
+  onDragStart: (e: DragEvent<HTMLSpanElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (e: DragEvent<HTMLElement>) => void;
+  onDrop: (e: DragEvent<HTMLElement>) => void;
+}
+
+/** Blocks in their new order after dropping `dragId` before or after `targetId`, or null when nothing moves. */
+function reorderBlocks(blocks: LessonBlock[], dragId: string, targetId: string, after: boolean): LessonBlock[] | null {
+  if (dragId === targetId) return null;
+  const from = blocks.findIndex((b) => b.id === dragId);
+  if (from === -1) return null;
+  const next = [...blocks];
+  const [moved] = next.splice(from, 1);
+  const to = next.findIndex((b) => b.id === targetId);
+  if (!moved || to === -1) return null;
+  next.splice(to + (after ? 1 : 0), 0, moved);
+  return next.every((b, i) => b.id === blocks[i]?.id) ? null : next;
+}
+
 function BlockCard({
   block,
   index,
@@ -153,6 +176,7 @@ function BlockCard({
   onDuplicate,
   onDelete,
   onInsertBelow,
+  dnd,
 }: {
   block: LessonBlock;
   index: number;
@@ -170,6 +194,7 @@ function BlockCard({
   onDuplicate: () => void;
   onDelete: () => void;
   onInsertBelow: (type: LessonBlockType) => void;
+  dnd: BlockDnd;
 }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -250,10 +275,29 @@ function BlockCard({
     <section
       ref={ref}
       aria-label={`Block ${index + 1}: ${BLOCK_LABELS[block.type]}`}
-      className={cn("rounded-card border bg-surface-1 shadow-card transition-shadow", error ? "border-danger/60 ring-1 ring-danger/30" : "border-border", focus && "ring-2 ring-accent/40")}
+      onDragOver={dnd.onDragOver}
+      onDrop={dnd.onDrop}
+      className={cn(
+        "relative rounded-card border bg-surface-1 shadow-card transition-shadow",
+        error ? "border-danger/60 ring-1 ring-danger/30" : "border-border",
+        focus && "ring-2 ring-accent/40",
+        dnd.dragging && "opacity-50",
+      )}
     >
+      {dnd.indicator && (
+        <span aria-hidden="true" className={cn("pointer-events-none absolute inset-x-3 z-10 h-0.5 rounded-full bg-accent", dnd.indicator === "after" ? "-bottom-2" : "-top-2")} />
+      )}
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <Icon.Grip className="hidden size-4 shrink-0 text-ink-faint sm:block" />
+        <span
+          draggable
+          onDragStart={dnd.onDragStart}
+          onDragEnd={dnd.onDragEnd}
+          title="Drag to reorder (or use the move buttons)"
+          aria-hidden="true"
+          className="hidden shrink-0 cursor-grab items-center justify-center rounded p-0.5 text-ink-faint hover:bg-surface-2 hover:text-ink active:cursor-grabbing sm:inline-flex"
+        >
+          <Icon.Grip className="size-4" />
+        </span>
         <button type="button" onClick={onToggle} aria-expanded={!collapsed} className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left">
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-muted">
             <BlockIcon type={block.type} className="size-4" />
@@ -314,6 +358,8 @@ export function BlockEditor({ blocks, onChange, errors, assessments, courseId, o
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LessonBlock | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [over, setOver] = useState<{ id: string; after: boolean } | null>(null);
 
   const insertAt = (index: number, type: LessonBlockType) => {
     const block = createBlock(type);
@@ -333,6 +379,45 @@ export function BlockEditor({ blocks, onChange, errors, assessments, courseId, o
     setFocusId(b!.id);
   };
   const remove = (id: string) => onChange(blocks.filter((b) => b.id !== id));
+
+  const endDrag = () => {
+    setDragId(null);
+    setOver(null);
+  };
+  const blockDnd = (block: LessonBlock): BlockDnd => ({
+    dragging: dragId === block.id,
+    indicator: dragId && dragId !== block.id && over?.id === block.id ? (over.after ? "after" : "before") : null,
+    onDragStart: (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", block.id);
+      const card = e.currentTarget.closest("section");
+      if (card) e.dataTransfer.setDragImage(card, 24, 20);
+      setDragId(block.id);
+    },
+    onDragEnd: endDrag,
+    onDragOver: (e) => {
+      // Only block drags are handled here; file drops into upload fields pass through.
+      if (!dragId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const rect = e.currentTarget.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      if (over?.id !== block.id || over.after !== after) setOver({ id: block.id, after });
+    },
+    onDrop: (e) => {
+      if (!dragId) return;
+      e.preventDefault();
+      const target = over;
+      const moving = dragId;
+      endDrag();
+      if (!target) return;
+      const next = reorderBlocks(blocks, moving, target.id, target.after);
+      if (next) {
+        onChange(next);
+        setFocusId(moving);
+      }
+    },
+  });
   const allCollapsed = blocks.length > 0 && blocks.every((b) => collapsed.has(b.id));
 
   return (
@@ -384,6 +469,7 @@ export function BlockEditor({ blocks, onChange, errors, assessments, courseId, o
             }}
             onDelete={() => (blockHasContent(block) ? setPendingDelete(block) : remove(block.id))}
             onInsertBelow={(type) => insertAt(i + 1, type)}
+            dnd={blockDnd(block)}
           />
         ))
       )}

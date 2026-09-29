@@ -4,22 +4,26 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, CertificateEvaluation, CertificateRequest, EvaluatorSlot, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, hasRole, isModerator } from "@/lib/auth/session";
-import { canEditAvailability, getAvailableSlots, getCourseEvaluators, isEvaluatorRole, platformNow, platformTimeZone } from "@/lib/data/certificates";
+import { canEditAvailability, findEvaluationForRequest, getAvailableSlots, getCourseEvaluators, isEvaluatorRole, platformNow, platformTimeZone } from "@/lib/data/certificates";
 import { issueCertificate } from "@/lib/services/progress";
 import { notify } from "@/lib/services/notifications";
 import { fd, fdBool, fdNumber, isValidUrl, toDateKey, uid } from "@/lib/utils";
 import {
   BOOKING_WINDOW_DAYS,
   EVALUATION_SLOT_MINUTES,
+  activeUnavailability,
   addDaysToKey,
   clockToMinutes,
   formatClock12,
   formatLongDate,
   isValidClock,
+  isDateInRange,
   isValidDateKey,
   minutesToClock,
   timeZoneLabel,
+  unavailabilityOf,
 } from "@/components/certificates/time";
+import { DEFAULT_CERTIFICATE_TEMPLATE_ID, isCertificateTemplateId } from "@/components/certificates/templates";
 
 /* ------------------------------------------------------------------ */
 /* Evaluator weekly availability                                       */
@@ -74,7 +78,17 @@ export async function addEvaluatorSlotAction(evaluatorId: string, input: SlotInp
   const others = db.evaluatorSlots.filter((s) => s.evaluatorId === evaluatorId);
   const error = validateSlot(input, others);
   if (error) return { ok: false, error };
-  const slot: EvaluatorSlot = { id: uid("slot"), evaluatorId, day: Number(input.day), startTime: input.startTime, endTime: input.endTime };
+  // Every slot row carries the evaluator's unavailability range, so new rows inherit it.
+  const range = unavailabilityOf(others);
+  const slot: EvaluatorSlot = {
+    id: uid("slot"),
+    evaluatorId,
+    day: Number(input.day),
+    startTime: input.startTime,
+    endTime: input.endTime,
+    unavailableFrom: range.from || undefined,
+    unavailableTo: range.to || undefined,
+  };
   await mutate((d) => {
     d.evaluatorSlots.push(slot);
   });
@@ -118,6 +132,51 @@ export async function deleteEvaluatorSlotAction(slotId: string): Promise<ActionR
   await revalidateEvaluator(existing.evaluatorId);
   return { ok: true, data: undefined, message: "Slot deleted successfully" };
 }
+
+export interface UnavailabilityInput {
+  /** YYYY-MM-DD or empty to clear. */
+  from: string;
+  /** YYYY-MM-DD or empty to clear. */
+  to: string;
+}
+
+/**
+ * "I am unavailable" From / To (Frappe: set_evaluator_unavailability).
+ * Both empty clears the range. Learners cannot book dates inside it.
+ */
+export async function setEvaluatorUnavailabilityAction(evaluatorId: string, input: UnavailabilityInput): Promise<ActionResult<{ from: string; to: string }>> {
+  const user = await getCurrentUser();
+  const denied = await assertAvailabilityAccess(user, evaluatorId);
+  if (denied) return { ok: false, error: denied };
+  const from = (input.from ?? "").trim();
+  const to = (input.to ?? "").trim();
+  if (from && !isValidDateKey(from)) return { ok: false, error: `${from} is not a valid date.` };
+  if (to && !isValidDateKey(to)) return { ok: false, error: `${to} is not a valid date.` };
+  if (from && to && from > to) return { ok: false, error: "Unavailable From Date cannot be greater than Unavailable To Date" };
+  const db = await getDb();
+  if (!db.evaluatorSlots.some((s) => s.evaluatorId === evaluatorId)) {
+    const evaluator = db.users.find((u) => u.id === evaluatorId);
+    return { ok: false, error: `${evaluator?.name ?? "This evaluator"} has no availability set up yet.` };
+  }
+  const updated = await mutate((d) => {
+    let count = 0;
+    for (const row of d.evaluatorSlots) {
+      if (row.evaluatorId !== evaluatorId) continue;
+      row.unavailableFrom = from || undefined;
+      row.unavailableTo = to || undefined;
+      count++;
+    }
+    return count;
+  });
+  if (!updated) return { ok: false, error: "This evaluator has no availability set up yet." };
+  await revalidateEvaluator(evaluatorId);
+  // Learners' booking dialogs read the range through the certification page.
+  revalidatePath("/courses/[slug]/certification", "page");
+  return { ok: true, data: { from, to }, message: "Unavailability updated successfully" };
+}
+
+/** Placeholder room generated for bookings when the evaluator has not shared a call link yet. */
+const GENERATED_MEETING_PREFIX = "https://meet.example.com/eval-";
 
 /* ------------------------------------------------------------------ */
 /* Learner: book / cancel an evaluation                                */
@@ -167,6 +226,14 @@ export async function bookEvaluationAction(_prev: ActionResult<{ id: string }> |
   if (date < today) return { ok: false, error: "You cannot schedule evaluations for past slots." };
   if (date > lastDay) return { ok: false, error: `Evaluations can be booked up to ${BOOKING_WINDOW_DAYS} days ahead.` };
 
+  const unavailable = activeUnavailability(db.evaluatorSlots.filter((s) => s.evaluatorId === evaluatorId));
+  if (unavailable && isDateInRange(date, unavailable)) {
+    return {
+      ok: false,
+      error: `The evaluator of this course is unavailable from ${formatLongDate(unavailable.from)} to ${formatLongDate(unavailable.to)}. Please select a date after ${formatLongDate(unavailable.to)}`,
+    };
+  }
+
   const existing = db.certificateRequests.find((r) => r.userId === user.id && r.courseId === course.id && r.status === "upcoming" && r.date >= today);
   if (existing) {
     return {
@@ -189,6 +256,11 @@ export async function bookEvaluationAction(_prev: ActionResult<{ id: string }> |
 
   const tz = platformTimeZone();
   const id = uid("creq");
+  // Custom conferencing: reuse the evaluator's own call link (the last one they set on a booking),
+  // otherwise generate a placeholder room for this evaluation.
+  const evaluatorLink = db.certificateRequests
+    .filter((r) => r.evaluatorId === evaluatorId && r.meetingLink && !r.meetingLink.startsWith(GENERATED_MEETING_PREFIX))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.meetingLink;
   const request: CertificateRequest = {
     id,
     courseId: course.id,
@@ -199,7 +271,7 @@ export async function bookEvaluationAction(_prev: ActionResult<{ id: string }> |
     startTime,
     endTime: minutesToClock(clockToMinutes(startTime) + EVALUATION_SLOT_MINUTES),
     timezone: tz,
-    meetingLink: `https://meet.example.com/eval-${id.replace(/^creq_/, "")}`,
+    meetingLink: evaluatorLink ?? `${GENERATED_MEETING_PREFIX}${id.replace(/^creq_/, "")}`,
     status: "upcoming",
     createdAt: new Date().toISOString(),
   };
@@ -277,6 +349,7 @@ async function loadRequestForEvaluator(user: User | null, requestId: string) {
   if (!request) return { error: "This evaluation no longer exists." } as const;
   if (!hasRole(user, "batch_evaluator", "moderator")) return { error: "Only evaluators can record evaluations." } as const;
   if (request.evaluatorId !== user.id && !isModerator(user)) return { error: "You are not the assigned evaluator for this course and batch." } as const;
+  if (request.status === "cancelled") return { error: "This evaluation was cancelled by the learner." } as const;
   const course = db.courses.find((c) => c.id === request.courseId);
   const learner = db.users.find((u) => u.id === request.userId);
   if (!course || !learner) return { error: "The course or learner for this evaluation no longer exists." } as const;
@@ -330,7 +403,8 @@ export async function saveEvaluationAction(
 
   const now = new Date().toISOString();
   await mutate((d) => {
-    let row = d.certificateEvaluations.find((e) => e.userId === request.userId && e.courseId === request.courseId);
+    // One evaluation per booking: a rebooking after a failed attempt gets its own row, keeping the history.
+    let row = findEvaluationForRequest(d.certificateEvaluations, request);
     if (!row) {
       row = {
         id: uid("ceval"),
@@ -351,8 +425,6 @@ export async function saveEvaluationAction(
       row.rating = rating;
       row.summary = summary || undefined;
       row.status = status;
-      row.date = request.date;
-      row.startTime = request.startTime;
       row.endTime = request.endTime;
       row.evaluatorId = request.evaluatorId;
       if (request.batchId) row.batchId = request.batchId;
@@ -364,10 +436,13 @@ export async function saveEvaluationAction(
   let certificateCode: string | null = null;
   if (status === "pass") {
     const cert = await issueCertificate(learner, course, { batchId: request.batchId, evaluatorId: request.evaluatorId });
-    if (!cert.evaluatorId) {
+    if (!cert.evaluatorId || !cert.templateId) {
       await mutate((d) => {
         const row = d.certificates.find((c) => c.id === cert.id);
-        if (row) row.evaluatorId = request.evaluatorId;
+        if (!row) return;
+        row.evaluatorId = row.evaluatorId ?? request.evaluatorId;
+        // Pass issues with the default template; the Certification tab can change it.
+        row.templateId = row.templateId ?? DEFAULT_CERTIFICATE_TEMPLATE_ID;
       });
     }
     certificateCode = cert.code;
@@ -401,14 +476,17 @@ export async function saveEvaluationCertificateAction(
   const published = fdBool(formData, "published");
   const issueDate = fd(formData, "issueDate") || toDateKey();
   const expiryRaw = fd(formData, "expiryDate");
+  const templateRaw = fd(formData, "templateId");
   const fieldErrors: Record<string, string> = {};
   if (!isValidDateKey(issueDate)) fieldErrors.issueDate = "Enter a valid issue date.";
+  if (templateRaw && !isCertificateTemplateId(templateRaw)) fieldErrors.templateId = "Choose one of the available certificate templates.";
+  const templateId = templateRaw || DEFAULT_CERTIFICATE_TEMPLATE_ID;
   if (expiryRaw && !isValidDateKey(expiryRaw)) fieldErrors.expiryDate = "Enter a valid expiry date.";
   else if (expiryRaw && expiryRaw <= issueDate) fieldErrors.expiryDate = "Expiry date must be after the issue date.";
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
 
   const db = await getDb();
-  const evaluation = db.certificateEvaluations.find((e) => e.userId === request.userId && e.courseId === request.courseId);
+  const evaluation = findEvaluationForRequest(db.certificateEvaluations, request);
   const hasCertificate = db.certificates.some((c) => c.userId === request.userId && c.courseId === request.courseId);
   if (!hasCertificate && evaluation?.status !== "pass") return { ok: false, error: "Mark the evaluation as Pass before issuing the certificate." };
 
@@ -419,6 +497,7 @@ export async function saveEvaluationCertificateAction(
     row.published = published;
     row.issueDate = issueDate;
     row.expiryDate = expiryRaw || undefined;
+    row.templateId = templateId;
     row.evaluatorId = row.evaluatorId ?? request.evaluatorId;
     if (request.batchId && !row.batchId) row.batchId = request.batchId;
   });

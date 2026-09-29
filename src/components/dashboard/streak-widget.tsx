@@ -75,7 +75,7 @@ export function StreakWidget({
         </div>
         <p className="mt-4 rounded-lg border border-border px-3 py-2 text-xs leading-relaxed text-ink-muted">
           Your learning streak counts the number of days in a row you have kept up your learning, whether it is a lesson, quiz, or
-          assignment. Any learning activity during the day keeps it going.
+          assignment. Do not worry, weekends do not break your streak.
         </p>
       </Dialog>
     </>

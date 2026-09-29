@@ -11,10 +11,12 @@ import {
   acceptsEnrollment,
   canManageBatch,
   canViewBatch,
+  ensureBatchReminders,
   feedbackAverages,
   getBatchAnnouncements,
   getBatchAssessmentRows,
   getBatchBySlug,
+  getBatchCertificationInfo,
   getBatchCourseItems,
   getBatchEnrollment,
   getBatchFeedback,
@@ -31,7 +33,9 @@ import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import { Icon } from "@/components/ui/icons";
+import { getUpcomingEvaluationsForUser } from "@/lib/data/certificates";
 import { Breadcrumbs } from "@/components/batches/breadcrumbs";
+import { BatchEvaluations } from "@/components/batches/batch-evaluations";
 import { BatchStatusBadge, InstructorNames, SeatBadge } from "@/components/batches/batch-meta";
 import { EnrollPanel } from "@/components/batches/enroll-panel";
 import { BatchCourseGrid } from "@/components/batches/batch-courses";
@@ -221,6 +225,8 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
   const enrolled = !!enrollment;
   const isManager = canManageBatch(user, batch);
   if (!canViewBatch(user, batch, enrolled)) notFound();
+  // Best effort: a failed reminder write must never break the batch page.
+  if (user && enrolled) await ensureBatchReminders(user.id).catch(() => 0);
 
   const now = serverNow();
   const summary = await getBatchSummary(batch, user);
@@ -284,7 +290,17 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
       </div>
       <Tabs items={tabs} className="mt-6" />
       <div className="mt-6">
-        <TabContent active={active} batch={batch} summary={summary} user={user!} enrolled={enrolled} isManager={isManager} now={now} liveClassCount={liveClassCount} />
+        <TabContent
+          active={active}
+          batch={batch}
+          summary={summary}
+          user={user!}
+          enrolled={enrolled}
+          isManager={isManager}
+          now={now}
+          liveClassCount={liveClassCount}
+          certificationsEnabled={settings.features.certifications}
+        />
       </div>
     </div>
   );
@@ -299,6 +315,7 @@ async function TabContent({
   isManager,
   now,
   liveClassCount,
+  certificationsEnabled,
 }: {
   active: BatchDetailTab;
   batch: Batch;
@@ -308,6 +325,7 @@ async function TabContent({
   isManager: boolean;
   now: number;
   liveClassCount: number;
+  certificationsEnabled: boolean;
 }) {
   const manageHref = (tab: string) => `/admin/batches/${batch.id}?tab=${tab}`;
 
@@ -361,29 +379,36 @@ async function TabContent({
     }
     case "assessments": {
       const rows = await getBatchAssessmentRows(batch, enrolled ? user.id : null);
-      if (!rows.length) {
-        return (
-          <EmptyState
-            icon={<Icon.ClipboardList />}
-            title="No assessments added to this batch"
-            description="Quizzes, assignments and programming exercises for this batch will be listed here."
-            action={isManager ? <ButtonLink href={manageHref("assessments")}>Add assessments</ButtonLink> : null}
-          />
-        );
-      }
+      const showCertification = enrolled && batch.certification && certificationsEnabled;
+      const [certInfo, evaluations] = showCertification
+        ? await Promise.all([getBatchCertificationInfo(batch, user.id, now), getUpcomingEvaluationsForUser(user.id, { courseIds: batch.courseIds })])
+        : [null, []];
+      const batchEvaluations = evaluations.filter((e) => !e.batchId || e.batchId === batch.id);
       const passed = rows.filter((r) => r.status === "pass").length;
       return (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-lg font-semibold text-ink">Assessments</h2>
-            <p className="text-sm text-ink-muted">{enrolled ? `${passed} of ${rows.length} passed.` : "Assessments learners complete as part of this batch."}</p>
-          </div>
-          <AssessmentList rows={rows} showStatus={enrolled} />
+        <div className="space-y-10">
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={<Icon.ClipboardList />}
+              title="No assessments added to this batch"
+              description="Quizzes, assignments and programming exercises for this batch will be listed here."
+              action={isManager ? <ButtonLink href={manageHref("assessments")}>Add assessments</ButtonLink> : null}
+            />
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-ink">Assessments</h2>
+                <p className="text-sm text-ink-muted">{enrolled ? `${passed} of ${rows.length} passed.` : "Assessments learners complete as part of this batch."}</p>
+              </div>
+              <AssessmentList rows={rows} showStatus={enrolled} />
+            </div>
+          )}
+          {certInfo && <BatchEvaluations info={certInfo} evaluations={batchEvaluations} />}
         </div>
       );
     }
     case "classes": {
-      const classes = await getBatchLiveClasses(batch.id, user.id);
+      const classes = await getBatchLiveClasses(batch.id, user.id, { forManager: isManager });
       return (
         <div className="space-y-4">
           {isManager && (

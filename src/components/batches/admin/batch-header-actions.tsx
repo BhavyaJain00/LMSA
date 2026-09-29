@@ -47,8 +47,9 @@ export function BatchHeaderActions({
       </Button>
       <Dropdown
         trigger={
-          <span className="inline-flex size-9 items-center justify-center rounded-lg border border-border-strong bg-surface-1 text-ink hover:bg-surface-2" aria-label="Batch options">
+          <span className="inline-flex size-9 items-center justify-center rounded-lg border border-border-strong bg-surface-1 text-ink hover:bg-surface-2">
             <Icon.MoreHorizontal className="size-5" />
+            <span className="sr-only">Batch options</span>
           </span>
         }
         items={items}

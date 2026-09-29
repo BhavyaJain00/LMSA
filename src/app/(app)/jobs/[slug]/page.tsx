@@ -1,33 +1,38 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/session";
+import { getCurrentUser, isStaff } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
-import { canManageJob, getJobBySlug, getUserApplication } from "@/lib/data/jobs";
+import { canManageJob, closeExpiredJobs, getJobBySlug, getUserApplication } from "@/lib/data/jobs";
 import { Markdown } from "@/lib/markdown";
 import { ButtonLink } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
-import { CompanyLogo, JOB_TYPE_LABEL, workModeLabel } from "@/components/jobs/job-bits";
+import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel, workModeTone } from "@/components/jobs/job-bits";
 import { ApplyDialog } from "@/components/jobs/apply-dialog";
 import { JobStatusButton, WithdrawApplicationButton } from "@/components/jobs/job-actions";
 import { formatDate, pluralize, relativeTime, stripMarkdown, truncate } from "@/lib/utils";
 
 export async function generateMetadata(props: PageProps<"/jobs/[slug]">) {
   const { slug } = await props.params;
-  const job = await getJobBySlug(slug);
+  const [job, viewer] = await Promise.all([getJobBySlug(slug), getCurrentUser()]);
   if (!job) return { title: "Job not found" };
+  if (job.status === "closed" && !canManageJob(viewer, job) && !(await getUserApplication(viewer?.id, job.id))) return { title: "Job not found" };
   return { title: `${job.title} at ${job.company}`, description: truncate(stripMarkdown(job.description).replace(/\n/g, " "), 160) };
 }
 
 export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
   const { slug } = await props.params;
+  await closeExpiredJobs();
   const [settings, viewer, job] = await Promise.all([getSettings(), getCurrentUser(), getJobBySlug(slug)]);
   if (!settings.features.jobs || !job) notFound();
   if (!viewer && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/jobs/${slug}`)}`);
 
   const manager = canManageJob(viewer, job);
   const application = await getUserApplication(viewer?.id, job.id);
+  // Same visibility rule as the board: closed jobs are only shown to people who manage them or applied.
+  if (job.status === "closed" && !manager && !application) notFound();
+  const showApplicants = manager || isStaff(viewer);
   const website = job.companyWebsite ? (/^https?:\/\//i.test(job.companyWebsite) ? job.companyWebsite : `https://${job.companyWebsite}`) : null;
 
   return (
@@ -41,12 +46,12 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
 
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         {manager && job.applicantCount > 0 && (
-          <ButtonLink href={`/admin/jobs/${job.id}/applications`} variant="subtle" leftIcon={<Icon.Users className="size-4" />}>
+          <ButtonLink href={`/jobs/${job.slug}/applications`} variant="subtle" leftIcon={<Icon.Users className="size-4" />}>
             View Applications
           </ButtonLink>
         )}
         {manager && (
-          <ButtonLink href={`/admin/jobs/${job.id}`} variant="subtle" leftIcon={<Icon.Edit className="size-4" />}>
+          <ButtonLink href={`/jobs/${job.slug}/edit`} variant="subtle" leftIcon={<Icon.Edit className="size-4" />}>
             Edit
           </ButtonLink>
         )}
@@ -87,7 +92,7 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
           <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">{job.title}</h1>
             <p className="mt-1 text-sm font-medium text-ink-muted">
-              {job.company} - {job.location}
+              {job.company} - {formatJobLocation(job)}
             </p>
           </div>
         </header>
@@ -101,9 +106,9 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
             <Icon.ClipboardList className="size-4" />
             {JOB_TYPE_LABEL[job.type]}
           </Badge>
-          <Badge size="md" tone={job.remote ? "info" : "neutral"}>
+          <Badge size="md" tone={workModeTone(job)}>
             <Icon.Briefcase className="size-4" />
-            {workModeLabel(job.remote)}
+            {workModeLabel(job)}
           </Badge>
           {job.salaryRange && (
             <Badge size="md">
@@ -111,7 +116,7 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
               {job.salaryRange}
             </Badge>
           )}
-          {job.applicantCount > 0 && (
+          {showApplicants && job.applicantCount > 0 && (
             <Badge size="md">
               <Icon.User className="size-4" />
               {pluralize(job.applicantCount, "applicant")}

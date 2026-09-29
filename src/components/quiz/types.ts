@@ -54,10 +54,16 @@ export interface RunnerQuiz {
   scheduleEnd?: string;
   enableProctoring: boolean;
   maxViolations: number;
-  /** Questions in quiz order. Empty while the schedule withholds them. */
+  /**
+   * Questions in quiz order. Only filled for the builder's preview: live
+   * payloads leave it empty and the server issues the questions of each
+   * attempt when it starts (see `StartAttemptResult`).
+   */
   questions: RunnerQuestion[];
-  /** Set when the questions were withheld because the schedule is closed. */
+  /** Set when questions are issued by the server when an attempt starts (every live payload). */
   questionsWithheld: boolean;
+  /** Number of questions available in the quiz (0 = nothing to take yet). */
+  poolSize: number;
   hasOpenEnded: boolean;
 }
 
@@ -95,17 +101,33 @@ export const submissionReasonLabels: Record<Exclude<SubmissionReason, "manual">,
   browser_closed: "Browser closed",
 };
 
+/**
+ * A live attempt as issued by the server. The signed `token` fixes the
+ * learner, the questions of this attempt and the server-side start time; it
+ * is sent back with proctoring events, answer checks and the submission.
+ */
+export interface StartAttemptResult {
+  token: string;
+  /** ISO time the attempt started on the server. */
+  startedAt: string;
+  /** Server clock (ms) when the attempt was issued, to derive a skew-free local deadline. */
+  serverTime: number;
+  /** The questions of this attempt, in the order they are shown. */
+  questions: RunnerQuestion[];
+}
+
 export interface SubmitQuizInput {
   quizId: string;
   lessonId?: string;
   courseId?: string;
-  /** Question ids in the order they were shown (a subset when the quiz limits questions). */
-  questionIds: string[];
+  /** Token from `StartAttemptResult` (required for live attempts). */
+  attemptToken?: string;
+  /** Preview only: question ids in the order they were shown. Live attempts use the token's questions. */
+  questionIds?: string[];
   /** Selected option ids / typed answers keyed by question id. */
   answers: Record<string, string[]>;
-  /** ISO time the attempt started (used to link proctoring events and check the timer). */
-  startedAt: string;
-  timeTakenSeconds: number;
+  /** Preview only: ISO time the preview started. Live attempts use the token's start time. */
+  startedAt?: string;
   violationCount: number;
   submissionReason: SubmissionReason;
   /** Managers only: grade without storing anything. */

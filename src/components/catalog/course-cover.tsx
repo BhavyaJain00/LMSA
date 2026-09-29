@@ -5,6 +5,12 @@ import { cn, gradientFor, initials } from "@/lib/utils";
 /**
  * Course artwork: the cover image when there is one, otherwise the course's
  * card gradient with the title initials as a monogram (Frappe card_gradient).
+ *
+ * Deliberate exception to the "semantic tokens only" rule: the card gradients
+ * (`gradientClasses` in src/lib/utils.ts) are a fixed, theme-independent
+ * palette, so the shade, dot pattern and monogram drawn on top of them use
+ * fixed black/white as well. Theme tokens (ink, surface) flip in dark mode and
+ * would lose contrast against the same gradient.
  */
 export function CourseCover({
   title,

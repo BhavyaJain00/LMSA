@@ -40,6 +40,7 @@ export default async function EditProfilePage(props: PageProps<"/user/[username]
     username: target.username,
     headline: target.headline ?? "",
     location: target.location ?? "",
+    openTo: target.openTo ?? "",
     bio: target.bio ?? "",
     avatarUrl: target.avatarUrl ?? "",
     coverImageUrl: target.coverImageUrl ?? "",

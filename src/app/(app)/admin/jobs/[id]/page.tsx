@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { JobForm } from "@/components/jobs/job-form";
+import { toJobFormValues } from "@/components/jobs/job-form-values";
 
 export async function generateMetadata(props: PageProps<"/admin/jobs/[id]">) {
   const { id } = await props.params;
@@ -46,20 +47,7 @@ export default async function EditJobPage(props: PageProps<"/admin/jobs/[id]">) 
         }
       />
       <JobForm
-        job={{
-          id: job.id,
-          slug: job.slug,
-          title: job.title,
-          company: job.company,
-          companyLogoUrl: job.companyLogoUrl,
-          companyWebsite: job.companyWebsite,
-          location: job.location,
-          remote: job.remote,
-          type: job.type,
-          description: job.description,
-          salaryRange: job.salaryRange,
-          status: job.status,
-        }}
+        job={toJobFormValues(job)}
         cancelHref="/admin/jobs"
       />
     </div>

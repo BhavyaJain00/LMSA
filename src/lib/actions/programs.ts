@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import type { ActionResult, Database, Program, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
-import { canCreateProgram, canManageProgram, computeProgramProgress } from "@/lib/data/programs";
+import { canCreateProgram, canManageProgram, computeProgramProgress, programCourseAccess } from "@/lib/data/programs";
 import { getNextLesson, lessonHref } from "@/lib/data/courses";
 import { enrollUserInCourse } from "@/lib/services/enrollment";
 import { notify } from "@/lib/services/notifications";
@@ -45,9 +45,26 @@ function refreshMemberProgress(d: Database, programId: string) {
  * Enroll a member in the courses they may start: only the first course when
  * the order is enforced (later ones unlock as they finish), otherwise all.
  */
-async function enrollMemberInCourses(program: Program, userId: string) {
+/**
+ * Enroll a program member in the program's starting course(s). Managers adding
+ * members grant access directly; a learner joining on their own (`self`) is
+ * only enrolled in courses they could open anyway (published, and free or
+ * already paid for). Paid courses stay behind checkout.
+ */
+async function enrollMemberInCourses(program: Program, userId: string, opts: { self?: User } = {}) {
   const ids = program.enforceCourseOrder ? program.courseIds.slice(0, 1) : program.courseIds;
-  for (const courseId of ids) await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
+  const db = opts.self ? await getDb() : null;
+  for (const courseId of ids) {
+    if (db && opts.self) {
+      const course = db.courses.find((c) => c.id === courseId);
+      if (!course) continue;
+      const access = programCourseAccess(db, opts.self, course);
+      if (!access.ok) continue;
+      await enrollUserInCourse(userId, courseId, { notifyInstructors: false, paymentId: access.paymentId });
+    } else {
+      await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
+    }
+  }
   await mutate((d) => refreshMemberProgress(d, program.id));
 }
 
@@ -267,7 +284,7 @@ export async function enrollInProgramAction(_prev: ActionResult | null, formData
         d.programMembers.push({ id: uid("pm"), programId: program.id, userId: user.id, progress: 0, joinedAt: new Date().toISOString() });
       }
     });
-    await enrollMemberInCourses(program, user.id);
+    await enrollMemberInCourses(program, user.id, { self: user });
   }
   revalidateProgram(program);
   await setFlash(existing ? "You are already enrolled in this program" : "Successfully enrolled in program", existing ? "info" : "success");
@@ -275,8 +292,9 @@ export async function enrollInProgramAction(_prev: ActionResult | null, formData
 }
 
 /**
- * Start the next course of a program once it is unlocked (enrolls the member
- * even when the course is paid or closed to self-learning — the program grants access).
+ * Start the next course of a program once it is unlocked. The program unlocks
+ * the order, not the course's own gates: unpublished courses stay closed to
+ * learners and paid courses need a completed payment (sent to checkout).
  */
 export async function startProgramCourseAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const user = await getCurrentUser();
@@ -296,7 +314,12 @@ export async function startProgramCourseAction(_prev: ActionResult | null, formD
     const prev = db.enrollments.find((e) => e.userId === user.id && e.courseId === prevId);
     if (!prev || (prev.progress < 100 && !prev.completedAt)) return { ok: false, error: "Please complete the previous course to unlock this one." };
   }
-  await enrollUserInCourse(user.id, course.id, { notifyInstructors: true });
+  const access = programCourseAccess(db, user, course);
+  if (!access.ok) {
+    if (access.reason === "payment") redirect(`/billing/course/${course.id}`);
+    return { ok: false, error: "This course is not available yet." };
+  }
+  await enrollUserInCourse(user.id, course.id, { notifyInstructors: true, paymentId: access.paymentId });
   await mutate((d) => refreshMemberProgress(d, program.id));
   revalidateProgram(program);
   revalidatePath(`/courses/${course.slug}`);

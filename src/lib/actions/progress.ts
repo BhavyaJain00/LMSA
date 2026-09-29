@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { getLessonAccess } from "@/lib/data/lessons";
+import { getLessonAccess, lockedLessonError } from "@/lib/data/lessons";
 import { completeLesson, setLessonStatus } from "@/lib/services/progress";
 import { clamp } from "@/lib/utils";
 
@@ -52,9 +52,8 @@ export async function completeLessonAction(input: { lessonId: string; dwellDelta
   const access = lessonId ? await getLessonAccess(user, lessonId) : null;
   if (!access) return { ok: false, error: "This lesson no longer exists." };
   if (!access.enrolled) return { ok: false, error: "Enroll in this course to track your progress." };
-  if (!access.canView) {
-    return { ok: false, error: access.locked ? "Complete the previous lesson before marking this one as done." : "You do not have access to this lesson." };
-  }
+  // Locked lessons (scheduled/drip, enforced order, prerequisites) can never be completed early.
+  if (!access.canView) return { ok: false, error: lockedLessonError(access) };
 
   const summary = async (completed: boolean, alreadyComplete: boolean, missing: string[]): Promise<CompleteLessonResult> => {
     const db = await getDb();

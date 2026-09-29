@@ -2,7 +2,8 @@
 
 import { useState, type ReactNode } from "react";
 import type { Settings } from "@/lib/types";
-import { savePaymentSettingsAction } from "@/lib/actions/settings";
+import type { GatewayStatusView } from "@/lib/payments/types";
+import { savePaymentGatewaySettingsAction } from "@/lib/actions/payments";
 import { currencies } from "@/lib/config";
 import { Input, RadioCard, Select, Switch } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
@@ -12,37 +13,58 @@ import { useFormAction } from "./use-form-action";
 
 type Gateway = Settings["commerce"]["paymentGateway"];
 
-const GATEWAYS: { value: Gateway; title: string; description: string; icon: ReactNode }[] = [
-  {
-    value: "manual",
-    title: "Manual payment",
-    description: "Learners place an order and pay offline (bank transfer, invoice). Confirm payments in Transactions to enroll them.",
-    icon: <Icon.Receipt className="size-5" />,
-  },
-  {
-    value: "stripe",
-    title: "Stripe (test mode)",
-    description: "Checkout shows a 'Test payment' button that simulates a successful card payment.",
-    icon: <Icon.CreditCard className="size-5" />,
-  },
-  {
-    value: "razorpay",
-    title: "Razorpay (test mode)",
-    description: "Checkout shows a 'Test payment' button that simulates a successful Razorpay payment.",
-    icon: <Icon.CreditCard className="size-5" />,
-  },
-  {
-    value: "none",
-    title: "No payment gateway",
-    description: "Payment is not collected: paid items are granted as soon as the learner checks out.",
-    icon: <Icon.Gift className="size-5" />,
-  },
-];
+interface GatewayChoice {
+  value: Gateway;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  /** Problem that keeps this gateway from being selected (keys missing). */
+  blocked?: string;
+}
 
-export function PaymentsForm({ initial }: { initial: Settings["commerce"] }) {
-  const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(savePaymentSettingsAction);
+function gatewayChoices(statuses: GatewayStatusView[]): GatewayChoice[] {
+  const status = (g: "stripe" | "razorpay") => statuses.find((s) => s.gateway === g);
+  const describe = (g: "stripe" | "razorpay", text: string) => {
+    const s = status(g);
+    if (!s?.configured) return `${text} Not available yet: ${s?.missing[0] ?? "keys missing"}.`;
+    return `${text} ${s.mode === "live" ? "Live mode — real payments." : "Test mode — no real money moves."}`;
+  };
+  return [
+    {
+      value: "manual",
+      title: "Manual payment",
+      description: "Learners place an order and pay offline (bank transfer, invoice). Confirm payments in Transactions to enroll them.",
+      icon: <Icon.Receipt className="size-5" />,
+    },
+    {
+      value: "stripe",
+      title: "Stripe",
+      description: describe("stripe", "Learners pay on Stripe's hosted checkout (cards, wallets) and are enrolled automatically."),
+      icon: <Icon.CreditCard className="size-5" />,
+      blocked: status("stripe")?.configured ? undefined : (status("stripe")?.missing[0] ?? "Stripe is not configured"),
+    },
+    {
+      value: "razorpay",
+      title: "Razorpay",
+      description: describe("razorpay", "Learners pay in the Razorpay window (cards, UPI, netbanking, wallets) and are enrolled automatically."),
+      icon: <Icon.CreditCard className="size-5" />,
+      blocked: status("razorpay")?.configured ? undefined : (status("razorpay")?.missing[0] ?? "Razorpay is not configured"),
+    },
+    {
+      value: "none",
+      title: "No payment gateway",
+      description: "Payment is not collected: paid items are granted as soon as the learner checks out.",
+      icon: <Icon.Gift className="size-5" />,
+    },
+  ];
+}
+
+export function PaymentsForm({ initial, gateways }: { initial: Settings["commerce"]; gateways: GatewayStatusView[] }) {
+  const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(savePaymentGatewaySettingsAction);
   const [gateway, setGateway] = useState<Gateway>(initial.paymentGateway);
   const [applyTax, setApplyTax] = useState(initial.applyTax);
+  const choices = gatewayChoices(gateways);
+  const selectedBlocked = choices.find((c) => c.value === gateway)?.blocked;
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
@@ -65,12 +87,13 @@ export function PaymentsForm({ initial }: { initial: Settings["commerce"] }) {
 
       <SettingsSection title="Payment Gateway" description="Payment gateway used to process course, batch and certificate purchases.">
         <div className="grid gap-2 px-4 py-4 sm:grid-cols-2 sm:px-5" role="radiogroup" aria-label="Payment gateway">
-          {GATEWAYS.map((g) => (
+          {choices.map((g) => (
             <RadioCard
               key={g.value}
               name="paymentGateway"
               value={g.value}
               checked={gateway === g.value}
+              disabled={!!g.blocked && gateway !== g.value}
               onChange={(v) => {
                 setGateway(v as Gateway);
                 markDirty();
@@ -81,6 +104,13 @@ export function PaymentsForm({ initial }: { initial: Settings["commerce"] }) {
             />
           ))}
         </div>
+        {selectedBlocked && !errors.paymentGateway && (
+          <p role="alert" className="mx-4 mb-4 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-ink sm:mx-5">
+            <Icon.AlertTriangle className="mt-px size-3.5 shrink-0 text-danger" />
+            The selected gateway cannot take payments ({selectedBlocked}). Learners see &ldquo;Online payments are unavailable&rdquo; at checkout until you fix the keys or choose
+            another gateway.
+          </p>
+        )}
         {errors.paymentGateway && <p className="px-5 pb-3 text-xs text-danger">{errors.paymentGateway}</p>}
       </SettingsSection>
 
@@ -118,12 +148,12 @@ export function PaymentsForm({ initial }: { initial: Settings["commerce"] }) {
             name="sendPaymentReminders"
             defaultChecked={initial.sendPaymentReminders}
             label="Send payment reminders"
-            description="If enabled, learners who left an order unpaid are reminded to complete their enrollment."
+            description="If enabled, learners who left an order unpaid in the last week are reminded automatically once a day until they pay (checked whenever an admin opens the admin overview or Transactions). Transactions also offers Send reminders to remind everyone right away."
           />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} />
+      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} failed={state?.ok === false} />
     </form>
   );
 }

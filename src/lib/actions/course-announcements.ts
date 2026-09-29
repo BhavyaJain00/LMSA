@@ -6,6 +6,7 @@ import { findById, getDb, insert, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { canManageCourse } from "@/lib/data/courses";
 import { notifyMany } from "@/lib/services/notifications";
+import { courseAudienceText, sendCourseAnnouncementEmails } from "@/lib/email";
 import { fd, isValidEmail, splitList, stripMarkdown, truncate, uid } from "@/lib/utils";
 
 /**
@@ -53,17 +54,22 @@ export async function createCourseAnnouncementAction(
   await insert("announcements", announcement);
   await notifyMany(recipients, {
     type: "announcement",
-    subject: `${course.title}: ${subject}`,
-    message: truncate(stripMarkdown(body).replace(/\s+/g, " "), 200),
+    subject: `${course.title}: ${courseAudienceText(db, course, subject)}`,
+    message: truncate(stripMarkdown(courseAudienceText(db, course, body)).replace(/\s+/g, " "), 200),
     link: `/courses/${course.slug}`,
     fromUserId: user.id,
+    // Learners (and CC'd addresses) get the full announcement by email below.
+    email: false,
   });
+  const mail = await sendCourseAnnouncementEmails(announcement.id);
   revalidatePath(`/admin/courses/${course.id}`);
   revalidatePath(`/courses/${course.slug}`, "layout");
+  revalidatePath("/admin/emails");
+  const emailed = !mail.disabled && mail.queued ? ` (${mail.queued} emailed)` : "";
   return {
     ok: true,
     data: { recipients: recipients.length },
-    message: recipients.length ? `Announcement sent to ${recipients.length} ${recipients.length === 1 ? "learner" : "learners"}` : "Announcement posted",
+    message: recipients.length ? `Announcement sent to ${recipients.length} ${recipients.length === 1 ? "learner" : "learners"}${emailed}` : "Announcement posted",
   };
 }
 

@@ -5,8 +5,9 @@ import { redirect } from "next/navigation";
 import { createHash, randomBytes } from "node:crypto";
 import type { PublicUser, Role, Session, User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
-import { findById, findOne, insert, mutate, removeWhere, update } from "@/lib/db/store";
+import { findById, findOne, getSettings, insert, mutate, removeWhere, update } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
+import { mustSetUpTwoFactor } from "./account-status";
 
 const COOKIE = siteConfig.sessionCookie;
 const SESSION_MS = siteConfig.sessionDays * 24 * 60 * 60 * 1000;
@@ -15,9 +16,31 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** SHA-256 hex of a raw session token (the form stored in `sessions.tokenHash`). */
+export function hashSessionToken(token: string): string {
+  return hashToken(token);
+}
+
+/**
+ * Public-safe projection of a user. Besides the password hash it also drops
+ * the account-security secrets (encrypted TOTP seed, replay step, recovery
+ * code hashes) and the private calendar feed token, so profiles and lists
+ * rendered for other people never carry them.
+ */
 export function toPublicUser(user: User): PublicUser {
-  const { passwordHash: _omit, ...rest } = user;
+  const {
+    passwordHash: _omit,
+    twoFactorSecretEnc: _secret,
+    twoFactorLastStep: _step,
+    recoveryCodeHashes: _codes,
+    calendarToken: _calendar,
+    ...rest
+  } = user;
   void _omit;
+  void _secret;
+  void _step;
+  void _codes;
+  void _calendar;
   return rest;
 }
 
@@ -64,6 +87,19 @@ export async function destroyAllSessions(userId: string): Promise<void> {
   await removeWhere("sessions", (s) => s.userId === userId);
 }
 
+/** Hash of the session token in the current request's cookie (null when signed out). */
+export async function getCurrentSessionTokenHash(): Promise<string | null> {
+  const store = await cookies();
+  const token = store.get(COOKIE)?.value;
+  return token ? hashToken(token) : null;
+}
+
+/** Log the user out on every other device, keeping the current session. Returns how many were removed. */
+export async function destroyOtherSessions(userId: string): Promise<number> {
+  const current = await getCurrentSessionTokenHash();
+  return removeWhere("sessions", (s) => s.userId === userId && s.tokenHash !== current);
+}
+
 /**
  * Resolve the logged-in user for this request. Memoized per request with
  * React `cache`, so calling it from layouts, pages and actions is free.
@@ -106,19 +142,47 @@ export const isEvaluator = (u: Pick<User, "roles"> | null | undefined) => hasRol
 export const isStaff = (u: Pick<User, "roles"> | null | undefined) =>
   hasRole(u, "course_creator", "moderator", "batch_evaluator");
 
-/** Redirect to login when unauthenticated. `next` preserves the destination. */
+/**
+ * Staff who must turn on two-step verification (`settings.security.
+ * enforceTwoFactorForStaff`) are sent to the security settings first, with the
+ * page they wanted kept as `next`.
+ */
+async function enforceStaffTwoFactor(user: User, nextPath?: string): Promise<void> {
+  const settings = await getSettings();
+  if (!mustSetUpTwoFactor(user, settings.security)) return;
+  const query = new URLSearchParams({ required: "2fa" });
+  if (nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//")) query.set("next", nextPath);
+  redirect(`/settings/security?${query.toString()}`);
+}
+
+/** Admin and teaching tools live under /admin; the enforce-2FA policy guards them. */
+function isStaffAreaPath(nextPath?: string): boolean {
+  return !!nextPath && (nextPath === "/admin" || nextPath.startsWith("/admin/") || nextPath.startsWith("/admin?"));
+}
+
+/**
+ * Redirect to login when unauthenticated. `next` preserves the destination.
+ * For `/admin…` destinations the enforce-2FA-for-staff policy also applies.
+ */
 export async function requireUser(nextPath?: string): Promise<User> {
   const user = await getCurrentUser();
   if (!user) {
     const target = nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : "/login";
     redirect(target);
   }
+  if (isStaffAreaPath(nextPath)) await enforceStaffTwoFactor(user, nextPath);
   return user;
 }
 
+/**
+ * Require one of `roles`. When the platform enforces two-step verification for
+ * staff, staff members who have not turned it on are sent to the security
+ * settings to set it up first.
+ */
 export async function requireRole(roles: Role[], nextPath?: string): Promise<User> {
   const user = await requireUser(nextPath);
   if (!hasRole(user, ...roles)) redirect("/forbidden");
+  if (!isStaffAreaPath(nextPath)) await enforceStaffTwoFactor(user, nextPath);
   return user;
 }
 

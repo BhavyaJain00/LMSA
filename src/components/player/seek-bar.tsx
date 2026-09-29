@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clamp, cn, formatTime } from "@/lib/utils";
 import type { BufferedRange } from "./use-video-player";
 
@@ -37,6 +37,8 @@ export function SeekBar({
   onScrubStart,
   onScrubEnd,
   onMarkerClick,
+  onHoverTime,
+  preview,
   className,
 }: {
   currentTime: number;
@@ -50,12 +52,17 @@ export function SeekBar({
   onScrubStart?: () => void;
   onScrubEnd?: () => void;
   onMarkerClick?: (marker: SeekMarker) => void;
+  /** Reports the hovered (or scrubbed) time, null when the pointer leaves. Used for preview thumbnails. */
+  onHoverTime?: (time: number | null) => void;
+  /** Preview frame shown above the time in the hover tooltip. */
+  preview?: ReactNode;
   className?: string;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubTime, setScrubTime] = useState(0);
+  const [trackWidth, setTrackWidth] = useState(0);
 
   const timeFromEvent = useCallback(
     (clientX: number) => {
@@ -75,11 +82,16 @@ export function SeekBar({
     const t = timeFromEvent(e.clientX);
     setScrubbing(true);
     setScrubTime(t);
+    setHoverTime(t);
+    setTrackWidth(e.currentTarget.getBoundingClientRect().width);
+    onHoverTime?.(t);
     onScrubStart?.();
   };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const t = timeFromEvent(e.clientX);
     setHoverTime(t);
+    setTrackWidth(e.currentTarget.getBoundingClientRect().width);
+    onHoverTime?.(t);
     if (scrubbing) setScrubTime(t);
   };
   const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
@@ -88,6 +100,10 @@ export function SeekBar({
     setScrubbing(false);
     onSeek(t);
     onScrubEnd?.();
+    if (e.pointerType !== "mouse") {
+      setHoverTime(null);
+      onHoverTime?.(null);
+    }
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 30 : 5;
@@ -118,17 +134,24 @@ export function SeekBar({
       : [{ start: 0, end: duration || 1, title: "" }];
 
   const hoverChapter = hoverTime !== null ? chapterAt(chapters, hoverTime) : null;
+  // Keep the tooltip (and its preview frame) inside the bar.
+  const tipHalfPx = preview ? 84 : 36;
+  const edgePct = trackWidth > 0 ? Math.min(50, (tipHalfPx / trackWidth) * 100) : 4;
 
   return (
     <div className={cn("group/seek relative w-full select-none py-2", className)}>
       {/* Hover tooltip */}
       {hoverPct !== null && duration > 0 && (
         <div
-          className="pointer-events-none absolute bottom-full mb-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-black/85 px-2 py-1 text-center text-xs text-white shadow"
-          style={{ left: `${clamp(hoverPct, 4, 96)}%` }}
+          className={cn(
+            "pointer-events-none absolute bottom-full z-30 mb-2 flex -translate-x-1/2 flex-col items-center whitespace-nowrap rounded-md bg-black/85 text-center text-xs text-white shadow",
+            preview ? "p-1" : "px-2 py-1",
+          )}
+          style={{ left: `${clamp(hoverPct, edgePct, 100 - edgePct)}%` }}
         >
-          {hoverChapter && <div className="mb-0.5 max-w-48 truncate text-[11px] font-medium text-white/80">{hoverChapter.title}</div>}
-          {formatTime(scrubbing ? scrubTime : hoverTime!)}
+          {preview && <div className="mb-1 overflow-hidden rounded-sm bg-black">{preview}</div>}
+          {hoverChapter && <div className="mb-0.5 max-w-40 truncate px-1 text-[11px] font-medium text-white/80">{hoverChapter.title}</div>}
+          <span className={cn("tabular-nums", preview && "px-1 pb-0.5")}>{formatTime(scrubbing ? scrubTime : hoverTime!)}</span>
         </div>
       )}
 
@@ -145,8 +168,16 @@ export function SeekBar({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => setScrubbing(false)}
-        onPointerLeave={() => setHoverTime(null)}
+        onPointerCancel={() => {
+          setScrubbing(false);
+          setHoverTime(null);
+          onHoverTime?.(null);
+        }}
+        onPointerLeave={() => {
+          if (scrubbing) return;
+          setHoverTime(null);
+          onHoverTime?.(null);
+        }}
         onKeyDown={onKeyDown}
       >
         {/* Track split into chapter segments */}

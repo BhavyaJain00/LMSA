@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { ActionResult } from "@/lib/types";
 import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
-import { submitAssignmentAction } from "@/lib/actions/assignments";
+import { submitAssignmentAction, type SubmitAssignmentResult } from "@/lib/actions/assignments";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -29,7 +30,7 @@ import {
   type AssignmentView,
 } from "./shared";
 
-type SubmitState = ActionResult<{ submission: AssignmentSubmissionView }> | null;
+type SubmitState = ActionResult<SubmitAssignmentResult> | null;
 
 export interface AssignmentPanelProps {
   assignment: AssignmentView;
@@ -113,11 +114,21 @@ export function AssignmentPanel({
   pageHref,
 }: AssignmentPanelProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, pending] = useActionState<SubmitState, FormData>(async (prev, formData) => {
     const res = await submitAssignmentAction(prev, formData);
-    if (res.ok) toast({ title: res.message ?? "Changes saved successfully", tone: "success" });
-    else toast({ title: res.error, tone: "error" });
+    if (res.ok) {
+      toast({
+        title: res.message ?? "Changes saved successfully",
+        description: res.data.lessonCompleted && lessonId ? "This lesson is now marked as complete." : undefined,
+        tone: "success",
+      });
+      // Pull fresh server state: lesson status, course progress, and the model answer (revealed after submitting).
+      router.refresh();
+    } else {
+      toast({ title: res.error, tone: "error" });
+    }
     return res;
   }, null);
 

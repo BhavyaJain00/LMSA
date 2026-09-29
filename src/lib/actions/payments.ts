@@ -2,23 +2,44 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ActionResult, Payment, User } from "@/lib/types";
+import type { ActionResult, Payment, Settings, User } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import {
   checkBillingAccess,
+  checkReminderEligibility,
   computeOrderSummary,
-  fulfillPayment,
   generateOrderId,
   getBillingItem,
+  getPaymentByOrderId,
+  insertPendingOrder,
   notifyAdminsOfPendingOrder,
   parseItemType,
-  refundPayment,
+  sendPaymentReminder,
+  sendPendingPaymentReminders,
   validateCoupon,
 } from "@/lib/data/commerce";
+import { acquireRefundLock, applyRefund, fulfillPayment, isGatewayPaymentReference, markPaymentFailed, releaseRefundLock, type FulfillmentResult } from "@/lib/payments/fulfillment";
+import {
+  GATEWAY_NAMES,
+  checkoutUrls,
+  closeGatewayCheckout,
+  confirmRazorpayCheckout,
+  createCheckout,
+  gatewayErrorMessage,
+  isConfigured,
+  isRealGateway,
+  refund,
+  resumeCheckout,
+  syncPaymentStatus,
+  testGatewayConnection,
+} from "@/lib/payments/gateway";
+import { parseDecimalAmount } from "@/lib/payments/amounts";
+import type { CheckoutNext } from "@/lib/payments/types";
 import { BILLING_SOURCES, GSTIN_RE, PAN_RE, canonicalIndianState, isKnownCountry } from "@/components/commerce/countries";
 import { setFlash } from "@/lib/flash";
-import { fd, fdBool, uid } from "@/lib/utils";
+import { currencies } from "@/lib/config";
+import { fd, fdBool, formatPrice, uid } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
@@ -81,15 +102,28 @@ function validateBilling(input: BillingInput, applyTax: boolean): Record<string,
   return errors;
 }
 
+function orderPath(orderId: string): string {
+  return `/billing/success/${encodeURIComponent(orderId)}`;
+}
+
+function revalidateOrder(orderId: string) {
+  revalidatePath(orderPath(orderId));
+  revalidatePath("/billing/history");
+  revalidatePath("/admin/settings/transactions");
+}
+
 /**
- * Place an order for a course, batch or certificate.
+ * Place an order for a course, batch or certificate. The amount is computed
+ * here from the item price, the coupon and the tax settings — never taken
+ * from the browser.
  *
  * Gateways:
  *  - total 0 or gateway "none" → recorded as paid immediately and fulfilled.
  *  - "manual"   → pending payment; admins confirm it in Settings → Transactions.
- *  - "stripe" / "razorpay" → test mode: the payment is captured immediately.
+ *  - "stripe"   → returns the hosted Stripe Checkout URL to redirect to.
+ *  - "razorpay" → returns the options for the Razorpay Checkout modal.
  */
-export async function placeOrderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null, formData: FormData): Promise<ActionResult<CheckoutNext>> {
   const type = parseItemType(fd(formData, "itemType"));
   const itemId = fd(formData, "itemId");
   const user = await getCurrentUser();
@@ -104,7 +138,7 @@ export async function placeOrderAction(_prev: ActionResult | null, formData: For
 
   const access = await checkBillingAccess(user, item);
   if (access.status === "owned" || access.status === "free") redirect(access.redirectTo);
-  if (access.status === "pending") redirect(`/billing/success/${access.payment.orderId}`);
+  if (access.status === "pending") redirect(orderPath(access.payment.orderId));
   if (access.status === "denied") return { ok: false, error: access.message };
 
   const db = await getDb();
@@ -131,9 +165,12 @@ export async function placeOrderAction(_prev: ActionResult | null, formData: For
 
   const gateway = settings.commerce.paymentGateway;
   const settleNow = summary.total <= 0 || gateway === "none";
-  const payment: Payment = {
+  if (!settleNow && isRealGateway(gateway) && !isConfigured(gateway)) {
+    return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
+  }
+
+  const { payment, existing } = await insertPendingOrder({
     id: uid("pay"),
-    orderId: await generateOrderId(),
     userId: user.id,
     itemType: type,
     itemId: item.id,
@@ -160,55 +197,125 @@ export async function placeOrderAction(_prev: ActionResult | null, formData: For
     gateway: summary.total <= 0 ? "free" : gateway,
     status: "pending",
     createdAt: new Date().toISOString(),
-  };
-  await mutate((d) => {
-    d.payments.push(payment);
   });
-
-  let flash = "Your order has been placed.";
-  if (settleNow) {
-    const res = await fulfillPayment(payment.id);
-    if (!res.ok) return { ok: false, error: res.error };
-    flash = summary.total <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.";
-  } else if (gateway === "manual") {
-    await notifyAdminsOfPendingOrder(payment, user.name);
-    flash = "Order placed. We'll confirm your payment shortly.";
-  } else {
-    /*
-     * Real gateway integration goes here. For Stripe: create a Checkout
-     * Session for `summary.total` in `summary.currency` with metadata
-     * { paymentId }, redirect the learner to `session.url`, and call
-     * fulfillPayment(paymentId, { gatewayPaymentId }) from the verified
-     * `checkout.session.completed` webhook. For Razorpay: create an order,
-     * open Razorpay Checkout on the client, verify the signature server-side
-     * and fulfil on `payment.captured`. In test mode we simulate an
-     * immediate successful capture.
-     */
-    const res = await fulfillPayment(payment.id, { gatewayPaymentId: `test_${gateway}_${uid()}` });
-    if (!res.ok) return { ok: false, error: res.error };
-    flash = "Test payment successful.";
+  if (existing) {
+    await setFlash("You already have an open order for this item.", "info");
+    redirect(orderPath(payment.orderId));
   }
 
-  revalidatePath("/", "layout");
-  await setFlash(flash, "success");
-  redirect(`/billing/success/${payment.orderId}`);
+  if (settleNow) {
+    const res = await fulfillPayment(payment.id, undefined, { source: "checkout" });
+    if (!res.ok) return { ok: false, error: res.error };
+    revalidatePath("/", "layout");
+    await finishFulfilledCheckout(res.data, item.course?.slug);
+    await setFlash(summary.total <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.", "success");
+    redirect(orderPath(payment.orderId));
+  }
+
+  if (gateway === "manual") {
+    await notifyAdminsOfPendingOrder(payment, user.name);
+    revalidateOrder(payment.orderId);
+    await setFlash("Order placed. We'll confirm your payment shortly.", "success");
+    redirect(orderPath(payment.orderId));
+  }
+
+  try {
+    const next = await createCheckout(payment, checkoutUrls(payment));
+    revalidateOrder(payment.orderId);
+    return { ok: true, data: next, message: next.kind === "redirect" ? `Redirecting to ${GATEWAY_NAMES[gateway as keyof typeof GATEWAY_NAMES] ?? "payment"}…` : undefined };
+  } catch (error) {
+    // Nothing reached the gateway: drop the order so the learner can simply try again.
+    await mutate((d) => {
+      d.payments = d.payments.filter((p) => !(p.id === payment.id && p.status === "pending" && !p.gatewayOrderId));
+    });
+    return { ok: false, error: gatewayErrorMessage(error) };
+  }
 }
 
-/** Let a learner cancel their own order while it is still awaiting confirmation. */
-export async function cancelOrderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+/** A paid certificate for a course that is not finished yet is issued on completion: show the certification page. */
+async function finishFulfilledCheckout(result: FulfillmentResult, courseSlug: string | undefined): Promise<void> {
+  if (result.payment.itemType === "certificate" && !result.certificateCode && courseSlug) {
+    await setFlash("Certificate purchased. It will be issued as soon as you complete the course.", "success");
+    redirect(`/courses/${courseSlug}/certification`);
+  }
+}
+
+async function ownPayment(orderId: string): Promise<{ user: User; payment: Payment } | { error: string }> {
   const user = await getCurrentUser();
-  if (!user) return { ok: false, error: "You must be logged in." };
-  const orderId = fd(formData, "orderId");
-  const db = await getDb();
-  const payment = db.payments.find((p) => p.orderId === orderId);
-  if (!payment || payment.userId !== user.id) return { ok: false, error: "Order not found." };
-  if (payment.status !== "pending") return { ok: false, error: "Only orders awaiting confirmation can be cancelled." };
-  await mutate((d) => {
-    const row = d.payments.find((p) => p.id === payment.id);
-    if (row && row.status === "pending") row.status = "failed";
-  });
-  revalidatePath(`/billing/success/${payment.orderId}`);
-  revalidatePath("/admin/settings/transactions");
+  if (!user) return { error: "Please log in again to continue." };
+  if (!orderId || orderId.length > 64) return { error: "Order not found." };
+  const payment = await getPaymentByOrderId(orderId);
+  if (!payment || payment.userId !== user.id) return { error: "Order not found." };
+  return { user, payment: { ...payment } };
+}
+
+/**
+ * "Complete payment" / "Try again" for a pending order: reopens the gateway
+ * checkout (or reports that the payment already went through).
+ */
+export async function resumeCheckoutAction(orderId: string): Promise<ActionResult<CheckoutNext>> {
+  const found = await ownPayment(typeof orderId === "string" ? orderId : "");
+  if ("error" in found) return { ok: false, error: found.error };
+  const { payment } = found;
+  if (payment.status === "failed") return { ok: false, error: "This order was cancelled. Start a new checkout to buy it again." };
+  if (payment.status === "refunded") return { ok: false, error: "This order was refunded." };
+  const res = await resumeCheckout(payment);
+  revalidateOrder(payment.orderId);
+  if (!res.ok) return { ok: false, error: res.error };
+  return { ok: true, data: res.next, message: res.message };
+}
+
+/**
+ * Called by the Razorpay Checkout success handler. The signature is verified
+ * server-side (HMAC-SHA256 of `order_id|payment_id` with the key secret)
+ * before anything is fulfilled.
+ */
+export async function confirmRazorpayPaymentAction(input: {
+  orderId: string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}): Promise<ActionResult<{ redirectTo: string }>> {
+  const orderId = typeof input?.orderId === "string" ? input.orderId.trim() : "";
+  const razorpayOrderId = typeof input?.razorpayOrderId === "string" ? input.razorpayOrderId.trim() : "";
+  const razorpayPaymentId = typeof input?.razorpayPaymentId === "string" ? input.razorpayPaymentId.trim() : "";
+  const signature = typeof input?.razorpaySignature === "string" ? input.razorpaySignature.trim() : "";
+  if (!orderId || orderId.length > 64 || !/^order_[A-Za-z0-9]+$/.test(razorpayOrderId) || !/^pay_[A-Za-z0-9]+$/.test(razorpayPaymentId) || !/^[0-9a-f]{64}$/i.test(signature)) {
+    return { ok: false, error: "The payment response was incomplete. If you were charged, contact support with your order ID." };
+  }
+  const payment = await getPaymentByOrderId(orderId);
+  if (!payment) return { ok: false, error: "Order not found." };
+
+  const state = await confirmRazorpayCheckout({ ...payment }, { razorpayOrderId, razorpayPaymentId, signature });
+  revalidateOrder(payment.orderId);
+  if (state.state === "paid") {
+    revalidatePath("/", "layout");
+    return { ok: true, data: { redirectTo: orderPath(payment.orderId) }, message: "Payment successful. You're all set!" };
+  }
+  if (state.state === "processing" || state.state === "pending") {
+    return { ok: true, data: { redirectTo: orderPath(payment.orderId) }, message: "We're confirming your payment." };
+  }
+  if (state.state === "failed") return { ok: false, error: state.reason ?? "The payment was declined." };
+  return { ok: false, error: state.message };
+}
+
+/** Let a learner cancel their own order while it is still awaiting payment. */
+export async function cancelOrderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const found = await ownPayment(fd(formData, "orderId"));
+  if ("error" in found) return { ok: false, error: found.error };
+  const { payment } = found;
+  if (payment.status !== "pending") return { ok: false, error: "Only orders awaiting payment can be cancelled." };
+
+  if (isRealGateway(payment.gateway)) {
+    const closed = await closeGatewayCheckout(payment);
+    if (closed.paid) {
+      revalidateOrder(payment.orderId);
+      revalidatePath("/", "layout");
+      return { ok: false, error: "Your payment has already gone through, so this order can't be cancelled." };
+    }
+  }
+  await markPaymentFailed(payment.id);
+  revalidateOrder(payment.orderId);
   return { ok: true, data: undefined, message: "Your order has been cancelled." };
 }
 
@@ -221,46 +328,389 @@ async function requireAdminActor(): Promise<User | null> {
   return user && isAdmin(user) ? user : null;
 }
 
-function revalidateCommerce() {
+function revalidateCommerce(orderId?: string) {
   revalidatePath("/admin/settings/transactions");
+  if (orderId) revalidatePath(orderPath(orderId));
   revalidatePath("/", "layout");
 }
 
-/** Confirm a (manual) payment and fulfil the order. */
+async function findPayment(paymentId: string): Promise<Payment | null> {
+  if (typeof paymentId !== "string" || !paymentId) return null;
+  const db = await getDb();
+  const row = db.payments.find((p) => p.id === paymentId);
+  return row ? { ...row } : null;
+}
+
+/** Confirm a payment received outside the gateway and fulfil the order. */
 export async function markPaymentPaidAction(paymentId: string): Promise<ActionResult<{ notice?: string }>> {
   const actor = await requireAdminActor();
   if (!actor) return { ok: false, error: "Only administrators can confirm payments." };
-  const db = await getDb();
-  const payment = db.payments.find((p) => p.id === paymentId);
+  const payment = await findPayment(paymentId);
   if (!payment) return { ok: false, error: "Payment not found." };
   if (payment.status === "paid") return { ok: false, error: "This order is already paid." };
-  const res = await fulfillPayment(paymentId, { gatewayPaymentId: payment.gateway === "manual" ? `manual_${actor.id}_${Date.now()}` : undefined });
+  if (payment.status === "refunded") return { ok: false, error: "Refunded orders cannot be marked as paid." };
+
+  if (isRealGateway(payment.gateway) && payment.gatewayOrderId && payment.status === "pending") {
+    // Close the learner's open checkout first so the order cannot be paid twice.
+    const closed = await closeGatewayCheckout(payment);
+    if (closed.paid) {
+      revalidateCommerce(payment.orderId);
+      return { ok: true, data: {}, message: `Order ${payment.orderId} was already paid through ${GATEWAY_NAMES[payment.gateway]}.` };
+    }
+    if (!closed.reached) {
+      return { ok: false, error: `${GATEWAY_NAMES[payment.gateway]} could not be reached to close the learner's open checkout. Try again, or check the order in the ${GATEWAY_NAMES[payment.gateway]} dashboard.` };
+    }
+  }
+
+  // Money that did not come through a gateway is recorded as a manual payment.
+  const reference = `manual_${actor.id}_${Date.now()}`;
+  await mutate((d) => {
+    const row = d.payments.find((p) => p.id === payment.id);
+    if (row && row.status !== "paid" && isRealGateway(row.gateway) && !isGatewayPaymentReference(row.gateway, row.gatewayPaymentId)) row.gateway = "manual";
+  });
+  const res = await fulfillPayment(payment.id, payment.gatewayPaymentId ? undefined : reference, { source: "admin" });
   if (!res.ok) return { ok: false, error: res.error };
-  revalidateCommerce();
+  revalidateCommerce(payment.orderId);
   return { ok: true, data: { notice: res.data.notice }, message: `Order ${payment.orderId} marked as paid.` };
 }
 
-/** Refund a paid order and remove the access it granted. */
-export async function refundPaymentAction(paymentId: string): Promise<ActionResult> {
+/**
+ * Refund a paid order. Orders paid through Stripe/Razorpay are refunded
+ * through the gateway API (optionally a partial amount); other orders — or
+ * refunds already made in the gateway dashboard (`recordOnly`) — are only
+ * recorded. Either way the order is marked refunded and its access removed.
+ */
+export async function refundPaymentAction(paymentId: string, opts: { amount?: string; recordOnly?: boolean } = {}): Promise<ActionResult<{ viaGateway: boolean }>> {
   const actor = await requireAdminActor();
   if (!actor) return { ok: false, error: "Only administrators can refund payments." };
-  const res = await refundPayment(paymentId);
-  if (!res.ok) return { ok: false, error: res.error };
-  revalidateCommerce();
-  return { ok: true, data: undefined, message: `Order ${res.data.orderId} refunded.` };
+  const payment = await findPayment(paymentId);
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (payment.status !== "paid") return { ok: false, error: "Only paid orders can be refunded." };
+
+  const alreadyRefunded = Math.min(payment.amount, payment.refundedAmount ?? 0);
+  const remaining = payment.amount - alreadyRefunded;
+  let value: number | undefined;
+  const rawAmount = typeof opts?.amount === "string" ? opts.amount.trim() : "";
+  if (rawAmount) {
+    const parsed = parseDecimalAmount(rawAmount);
+    if (parsed === null || parsed <= 0) return { ok: false, error: "Enter a refund amount greater than zero, e.g. 12.50.", fieldErrors: { amount: "Enter a valid amount." } };
+    if (parsed > remaining) {
+      return { ok: false, error: `You can refund at most ${formatPrice(remaining, payment.currency)}.`, fieldErrors: { amount: "More than what was paid." } };
+    }
+    value = parsed;
+  }
+  const recordOnly = opts?.recordOnly === true;
+
+  if (!acquireRefundLock(payment.id)) return { ok: false, error: "A refund for this order is already in progress." };
+  try {
+    const result = recordOnly ? { amount: value ?? remaining, viaGateway: false, refundId: undefined } : await refund(payment, value);
+    const res = await applyRefund(payment.id, { refundId: result.refundId, amount: alreadyRefunded + result.amount });
+    if (!res.ok) return { ok: false, error: res.error };
+    revalidateCommerce(payment.orderId);
+    const amountLabel = formatPrice(result.amount, payment.currency, "nothing");
+    const message = result.viaGateway
+      ? `Refunded ${amountLabel} through ${GATEWAY_NAMES[payment.gateway as keyof typeof GATEWAY_NAMES] ?? payment.gateway}. It usually reaches the learner within 5–10 business days.`
+      : `Order ${payment.orderId} marked as refunded${result.amount > 0 ? ` (${amountLabel})` : ""}.`;
+    return { ok: true, data: { viaGateway: result.viaGateway }, message };
+  } catch (error) {
+    return { ok: false, error: gatewayErrorMessage(error) };
+  } finally {
+    releaseRefundLock(payment.id);
+  }
 }
 
-/** Delete an unpaid, cancelled or refunded payment record. */
+/** Ask the gateway for the current state of a pending order and settle it. */
+export async function syncPaymentAction(paymentId: string): Promise<ActionResult<{ status: Payment["status"] }>> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can check payments." };
+  const payment = await findPayment(paymentId);
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (!isRealGateway(payment.gateway) || !payment.gatewayOrderId) return { ok: false, error: "This order was not paid through a payment gateway." };
+  if (!isConfigured(payment.gateway)) return { ok: false, error: `${GATEWAY_NAMES[payment.gateway]} is not configured.` };
+  if (payment.status !== "pending") return { ok: true, data: { status: payment.status }, message: "This order is already settled." };
+
+  const state = await syncPaymentStatus(payment, { source: "admin" });
+  revalidateCommerce(payment.orderId);
+  switch (state.state) {
+    case "paid":
+      return { ok: true, data: { status: "paid" }, message: `Payment confirmed: order ${payment.orderId} is now paid.` };
+    case "processing":
+      return { ok: true, data: { status: "pending" }, message: "The payment is still being processed by the bank." };
+    case "failed":
+      return { ok: true, data: { status: "failed" }, message: `The checkout ended without payment${state.reason ? `: ${state.reason}` : "."}` };
+    case "pending":
+      return { ok: true, data: { status: "pending" }, message: `No payment yet — the learner has not completed the ${GATEWAY_NAMES[payment.gateway]} checkout.` };
+    default:
+      return { ok: false, error: state.message };
+  }
+}
+
+/** Delete an unpaid or cancelled payment record. Invoiced orders are kept for bookkeeping. */
 export async function deletePaymentAction(paymentId: string): Promise<ActionResult> {
   const actor = await requireAdminActor();
   if (!actor) return { ok: false, error: "Only administrators can delete transactions." };
-  const db = await getDb();
-  const payment = db.payments.find((p) => p.id === paymentId);
+  const payment = await findPayment(paymentId);
   if (!payment) return { ok: false, error: "Payment not found." };
   if (payment.status === "paid") return { ok: false, error: "Refund this order before deleting it." };
+  if (payment.invoiceNumber) return { ok: false, error: `Order ${payment.orderId} has invoice ${payment.invoiceNumber}; invoiced orders are kept for your records.` };
+  if (payment.status === "pending" && isRealGateway(payment.gateway) && payment.gatewayOrderId) {
+    const closed = await closeGatewayCheckout(payment);
+    if (closed.paid) {
+      revalidateCommerce(payment.orderId);
+      return { ok: false, error: "This order has just been paid, so it can't be deleted." };
+    }
+    if (!closed.reached) return { ok: false, error: `${GATEWAY_NAMES[payment.gateway]} could not be reached to close the open checkout. Try again in a moment.` };
+  }
   await mutate((d) => {
-    d.payments = d.payments.filter((p) => p.id !== paymentId);
+    d.payments = d.payments.filter((p) => !(p.id === paymentId && p.status !== "paid" && !p.invoiceNumber));
   });
-  revalidateCommerce();
+  revalidateCommerce(payment.orderId);
   return { ok: true, data: undefined, message: "Transaction deleted successfully" };
+}
+
+/** Send an in-app payment reminder for one unpaid order. */
+export async function sendPaymentReminderAction(paymentId: string): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can send payment reminders." };
+  const payment = await findPayment(paymentId);
+  if (!payment) return { ok: false, error: "Payment not found." };
+  const check = await checkReminderEligibility(payment);
+  if (!check.ok) return { ok: false, error: check.message };
+  const sent = await sendPaymentReminder(payment);
+  if (!sent.ok) return { ok: false, error: sent.message };
+  revalidateCommerce();
+  return { ok: true, data: undefined, message: "Reminder sent" };
+}
+
+/** Remind every learner with an eligible unpaid order (requires "Send payment reminders"). */
+export async function sendPaymentRemindersAction(): Promise<ActionResult<{ sent: number; skipped: number }>> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can send payment reminders." };
+  const db = await getDb();
+  if (!db.settings.commerce.sendPaymentReminders) {
+    return { ok: false, error: "Turn on “Send payment reminders” in Payments settings first." };
+  }
+  const result = await sendPendingPaymentReminders();
+  revalidateCommerce();
+  const message =
+    result.sent === 0
+      ? "No reminders were needed. Every unpaid order was reminded recently or no longer applies."
+      : `Sent ${result.sent} ${result.sent === 1 ? "reminder" : "reminders"}${result.skipped ? ` (${result.skipped} skipped)` : ""}.`;
+  return { ok: true, data: result, message };
+}
+
+function parseMoney(raw: string): number | null {
+  if (raw === "") return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
+/**
+ * Record a payment by hand (Frappe: Settings > Transactions > New), e.g. a
+ * bank transfer or an invoice paid outside the site. When "Received" is on,
+ * the order is fulfilled right away exactly like a confirmed checkout.
+ */
+export async function recordPaymentAction(_prev: ActionResult<{ orderId: string }> | null, formData: FormData): Promise<ActionResult<{ orderId: string }>> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can record transactions." };
+  const db = await getDb();
+
+  const userId = fd(formData, "userId");
+  const itemType = parseItemType(fd(formData, "itemType"));
+  const itemId = fd(formData, "itemId");
+  const currency = fd(formData, "currency").toUpperCase();
+  const billingNameRaw = fd(formData, "billingName");
+  const source = fd(formData, "source");
+  const gatewayPaymentId = fd(formData, "gatewayPaymentId");
+  const couponId = fd(formData, "couponId");
+  const received = fdBool(formData, "received");
+  const original = parseMoney(fd(formData, "originalAmount"));
+  const discount = parseMoney(fd(formData, "discountAmount"));
+  const tax = parseMoney(fd(formData, "taxAmount"));
+
+  const errors: Record<string, string> = {};
+  const member = db.users.find((u) => u.id === userId);
+  if (!userId) errors.userId = "Member is required";
+  else if (!member) errors.userId = "This member no longer exists.";
+  if (!itemType) errors.itemType = "Paid For is required";
+
+  let itemTitle = "";
+  if (itemType && !itemId) errors.itemId = itemType === "batch" ? "Batch is required" : "Course is required";
+  else if (itemType === "batch") {
+    const batch = db.batches.find((b) => b.id === itemId);
+    if (!batch) errors.itemId = "This batch no longer exists.";
+    else itemTitle = batch.title;
+  } else if (itemType) {
+    const course = db.courses.find((c) => c.id === itemId);
+    if (!course) errors.itemId = "This course no longer exists.";
+    else if (itemType === "certificate" && !course.paidCertificate) errors.itemId = "This course does not sell certificates.";
+    else itemTitle = itemType === "certificate" ? `Certificate for ${course.title}` : course.title;
+  }
+
+  if (!(currencies as readonly string[]).includes(currency)) errors.currency = "Currency is required";
+  if (original === null) errors.originalAmount = "Enter an amount of zero or more.";
+  if (discount === null) errors.discountAmount = "Enter an amount of zero or more.";
+  if (tax === null) errors.taxAmount = "Enter an amount of zero or more.";
+  if (original !== null && discount !== null && discount > original) errors.discountAmount = "The discount cannot be larger than the original amount.";
+  const billingName = billingNameRaw || member?.name || "";
+  if (!billingName) errors.billingName = "Billing Name is required";
+  else if (billingName.length > 140) errors.billingName = "Please enter a valid Billing Name";
+  if (source.length > 80) errors.source = "Keep the source under 80 characters.";
+  if (gatewayPaymentId.length > 120) errors.gatewayPaymentId = "Keep the payment ID under 120 characters.";
+  else if (gatewayPaymentId && db.payments.some((p) => p.gatewayPaymentId === gatewayPaymentId)) errors.gatewayPaymentId = "Another transaction already uses this payment ID.";
+  const coupon = couponId ? db.coupons.find((c) => c.id === couponId) : null;
+  if (couponId && !coupon) errors.couponId = "This coupon no longer exists.";
+
+  if (Object.keys(errors).length || !itemType || !member || original === null || discount === null || tax === null) {
+    return { ok: false, error: Object.values(errors)[0] ?? "Fill in every required field", fieldErrors: errors };
+  }
+
+  if (received) {
+    // Refuse to grant access the learner already paid for (it would record a second sale).
+    if (itemType === "course" && db.enrollments.some((e) => e.userId === member.id && e.courseId === itemId && e.paymentId)) {
+      return { ok: false, error: `${member.name} already paid for this course.`, fieldErrors: { itemId: "Already paid for by this member." } };
+    }
+    if (itemType === "batch" && db.batchEnrollments.some((e) => e.userId === member.id && e.batchId === itemId)) {
+      return { ok: false, error: `${member.name} is already enrolled in this batch.`, fieldErrors: { itemId: "Already enrolled." } };
+    }
+    if (itemType === "certificate" && db.enrollments.some((e) => e.userId === member.id && e.courseId === itemId && e.purchasedCertificate)) {
+      return { ok: false, error: `${member.name} already purchased this certificate.`, fieldErrors: { itemId: "Already purchased." } };
+    }
+  }
+
+  const amount = original - discount + tax;
+  const payment: Payment = {
+    id: uid("pay"),
+    orderId: await generateOrderId(),
+    userId: member.id,
+    itemType,
+    itemId,
+    itemTitle,
+    originalAmount: original,
+    discountAmount: discount,
+    taxAmount: tax,
+    amount,
+    currency,
+    couponId: coupon?.id,
+    couponCode: coupon?.code,
+    billingName,
+    source: source || undefined,
+    gateway: "manual",
+    gatewayPaymentId: gatewayPaymentId || undefined,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  };
+  await mutate((d) => {
+    d.payments.push(payment);
+  });
+
+  let message = "Transaction created successfully";
+  if (received) {
+    const res = await fulfillPayment(payment.id, gatewayPaymentId || `manual_${actor.id}_${Date.now()}`, { source: "admin" });
+    if (!res.ok) return { ok: false, error: res.error };
+    message = res.data.notice ? `Transaction created. ${res.data.notice}` : `Transaction created and ${member.name} now has access.`;
+  }
+  revalidateCommerce(payment.orderId);
+  return { ok: true, data: { orderId: payment.orderId }, message };
+}
+
+/** Correct the billing details of an order (name, payment ID, tax IDs, source). */
+export async function updatePaymentDetailsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can edit transactions." };
+  const db = await getDb();
+  const id = fd(formData, "id");
+  const payment = db.payments.find((p) => p.id === id);
+  if (!payment) return { ok: false, error: "Payment not found." };
+
+  const billingName = fd(formData, "billingName");
+  const gatewayPaymentId = fd(formData, "gatewayPaymentId");
+  const source = fd(formData, "source");
+  const gstin = fd(formData, "gstin").toUpperCase();
+  const pan = fd(formData, "pan").toUpperCase();
+  const lockedReference = isGatewayPaymentReference(payment.gateway, payment.gatewayPaymentId);
+
+  const errors: Record<string, string> = {};
+  if (billingName.length < 2 || billingName.length > 140) errors.billingName = "Please enter a valid Billing Name";
+  if (lockedReference && gatewayPaymentId !== payment.gatewayPaymentId) {
+    errors.gatewayPaymentId = `This payment ID comes from ${GATEWAY_NAMES[payment.gateway as keyof typeof GATEWAY_NAMES] ?? "the gateway"} and cannot be changed.`;
+  } else if (gatewayPaymentId.length > 120) errors.gatewayPaymentId = "Keep the payment ID under 120 characters.";
+  else if (gatewayPaymentId && db.payments.some((p) => p.id !== id && p.gatewayPaymentId === gatewayPaymentId)) errors.gatewayPaymentId = "Another transaction already uses this payment ID.";
+  if (source.length > 80) errors.source = "Keep the source under 80 characters.";
+  if (gstin && !GSTIN_RE.test(gstin)) errors.gstin = "Please enter a valid GST number.";
+  if (pan && !PAN_RE.test(pan)) errors.pan = "Please enter a valid pan number.";
+  else if (gstin && !pan) errors.pan = "Please enter a valid pan number.";
+  if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
+
+  await mutate((d) => {
+    const row = d.payments.find((p) => p.id === id);
+    if (!row) return;
+    row.billingName = billingName;
+    if (!lockedReference) row.gatewayPaymentId = gatewayPaymentId || undefined;
+    row.source = source || undefined;
+    row.gstin = gstin || undefined;
+    row.pan = pan || undefined;
+  });
+  revalidateCommerce(payment.orderId);
+  revalidatePath(`/billing/invoice/${payment.orderId}`);
+  return { ok: true, data: undefined, message: `Transaction updated successfully (${payment.orderId}, ${formatPrice(payment.amount, payment.currency)}).` };
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin: payment settings                                             */
+/* ------------------------------------------------------------------ */
+
+const GATEWAY_CHOICES: Settings["commerce"]["paymentGateway"][] = ["manual", "stripe", "razorpay", "none"];
+
+/**
+ * Save Settings → Payments (currency, active gateway, tax, reminders). A
+ * real gateway can only be activated once its keys are configured, so
+ * checkout never offers a gateway that cannot take payments.
+ */
+export async function savePaymentGatewaySettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can change payment settings." };
+  const defaultCurrency = fd(formData, "defaultCurrency").toUpperCase();
+  const paymentGateway = fd(formData, "paymentGateway") as Settings["commerce"]["paymentGateway"];
+  const applyTax = fdBool(formData, "applyTax");
+  const rawTax = fd(formData, "taxPercentage");
+  const taxLabel = fd(formData, "taxLabel");
+
+  const errors: Record<string, string> = {};
+  if (!(currencies as readonly string[]).includes(defaultCurrency)) errors.defaultCurrency = "Choose a supported currency.";
+  if (!GATEWAY_CHOICES.includes(paymentGateway)) errors.paymentGateway = "Choose a payment gateway.";
+  else if (isRealGateway(paymentGateway) && !isConfigured(paymentGateway)) {
+    errors.paymentGateway = `${GATEWAY_NAMES[paymentGateway]} is not configured. Add its keys to the .env file and restart the server, or choose another gateway.`;
+  }
+  const taxPercentage = rawTax === "" ? 0 : Number(rawTax);
+  if (!Number.isFinite(taxPercentage) || taxPercentage < 0 || taxPercentage > 100) errors.taxPercentage = "Enter a percentage between 0 and 100.";
+  else if (applyTax && taxPercentage <= 0) errors.taxPercentage = "Enter a tax percentage greater than zero, or turn tax off.";
+  if (applyTax && !taxLabel) errors.taxLabel = "Tax label is required when tax is applied.";
+  else if (taxLabel.length > 30) errors.taxLabel = "Keep the tax label under 30 characters.";
+  if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
+
+  await mutate((d) => {
+    const c = d.settings.commerce;
+    c.defaultCurrency = defaultCurrency;
+    c.paymentGateway = paymentGateway;
+    c.applyTax = applyTax;
+    c.taxPercentage = Math.round(taxPercentage * 100) / 100;
+    c.taxLabel = taxLabel || "Tax";
+    c.showUsdEquivalent = fdBool(formData, "showUsdEquivalent");
+    c.applyRounding = fdBool(formData, "applyRounding");
+    c.sendPaymentReminders = fdBool(formData, "sendPaymentReminders");
+    d.settings.updatedAt = new Date().toISOString();
+  });
+  revalidatePath("/", "layout");
+  return { ok: true, data: undefined, message: "Payment settings saved" };
+}
+
+/** "Test connection" for a configured gateway (an authenticated read-only API call). */
+export async function testGatewayConnectionAction(gateway: string): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can test payment gateways." };
+  if (!isRealGateway(gateway)) return { ok: false, error: "Unknown payment gateway." };
+  const res = await testGatewayConnection(gateway);
+  return res.ok ? { ok: true, data: undefined, message: res.message } : { ok: false, error: res.error };
 }

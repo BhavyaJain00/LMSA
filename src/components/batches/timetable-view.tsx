@@ -9,6 +9,8 @@ import { IconButton, Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
+import { AddToCalendar, type AddToCalendarEvent } from "@/components/pwa/add-to-calendar";
+import { addDaysToKey, isClock, zonedTimeToUtc } from "@/lib/calendar/time";
 import { MONTHS_LONG, WEEKDAYS_SHORT, formatClockRange, formatDayKey } from "./tz";
 import type { TimetableEntry } from "./types";
 
@@ -95,7 +97,40 @@ function shiftMonth(month: Month, delta: number): Month {
   return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1 };
 }
 
-function EntryRow({ entry }: { entry: TimetableEntry }) {
+/** Calendar export for a timetable row: timed in the batch timezone, or all-day. */
+function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEvent | null {
+  const fromClass = entry.source === "live_class" && entry.refId;
+  const icsHref = fromClass
+    ? `/api/calendar/event?type=live_class&id=${encodeURIComponent(entry.refId!)}`
+    : entry.itemId
+      ? `/api/calendar/event?type=timetable&id=${encodeURIComponent(entry.itemId)}`
+      : undefined;
+  const base = {
+    uid: fromClass ? `live-class-${entry.refId}` : `timetable-${entry.itemId ?? entry.id}`,
+    title: entry.milestone ? `★ ${entry.title}` : entry.title,
+    description: [timetableTypeLabel[entry.type], entry.legendLabel && entry.legendLabel !== timetableTypeLabel[entry.type] ? entry.legendLabel : ""]
+      .filter(Boolean)
+      .join(" · "),
+    url: entry.href ?? undefined,
+    icsHref,
+  };
+  if (entry.startTime && isClock(entry.startTime)) {
+    const start = zonedTimeToUtc(entry.date, entry.startTime, timezone);
+    if (Number.isNaN(start)) return null;
+    let end = entry.endTime && isClock(entry.endTime) ? zonedTimeToUtc(entry.date, entry.endTime, timezone) : NaN;
+    if (!Number.isNaN(end) && end <= start) end = zonedTimeToUtc(addDaysToKey(entry.date, 1), entry.endTime!, timezone);
+    if (Number.isNaN(end) || end <= start) end = start + 3_600_000;
+    return { ...base, start, end };
+  }
+  const endDate = addDaysToKey(entry.date, 1);
+  const start = zonedTimeToUtc(entry.date, "00:00", timezone);
+  const end = zonedTimeToUtc(endDate, "00:00", timezone);
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  return { ...base, start, end, allDay: { startDate: entry.date, endDate } };
+}
+
+function EntryRow({ entry, timezone, showCalendar }: { entry: TimetableEntry; timezone: string; showCalendar: boolean }) {
+  const calendar = showCalendar ? calendarEvent(entry, timezone) : null;
   return (
     <li className="flex items-start gap-3 py-3">
       <span
@@ -127,6 +162,7 @@ function EntryRow({ entry }: { entry: TimetableEntry }) {
           {entry.startTime && <> · {formatClockRange(entry.startTime, entry.endTime)}</>}
         </p>
       </div>
+      {calendar && <AddToCalendar event={calendar} size="xs" className="mt-1 shrink-0" />}
       {entry.href && <Icon.ChevronRight className="mt-2 size-4 shrink-0 text-ink-faint" />}
     </li>
   );
@@ -143,6 +179,7 @@ export function TimetableView({
   endDate,
   todayKey,
   timezone,
+  showAddToCalendar = true,
 }: {
   entries: TimetableEntry[];
   legends: TimetableLegend[];
@@ -150,6 +187,8 @@ export function TimetableView({
   endDate: string;
   todayKey: string;
   timezone: string;
+  /** Per-entry "Add to calendar" menus in the list and day views. */
+  showAddToCalendar?: boolean;
 }) {
   const [view, setView] = useState<"calendar" | "list">("calendar");
   const initial = todayKey >= startDate && todayKey <= endDate ? todayKey : entries.find((e) => e.date >= todayKey)?.date ?? startDate;
@@ -319,7 +358,7 @@ export function TimetableView({
               {selectedEntries.length ? (
                 <ul className="divide-y divide-border">
                   {selectedEntries.map((e) => (
-                    <EntryRow key={e.id} entry={e} />
+                    <EntryRow key={e.id} entry={e} timezone={timezone} showCalendar={showAddToCalendar} />
                   ))}
                 </ul>
               ) : (
@@ -339,7 +378,7 @@ export function TimetableView({
               </h3>
               <ul className="divide-y divide-border rounded-card border border-border bg-surface-1 px-4 shadow-card">
                 {list.map((e) => (
-                  <EntryRow key={e.id} entry={e} />
+                  <EntryRow key={e.id} entry={e} timezone={timezone} showCalendar={showAddToCalendar} />
                 ))}
               </ul>
             </section>

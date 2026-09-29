@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { getCurrentUser, isStaff } from "@/lib/auth/session";
-import { getCertificateByCode, type CertificateDetail } from "@/lib/data/certificates";
+import { getCertificateByCode, getCertificateUrl, type CertificateDetail } from "@/lib/data/certificates";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
@@ -12,21 +11,24 @@ import { CertificateSheet } from "@/components/certificates/certificate-sheet";
 import { CertificateActions } from "@/components/certificates/certificate-actions";
 import { formatLongDate } from "@/components/certificates/time";
 
+/** Route params are already URL-decoded; decoding again throws on a literal "%" (e.g. /certificates/100%25). */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 async function loadVisible(code: string): Promise<{ detail: CertificateDetail; owner: boolean; staff: boolean } | null> {
-  const detail = await getCertificateByCode(decodeURIComponent(code));
+  const decoded = safeDecode(code);
+  const detail = (await getCertificateByCode(code)) ?? (decoded !== code ? await getCertificateByCode(decoded) : null);
   if (!detail) return null;
   const viewer = await getCurrentUser();
   const owner = !!viewer && viewer.id === detail.certificate.userId;
   const staff = isStaff(viewer);
   if (!detail.certificate.published && !owner && !staff) return null;
   return { detail, owner, staff };
-}
-
-async function absoluteUrl(path: string): Promise<string> {
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") || host.startsWith("127.") ? "http" : "https");
-  return `${proto}://${host}${path}`;
 }
 
 export async function generateMetadata(props: PageProps<"/certificates/[code]">): Promise<Metadata> {
@@ -36,9 +38,13 @@ export async function generateMetadata(props: PageProps<"/certificates/[code]">)
   const { detail } = loaded;
   const title = detail.course?.title ?? detail.batch?.title ?? "Certificate";
   const name = detail.learner?.name ?? "Learner";
+  const description = `${name} earned a certificate for ${title} from ${detail.brand.name} on ${formatLongDate(detail.certificate.issueDate)}.`;
+  const url = await getCertificateUrl(detail.certificate.code);
   return {
     title: `${name} · ${title}`,
-    description: `${name} earned a certificate for ${title} from ${detail.brand.name} on ${formatLongDate(detail.certificate.issueDate)}.`,
+    description,
+    alternates: { canonical: url },
+    openGraph: { title: `${name} · ${title}`, description, url, type: "website", siteName: detail.brand.name },
     robots: detail.certificate.published ? undefined : { index: false },
   };
 }
@@ -52,7 +58,8 @@ export default async function CertificatePage(props: PageProps<"/certificates/[c
 
   const title = course?.title ?? batch?.title ?? "Course";
   const learnerName = learner?.name ?? "Former member";
-  const verifyUrl = await absoluteUrl(`/certificates/${certificate.code}`);
+  // Absolute links come from APP_URL when it is set (see getPublicBaseUrl), otherwise from the request.
+  const verifyUrl = await getCertificateUrl(certificate.code);
   const displayUrl = verifyUrl.replace(/^https?:\/\//, "");
   const issueYear = certificate.issueDate.slice(0, 4);
   const issueMonth = String(Number(certificate.issueDate.slice(5, 7)));
@@ -98,6 +105,7 @@ export default async function CertificatePage(props: PageProps<"/certificates/[c
         instructorNames={instructors.map((i) => i.name)}
         code={certificate.code}
         verifyUrl={displayUrl}
+        templateId={certificate.templateId}
       />
 
       {/* Details (screen only) */}

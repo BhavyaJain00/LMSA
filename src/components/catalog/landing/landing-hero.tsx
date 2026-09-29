@@ -17,6 +17,7 @@ export function LandingHero({
   tagline,
   description,
   signupEnabled,
+  browse,
   spotlight,
   instructors,
   courseCount,
@@ -28,6 +29,8 @@ export function LandingHero({
   tagline: string;
   description?: string;
   signupEnabled: boolean;
+  /** Secondary "browse the catalog" link; null hides it (e.g. guests can't browse and signup is off). */
+  browse: { href: string; label: string } | null;
   spotlight: CourseSummary | null;
   instructors: PublicUser[];
   courseCount: number;
@@ -66,9 +69,11 @@ export function LandingHero({
                 Log in to start learning
               </ButtonLink>
             )}
-            <ButtonLink href="/courses" size="lg" variant="outline" leftIcon={<Icon.BookOpen className="size-4" />}>
-              Browse courses
-            </ButtonLink>
+            {browse && (
+              <ButtonLink href={browse.href} size="lg" variant="outline" leftIcon={<Icon.BookOpen className="size-4" />}>
+                {browse.label}
+              </ButtonLink>
+            )}
           </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-ink-muted">

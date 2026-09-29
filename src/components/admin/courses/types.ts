@@ -267,6 +267,8 @@ export type CourseSettingsValues = Pick<
   | "paidCertificate"
   | "certificatePrice"
   | "evaluatorId"
+  | "metaDescription"
+  | "metaKeywords"
 >;
 
 /* ------------------------------ Lesson editor ----------------------------- */

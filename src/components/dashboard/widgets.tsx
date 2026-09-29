@@ -7,6 +7,17 @@ import { Icon } from "@/components/ui/icons";
 import { cn, formatDate, toDateKey } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
+/* Your rank (points & leaderboard)                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Async server component: weekly/all-time rank, level progress and the
+ * latest points award. Renders nothing while points are turned off.
+ * Usage in the dashboard sidebar: `<YourRankWidget user={user} />`.
+ */
+export { YourRankWidget } from "@/components/gamification/your-rank-widget";
+
+/* ------------------------------------------------------------------ */
 /* Pending work                                                         */
 /* ------------------------------------------------------------------ */
 

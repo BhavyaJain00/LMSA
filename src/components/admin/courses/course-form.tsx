@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import type { ActionResult, CardGradient, Category } from "@/lib/types";
+import type { ActionResult, CardGradient, Category, PublicUser } from "@/lib/types";
 import { createCategoryAction, createCourseAction, updateCourseAction } from "@/lib/actions/courses";
 import { cn, gradientFor, slugify } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import type { CourseFormOptions, CourseFormValues, PickerOption } from "./types"
 import { MarkdownEditor } from "./markdown-editor";
 import { GradientPicker, ListEditor, MediaField, MultiSelect, TagsInput } from "./form-controls";
 import { UnsavedChangesGuard } from "./unsaved-changes-guard";
+import { CREATE_MEMBER_OPTION, CreateMemberDialog, memberQualifies, type MemberPurpose } from "./create-member-dialog";
 
 export interface CourseFormProps {
   mode: "create" | "edit";
@@ -26,6 +27,9 @@ export interface CourseFormProps {
   reviewResetNotice?: boolean;
   /** Where "Cancel" goes. */
   cancelHref: string;
+  /** Moderators can add a new member straight from the instructor/evaluator pickers. */
+  canCreateMembers?: boolean;
+  canGrantAdmin?: boolean;
 }
 
 /** Order-stable fingerprint of the form values (props may arrive without undefined keys). */
@@ -48,7 +52,7 @@ function serialize(v: CourseFormValues): string {
   ]);
 }
 
-export function CourseForm({ mode, courseId, initial, options, tagSuggestions, reviewResetNotice, cancelHref }: CourseFormProps) {
+export function CourseForm({ mode, courseId, initial, options, tagSuggestions, reviewResetNotice, cancelHref, canCreateMembers = false, canGrantAdmin = false }: CourseFormProps) {
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const submittedSnapshot = useRef<string>("");
@@ -69,6 +73,18 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
   const [outcomes, setOutcomes] = useState(initial.outcomes);
   const [requirements, setRequirements] = useState(initial.requirements);
   const [relatedCourseIds, setRelatedCourseIds] = useState(initial.relatedCourseIds);
+
+  const [createdMembers, setCreatedMembers] = useState<PublicUser[]>([]);
+  const [memberDialog, setMemberDialog] = useState<{ purpose: MemberPurpose; query: string } | null>(null);
+  const instructors = useMemo(() => [...options.instructors, ...createdMembers.filter((u) => memberQualifies(u, "instructor"))], [options.instructors, createdMembers]);
+  const evaluators = useMemo(() => [...options.evaluators, ...createdMembers.filter((u) => memberQualifies(u, "evaluator"))], [options.evaluators, createdMembers]);
+
+  const onMemberCreated = (user: PublicUser) => {
+    const purpose = memberDialog?.purpose;
+    setCreatedMembers((list) => [...list, user]);
+    if (purpose === "instructor") setInstructorIds((ids) => (ids.includes(user.id) ? ids : [...ids, user.id]));
+    else if (purpose === "evaluator") setEvaluatorId(user.id);
+  };
 
   const [newCategory, setNewCategory] = useState<string | null>(null);
   const [creatingCategory, startCategory] = useTransition();
@@ -128,8 +144,8 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
       : "Used in the course URL. Generated from the title until you edit it.";
 
   const instructorOptions: PickerOption[] = useMemo(
-    () => options.instructors.map((u) => ({ value: u.id, label: u.name, description: u.email, avatar: { name: u.name, src: u.avatarUrl } })),
-    [options.instructors],
+    () => instructors.map((u) => ({ value: u.id, label: u.name, description: u.email, avatar: { name: u.name, src: u.avatarUrl } })),
+    [instructors],
   );
   const relatedOptions: PickerOption[] = useMemo(
     () => options.relatedCourses.map((c) => ({ value: c.id, label: c.title, description: c.published ? `/courses/${c.slug}` : "Unpublished" })),
@@ -355,16 +371,28 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
               searchPlaceholder="Search instructors…"
               emptyText="No course creators match your search"
               invalid={!!errors.instructorIds}
+              onCreate={canCreateMembers ? (query) => setMemberDialog({ purpose: "instructor", query }) : undefined}
+              createLabel="Add New Member"
             />
           </Field>
           <Field label="Evaluator" htmlFor="course-evaluator" error={errors.evaluatorId} hint="Grades certificate evaluations for this course.">
-            <Select id="course-evaluator" name="evaluatorId" value={evaluatorId} onChange={(e) => setEvaluatorId(e.target.value)} invalid={!!errors.evaluatorId}>
+            <Select
+              id="course-evaluator"
+              name="evaluatorId"
+              value={evaluatorId}
+              onChange={(e) => {
+                if (e.target.value === CREATE_MEMBER_OPTION) setMemberDialog({ purpose: "evaluator", query: "" });
+                else setEvaluatorId(e.target.value);
+              }}
+              invalid={!!errors.evaluatorId}
+            >
               <option value="">No evaluator</option>
-              {options.evaluators.map((u) => (
+              {evaluators.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name} ({u.email})
                 </option>
               ))}
+              {canCreateMembers && <option value={CREATE_MEMBER_OPTION}>+ Add New Member…</option>}
             </Select>
           </Field>
         </CardBody>
@@ -444,6 +472,14 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
           </Link>
         </p>
       )}
+      <CreateMemberDialog
+        open={memberDialog !== null}
+        onClose={() => setMemberDialog(null)}
+        purpose={memberDialog?.purpose ?? "instructor"}
+        initialQuery={memberDialog?.query}
+        canGrantAdmin={canGrantAdmin}
+        onCreated={onMemberCreated}
+      />
     </form>
   );
 }

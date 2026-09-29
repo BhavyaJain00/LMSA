@@ -10,10 +10,11 @@ import { Button, ButtonLink, IconButton } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Icon } from "@/components/ui/icons";
-import { Checkbox, Field, FormError, Input, Textarea } from "@/components/ui/input";
+import { Checkbox, Field, FormError, Input, Select, Textarea } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { Markdown } from "@/lib/markdown";
 import { cn, uid } from "@/lib/utils";
+import { OpenToBadge, openToOptions, type OpenTo } from "./open-to-badge";
 import { socialMeta } from "./social-icons";
 
 export interface EditProfileValues {
@@ -21,6 +22,8 @@ export interface EditProfileValues {
   username: string;
   headline: string;
   location: string;
+  /** "" when the member is neither looking for work nor hiring. */
+  openTo: OpenTo | "";
   bio: string;
   avatarUrl: string;
   coverImageUrl: string;
@@ -330,7 +333,7 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
               invalid={!!errors.username}
               leftAddon={<span className="text-xs">@</span>}
               autoComplete="username"
-              maxLength={30}
+              maxLength={40}
               required
             />
           </Field>
@@ -349,6 +352,34 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
               maxLength={80}
             />
           </Field>
+          <Field
+            label="Open to"
+            htmlFor="openTo"
+            error={errors.openTo}
+            hint="Shows an “Open to Work” or “Hiring” badge on your profile picture and in Certified Members."
+          >
+            <Select
+              id="openTo"
+              name="openTo"
+              value={values.openTo}
+              onChange={(e) => set("openTo", e.target.value === "work" || e.target.value === "hiring" ? e.target.value : "")}
+              invalid={!!errors.openTo}
+              options={[{ value: "", label: "Looking for new work or hiring talent?" }, ...openToOptions.map((o) => ({ value: o.value, label: o.label }))]}
+            />
+          </Field>
+          <div className="flex items-end pb-2">
+            {values.openTo ? (
+              <span className="inline-flex items-center gap-2 text-sm text-ink-muted">
+                <span className="relative inline-flex pb-2">
+                  <Avatar name={values.name || initial.name} src={values.avatarUrl || null} size="lg" />
+                  <OpenToBadge value={values.openTo} overlay size="xs" />
+                </span>
+                Preview of your badge
+              </span>
+            ) : (
+              <span className="text-sm text-ink-faint">No badge is shown on your profile.</span>
+            )}
+          </div>
           <div className="md:col-span-2">
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <label htmlFor="bio" className="text-sm font-medium text-ink">

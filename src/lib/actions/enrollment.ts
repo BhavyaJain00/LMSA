@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db/store";
 import { canManageCourse, getCourseBySlug, getEnrollment, getNextLesson, lessonHref } from "@/lib/data/courses";
 import { getUserCourseCertificate } from "@/lib/data/catalog";
 import { enrollUserInCourse, unenrollUserFromCourse } from "@/lib/services/enrollment";
+import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { issueCertificate } from "@/lib/services/progress";
 import { setFlash } from "@/lib/flash";
 import { fd } from "@/lib/utils";
@@ -17,6 +18,17 @@ function revalidateCourse(slug: string) {
   revalidatePath(`/courses/${slug}`);
   revalidatePath("/dashboard");
   revalidatePath("/");
+}
+
+/**
+ * Optional `next` field: a lesson of this same course ("/courses/<slug>/learn/<chapter>-<lesson>")
+ * to return to after enrolling. Anything else is ignored.
+ */
+function lessonReturnPath(formData: FormData, course: Course): string | null {
+  const next = fd(formData, "next");
+  const prefix = `/courses/${course.slug}/learn/`;
+  if (!next || !next.startsWith(prefix)) return null;
+  return /^\d{1,4}-\d{1,4}$/.test(next.slice(prefix.length)) ? next : null;
 }
 
 async function courseFromForm(formData: FormData): Promise<Course | null> {
@@ -29,18 +41,21 @@ async function courseFromForm(formData: FormData): Promise<Course | null> {
  * Enroll the current user in a course they are allowed to join for free.
  *
  * Mirrors Frappe's LMS Enrollment.before_insert checks: duplicate, self
- * learning disabled, unpublished, upcoming and payment required. Guests are
+ * learning disabled, unpublished, upcoming and payment required, plus the
+ * round-2 prerequisite gate (every prerequisite course completed). Guests are
  * sent to the login page (with a warning toast) and come back afterwards.
- * On success the learner lands on their first unlocked lesson.
+ * On success the learner lands on their first unlocked lesson (or the course
+ * page when every lesson is still scheduled).
  */
 export async function enrollAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const course = await courseFromForm(formData);
   if (!course) return { ok: false, error: "This course no longer exists." };
 
+  const returnTo = lessonReturnPath(formData, course);
   const user = await getCurrentUser();
   if (!user) {
     await setFlash("You need to login first to enroll for this course", "warning");
-    redirect(`/login?next=${encodeURIComponent(`/courses/${course.slug}`)}`);
+    redirect(`/login?next=${encodeURIComponent(returnTo ?? `/courses/${course.slug}`)}`);
   }
 
   const db = await getDb();
@@ -53,7 +68,7 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
   if (existing) {
     const next = await getNextLesson(course, user);
     await setFlash("You're already enrolled in this course", "info");
-    redirect(next ? lessonHref(course.slug, next) : `/courses/${course.slug}`);
+    redirect(returnTo ?? (next ? lessonHref(course.slug, next) : `/courses/${course.slug}`));
   }
 
   if (!course.published && !manager) return { ok: false, error: "You cannot enroll in an unpublished course." };
@@ -63,6 +78,12 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
       ok: false,
       error: "You cannot enroll in this course as self-learning is disabled. Please contact the Administrator.",
     };
+  }
+
+  // Prerequisite courses must be completed first (course managers and learners who already paid are exempt).
+  if (!manager) {
+    const gate = await assertPrerequisitesMet(user.id, course.id);
+    if (!gate.ok) return { ok: false, error: gate.error };
   }
 
   let paymentId: string | undefined;
@@ -77,7 +98,7 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
 
   const next = await getNextLesson(course, user);
   await setFlash("You have been enrolled in this course", "success");
-  redirect(next ? lessonHref(course.slug, next) : `/courses/${course.slug}`);
+  redirect(returnTo ?? (next ? lessonHref(course.slug, next) : `/courses/${course.slug}`));
 }
 
 /**

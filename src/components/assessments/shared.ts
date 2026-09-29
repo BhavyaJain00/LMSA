@@ -156,40 +156,24 @@ export function outputsMatch(actual: string, expected: string): boolean {
   return actual.trim() === expected.trim();
 }
 
-/**
- * Small non-cryptographic hash (cyrb53) of a trimmed output. Hidden test
- * cases are sent to the browser with only this hash so the expected output is
- * not exposed; the server re-runs every test anyway.
- */
-export function hashOutput(value: string): string {
-  const str = value.trim();
-  let h1 = 0xdeadbeef ^ 0x9e3779b9;
-  let h2 = 0x41c6ce57 ^ 0x9e3779b9;
-  for (let i = 0; i < str.length; i++) {
-    const ch = str.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
-  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
-  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
-}
-
 /* ------------------------------------------------------------------ */
 /* View models passed from the server to client components             */
 /* ------------------------------------------------------------------ */
 
-/** A test case as sent to the runner. Hidden tests carry a hash instead of the expected output. */
+/**
+ * A test case as sent to the runner. For learners, hidden tests carry
+ * neither input nor expected output (`serverOnly`): they are checked by the
+ * server sandbox on submit.
+ */
 export interface RunnerTestCase {
   id: string;
   /** 1-based position for "Test n" labels. */
   index: number;
   hidden: boolean;
-  input: string;
+  input?: string;
   expectedOutput?: string;
-  expectedHash?: string;
+  /** Not runnable in the browser; graded on submit. */
+  serverOnly?: boolean;
 }
 
 export interface RunnerExercise {
@@ -216,6 +200,8 @@ export interface TestResultView {
   durationMs?: number;
   /** True when the test was not executed (non-runnable language). */
   skipped?: boolean;
+  /** Browser run only: a hidden test that the server checks on submit. */
+  pending?: boolean;
 }
 
 export interface ExerciseSubmissionView {

@@ -1,14 +1,19 @@
 import type { ReactNode } from "react";
 import type { Course } from "@/lib/types";
+import { getCurrentUser } from "@/lib/auth/session";
+import { getDb } from "@/lib/db/store";
+import { getDripOverview, getPrerequisiteStatus, type DripOverview, type PrerequisiteStatus } from "@/lib/services/drip";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
 import { cn, formatDuration, formatPrice } from "@/lib/utils";
+import { UnlockLabel } from "@/components/learn/unlock-time";
 import { ClaimCertificateButton, EnrollButton, LeaveCourseButton } from "./enroll-actions";
 import { enrolledTier, plural } from "./format";
 import { isPaidCourse, PriceTag } from "./price-tag";
+import { PrerequisiteList } from "./prerequisite-list";
 
 export interface EnrollCardEnrollment {
   progress: number;
@@ -106,7 +111,63 @@ function CertificateLinks({ props }: { props: EnrollCardProps }) {
   return null;
 }
 
-function PrimaryCta({ props }: { props: EnrollCardProps }) {
+/** Viewer-specific state the card resolves itself (prerequisites, scheduled content). */
+interface CardExtras {
+  loggedIn: boolean;
+  prerequisites: PrerequisiteStatus;
+  drip: DripOverview | null;
+}
+
+/** "Next scheduled lesson" line for enrolled learners. */
+function NextUnlockNote({ drip }: { drip: DripOverview | null }) {
+  const next = drip?.nextUnlock;
+  if (!next) return null;
+  return (
+    <p className="flex items-start gap-2 rounded-lg bg-accent/8 px-3 py-2 text-xs text-ink-muted">
+      <Icon.Clock className="mt-px size-4 shrink-0 text-accent" aria-hidden="true" />
+      <span className="min-w-0">
+        <span className="block truncate font-medium text-ink" title={next.title}>
+          Next scheduled: {next.title}
+        </span>
+        <UnlockLabel at={next.unlocksAt} className="text-accent" />
+        {drip.scheduledCount > 1 && <span> · {drip.scheduledCount - 1} more scheduled</span>}
+      </span>
+    </p>
+  );
+}
+
+function PrerequisitesBlock({ status, loggedIn, manager }: { status: PrerequisiteStatus; loggedIn: boolean; manager: boolean }) {
+  if (!status.items.length) return null;
+  const allDone = loggedIn && !status.missing.length;
+  const description = manager
+    ? "Learners must complete these courses before they can enroll."
+    : !loggedIn
+      ? "Complete these courses before enrolling. Log in to see your progress."
+      : allDone
+        ? "You've completed every prerequisite."
+        : status.blocking
+          ? `Complete ${status.missing.length === 1 ? "this course" : `these ${status.missing.length} courses`} to unlock enrollment.`
+          : "Recommended before you start.";
+  return (
+    <section aria-labelledby="prerequisites-heading" className="space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <h2 id="prerequisites-heading" className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+          <Icon.ListChecks className="size-4 text-ink-faint" aria-hidden="true" />
+          Prerequisites
+        </h2>
+        {loggedIn && !manager && (
+          <Badge tone={allDone ? "success" : "warning"} size="xs">
+            {status.items.length - status.missing.length}/{status.items.length} done
+          </Badge>
+        )}
+      </div>
+      <p className="text-xs text-ink-muted">{description}</p>
+      <PrerequisiteList items={status.items} compact />
+    </section>
+  );
+}
+
+function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExtras }) {
   const { course, manager, enrollment, nextLesson, firstLessonHref, alreadyPaid, batches } = props;
 
   if (manager) {
@@ -147,11 +208,21 @@ function PrimaryCta({ props }: { props: EnrollCardProps }) {
               </p>
             )}
           </div>
+        ) : extras.drip?.nextUnlock ? (
+          <div>
+            <Button size="lg" className="w-full" disabled leftIcon={<Icon.Clock className="size-4" />}>
+              Next lesson is scheduled
+            </Button>
+            <p className="mt-1.5 text-center text-xs text-ink-muted">
+              <span className="font-medium text-ink">{extras.drip.nextUnlock.title}</span> · <UnlockLabel at={extras.drip.nextUnlock.unlocksAt} />
+            </p>
+          </div>
         ) : (
           <Button size="lg" className="w-full" disabled>
             Lessons coming soon
           </Button>
         )}
+        {nextLesson && !enrollment.completed && <NextUnlockNote drip={extras.drip} />}
       </div>
     );
   }
@@ -179,6 +250,19 @@ function PrimaryCta({ props }: { props: EnrollCardProps }) {
     );
   }
 
+  if (extras.prerequisites.blocking && !alreadyPaid) {
+    return (
+      <div className="space-y-2">
+        <Button size="lg" className="w-full" disabled leftIcon={<Icon.Lock className="size-4" />}>
+          {isPaidCourse(course) ? "Complete prerequisites to buy" : "Complete prerequisites to enroll"}
+        </Button>
+        <p className="text-center text-xs text-ink-muted">
+          Finish the {extras.prerequisites.missing.length === 1 ? "course" : "courses"} listed below first. Enrollment unlocks automatically.
+        </p>
+      </div>
+    );
+  }
+
   if (isPaidCourse(course)) {
     if (alreadyPaid) return <EnrollButton slug={course.slug} label="Start course" icon={<Icon.Play className="size-4" />} />;
     return (
@@ -194,12 +278,26 @@ function PrimaryCta({ props }: { props: EnrollCardProps }) {
 /**
  * Sticky call-to-action card on the course page: price, the primary action
  * for the viewer's state (enroll / buy / continue / coming soon / batch only
- * / edit), certificate links and the "This course includes" list.
+ * / prerequisites pending / edit), prerequisite courses with the viewer's
+ * status, the next scheduled (drip) lesson, certificate links and the
+ * "This course includes" list.
+ *
+ * A Server Component: it resolves the viewer's prerequisite and drip status
+ * itself so every page rendering the card gets them.
  */
-export function EnrollCard(props: EnrollCardProps) {
+export async function EnrollCard(props: EnrollCardProps) {
   const { course, enrollment, includes, manager, certificationsEnabled, className } = props;
   const showPrice = !enrollment && !manager;
   const certificate = certificationsEnabled && (course.enableCertification || course.paidCertificate);
+
+  const [viewer, db] = await Promise.all([getCurrentUser(), getDb()]);
+  const fullCourse = db.courses.find((c) => c.id === course.id) ?? null;
+  const [prerequisites, drip] = await Promise.all([
+    fullCourse ? getPrerequisiteStatus(fullCourse, viewer) : Promise.resolve<PrerequisiteStatus>({ items: [], missing: [], blocking: false }),
+    fullCourse && enrollment && !manager ? getDripOverview(fullCourse, viewer) : Promise.resolve(null),
+  ]);
+  const extras: CardExtras = { loggedIn: !!viewer, prerequisites, drip };
+  const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
 
   return (
     <Card className={cn("overflow-hidden", className)}>
@@ -226,7 +324,12 @@ export function EnrollCard(props: EnrollCardProps) {
           </div>
         )}
 
-        <PrimaryCta props={props} />
+        <PrimaryCta props={props} extras={extras} />
+        {showPrerequisites && (
+          <div className="border-t border-border pt-4">
+            <PrerequisitesBlock status={prerequisites} loggedIn={extras.loggedIn} manager={manager} />
+          </div>
+        )}
         <CertificateLinks props={props} />
 
         {enrollment?.canLeave && !manager && (

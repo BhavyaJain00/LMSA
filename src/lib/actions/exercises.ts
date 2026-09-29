@@ -8,9 +8,9 @@ import type { ActionResult, ExerciseLanguage, ExerciseSubmission, Lesson, Progra
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { getLessonHref } from "@/lib/data/courses";
-import { canManageAssessments, toExerciseSubmissionView } from "@/lib/data/assessments";
+import { canManageAssessments, completeLessonFromAssessment, toExerciseSubmissionView } from "@/lib/data/assessments";
 import { logActivity } from "@/lib/services/activity";
-import { completeLesson } from "@/lib/services/progress";
+import { awardPoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { fd, uid } from "@/lib/utils";
 import {
@@ -81,6 +81,8 @@ const epilogue =
 let script = null;
 let compileError = null;
 try {
+  // Compile the learner's code on its own first so syntax errors point at their code, not the harness.
+  new vm.Script(workerData.code, { filename: "solution.js" });
   script = new vm.Script(prelude + workerData.code + epilogue, { filename: "solution.js" });
 } catch (err) {
   compileError = err && err.message ? (err.name ? String(err.name) + ": " : "") + String(err.message) : "SyntaxError";
@@ -191,6 +193,18 @@ async function gradeOnServer(exercise: ProgrammingExercise, code: string): Promi
 }
 
 /* ------------------------------------------------------------------ */
+/* Sandbox throttle                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Each server check can keep a worker thread busy for a long time (up to
+ * 50 tests x 3 s). Allow one check per user at a time and a small number of
+ * checks server-wide, so parallel submissions cannot exhaust the CPU.
+ */
+const MAX_CONCURRENT_SANDBOX_RUNS = 4;
+const activeSandboxRuns = new Set<string>();
+
+/* ------------------------------------------------------------------ */
 /* Learner: submit                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -228,6 +242,9 @@ export async function submitExerciseAction(
   if (!input || typeof input !== "object") return { ok: false, error: "Invalid submission." };
 
   const db = await getDb();
+  if (!db.settings.features.programmingExercises && !canManageAssessments(user)) {
+    return { ok: false, error: "Programming exercises are turned off on this site." };
+  }
   const exercise = db.exercises.find((e) => e.id === input.exerciseId);
   if (!exercise) return { ok: false, error: "This exercise no longer exists." };
 
@@ -240,7 +257,14 @@ export async function submitExerciseAction(
 
   let results: TestCaseResult[];
   if (runnable) {
-    results = await gradeOnServer(exercise, code);
+    if (activeSandboxRuns.has(user.id)) return { ok: false, error: "Your previous submission is still being checked. Please wait for it to finish." };
+    if (activeSandboxRuns.size >= MAX_CONCURRENT_SANDBOX_RUNS) return { ok: false, error: "The code checker is busy right now. Please try again in a moment." };
+    activeSandboxRuns.add(user.id);
+    try {
+      results = await gradeOnServer(exercise, code);
+    } finally {
+      activeSandboxRuns.delete(user.id);
+    }
   } else {
     results = exercise.testCases.map((t) => ({
       testCaseId: t.id,
@@ -294,9 +318,12 @@ export async function submitExerciseAction(
   });
 
   await logActivity(user.id, "exercise_submit", exercise.id);
+  if (status === "passed") await awardPoints(user.id, "exercise_pass", { refId: exercise.id, courseId: saved.courseId });
+  // A passing submission from a lesson completes that lesson (when its other requirements are met).
   let lessonCompleted = false;
-  if (status === "passed" && lesson) {
-    const outcome = await completeLesson(user, lesson, 9999);
+  const completionLesson = lesson ?? (saved.lessonId ? db.lessons.find((l) => l.id === saved.lessonId) : undefined);
+  if (status === "passed" && completionLesson) {
+    const outcome = await completeLessonFromAssessment(user, completionLesson);
     lessonCompleted = outcome.completed;
   }
 

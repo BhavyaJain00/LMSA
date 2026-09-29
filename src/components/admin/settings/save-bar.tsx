@@ -4,15 +4,18 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { UnsavedChangesGuard } from "./unsaved-changes-guard";
 
 /**
  * Sticky footer for manual-save forms: shows the save state badge
- * ("Not saved" / "Saving…" / "Saved") next to the Save button.
+ * ("Not saved" / "Saving…" / "Saved" / "Save failed") next to the Save
+ * button, and guards unsaved changes against accidental navigation.
  */
 export function SaveBar({
   dirty,
   pending,
   saved,
+  failed,
   label = "Save",
   extra,
   className,
@@ -21,6 +24,8 @@ export function SaveBar({
   dirty: boolean;
   pending: boolean;
   saved?: boolean;
+  /** The last save attempt was rejected (validation or permission error). */
+  failed?: boolean;
   label?: string;
   extra?: ReactNode;
   className?: string;
@@ -37,6 +42,10 @@ export function SaveBar({
       <div className="flex min-h-6 items-center gap-2 text-sm" aria-live="polite">
         {pending ? (
           <Badge tone="neutral">Saving…</Badge>
+        ) : failed ? (
+          <Badge tone="danger" dot>
+            Save failed
+          </Badge>
         ) : dirty ? (
           <Badge tone="warning" dot>
             Not saved
@@ -53,6 +62,7 @@ export function SaveBar({
       <Button type="submit" loading={pending} disabled={requireDirty && !dirty}>
         {label}
       </Button>
+      <UnsavedChangesGuard when={dirty && !pending} />
     </div>
   );
 }

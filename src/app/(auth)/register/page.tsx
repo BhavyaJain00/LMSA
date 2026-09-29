@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { Markdown } from "@/lib/markdown";
+import { clampMinLength } from "@/lib/auth/password-policy";
 import { RegisterForm } from "./register-form";
 
 export const metadata = { title: "Create account" };
@@ -10,7 +11,7 @@ export const metadata = { title: "Create account" };
 export default async function RegisterPage(props: PageProps<"/register">) {
   const user = await getCurrentUser();
   const sp = await props.searchParams;
-  const next = typeof sp.next === "string" ? sp.next : undefined;
+  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
   if (user) redirect("/dashboard");
   const settings = await getSettings();
 
@@ -28,7 +29,7 @@ export default async function RegisterPage(props: PageProps<"/register">) {
           {settings.learning.disableSignup ? (
             <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">Sign up is currently disabled. Please contact an administrator for an account.</p>
           ) : (
-            <RegisterForm next={next} />
+            <RegisterForm next={next} minLength={clampMinLength(settings.security.passwordMinLength)} />
           )}
         </div>
       </div>

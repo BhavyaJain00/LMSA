@@ -10,7 +10,6 @@ import {
   getCourseOutline,
   getCourseProgress,
   getCourseReviews,
-  getCourseSummary,
   getEnrollment,
   getNextLesson,
   getRatingBreakdown,
@@ -23,6 +22,7 @@ import {
   getInstructorStats,
   getRelatedCourses,
   getUserCourseCertificate,
+  getCourseSummaryForViewer,
   hasPaidForCourse,
 } from "@/lib/data/catalog";
 import { getPublicUser } from "@/lib/data/users";
@@ -45,14 +45,34 @@ import {
 import { lessonKindFromBlocks, outlineStats, reviewDateLabel } from "@/components/catalog/format";
 import { isPaidCourse } from "@/components/catalog/price-tag";
 import type { OutlineChapterView, OutlineMode, ReviewView } from "@/components/catalog/types";
+import { siteConfig } from "@/lib/config";
 import { formatDuration, stripMarkdown, sum, truncate } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Absolute URL for a possibly relative asset path (e.g. `/uploads/x.jpg`), for OG tags and JSON-LD. */
+function absoluteUrl(url: string): string {
+  try {
+    return new URL(url, `${siteConfig.appUrl}/`).href;
+  } catch {
+    return url;
+  }
+}
+
+/** Course meta description (set in the course Settings tab), falling back to the introduction. */
 function metaDescription(course: Course): string {
+  const custom = course.metaDescription?.trim();
+  if (custom) return custom;
   return course.shortIntroduction || truncate(stripMarkdown(course.description).replace(/\s+/g, " "), 160);
+}
+
+/** Course meta keywords (comma-separated), falling back to the course tags. */
+function metaKeywords(course: Course): string[] {
+  const list = (course.metaKeywords ?? "").split(/[,\n]/);
+  const keywords = Array.from(new Set(list.map((k) => k.trim()).filter(Boolean)));
+  return keywords.length ? keywords : course.tags;
 }
 
 function toOutlineView(course: Course, outline: ChapterWithLessons[]): OutlineChapterView[] {
@@ -110,8 +130,9 @@ function courseJsonLd(course: CourseSummary, settings: Settings): string {
     description: metaDescription(course),
     provider: { "@type": "Organization", name: settings.brand.name },
     inLanguage: "en",
-    keywords: course.tags.join(", ") || undefined,
-    image: course.imageUrl || undefined,
+    keywords: metaKeywords(course).join(", ") || undefined,
+    url: absoluteUrl(`/courses/${course.slug}`),
+    image: course.imageUrl ? absoluteUrl(course.imageUrl) : undefined,
     instructor: course.instructors.map((i) => ({ "@type": "Person", name: i.name })),
     offers: {
       "@type": "Offer",
@@ -138,23 +159,29 @@ function courseJsonLd(course: CourseSummary, settings: Settings): string {
 export async function generateMetadata(props: PageProps<"/courses/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
   const [course, user] = await Promise.all([getCourseBySlug(slug), getCurrentUser()]);
-  if (!course || !canViewCourse(user, course)) return { title: "Course not found", robots: { index: false, follow: false } };
+  const enrolled = course && user && !course.published ? !!(await getEnrollment(user.id, course.id)) : false;
+  if (!course || !(canViewCourse(user, course) || enrolled)) return { title: "Course not found", robots: { index: false, follow: false } };
   const description = metaDescription(course);
+  const keywords = metaKeywords(course);
+  const image = course.imageUrl ? absoluteUrl(course.imageUrl) : undefined;
   return {
+    metadataBase: new URL(`${siteConfig.appUrl}/`),
+    alternates: { canonical: `/courses/${course.slug}` },
     title: course.title,
     description,
-    keywords: course.tags.length ? course.tags : undefined,
+    keywords: keywords.length ? keywords : undefined,
     openGraph: {
       type: "website",
       title: course.title,
       description,
-      images: course.imageUrl ? [{ url: course.imageUrl, alt: course.title }] : undefined,
+      url: `/courses/${course.slug}`,
+      images: image ? [{ url: image, alt: course.title }] : undefined,
     },
     twitter: {
-      card: course.imageUrl ? "summary_large_image" : "summary",
+      card: image ? "summary_large_image" : "summary",
       title: course.title,
       description,
-      images: course.imageUrl ? [course.imageUrl] : undefined,
+      images: image ? [image] : undefined,
     },
     robots: course.published ? undefined : { index: false, follow: false },
   };
@@ -170,15 +197,17 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   if (!course) notFound();
 
   const manager = canManageCourse(user, course);
-  if (!course.published && !manager) notFound();
+  // Unpublished courses stay visible to their managers and to members already enrolled
+  // (same rule as the lesson player layout), so enrolled learners are not sent to a 404.
+  const enrollment = await getEnrollment(user?.id, course.id);
+  if (!course.published && !manager && !enrollment) notFound();
   if (!settings.features.courses && !manager) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/courses/${course.slug}`)}`);
 
-  const [summary, outline, enrollment, reviews, breakdown, related, content, announcements, certificate, batches, alreadyPaid, instructorStats, evaluator] =
+  const [summary, outline, reviews, breakdown, related, content, announcements, certificate, batches, alreadyPaid, instructorStats, evaluator] =
     await Promise.all([
-      getCourseSummary(course.id, user),
+      getCourseSummaryForViewer(course.id, user, !!enrollment),
       getCourseOutline(course, user),
-      getEnrollment(user?.id, course.id),
       settings.features.reviews ? getCourseReviews(course.id) : Promise.resolve([] as ReviewWithUser[]),
       getRatingBreakdown(course.id),
       getRelatedCourses(course, user, 4),

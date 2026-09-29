@@ -1,0 +1,70 @@
+/*
+ * Print styles for /billing/invoice/[orderId]: only the invoice sheet is
+ * printed (no sidebar, header or page actions), on A4 paper, in light colors
+ * even when the site is in dark mode. Every rule is scoped to documents that
+ * contain the invoice, so the stylesheet is harmless after client-side
+ * navigation to other pages.
+ */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm 14mm 16mm;
+  }
+
+  :root:has(#invoice-sheet),
+  :root[data-theme="dark"]:has(#invoice-sheet) {
+    color-scheme: light;
+    --surface: #ffffff;
+    --surface-1: #ffffff;
+    --surface-2: #f3f4f6;
+    --surface-3: #e5e7eb;
+    --border: #e4e4e7;
+    --border-strong: #a1a1aa;
+    --ink: #18181b;
+    --ink-muted: #52525b;
+    --ink-faint: #71717a;
+    --success: #15803d;
+    --warning: #b45309;
+    --danger: #b91c1c;
+  }
+
+  html:has(#invoice-sheet),
+  body:has(#invoice-sheet) {
+    background: #ffffff !important;
+  }
+
+  body:has(#invoice-sheet) * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* App chrome: sidebar, top bar, phone tab bar, footer. */
+  body:has(#invoice-sheet) :is(header, aside, nav, footer):not(#invoice-sheet, #invoice-sheet *) {
+    display: none !important;
+  }
+
+  body:has(#invoice-sheet) main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+
+  body:has(#invoice-sheet) .invoice-screen-only {
+    display: none !important;
+  }
+
+  #invoice-sheet {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  #invoice-sheet a {
+    color: inherit;
+    text-decoration: none;
+  }
+}

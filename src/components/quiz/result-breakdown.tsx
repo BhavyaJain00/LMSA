@@ -147,7 +147,7 @@ export function ResultBreakdown({
                   <>
                     {!row.graded ? (
                       <Badge tone="warning">Awaiting grading</Badge>
-                    ) : revealed && row.marks !== undefined ? (
+                    ) : row.marks !== undefined && (revealed || row.type === "open_ended") ? (
                       <span className="text-sm font-semibold tabular-nums text-ink">
                         {formatScore(row.marks)} <span className="font-normal text-ink-muted">/ {formatScore(row.marksOutOf)}</span>
                       </span>

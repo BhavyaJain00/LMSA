@@ -41,7 +41,24 @@ function withExisting(options: string[], existing: string[]): string[] {
  * then "Where do you want to start?". Single choices auto-advance; answers are
  * saved with the chosen starting point, or with "Skip for now".
  */
-export function PersonaForm({ brandName, username, initial }: { brandName: string; username: string; initial: PersonaInitial }) {
+/** Feature flags that decide which starting points are offered. */
+export interface PersonaFeatures {
+  courses: boolean;
+  batches: boolean;
+  programs: boolean;
+}
+
+export function PersonaForm({
+  brandName,
+  username,
+  initial,
+  features,
+}: {
+  brandName: string;
+  username: string;
+  initial: PersonaInitial;
+  features: PersonaFeatures;
+}) {
   const [state, dispatch, pending] = useActionState(savePersonaAction, null);
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<QuestionKey, string[]>>({
@@ -113,9 +130,15 @@ export function PersonaForm({ brandName, username, initial }: { brandName: strin
   ];
 
   const outcomes: Outcome[] = [
-    { label: "Browse courses", description: "Find something new to learn.", href: "/courses", icon: <Icon.BookOpen className="size-5" /> },
-    { label: "Join a live batch", description: "Learn with a cohort and live classes.", href: "/batches", icon: <Icon.Users className="size-5" /> },
-    { label: "Follow a program", description: "A guided path of courses, in order.", href: "/programs", icon: <Icon.Layers className="size-5" /> },
+    ...(features.courses
+      ? [{ label: "Browse courses", description: "Find something new to learn.", href: "/courses", icon: <Icon.BookOpen className="size-5" /> }]
+      : []),
+    ...(features.batches
+      ? [{ label: "Join a live batch", description: "Learn with a cohort and live classes.", href: "/batches", icon: <Icon.Users className="size-5" /> }]
+      : []),
+    ...(features.programs
+      ? [{ label: "Follow a program", description: "A guided path of courses, in order.", href: "/programs", icon: <Icon.Layers className="size-5" /> }]
+      : []),
     { label: "Complete my profile", description: "Add a photo, headline and skills.", href: `/user/${username}/edit`, icon: <Icon.User className="size-5" /> },
     { label: "Go to my dashboard", description: "See your streak and what's next.", href: "/dashboard", icon: <Icon.Home className="size-5" /> },
   ];

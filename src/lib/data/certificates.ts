@@ -1,20 +1,25 @@
 import "server-only";
+import { headers } from "next/headers";
 import type { Batch, Certificate, CertificateEvaluation, CertificateRequest, Course, Database, EvaluatorSlot, PublicUser, Settings, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { hasRole, isModerator, toPublicUser } from "@/lib/auth/session";
 import { getLessonHref } from "@/lib/data/courses";
+import { siteConfig } from "@/lib/config";
 import { toDateKey } from "@/lib/utils";
 import {
   BOOKING_WINDOW_DAYS,
   EVALUATION_SLOT_MINUTES,
+  activeUnavailability,
   addDaysToKey,
   clockToMinutes,
+  isDateInRange,
   isValidTimeZone,
   minutesToClock,
   timeZoneLabel,
   weekdayName,
   weekdayOfDateKey,
   zonedToUtcIso,
+  type UnavailabilityRange,
 } from "@/components/certificates/time";
 
 /**
@@ -77,6 +82,32 @@ const deletedPerson = (id: string): PersonLite => ({ id, name: "Deleted user", u
 
 function isExpired(c: Pick<Certificate, "expiryDate">, today: string): boolean {
   return !!c.expiryDate && c.expiryDate < today;
+}
+
+/* ------------------------------------------------------------------ */
+/* Public URLs                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Origin used for absolute certificate links (verification URL printed on
+ * the certificate, share links, LinkedIn "add certification"). When APP_URL
+ * is configured it is authoritative; otherwise the request headers are used
+ * so local and preview deployments still produce working links.
+ */
+export async function getPublicBaseUrl(): Promise<string> {
+  if (process.env.APP_URL?.trim()) return siteConfig.appUrl;
+  const h = await headers();
+  const host = h.get("x-forwarded-host")?.split(",")[0]?.trim() || h.get("host") || "";
+  if (!host) return siteConfig.appUrl;
+  const forwardedProto = h.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const local = /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/.test(host);
+  const proto = forwardedProto === "http" || forwardedProto === "https" ? forwardedProto : local ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
+/** Absolute URL of a certificate's public verification page. */
+export async function getCertificateUrl(code: string): Promise<string> {
+  return `${await getPublicBaseUrl()}/certificates/${encodeURIComponent(code)}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -209,11 +240,28 @@ export async function getCertificateByCode(code: string): Promise<CertificateDet
 /* Certified members directory                                         */
 /* ------------------------------------------------------------------ */
 
+export type OpenTo = "work" | "hiring";
+
 export interface CertifiedMember {
-  user: PersonLite & { createdAt: string };
+  user: PersonLite & { createdAt: string; openTo: OpenTo | null };
   certificateCount: number;
   latestIssueDate: string;
   titles: string[];
+}
+
+/**
+ * The member's profile "Open to" choice (Frappe: User.open_to = 'Work' |
+ * 'Hiring'), owned by the profile area. Read defensively and normalized so
+ * "Work"/"work"/"open_to_work"/"opportunities" and "Hiring"/"hiring" all match.
+ */
+export function userOpenTo(user: object): OpenTo | null {
+  const raw = (user as { openTo?: unknown }).openTo;
+  if (typeof raw !== "string") return null;
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (value.includes("hir")) return "hiring";
+  if (value.includes("work") || value.includes("opportunit")) return "work";
+  return null;
 }
 
 function certificateTitle(db: Database, c: Certificate): string | null {
@@ -222,10 +270,12 @@ function certificateTitle(db: Database, c: Certificate): string | null {
   return null;
 }
 
-export async function getCertifiedMembers(filter: { name?: string; category?: string } = {}): Promise<CertifiedMember[]> {
+export async function getCertifiedMembers(filter: { name?: string; category?: string; openToWork?: boolean; hiring?: boolean } = {}): Promise<CertifiedMember[]> {
   const db = await getDb();
   const name = filter.name?.trim().toLowerCase();
   const category = filter.category?.trim().toLowerCase();
+  // Both toggles on shows members who chose either option.
+  const wanted = new Set<OpenTo>([...(filter.openToWork ? (["work"] as const) : []), ...(filter.hiring ? (["hiring"] as const) : [])]);
   const groups = new Map<string, { certs: Certificate[]; titles: Set<string> }>();
   for (const c of db.certificates) {
     if (!c.published) continue;
@@ -240,10 +290,12 @@ export async function getCertifiedMembers(filter: { name?: string; category?: st
     const user = db.users.find((u) => u.id === userId);
     if (!user || !user.enabled) continue;
     if (name && !user.name.toLowerCase().includes(name)) continue;
+    const openTo = userOpenTo(user);
+    if (wanted.size && (!openTo || !wanted.has(openTo))) continue;
     const titles = Array.from(entry.titles).sort((a, b) => a.localeCompare(b));
     if (category && !titles.some((t) => t.toLowerCase().includes(category))) continue;
     const latest = entry.certs.map((c) => c.issueDate).sort().at(-1) ?? "";
-    out.push({ user: { ...person(user)!, createdAt: user.createdAt }, certificateCount: entry.certs.length, latestIssueDate: latest, titles });
+    out.push({ user: { ...person(user)!, createdAt: user.createdAt, openTo }, certificateCount: entry.certs.length, latestIssueDate: latest, titles });
   }
   return out.sort((a, b) => b.latestIssueDate.localeCompare(a.latestIssueDate) || a.user.name.localeCompare(b.user.name));
 }
@@ -272,6 +324,15 @@ export async function getEvaluatorSlots(evaluatorId: string): Promise<EvaluatorS
     .sort((a, b) => order(a.day) - order(b.day) || a.startTime.localeCompare(b.startTime));
 }
 
+/**
+ * The evaluator's blocking unavailability range (both dates set), or null.
+ * Stored on the evaluator's slot rows; see EvaluatorSlot.unavailableFrom.
+ */
+export async function getEvaluatorUnavailability(evaluatorId: string): Promise<UnavailabilityRange | null> {
+  const db = await getDb();
+  return activeUnavailability(db.evaluatorSlots.filter((s) => s.evaluatorId === evaluatorId));
+}
+
 export interface BookableSlot {
   date: string;
   startTime: string;
@@ -288,8 +349,9 @@ export interface AvailableDay {
 
 /**
  * 30-minute bookable slots for an evaluator over the next `days` days,
- * built from their weekly availability, skipping slots that already started
- * today and slots booked by any non-cancelled request.
+ * built from their weekly availability, skipping days inside the evaluator's
+ * unavailability range, slots that already started today and slots booked by
+ * any non-cancelled request.
  */
 export async function getAvailableSlots(evaluatorId: string, opts: { days?: number; maxDate?: string | null } = {}): Promise<AvailableDay[]> {
   const db = await getDb();
@@ -298,6 +360,7 @@ export async function getAvailableSlots(evaluatorId: string, opts: { days?: numb
   const { dateKey: today, minutes: nowMinutes } = platformNow();
   const weekly = db.evaluatorSlots.filter((s) => s.evaluatorId === evaluatorId);
   if (!weekly.length) return [];
+  const unavailable = activeUnavailability(weekly);
   const booked = new Set(
     db.certificateRequests.filter((r) => r.evaluatorId === evaluatorId && r.status !== "cancelled").map((r) => `${r.date}|${r.startTime}`),
   );
@@ -305,6 +368,7 @@ export async function getAvailableSlots(evaluatorId: string, opts: { days?: numb
   for (let i = 0; i < days; i++) {
     const date = addDaysToKey(today, i);
     if (opts.maxDate && date > opts.maxDate) break;
+    if (isDateInRange(date, unavailable)) continue;
     const weekday = weekdayOfDateKey(date);
     const windows = weekly.filter((s) => s.day === weekday).sort((a, b) => a.startTime.localeCompare(b.startTime));
     const seen = new Set<string>();
@@ -422,7 +486,19 @@ export async function getUpcomingEvaluationsForUser(userId: string, opts: { cour
 
 export interface ScheduleEvent extends EvaluationCard {
   evaluation: { id: string; rating: number; status: CertificateEvaluation["status"]; summary: string | null } | null;
-  certificate: { id: string; code: string; published: boolean; issueDate: string; expiryDate: string | null } | null;
+  certificate: { id: string; code: string; published: boolean; issueDate: string; expiryDate: string | null; templateId: string | null } | null;
+}
+
+/**
+ * The evaluation recorded for one booking. A learner can be evaluated more
+ * than once for a course (fail, then rebook), so the result is matched on the
+ * booking's own date and start time, not just on learner + course.
+ */
+export function findEvaluationForRequest(
+  evaluations: CertificateEvaluation[],
+  request: Pick<CertificateRequest, "userId" | "courseId" | "date" | "startTime">,
+): CertificateEvaluation | undefined {
+  return evaluations.find((e) => e.userId === request.userId && e.courseId === request.courseId && e.date === request.date && e.startTime === request.startTime);
 }
 
 /** Every non-cancelled booking assigned to an evaluator, with evaluation results and certificates. */
@@ -433,13 +509,20 @@ export async function getEvaluatorSchedule(evaluatorId: string): Promise<Schedul
     .filter((r) => r.evaluatorId === evaluatorId && r.status !== "cancelled")
     .map((r): ScheduleEvent => {
       const card = toEvaluationCard(db, r, now);
-      const evaluation = db.certificateEvaluations.find((e) => e.userId === r.userId && e.courseId === r.courseId);
+      const evaluation = findEvaluationForRequest(db.certificateEvaluations, r);
       const certificate = db.certificates.find((c) => c.userId === r.userId && c.courseId === r.courseId);
       return {
         ...card,
         evaluation: evaluation ? { id: evaluation.id, rating: evaluation.rating, status: evaluation.status, summary: evaluation.summary ?? null } : null,
         certificate: certificate
-          ? { id: certificate.id, code: certificate.code, published: certificate.published, issueDate: certificate.issueDate, expiryDate: certificate.expiryDate ?? null }
+          ? {
+              id: certificate.id,
+              code: certificate.code,
+              published: certificate.published,
+              issueDate: certificate.issueDate,
+              expiryDate: certificate.expiryDate ?? null,
+              templateId: certificate.templateId ?? null,
+            }
           : null,
       };
     })
@@ -453,6 +536,8 @@ export async function getEvaluatorSchedule(evaluatorId: string): Promise<Schedul
 export interface EvaluatorAvailability {
   evaluator: PersonLite;
   days: AvailableDay[];
+  /** Unavailability range that has not ended yet (shown to learners as a note). */
+  unavailable: UnavailabilityRange | null;
 }
 
 export interface CertificationState {
@@ -496,7 +581,12 @@ export async function getCertificationState(user: User, course: Course): Promise
   let availability: EvaluatorAvailability[] = [];
   if (canSchedule && !deadline?.passed) {
     const evaluators = await getCourseEvaluators(course);
-    availability = await Promise.all(evaluators.map(async (evaluator) => ({ evaluator, days: await getAvailableSlots(evaluator.id, { maxDate: deadlineDate }) })));
+    availability = await Promise.all(
+      evaluators.map(async (evaluator) => {
+        const [days, range] = await Promise.all([getAvailableSlots(evaluator.id, { maxDate: deadlineDate }), getEvaluatorUnavailability(evaluator.id)]);
+        return { evaluator, days, unavailable: range && range.to >= today ? range : null };
+      }),
+    );
   }
 
   const upcoming = await getUpcomingEvaluationsForUser(user.id, { courseIds: [course.id] });

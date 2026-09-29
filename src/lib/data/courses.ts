@@ -6,6 +6,7 @@ import type {
   Course,
   CourseProgressSummary,
   CourseSummary,
+  Database,
   Enrollment,
   Lesson,
   LessonWithState,
@@ -16,6 +17,15 @@ import { all, findById, findOne, getDb } from "@/lib/db/store";
 import { hasRole, isModerator } from "@/lib/auth/session";
 import { getUserMap } from "./users";
 import { percent } from "@/lib/utils";
+import {
+  computeLessonLocks,
+  dripAnchor,
+  resolvePrerequisites,
+  unmetPrerequisites,
+  type LessonLock,
+  type LockInputLesson,
+  type PrerequisiteItem,
+} from "@/components/learn/drip-shared";
 
 /* ------------------------------------------------------------------ */
 /* Lookups                                                             */
@@ -181,51 +191,133 @@ export function lessonFlags(lesson: Lesson) {
   };
 }
 
+/** A lesson of the viewer outline with the reason it is locked (drip, order, enroll, prerequisite). */
+export interface ScheduledLesson extends LessonWithState {
+  /** Set when `locked`: why, and for drip locks when the lesson opens. */
+  lock?: LessonLock;
+}
+
+export interface ScheduledChapter extends ChapterWithLessons {
+  lessons: ScheduledLesson[];
+}
+
+/** Everything about a viewer's relationship with a course that locking depends on. */
+export interface ViewerCourseState {
+  enrollment: Enrollment | null;
+  /** Instructor of the course, moderator or admin. */
+  manager: boolean;
+  enrolled: boolean;
+  /** Free-preview lessons are open to non-enrolled viewers (published course + guest access on). */
+  previewAllowed: boolean;
+  /** Epoch ms drip days count from (enrollment or batch start); null when not enrolled. */
+  anchor: number | null;
+  /** Prerequisite courses with the viewer's status (empty when the course has none). */
+  prerequisites: PrerequisiteItem[];
+  /**
+   * A logged-in visitor must still complete prerequisites before enrolling
+   * (never for managers, enrolled learners, batch-only courses or learners who
+   * already paid for the course).
+   */
+  prerequisitesPending: boolean;
+}
+
+/** Resolve the viewer state used by the outline, the course page and access checks. */
+export function getViewerCourseState(db: Database, course: Course, viewer: Pick<User, "id" | "roles"> | null): ViewerCourseState {
+  const enrollment = viewer ? (db.enrollments.find((e) => e.userId === viewer.id && e.courseId === course.id) ?? null) : null;
+  const manager = canManageCourse(viewer, course);
+  const batch = enrollment?.batchId ? db.batches.find((b) => b.id === enrollment.batchId) : null;
+  const anchor = enrollment ? dripAnchor(enrollment, batch) : null;
+  const prerequisites = resolvePrerequisites(course.prerequisiteCourseIds, db, viewer?.id ?? null, course.id);
+  const paid = !!viewer && db.payments.some((p) => p.userId === viewer.id && p.itemType === "course" && p.itemId === course.id && p.status === "paid");
+  const prerequisitesPending =
+    !!viewer && !manager && !enrollment && !course.disableSelfLearning && !paid && unmetPrerequisites(prerequisites).length > 0;
+  return {
+    enrollment,
+    manager,
+    enrolled: !!enrollment,
+    previewAllowed: course.published && db.settings.learning.allowGuestAccess,
+    anchor: anchor !== null && Number.isFinite(anchor) ? anchor : null,
+    prerequisites,
+    prerequisitesPending,
+  };
+}
+
 /**
  * Build the chapter/lesson tree for a course with completion and locking
  * computed for the viewer.
  *
- * Locking rules (mirrors Frappe LMS):
+ * Locking rules (Frappe LMS plus round-2 drip content; see drip-shared.ts):
  *  - Course managers see everything unlocked.
- *  - Guests / non-enrolled users can open only preview lessons.
- *  - With `enforceLessonCompletion`, a lesson unlocks only when every
- *    previous lesson (in order) is complete.
+ *  - Guests / non-enrolled users can open only free-preview lessons (when the
+ *    course is published and guest access is on). Logged-in visitors who still
+ *    have prerequisite courses to finish get the "prerequisite" reason.
+ *  - Scheduled lessons (chapter/lesson `availableFrom`, and for enrolled
+ *    learners `dripDays` after enrollment or batch start) stay locked until
+ *    their release time. `availableFrom` also applies to free previews.
+ *  - With `enforceLessonCompletion`, an incomplete lesson unlocks only when
+ *    every previous lesson (in order) is complete.
+ *  - Completed lessons never lock.
  */
-export async function getCourseOutline(course: Course, viewer: User | null): Promise<ChapterWithLessons[]> {
-  const [chapters, lessons, db] = await Promise.all([getChapters(course.id), getLessons(course.id), getDb()]);
-  const enrollment = viewer ? await getEnrollment(viewer.id, course.id) : null;
-  const manager = canManageCourse(viewer, course);
+export async function getCourseOutline(course: Course, viewer: User | null, now: number = Date.now()): Promise<ScheduledChapter[]> {
+  const db = await getDb();
+  const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
+  const lessonsByChapter = new Map<string, Lesson[]>();
+  for (const lesson of db.lessons) {
+    if (lesson.courseId !== course.id) continue;
+    const list = lessonsByChapter.get(lesson.chapterId) ?? [];
+    list.push(lesson);
+    lessonsByChapter.set(lesson.chapterId, list);
+  }
+  for (const list of lessonsByChapter.values()) list.sort((a, b) => a.order - b.order);
+
+  const state = getViewerCourseState(db, course, viewer);
   const progressMap = new Map<string, "complete" | "partial" | "incomplete">();
   if (viewer) {
     for (const p of db.progress) if (p.userId === viewer.id && p.courseId === course.id) progressMap.set(p.lessonId, p.status);
   }
 
-  let previousAllComplete = true;
-  return chapters.map((chapter, ci) => {
-    const chapterLessons = lessons
-      .filter((l) => l.chapterId === chapter.id)
-      .map((lesson, li): LessonWithState => {
-        const status = progressMap.get(lesson.id) ?? "incomplete";
-        let locked = false;
-        if (!manager) {
-          if (!enrollment) locked = !lesson.includeInPreview;
-          else if (course.enforceLessonCompletion) locked = !previousAllComplete;
-        }
-        if (status !== "complete") previousAllComplete = false;
-        return {
-          ...lesson,
-          status,
-          locked,
-          chapterNumber: ci + 1,
-          lessonNumber: li + 1,
-          ...lessonFlags(lesson),
-        };
-      });
-    return { ...chapter, lessons: chapterLessons };
+  const ordered: { lesson: Lesson; chapter: Chapter; ci: number; li: number }[] = [];
+  chapters.forEach((chapter, ci) => (lessonsByChapter.get(chapter.id) ?? []).forEach((lesson, li) => ordered.push({ lesson, chapter, ci, li })));
+
+  const lockInput: LockInputLesson[] = ordered.map(({ lesson, chapter }) => ({
+    id: lesson.id,
+    status: progressMap.get(lesson.id) ?? "incomplete",
+    includeInPreview: lesson.includeInPreview,
+    dripDays: lesson.dripDays,
+    availableFrom: lesson.availableFrom,
+    chapter: { dripDays: chapter.dripDays, availableFrom: chapter.availableFrom },
+  }));
+  const locks = computeLessonLocks(lockInput, {
+    manager: state.manager,
+    enrolled: state.enrolled,
+    previewAllowed: state.previewAllowed,
+    enforceOrder: course.enforceLessonCompletion,
+    anchor: state.anchor,
+    prerequisitesPending: state.prerequisitesPending,
+    now,
   });
+
+  const byChapter = new Map<string, ScheduledLesson[]>();
+  ordered.forEach(({ lesson, chapter, ci, li }, i) => {
+    const lock = locks[i] ?? undefined;
+    const row: ScheduledLesson = {
+      ...lesson,
+      status: lockInput[i]!.status,
+      locked: !!lock,
+      ...(lock ? { lock } : {}),
+      chapterNumber: ci + 1,
+      lessonNumber: li + 1,
+      ...lessonFlags(lesson),
+    };
+    const list = byChapter.get(chapter.id) ?? [];
+    list.push(row);
+    byChapter.set(chapter.id, list);
+  });
+
+  return chapters.map((chapter) => ({ ...chapter, lessons: byChapter.get(chapter.id) ?? [] }));
 }
 
-export function flattenOutline(outline: ChapterWithLessons[]): LessonWithState[] {
+export function flattenOutline<L extends LessonWithState>(outline: { lessons: L[] }[]): L[] {
   return outline.flatMap((c) => c.lessons);
 }
 
@@ -280,17 +372,25 @@ export async function getCourseProgress(userId: string, courseId: string): Promi
   };
 }
 
-/** First incomplete lesson (or the first lesson) for "continue learning". */
-export async function getNextLesson(course: Course, viewer: User | null): Promise<LessonWithState | null> {
+/**
+ * Lesson for "continue learning": the lesson the learner last opened (when it
+ * is still open and incomplete), else the first open incomplete lesson, else
+ * the first open lesson. Never a locked lesson; when nothing is open because
+ * content is still scheduled (drip), returns null so callers fall back to the
+ * course page, which shows when the next lesson unlocks.
+ */
+export async function getNextLesson(course: Course, viewer: User | null): Promise<ScheduledLesson | null> {
   const outline = await getCourseOutline(course, viewer);
   const flat = flattenOutline(outline);
   if (!flat.length) return null;
   const enrollment = viewer ? await getEnrollment(viewer.id, course.id) : null;
   if (enrollment?.currentLessonId) {
     const current = flat.find((l) => l.id === enrollment.currentLessonId);
-    if (current && current.status !== "complete") return current;
+    if (current && !current.locked && current.status !== "complete") return current;
   }
-  return flat.find((l) => l.status !== "complete" && !l.locked) ?? flat[0] ?? null;
+  const open = flat.find((l) => l.status !== "complete" && !l.locked) ?? flat.find((l) => !l.locked);
+  if (open) return open;
+  return flat.some((l) => l.lock?.reason === "drip") ? null : (flat[0] ?? null);
 }
 
 /* ------------------------------------------------------------------ */

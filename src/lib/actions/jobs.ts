@@ -5,15 +5,19 @@ import { redirect } from "next/navigation";
 import type { ActionResult, JobApplication, JobOpening } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
-import { canManageJob, canPostJobs, parseJobType } from "@/lib/data/jobs";
+import { RESERVED_JOB_SLUGS, canManageJob, canPostJobs, parseJobType } from "@/lib/data/jobs";
+import { parseWorkMode } from "@/components/jobs/work-mode";
+import { isKnownCountry } from "@/components/commerce/countries";
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
-import { fd, fdBool, isValidUrl, uid, uniqueSlug } from "@/lib/utils";
+import { fd, fdBool, isValidEmail, isValidUrl, uid, uniqueSlug } from "@/lib/utils";
 
 /**
  * Job board mutations (Frappe: Job Opportunity + LMS Job Application).
- * Staff post jobs; posters and moderators manage them; any signed-in member
- * can apply once per job.
+ * Any signed-in member can post jobs while the board is on. Permission to
+ * edit, close, delete or contact applicants is ownership-based: the poster
+ * (job.postedById === user.id) or a moderator (canManageJob), never a role
+ * check alone. Any signed-in member can apply once per job.
  */
 
 type Errors = Record<string, string>;
@@ -25,8 +29,13 @@ function fail<T = undefined>(errors: Errors): ActionResult<T> {
 function revalidateJobs(slug?: string, id?: string) {
   revalidatePath("/jobs");
   revalidatePath("/jobs/applications");
+  revalidatePath("/jobs/mine");
   revalidatePath("/admin/jobs");
-  if (slug) revalidatePath(`/jobs/${slug}`);
+  if (slug) {
+    revalidatePath(`/jobs/${slug}`);
+    revalidatePath(`/jobs/${slug}/edit`);
+    revalidatePath(`/jobs/${slug}/applications`);
+  }
   if (id) {
     revalidatePath(`/admin/jobs/${id}`);
     revalidatePath(`/admin/jobs/${id}/applications`);
@@ -48,7 +57,7 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
   const id = fd(formData, "id");
   const existing = id ? db.jobs.find((j) => j.id === id) : null;
   if (id && !existing) return { ok: false, error: "This job opening no longer exists." };
-  if (existing ? !canManageJob(user, existing) : !canPostJobs(user)) {
+  if (existing ? !canManageJob(user, existing) : !canPostJobs(user, db.settings.features.jobs)) {
     return { ok: false, error: "You are not permitted to manage this job opening." };
   }
 
@@ -56,7 +65,10 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
   const company = fd(formData, "company");
   const location = fd(formData, "location");
   const type = parseJobType(fd(formData, "type"));
-  const remote = fdBool(formData, "remote");
+  // Work mode (On-site / Hybrid / Remote). Older forms only sent the "remote" switch.
+  const workMode = parseWorkMode(fd(formData, "workMode")) ?? (fdBool(formData, "remote") ? "remote" : "onsite");
+  const remote = workMode === "remote";
+  const country = fd(formData, "country");
   const description = fd(formData, "description");
   const salaryRange = fd(formData, "salaryRange");
   const companyWebsite = normalizeWebsite(fd(formData, "companyWebsite"));
@@ -71,6 +83,8 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
   else if (company.length > 100) errors.company = "Keep the company name under 100 characters.";
   if (!location) errors.location = "City is required";
   else if (location.length > 120) errors.location = "Keep the location under 120 characters.";
+  if (country && !isKnownCountry(country)) errors.country = "Pick a country from the list.";
+  if (formData.has("workMode") && !parseWorkMode(fd(formData, "workMode"))) errors.workMode = "Work Mode is required";
   if (!description) errors.description = "Description is required";
   else if (description.length < 30) errors.description = "Describe the role in at least 30 characters.";
   else if (description.length > 20000) errors.description = "The description is too long (20,000 characters max).";
@@ -96,6 +110,8 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
       row.location = location;
       row.type = type;
       row.remote = remote;
+      row.workMode = workMode;
+      row.country = country || undefined;
       row.description = description;
       row.salaryRange = salaryRange || undefined;
       row.companyWebsite = companyWebsite || undefined;
@@ -104,7 +120,7 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
       row.updatedAt = now;
     });
   } else {
-    slug = uniqueSlug(`${title}-${company}`, db.jobs.map((j) => j.slug));
+    slug = uniqueSlug(`${title}-${company}`, [...db.jobs.map((j) => j.slug), ...RESERVED_JOB_SLUGS]);
     jobId = uid("job");
     const job: JobOpening = {
       id: jobId,
@@ -114,7 +130,9 @@ export async function saveJobAction(_prev: ActionResult | null, formData: FormDa
       companyLogoUrl: companyLogoUrl || undefined,
       companyWebsite: companyWebsite || undefined,
       location,
+      country: country || undefined,
       remote,
+      workMode,
       type,
       description,
       salaryRange: salaryRange || undefined,
@@ -173,6 +191,7 @@ export async function applyToJobAction(_prev: ActionResult | null, formData: For
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Please log in to apply." };
   const db = await getDb();
+  if (!db.settings.features.jobs) return { ok: false, error: "The job board is disabled on this platform." };
   const jobId = fd(formData, "jobId");
   const job = db.jobs.find((j) => j.id === jobId);
   if (!job) return { ok: false, error: "This job opening no longer exists." };
@@ -205,7 +224,7 @@ export async function applyToJobAction(_prev: ActionResult | null, formData: For
       type: "system",
       subject: `${user.name} applied for ${job.title}`,
       message: `New application at ${job.company}.`,
-      link: `/admin/jobs/${job.id}/applications`,
+      link: `/jobs/${job.slug}/applications`,
       fromUserId: user.id,
     });
   }
@@ -226,4 +245,43 @@ export async function withdrawApplicationAction(id: string): Promise<ActionResul
   });
   revalidateJobs(job?.slug, job?.id);
   return { ok: true, data: undefined, message: "Application withdrawn" };
+}
+
+/**
+ * Message an applicant (Frappe: JobApplications > Send Email). The message is
+ * delivered as an in-app notification linked to the job; the optional reply-to
+ * address is included so the applicant can answer by email.
+ */
+export async function messageApplicantAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "You must be logged in." };
+  const db = await getDb();
+  const application = db.jobApplications.find((a) => a.id === fd(formData, "applicationId"));
+  if (!application) return { ok: false, error: "This application no longer exists." };
+  const job = db.jobs.find((j) => j.id === application.jobId);
+  if (!job) return { ok: false, error: "This job opening no longer exists." };
+  if (!canManageJob(user, job)) return { ok: false, error: "You are not permitted to contact applicants for this job." };
+  const applicant = db.users.find((u) => u.id === application.userId);
+  if (!applicant) return { ok: false, error: "The applicant's account no longer exists." };
+
+  const subject = fd(formData, "subject");
+  const replyTo = fd(formData, "replyTo").toLowerCase();
+  const message = fd(formData, "message");
+  const errors: Errors = {};
+  if (!subject) errors.subject = "Subject is required";
+  else if (subject.length > 150) errors.subject = "Keep the subject under 150 characters.";
+  if (replyTo && !isValidEmail(replyTo)) errors.replyTo = "Please enter a valid reply-to email address.";
+  if (!message) errors.message = "Message is required";
+  else if (message.length > 5000) errors.message = "Keep the message under 5,000 characters.";
+  if (Object.keys(errors).length) return fail(errors);
+
+  const body = replyTo ? `${message}\n\nReply to: ${replyTo}` : message;
+  await notify(applicant.id, {
+    type: "system",
+    subject,
+    message: body,
+    link: `/jobs/${job.slug}`,
+    fromUserId: user.id,
+  });
+  return { ok: true, data: undefined, message: "Message sent successfully" };
 }

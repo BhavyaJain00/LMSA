@@ -6,11 +6,11 @@ import type { ActionResult, Assignment, AssignmentStatus, AssignmentSubmission, 
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { getLessonHref } from "@/lib/data/courses";
-import { canDeleteSubmissions, canManageAssessments, toSubmissionView } from "@/lib/data/assessments";
+import { canDeleteSubmissions, canManageAssessments, completeLessonFromAssessment, toSubmissionView } from "@/lib/data/assessments";
 import { notify, notifyMany } from "@/lib/services/notifications";
 import { evaluateBadges } from "@/lib/services/badges";
 import { logActivity } from "@/lib/services/activity";
-import { completeLesson } from "@/lib/services/progress";
+import { awardPoints, setPointsAward } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, formatDateTime, isValidUrl, uid } from "@/lib/utils";
 import {
@@ -175,10 +175,16 @@ function validateAttachment(type: AssignmentType, url: string): string | null {
   return null;
 }
 
+export interface SubmitAssignmentResult {
+  submission: AssignmentSubmissionView;
+  /** The lesson embedding this assignment is complete after this submission. */
+  lessonCompleted: boolean;
+}
+
 export async function submitAssignmentAction(
-  _prev: ActionResult<{ submission: AssignmentSubmissionView }> | null,
+  _prev: ActionResult<SubmitAssignmentResult> | null,
   formData: FormData,
-): Promise<ActionResult<{ submission: AssignmentSubmissionView }>> {
+): Promise<ActionResult<SubmitAssignmentResult>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Please log in to submit this assignment." };
 
@@ -280,14 +286,22 @@ export async function submitAssignmentAction(
 
   if (isNew) {
     await logActivity(user.id, "assignment_submit", assignment.id);
+    await awardPoints(user.id, "assignment_submit", { refId: assignment.id, courseId: saved.courseId });
     await notifyGraders(user, assignment, saved);
-    if (lesson) await completeLesson(user, lesson, 9999);
+  }
+
+  // Recording a submission from a lesson completes that lesson (when its other requirements are met).
+  const completionLesson = lesson ?? (saved.lessonId ? db.lessons.find((l) => l.id === saved.lessonId) : undefined);
+  let lessonCompleted = false;
+  if (completionLesson) {
+    const outcome = await completeLessonFromAssessment(user, completionLesson);
+    lessonCompleted = outcome.completed;
   }
 
   await revalidateAssignment(assignment.id, saved.lessonId);
   return {
     ok: true,
-    data: { submission: await toSubmissionView(saved) },
+    data: { submission: await toSubmissionView(saved), lessonCompleted },
     message: isNew ? "Assignment submitted successfully" : "Changes saved successfully",
   };
 }
@@ -363,6 +377,7 @@ export async function gradeAssignmentAction(_prev: ActionResult<{ status: Assign
     });
   }
   if (statusChanged && status === "pass") await evaluateBadges(submission.userId, "assignment_passed");
+  if (statusChanged) await setPointsAward(submission.userId, "assignment_pass", status === "pass", { refId: submission.assignmentId, courseId: submission.courseId });
 
   await revalidateAssignment(submission.assignmentId, submission.lessonId);
   revalidatePath(`/admin/assignments/submissions/${submission.id}`);

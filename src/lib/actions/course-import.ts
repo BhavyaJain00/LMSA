@@ -1,9 +1,6 @@
-"use server";
-
+import "server-only";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import type {
-  ActionResult,
   Assignment,
   AssignmentType,
   CardGradient,
@@ -18,13 +15,21 @@ import type {
 } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
-import { canCreateCourses } from "@/lib/data/admin-courses";
+import { RESERVED_COURSE_SLUGS, canCreateCourses, canEvaluateCertificates } from "@/lib/data/admin-courses";
 import { computeLessonDuration, isBlockedVideoHost, sanitizeBlocks } from "@/components/admin/courses/blocks";
 import { cardGradients, currencies } from "@/lib/config";
-import { setFlash } from "@/lib/flash";
 import { isValidUrl, slugify, uid, unique, uniqueSlug } from "@/lib/utils";
 
-const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+/**
+ * Largest accepted export file. The upload goes through a route handler (not a
+ * Server Action, which is capped at 1 MB), and must stay below the 10 MB body
+ * buffer that src/proxy.ts applies to /admin routes.
+ */
+export const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
+export type ImportCourseResult =
+  | { ok: true; courseId: string; redirectTo: string; message: string; tone: "success" | "warning" }
+  | { ok: false; error: string; status: number };
 
 type Raw = Record<string, unknown>;
 
@@ -47,43 +52,43 @@ const QUESTION_TYPES: QuestionType[] = ["choices", "user_input", "open_ended"];
 const ASSIGNMENT_TYPES: AssignmentType[] = ["document", "pdf", "url", "image", "text"];
 const LANGUAGES: ExerciseLanguage[] = ["javascript", "typescript", "python", "go", "rust"];
 
+const fail = (error: string, status = 400): ImportCourseResult => ({ ok: false, error, status });
+
 /**
  * Import a course from a JSON export (see /admin/courses/[id]/export).
  * All ids are regenerated, references are remapped, and the new course is
  * created unpublished and "in progress" so it goes through review again.
+ * Called by the POST /admin/courses/import/upload route handler.
  */
-export async function importCourseAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+export async function importCourseFile(file: FormDataEntryValue | null): Promise<ImportCourseResult> {
   const user = await getCurrentUser();
-  if (!user) return { ok: false, error: "Your session has expired. Please log in again." };
-  if (!canCreateCourses(user)) return { ok: false, error: "You are not permitted to create a course." };
+  if (!user) return fail("Your session has expired. Please log in again.", 401);
+  if (!canCreateCourses(user)) return fail("You are not permitted to create a course.", 403);
 
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Please choose a course JSON file.", fieldErrors: { file: "Please choose a course JSON file." } };
-  if (file.size > MAX_IMPORT_BYTES) return { ok: false, error: "This file is too large (max 5 MB).", fieldErrors: { file: "This file is too large (max 5 MB)." } };
-  if (!/\.json$/i.test(file.name) && file.type !== "application/json") {
-    return { ok: false, error: "Please upload a valid JSON export.", fieldErrors: { file: "Please upload a valid JSON export." } };
-  }
+  if (!(file instanceof File) || file.size === 0) return fail("Please choose a course JSON file.");
+  if (file.size > MAX_IMPORT_BYTES) return fail("This file is too large (max 5 MB).", 413);
+  if (!/\.json$/i.test(file.name) && file.type !== "application/json") return fail("Please upload a valid JSON export.");
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(await file.text());
   } catch {
-    return { ok: false, error: "Error importing course: the file is not valid JSON." };
+    return fail("Error importing course: the file is not valid JSON.");
   }
-  if (!isObj(parsed) || parsed.format !== "learnloop-course") return { ok: false, error: "Error importing course: this is not a course export file." };
-  if (parsed.version !== 1) return { ok: false, error: `Error importing course: unsupported export version ${String(parsed.version)}.` };
-  if (!isObj(parsed.course)) return { ok: false, error: "Error importing course: the course details are missing." };
+  if (!isObj(parsed) || parsed.format !== "learnloop-course") return fail("Error importing course: this is not a course export file.");
+  if (parsed.version !== 1) return fail(`Error importing course: unsupported export version ${String(parsed.version)}.`);
+  if (!isObj(parsed.course)) return fail("Error importing course: the course details are missing.");
   for (const key of ["chapters", "lessons", "quizzes", "questions", "assignments", "exercises"] as const) {
-    if (parsed[key] !== undefined && !Array.isArray(parsed[key])) return { ok: false, error: `Error importing course: "${key}" must be a list.` };
+    if (parsed[key] !== undefined && !Array.isArray(parsed[key])) return fail(`Error importing course: "${key}" must be a list.`);
   }
   const rawCourse = parsed.course;
   const title = text(rawCourse.title, 140).trim().replace(/\s+/g, " ");
-  if (!title) return { ok: false, error: "Error importing course: the course has no title." };
+  if (!title) return fail("Error importing course: the course has no title.");
 
   const list = (key: string): Raw[] => (Array.isArray(parsed[key]) ? (parsed[key] as unknown[]).filter(isObj) : []);
   const rawChapters = list("chapters");
   const rawLessons = list("lessons");
-  if (rawChapters.length > 200 || rawLessons.length > 2000) return { ok: false, error: "Error importing course: the outline is too large." };
+  if (rawChapters.length > 200 || rawLessons.length > 2000) return fail("Error importing course: the outline is too large.");
 
   const db = await getDb();
   const now = new Date().toISOString();
@@ -231,6 +236,7 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
   const lessons: Lesson[] = [];
   const takenLessonSlugs: string[] = [];
   let skippedBlocks = 0;
+  let unreadableLessons = 0;
   let orphanLessons = 0;
   const byChapter = new Map<string, Raw[]>();
   for (const l of rawLessons) {
@@ -248,6 +254,8 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
       lessonMap.set(text(l.id, 100), id);
       const lessonTitle = text(l.title, 160).trim() || "Untitled lesson";
       const { blocks, errors } = sanitizeBlocks(l.blocks ?? [], validation);
+      // "_" means the whole block list was rejected (not a list, or too many blocks): the lesson is imported empty.
+      if (errors._) unreadableLessons++;
       const kept = blocks.filter((b) => !errors[b.id]);
       skippedBlocks += blocks.length - kept.length;
       const rawSlug = text(l.slug, 80).toLowerCase();
@@ -274,18 +282,25 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
     if (lessonId) quiz.lessonId = lessonId;
   }
   if (skippedBlocks) warnings.push(`${skippedBlocks} invalid ${skippedBlocks === 1 ? "block was" : "blocks were"} skipped`);
+  if (unreadableLessons) {
+    warnings.push(`${unreadableLessons} ${unreadableLessons === 1 ? "lesson had" : "lessons had"} unreadable content and ${unreadableLessons === 1 ? "was" : "were"} imported empty`);
+  }
   if (orphanLessons) warnings.push(`${orphanLessons} ${orphanLessons === 1 ? "lesson without a chapter was" : "lessons without a chapter were"} skipped`);
 
   /* -------------------------------- Course ---------------------------------- */
   const instructorPool = new Set(db.users.filter((u) => u.enabled && u.roles.some((r) => r === "course_creator" || r === "moderator" || r === "admin")).map((u) => u.id));
   let instructorIds = strList(rawCourse.instructorIds).filter((id) => instructorPool.has(id));
   if (!instructorIds.length) instructorIds = [user.id];
-  const evaluatorId = optText(rawCourse.evaluatorId, 100);
+  const rawEvaluatorId = optText(rawCourse.evaluatorId, 100);
+  const evaluatorId = rawEvaluatorId && canEvaluateCertificates(db.users.find((u) => u.id === rawEvaluatorId && u.enabled)) ? rawEvaluatorId : undefined;
+  // A paid certificate needs an evaluator (same rule as the Settings tab).
+  const paidCertificate = bool(rawCourse.paidCertificate) && !bool(rawCourse.paidCourse) && !!evaluatorId;
+  if (bool(rawCourse.paidCertificate) && !bool(rawCourse.paidCourse) && !evaluatorId) warnings.push("paid certificate was turned off because the evaluator is not available here");
   const categoryId = optText(rawCourse.categoryId, 100);
   const gradient = text(rawCourse.cardGradient, 20);
   const currency = text(rawCourse.currency, 5).toUpperCase();
   const videoUrl = optUrl(rawCourse.videoUrl);
-  const takenCourseSlugs = [...db.courses.map((c) => c.slug), "new", "import"];
+  const takenCourseSlugs = [...db.courses.map((c) => c.slug), ...RESERVED_COURSE_SLUGS];
   const slugBase = text(rawCourse.slug, 80) || slugify(title);
 
   const course: Course = {
@@ -298,15 +313,15 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
     videoUrl: videoUrl && !isBlockedVideoHost(videoUrl) ? videoUrl : undefined,
     cardGradient: (cardGradients as readonly string[]).includes(gradient) ? (gradient as CardGradient) : "blue",
     instructorIds,
-    evaluatorId: evaluatorId && db.users.some((u) => u.id === evaluatorId) ? evaluatorId : undefined,
+    evaluatorId,
     categoryId: categoryId && db.categories.some((c) => c.id === categoryId) ? categoryId : undefined,
     tags: strList(rawCourse.tags, 12, 32),
     price: Math.round(nonNeg(rawCourse.price)),
     currency: (currencies as readonly string[]).includes(currency) ? currency : db.settings.commerce.defaultCurrency || "USD",
     paidCourse: bool(rawCourse.paidCourse),
-    paidCertificate: bool(rawCourse.paidCertificate) && !bool(rawCourse.paidCourse),
+    paidCertificate,
     certificatePrice: Math.round(nonNeg(rawCourse.certificatePrice)),
-    enableCertification: bool(rawCourse.enableCertification) && !bool(rawCourse.paidCertificate),
+    enableCertification: bool(rawCourse.enableCertification) && !paidCertificate,
     published: false,
     upcoming: bool(rawCourse.upcoming),
     featured: false,
@@ -316,6 +331,8 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
     relatedCourseIds: strList(rawCourse.relatedCourseIds).filter((id) => id !== oldCourseId && db.courses.some((c) => c.id === id)),
     outcomes: strList(rawCourse.outcomes, 20),
     requirements: strList(rawCourse.requirements, 20),
+    metaDescription: optText(rawCourse.metaDescription, 160)?.replace(/\s+/g, " "),
+    metaKeywords: optText(rawCourse.metaKeywords, 500),
     createdById: user.id,
     createdAt: now,
     updatedAt: now,
@@ -334,6 +351,11 @@ export async function importCourseAction(_prev: ActionResult | null, formData: F
   revalidatePath("/admin/quizzes");
   revalidatePath("/admin/assignments");
   revalidatePath("/admin/exercises");
-  await setFlash(warnings.length ? `Course imported successfully! (${warnings.join("; ")})` : "Course imported successfully!", warnings.length ? "warning" : "success");
-  redirect(`/admin/courses/${course.id}?tab=outline`);
+  return {
+    ok: true,
+    courseId: course.id,
+    redirectTo: `/admin/courses/${course.id}?tab=outline`,
+    message: warnings.length ? `Course imported successfully! (${warnings.join("; ")})` : "Course imported successfully!",
+    tone: warnings.length ? "warning" : "success",
+  };
 }

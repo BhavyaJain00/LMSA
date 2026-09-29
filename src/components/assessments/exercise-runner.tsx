@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
 import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
@@ -63,6 +64,7 @@ export function ExerciseRunner({
   revealHidden = false,
 }: ExerciseRunnerProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const runnable = isRunnableLanguage(exercise.language);
   const [code, setCode] = useState(initialCode);
   const [results, setResults] = useState<TestResultView[] | null>(initialSubmission && runnable ? initialSubmission.results : null);
@@ -107,7 +109,9 @@ export function ExerciseRunner({
       const res = await submitExerciseAction({
         exerciseId: exercise.id,
         code,
-        results: (local ?? []).map((r) => ({ testCaseId: r.testCaseId, passed: r.passed, actualOutput: r.actualOutput ?? "", error: r.error })),
+        results: (local ?? [])
+          .filter((r) => !r.pending)
+          .map((r) => ({ testCaseId: r.testCaseId, passed: r.passed, actualOutput: r.actualOutput ?? "", error: r.error })),
         lessonId,
         courseId,
       });
@@ -132,6 +136,8 @@ export function ExerciseRunner({
       } else if (!res.data.runnable) {
         setNotice({ tone: "info", text: NOT_RUNNABLE_NOTICE });
       }
+      // A passing submission can complete the lesson: refresh so the lesson status and progress update at once.
+      if (saved.status === "passed" || res.data.lessonCompleted) router.refresh();
     });
   };
 

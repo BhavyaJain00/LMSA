@@ -13,7 +13,8 @@ import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { formatShortDate } from "./time";
 
-export function CertificatesTable({ rows }: { rows: CertificateRow[] }) {
+/** `baseUrl` is the public origin (APP_URL when configured) used for copied verification links. */
+export function CertificatesTable({ rows, baseUrl }: { rows: CertificateRow[]; baseUrl: string }) {
   const { toast } = useToast();
   const [revoking, setRevoking] = useState<CertificateRow | null>(null);
   const [pending, startTransition] = useTransition();
@@ -25,7 +26,7 @@ export function CertificatesTable({ rows }: { rows: CertificateRow[] }) {
     });
 
   const copyLink = async (row: CertificateRow) => {
-    const url = `${window.location.origin}/certificates/${row.code}`;
+    const url = `${baseUrl || window.location.origin}/certificates/${encodeURIComponent(row.code)}`;
     try {
       await navigator.clipboard.writeText(url);
       toast({ title: "Link copied", description: url, tone: "success" });

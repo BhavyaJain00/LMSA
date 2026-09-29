@@ -22,7 +22,8 @@ const MAX_EXPLANATION = 2000;
 
 function revalidateBank() {
   revalidatePath("/admin/questions");
-  revalidatePath("/admin/questions/[id]", "page");
+  revalidatePath("/(app)/admin/questions/[id]", "page");
+  revalidatePath("/(app)/admin/quizzes/[id]", "page");
 }
 
 /** Normalise the editor payload into the stored shape (drops blank rows, keeps option ids stable). */

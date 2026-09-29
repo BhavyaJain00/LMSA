@@ -11,7 +11,8 @@ import type { ExerciseLanguage } from "@/lib/types";
 
 /**
  * Read-only view of a submitted solution with its stored test results and
- * an optional "Re-run in browser" check (useful for reviewers).
+ * an optional "Re-run in browser" check (useful for reviewers). The re-run
+ * always uses the isolated runner (sandboxed iframe with an opaque origin).
  */
 export function SubmissionReplay({
   code,
@@ -37,7 +38,9 @@ export function SubmissionReplay({
     setRunning(true);
     setResults([]);
     try {
-      const out = await runTestsInBrowser(code, tests, { onResult: (r) => setResults((prev) => [...prev, r]) });
+      // Submitted code may not be the viewer's own: run it in an opaque-origin sandbox so it can never
+      // make requests with the viewer's session.
+      const out = await runTestsInBrowser(code, tests, { isolated: true, onResult: (r) => setResults((prev) => [...prev, r]) });
       setResults(out);
       setRerun(true);
     } finally {

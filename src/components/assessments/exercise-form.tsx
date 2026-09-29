@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { CodeEditor } from "./code-editor";
 import { MarkdownEditor } from "./markdown-editor";
 import { NotSavedBadge } from "./status-badges";
+import { submitWithoutReset } from "./form-submit";
 import { DEFAULT_STARTER_CODE, LANGUAGE_OPTIONS, MAX_TEST_CASES, NOT_RUNNABLE_NOTICE, TYPESCRIPT_NOTICE, isRunnableLanguage } from "./shared";
 
 export interface ExerciseFormValues {
@@ -107,7 +108,7 @@ export function ExerciseForm({
   const serialized = JSON.stringify(rows.map((r) => ({ id: r.id, input: r.input, expectedOutput: r.expectedOutput, hidden: r.hidden })));
 
   return (
-    <form action={formAction} className="space-y-6" noValidate>
+    <form onSubmit={submitWithoutReset(formAction)} className="space-y-6" noValidate>
       {exercise && <input type="hidden" name="id" value={exercise.id} />}
       <input type="hidden" name="testCases" value={serialized} />
       <input type="hidden" name="starterCode" value={starterCode} />

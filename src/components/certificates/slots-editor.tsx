@@ -2,14 +2,14 @@
 
 import { useState, useTransition } from "react";
 import type { EvaluatorSlot } from "@/lib/types";
-import { addEvaluatorSlotAction, deleteEvaluatorSlotAction, updateEvaluatorSlotAction } from "@/lib/actions/evaluations";
+import { addEvaluatorSlotAction, deleteEvaluatorSlotAction, setEvaluatorUnavailabilityAction, updateEvaluatorSlotAction } from "@/lib/actions/evaluations";
 import { Button } from "@/components/ui/button";
-import { Input, Select } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { WEEKDAYS, WEEKDAY_ORDER, clockToMinutes, formatClock12 } from "./time";
+import { WEEKDAYS, WEEKDAY_ORDER, clockToMinutes, formatClock12, formatLongDate, isValidDateKey, unavailabilityOf } from "./time";
 
 const DAY_OPTIONS = WEEKDAY_ORDER.map((d) => ({ value: String(d), label: WEEKDAYS[d] }));
 
@@ -97,6 +97,145 @@ function SlotRow({ slot, editable, onDelete }: { slot: EvaluatorSlot; editable: 
   );
 }
 
+interface Range {
+  from: string;
+  to: string;
+}
+
+/**
+ * Commit a date input only once it holds a plausible full date: typing the
+ * year digit by digit briefly produces values like "0002-10-01".
+ */
+function isCommittableDate(value: string): boolean {
+  return value === "" || (isValidDateKey(value) && Number(value.slice(0, 4)) >= 2000);
+}
+
+/** "I am unavailable" From / To dates (Frappe: unavailable_from / unavailable_to). Each date saves on change. */
+function UnavailabilitySection({ evaluatorId, initial, editable, hasSlots }: { evaluatorId: string; initial: Range; editable: boolean; hasSlots: boolean }) {
+  const { toast } = useToast();
+  const [saved, setSaved] = useState<Range>(initial);
+  const [draft, setDraft] = useState<Range>(initial);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const disabled = !editable || !hasSlots || pending;
+
+  const commit = (next: Range) => {
+    if (next.from === saved.from && next.to === saved.to) return;
+    if (!isCommittableDate(next.from) || !isCommittableDate(next.to)) return;
+    if (next.from && next.to && next.from > next.to) {
+      setError("Unavailable From Date cannot be greater than Unavailable To Date");
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const res = await setEvaluatorUnavailabilityAction(evaluatorId, next);
+      if (res.ok) {
+        setSaved(next);
+        setDraft(next);
+        toast({ title: res.message ?? "Unavailability updated successfully", tone: "success" });
+      } else {
+        setDraft(saved);
+        setError(res.error);
+        toast({ title: res.error, tone: "error" });
+      }
+    });
+  };
+
+  const commitOnBlur = () => {
+    if (!isCommittableDate(draft.from) || !isCommittableDate(draft.to)) setDraft(saved);
+    else commit(draft);
+  };
+
+  const active = saved.from && saved.to && saved.from <= saved.to ? saved : null;
+  const partial = !active && (saved.from || saved.to);
+
+  return (
+    <section className="rounded-card border border-border bg-surface-1 p-4 shadow-card sm:p-5" aria-labelledby="unavailability-heading">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 id="unavailability-heading" className="font-semibold text-ink">
+            I am unavailable
+          </h3>
+          <p className="text-sm text-ink-muted">Block a date range, for example a holiday. Learners can&apos;t book evaluations on these days.</p>
+        </div>
+        {editable && (saved.from || saved.to) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={pending}
+            disabled={pending}
+            leftIcon={<Icon.X className="size-4" />}
+            onClick={() => {
+              setDraft({ from: "", to: "" });
+              commit({ from: "", to: "" });
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+
+      <div className={cn("mt-4 grid gap-3 sm:grid-cols-2", pending && "opacity-70")}>
+        <Field label="From" htmlFor="unavailable-from">
+          <Input
+            id="unavailable-from"
+            type="date"
+            value={draft.from}
+            max={draft.to || undefined}
+            disabled={disabled}
+            invalid={!!error}
+            onChange={(e) => {
+              const next = { ...draft, from: e.target.value };
+              setDraft(next);
+              commit(next);
+            }}
+            onBlur={commitOnBlur}
+          />
+        </Field>
+        <Field label="To" htmlFor="unavailable-to">
+          <Input
+            id="unavailable-to"
+            type="date"
+            value={draft.to}
+            min={draft.from || undefined}
+            disabled={disabled}
+            invalid={!!error}
+            onChange={(e) => {
+              const next = { ...draft, to: e.target.value };
+              setDraft(next);
+              commit(next);
+            }}
+            onBlur={commitOnBlur}
+          />
+        </Field>
+      </div>
+
+      <div aria-live="polite" className="mt-3 text-sm">
+        {error ? (
+          <p className="flex items-start gap-2 text-danger">
+            <Icon.AlertCircle className="mt-0.5 size-4 shrink-0" />
+            {error}
+          </p>
+        ) : !hasSlots ? (
+          <p className="text-ink-muted">{editable ? "Add a weekly slot first, then you can block dates." : "No availability set up yet."}</p>
+        ) : active ? (
+          <p className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-warning">
+            <Icon.Calendar className="mt-0.5 size-4 shrink-0" />
+            <span>
+              Unavailable from <strong className="font-semibold">{formatLongDate(active.from)}</strong> to <strong className="font-semibold">{formatLongDate(active.to)}</strong>. No
+              evaluations can be booked on these dates.
+            </span>
+          </p>
+        ) : partial ? (
+          <p className="text-ink-muted">Set both dates to block bookings.</p>
+        ) : (
+          <p className="text-ink-muted">No dates blocked. Learners can book any of your weekly slots.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /** Weekly availability editor: one row per slot, edits save automatically. */
 export function SlotsEditor({
   evaluatorId,
@@ -136,6 +275,7 @@ export function SlotsEditor({
     });
   };
 
+  const initialRange = unavailabilityOf(slots);
   const totalMinutes = slots.reduce((sum, s) => sum + Math.max(0, clockToMinutes(s.endTime) - clockToMinutes(s.startTime)), 0);
 
   return (
@@ -237,6 +377,14 @@ export function SlotsEditor({
           </div>
         )}
       </div>
+
+      <UnavailabilitySection
+        key={`${initialRange.from}|${initialRange.to}|${slots.length > 0}`}
+        evaluatorId={evaluatorId}
+        initial={initialRange}
+        editable={editable}
+        hasSlots={slots.length > 0}
+      />
 
       <ConfirmDialog
         open={!!deleting}

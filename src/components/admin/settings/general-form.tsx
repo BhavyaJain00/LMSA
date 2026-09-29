@@ -74,7 +74,7 @@ export function GeneralSettingsForm({ initial }: { initial: GeneralSettingsValue
         </SettingsRow>
       </SettingsSection>
 
-      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} />
+      <SaveBar dirty={dirty} pending={pending} saved={state?.ok} failed={state?.ok === false} />
     </form>
   );
 }

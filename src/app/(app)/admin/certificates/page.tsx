@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
-import { canIssueCertificates, getCertificateFormOptions, listCertificates, type CertificateStatusFilter } from "@/lib/data/certificates";
+import { canIssueCertificates, getCertificateFormOptions, getPublicBaseUrl, listCertificates, type CertificateStatusFilter } from "@/lib/data/certificates";
 import { PageHeader, StatCard } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/skeleton";
@@ -28,11 +28,12 @@ export default async function AdminCertificatesPage(props: PageProps<"/admin/cer
   const status = rawStatus && STATUSES.includes(rawStatus) ? rawStatus : "";
   const { size, pages, limit } = parsePaging(sp.size, sp.pages);
 
-  const [rows, all, options, settings] = await Promise.all([
+  const [rows, all, options, settings, baseUrl] = await Promise.all([
     listCertificates({ search, courseId, batchId, status }),
     listCertificates(),
     getCertificateFormOptions(),
     getSettings(),
+    getPublicBaseUrl(),
   ]);
   const shown = rows.slice(0, limit);
   const filtered = !!(search || courseId || batchId || status);
@@ -103,7 +104,7 @@ export default async function AdminCertificatesPage(props: PageProps<"/admin/cer
         />
       ) : (
         <>
-          <CertificatesTable rows={shown} />
+          <CertificatesTable rows={shown} baseUrl={baseUrl} />
           <ListFooter shown={shown.length} total={rows.length} size={size} pages={pages} noun="certificates" />
         </>
       )}

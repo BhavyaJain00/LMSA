@@ -1,5 +1,5 @@
 import type { Course, User } from "@/lib/types";
-import { isModerator } from "@/lib/auth/session";
+import { isAdmin, isModerator } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { getCourseFormOptions } from "@/lib/data/admin-courses";
 import { CourseForm } from "@/components/admin/courses/course-form";
@@ -18,6 +18,8 @@ export async function DetailsTab({ course, user }: { course: Course; user: User 
       options={options}
       tagSuggestions={tagSuggestions}
       reviewResetNotice={reviewResetNotice}
+      canCreateMembers={isModerator(user)}
+      canGrantAdmin={isAdmin(user)}
       initial={{
         title: course.title,
         slug: course.slug,

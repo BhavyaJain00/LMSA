@@ -35,7 +35,8 @@ export function TestResultsList({
   emptyText?: string;
   className?: string;
 }) {
-  const total = tests?.length ?? results?.length ?? 0;
+  const pendingCount = results?.filter((r) => r.pending).length ?? 0;
+  const total = (tests?.length ?? results?.length ?? 0) - pendingCount;
   const passed = results?.filter((r) => r.passed).length ?? 0;
   const skipped = results?.every((r) => r.skipped) ?? false;
 
@@ -44,9 +45,18 @@ export function TestResultsList({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-ink">Test Cases</h3>
         {results && results.length > 0 && !skipped && (
-          <Badge tone={passed === total && total > 0 ? "success" : "danger"} dot>
-            {passed} of {total} passed
-          </Badge>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {total > 0 && (
+              <Badge tone={passed === total ? "success" : "danger"} dot>
+                {passed} of {total} passed
+              </Badge>
+            )}
+            {pendingCount > 0 && (
+              <Badge tone="neutral" dot>
+                {pendingCount} checked on submit
+              </Badge>
+            )}
+          </div>
         )}
       </div>
 
@@ -67,7 +77,7 @@ export function TestResultsList({
                   </p>
                   {(!t.hidden || revealHidden) && (
                     <div className="grid min-w-0 flex-1 gap-2 sm:max-w-md sm:grid-cols-2">
-                      {t.input !== "" && <OutputBox label="Input" value={t.input} />}
+                      {t.input !== undefined && t.input !== "" && <OutputBox label="Input" value={t.input} />}
                       <OutputBox label="Expected Output" value={t.expectedOutput} />
                     </div>
                   )}
@@ -84,7 +94,7 @@ export function TestResultsList({
               <li key={r.testCaseId} className="space-y-2.5 px-3 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="flex items-center gap-2 text-sm font-medium text-ink">
-                    {r.skipped ? (
+                    {r.skipped || r.pending ? (
                       <Icon.Clock className="size-4 text-ink-faint" />
                     ) : r.passed ? (
                       <Icon.CheckCircle className="size-4 text-success" />
@@ -93,7 +103,9 @@ export function TestResultsList({
                     )}
                     <span>
                       Test {r.index} -{" "}
-                      {r.skipped ? (
+                      {r.pending ? (
+                        <span className="text-ink-muted">Checked on submit</span>
+                      ) : r.skipped ? (
                         <span className="text-ink-muted">Not run</span>
                       ) : (
                         <span className={r.passed ? "text-success" : "text-danger"}>{r.passed ? "Passed" : "Failed"}</span>
@@ -107,7 +119,7 @@ export function TestResultsList({
                   </p>
                   {typeof r.durationMs === "number" && <span className="text-xs text-ink-faint">{r.durationMs} ms</span>}
                 </div>
-                {showDetails && !r.skipped && (
+                {showDetails && !r.skipped && !r.pending && (
                   <div className="grid gap-2 sm:grid-cols-3">
                     {r.input !== undefined && r.input !== "" && <OutputBox label="Input" value={r.input} />}
                     <OutputBox label="Your Output" value={r.actualOutput} tone={r.passed ? "success" : "danger"} />

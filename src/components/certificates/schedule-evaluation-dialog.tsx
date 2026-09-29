@@ -121,6 +121,16 @@ export function ScheduleEvaluationDialog({ open, onClose, context }: { open: boo
               <p className="text-xs text-ink-muted">All times in {context.timeZoneLabel}</p>
             </div>
 
+            {current?.unavailable && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-ink">
+                <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                <span>
+                  {current.evaluator.name} is unavailable from {formatLongDate(current.unavailable.from)} to {formatLongDate(current.unavailable.to)}. Those dates
+                  can&apos;t be booked.
+                </span>
+              </p>
+            )}
+
             {!current || current.days.length === 0 ? (
               <p className="text-sm text-danger">No slots available for the selected course.</p>
             ) : (

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireUser } from "@/lib/auth/session";
+import { isAdmin, isModerator, requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canCreateCourses, getCourseFormOptions } from "@/lib/data/admin-courses";
 import { PageHeader } from "@/components/ui/card";
@@ -49,6 +49,8 @@ export default async function NewCoursePage() {
         cancelHref="/admin/courses"
         options={options}
         tagSuggestions={tagSuggestions}
+        canCreateMembers={isModerator(user)}
+        canGrantAdmin={isAdmin(user)}
         initial={{
           title: "",
           slug: "",

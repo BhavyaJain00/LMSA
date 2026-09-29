@@ -1,7 +1,7 @@
 import "server-only";
 import type { User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
-import { isModerator } from "@/lib/auth/session";
+import { hasRole, isModerator } from "@/lib/auth/session";
 import { canManageCourse } from "@/lib/data/courses";
 import { batchStatus, type BatchStatus } from "@/lib/data/dashboard";
 import { classWindow } from "@/components/dashboard/time";
@@ -65,6 +65,11 @@ export interface CategoryStat {
 
 export interface StatisticsData {
   range: StatRange;
+  /**
+   * True for moderators and course creators. Only they receive the per-course
+   * and per-batch drill-down tables; everyone else gets the aggregates.
+   */
+  detailed: boolean;
   kpis: {
     courses: number;
     users: number;
@@ -106,13 +111,17 @@ function buildSeries(keys: string[], dates: (string | null)[]): SeriesPoint[] {
 }
 
 /**
- * Site-wide analytics for moderators and course creators. Charts use a daily
- * grain over the selected range; KPI totals are all-time (as in Frappe).
- * Course and batch tables only list what the viewer is allowed to see.
+ * Site-wide analytics. Anyone the sidebar offers Statistics to (members, and
+ * guests when guest access is on) gets the aggregate KPIs and charts, which
+ * only count published courses in the rankings. Moderators and course creators
+ * also get the course and batch drill-down tables, limited to what they may see.
+ * Charts use a daily grain over the selected range; KPI totals are all-time
+ * (as in Frappe).
  */
-export async function getStatistics(viewer: User, range: StatRange): Promise<StatisticsData> {
+export async function getStatistics(viewer: Pick<User, "id" | "roles"> | null, range: StatRange): Promise<StatisticsData> {
   const db = await getDb();
   const moderator = isModerator(viewer);
+  const detailed = hasRole(viewer, "moderator", "course_creator");
   const now = new Date();
   const keys: string[] = [];
   for (let i = range - 1; i >= 0; i--) keys.push(toDateKey(addDays(now, -i)));
@@ -130,7 +139,7 @@ export async function getStatistics(viewer: User, range: StatRange): Promise<Sta
   const certificateDates = publishedCertificates.map((c) => dayKey(c.issueDate));
 
   /* Course table */
-  const visibleCourses = db.courses.filter((c) => c.published || moderator || canManageCourse(viewer, c));
+  const visibleCourses = db.courses.filter((c) => c.published || (detailed && (moderator || canManageCourse(viewer, c))));
   const courses: CourseStatRow[] = visibleCourses
     .map((course) => {
       const enrollments = studentEnrollments.filter((e) => e.courseId === course.id);
@@ -176,8 +185,9 @@ export async function getStatistics(viewer: User, range: StatRange): Promise<Sta
 
   /* Batches */
   const nowMs = now.getTime();
-  const batches: BatchStatRow[] = db.batches
-    .filter((b) => b.published || moderator || b.instructorIds.includes(viewer.id) || b.createdById === viewer.id)
+  const viewerId = viewer?.id ?? "";
+  const visibleBatches = detailed ? db.batches.filter((b) => b.published || moderator || b.instructorIds.includes(viewerId) || b.createdById === viewerId) : [];
+  const batches: BatchStatRow[] = visibleBatches
     .map((batch) => {
       const classes = db.liveClasses.filter((lc) => lc.batchId === batch.id);
       const feedback = db.batchFeedback.filter((f) => f.batchId === batch.id);
@@ -207,6 +217,7 @@ export async function getStatistics(viewer: User, range: StatRange): Promise<Sta
 
   return {
     range,
+    detailed,
     kpis: {
       courses: db.courses.filter((c) => c.published && !c.upcoming).length,
       users: activeUsers.length,
@@ -234,6 +245,6 @@ export async function getStatistics(viewer: User, range: StatRange): Promise<Sta
     topCourses,
     categories,
     batches,
-    courses,
+    courses: detailed ? courses : [],
   };
 }

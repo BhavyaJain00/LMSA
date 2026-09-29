@@ -10,6 +10,8 @@ import { ProgressRing } from "@/components/ui/progress";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
 import { useLearnPrefs } from "./learn-provider";
+import { openCommandPalette } from "@/components/command-palette/events";
+import { useShortcutLabel } from "@/components/command-palette/open-button";
 
 export interface LearnTopBarProps {
   brand: { name: string; logoUrl?: string };
@@ -25,6 +27,7 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
   const { zen } = useLearnPrefs();
   const pathname = usePathname();
   const next = encodeURIComponent(pathname || course.href);
+  const shortcut = useShortcutLabel();
 
   return (
     <header
@@ -72,6 +75,17 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
       <ButtonLink href={course.href} variant="ghost" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />} aria-label="Back to course" className="shrink-0">
         <span className="hidden sm:inline">Back to course</span>
       </ButtonLink>
+
+      <button
+        type="button"
+        onClick={openCommandPalette}
+        className="shrink-0 rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink"
+        aria-label="Search"
+        title={`Search (${shortcut})`}
+        aria-keyshortcuts="Control+K Meta+K"
+      >
+        <Icon.Search className="size-5" />
+      </button>
 
       <ThemeToggle className="shrink-0" />
 

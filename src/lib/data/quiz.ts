@@ -1,4 +1,8 @@
 import "server-only";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { revalidatePath } from "next/cache";
 import type {
   ActionResult,
   Course,
@@ -19,7 +23,8 @@ import { completeLesson } from "@/lib/services/progress";
 import { evaluateBadges } from "@/lib/services/badges";
 import { logActivity } from "@/lib/services/activity";
 import { notify, notifyMany } from "@/lib/services/notifications";
-import { stripMarkdown, uid, unique } from "@/lib/utils";
+import { siteConfig } from "@/lib/config";
+import { seededShuffle, stripMarkdown, uid, unique } from "@/lib/utils";
 import {
   computeTotalMarks,
   formatScore,
@@ -38,6 +43,7 @@ import {
   type RunnerPayload,
   type RunnerQuestion,
   type RunnerQuiz,
+  type StartAttemptResult,
   type SubmissionListItem,
   type SubmissionStatus,
   type SubmitQuizInput,
@@ -56,14 +62,14 @@ import {
  */
 
 /**
- * Quizzes may carry an optional markdown `description` (instructions shown on
- * the intro card). It is stored on the record but not declared on `Quiz`.
+ * A stored quiz record. `Quiz.description` (optional markdown instructions
+ * shown on the intro card) is declared on the shared type; this alias is kept
+ * for existing imports.
  */
-export type QuizDoc = Quiz & { description?: string };
+export type QuizDoc = Quiz;
 
 export function quizDescription(quiz: Quiz): string {
-  const d = (quiz as QuizDoc).description;
-  return typeof d === "string" ? d : "";
+  return typeof quiz.description === "string" ? quiz.description : "";
 }
 
 function fail(error: string, fieldErrors?: Record<string, string>): { ok: false; error: string; fieldErrors?: Record<string, string> } {
@@ -115,16 +121,51 @@ function primaryCourse(db: Database, quiz: Quiz): Course | null {
   return id ? (db.courses.find((c) => c.id === id) ?? null) : null;
 }
 
-/** Moderators manage every quiz; creators manage quizzes they wrote or that live in their courses. */
+/**
+ * Write access to a quiz (settings, questions, deletion, every submission):
+ * moderators, the quiz author and the instructors of the course the quiz is
+ * explicitly attached to (`quiz.courseId`).
+ *
+ * Lessons that merely embed the quiz do NOT grant write access: any creator
+ * can drop an existing quiz into one of their lessons, so placements only
+ * give read/take access (see `teachesQuizPlacement`) and course-scoped
+ * submission access (see `canViewQuizSubmission`).
+ */
 export function canManageQuiz(user: Pick<User, "id" | "roles"> | null | undefined, quiz: Quiz, db: Database): boolean {
   if (!user) return false;
   if (isModerator(user)) return true;
   if (!isCreator(user)) return false;
   if (quiz.authorId === user.id) return true;
+  if (!quiz.courseId) return false;
+  const course = db.courses.find((c) => c.id === quiz.courseId);
+  return course ? canManageCourse(user, course) : false;
+}
+
+/** The user teaches a course whose lessons embed the quiz (read/take access only). */
+export function teachesQuizPlacement(user: Pick<User, "id" | "roles">, quiz: Quiz, db: Database): boolean {
+  if (!isCreator(user)) return false;
   return quizCourseIds(db, quiz).some((cid) => {
     const course = db.courses.find((c) => c.id === cid);
     return course ? canManageCourse(user, course) : false;
   });
+}
+
+/**
+ * Staff access to one submission: quiz managers see every submission; other
+ * instructors only see (and grade) submissions made in a course they manage.
+ */
+export function canViewQuizSubmission(
+  user: Pick<User, "id" | "roles"> | null | undefined,
+  submission: Pick<QuizSubmission, "quizId" | "courseId">,
+  quiz: Quiz | null | undefined,
+  db: Database,
+): boolean {
+  if (!user) return false;
+  if (isModerator(user)) return true;
+  if (quiz && canManageQuiz(user, quiz, db)) return true;
+  if (!isCreator(user) || !submission.courseId) return false;
+  const course = db.courses.find((c) => c.id === submission.courseId);
+  return course ? canManageCourse(user, course) : false;
 }
 
 /** Moderators edit any question; creators edit the questions they wrote. */
@@ -146,7 +187,8 @@ export type QuizAccess = { ok: true; manage: boolean } | { ok: false; reason: "g
 
 /**
  * Who may take a quiz (mirrors Frappe's can_access_quiz):
- *  - managers (moderators, the author, instructors of a course that uses it)
+ *  - managers (moderators, the author, instructors of the quiz's own course)
+ *  - instructors of a course whose lessons embed it (take only, no management)
  *  - learners enrolled in a course that embeds it, unless the lesson is locked
  *    by sequential completion
  *  - anyone logged in, for a free-preview lesson of a published course
@@ -156,6 +198,8 @@ export async function getQuizAccess(user: User | null, quiz: Quiz): Promise<Quiz
   if (!user) return { ok: false, reason: "guest", message: "Please log in to access the quiz." };
   const db = await getDb();
   if (canManageQuiz(user, quiz, db)) return { ok: true, manage: true };
+  // Instructors of a course that embeds the quiz may take it, but not edit it.
+  if (teachesQuizPlacement(user, quiz, db)) return { ok: true, manage: false };
 
   let locked = false;
   for (const placement of findQuizPlacements(db, quiz)) {
@@ -226,7 +270,12 @@ export function toRunnerQuestion(entry: QuizEntry): RunnerQuestion {
   };
 }
 
-export function buildRunnerQuiz(db: Database, quiz: Quiz, withholdQuestions: boolean): RunnerQuiz {
+/**
+ * The quiz as sent to a live runner. Questions are never included: the server
+ * picks and issues the questions of each attempt when it starts
+ * (`startQuizAttempt`), so the full pool never reaches the browser.
+ */
+export function buildRunnerQuiz(db: Database, quiz: Quiz): RunnerQuiz {
   const entries = resolveQuizQuestions(db, quiz);
   const course = primaryCourse(db, quiz);
   const description = quizDescription(quiz);
@@ -256,8 +305,9 @@ export function buildRunnerQuiz(db: Database, quiz: Quiz, withholdQuestions: boo
     scheduleEnd: quiz.scheduleEnd,
     enableProctoring: quiz.enableProctoring,
     maxViolations: quiz.maxViolations,
-    questions: withholdQuestions ? [] : entries.map(toRunnerQuestion),
-    questionsWithheld: withholdQuestions,
+    questions: [],
+    questionsWithheld: true,
+    poolSize: entries.length,
     hasOpenEnded: entries.some((e) => e.question.type === "open_ended"),
   };
 }
@@ -284,14 +334,12 @@ export function getAttemptSummaries(db: Database, userId: string, quizId: string
     .map(toAttemptSummary);
 }
 
-/** Everything the runner needs for one viewer. Questions are withheld while the schedule is closed. */
+/** Everything the runner needs for one viewer (questions are issued per attempt by `startQuizAttempt`). */
 export async function getRunnerPayload(quiz: Quiz, user: User, manage: boolean): Promise<RunnerPayload> {
   const db = await getDb();
   const serverTime = Date.now();
-  const schedule = getScheduleState(quiz, serverTime);
-  const withhold = !manage && schedule.state !== "open";
   return {
-    quiz: buildRunnerQuiz(db, quiz, withhold),
+    quiz: buildRunnerQuiz(db, quiz),
     attempts: getAttemptSummaries(db, user.id, quiz.id),
     canManage: manage,
     serverTime,
@@ -375,7 +423,10 @@ export function optionOutcomes(question: Question, selected: string[], withExpla
   });
 }
 
-/** Per-question breakdown of a submission. Correctness, marks and answer keys only when `reveal`. */
+/**
+ * Per-question breakdown of a submission. Correctness, marks and answer keys
+ * only when `reveal`; the marks awarded to a graded written answer are always included.
+ */
 export function buildBreakdown(results: QuizResultRow[], questionsById: Map<string, Question>, reveal: boolean): ResultDetail[] {
   return results.map((row, i) => {
     const q = questionsById.get(row.questionId);
@@ -394,6 +445,10 @@ export function buildBreakdown(results: QuizResultRow[], questionsById: Map<stri
       marksOutOf: row.marksOutOf,
       graded: row.graded,
     };
+    if (row.questionType === "open_ended" && row.graded && row.answer.length > 0) {
+      // Marks given by the grader reveal no answer key, so the learner always sees them.
+      detail.marks = row.marks;
+    }
     if (reveal) {
       detail.isCorrect = row.isCorrect;
       detail.marks = row.marks;
@@ -437,10 +492,168 @@ function formatWhen(iso: string): string {
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC";
 }
 
+/* ------------------------------------------------------------------ */
+/* Attempts (server-issued start, question selection)                   */
+/* ------------------------------------------------------------------ */
+
 /**
- * Grade and store a quiz attempt. Enforces access, schedule, attempts and the
- * proctoring rules; runs the lesson/badge/activity side effects on success.
- * With `input.preview` (managers only) the attempt is graded but not stored.
+ * A live attempt is described by a signed token issued when the learner
+ * presses Start. It fixes who is taking which quiz, the server-side start
+ * time, the attempt number and the exact questions (the random subset when
+ * the quiz limits questions), so none of these can be chosen by the client.
+ */
+interface AttemptClaims {
+  v: 1;
+  /** Quiz id */
+  q: string;
+  /** User id */
+  u: string;
+  /** Server start time (ms) */
+  s: number;
+  /** Attempt number (submissions before it + 1) */
+  n: number;
+  /** Question ids of this attempt, in order */
+  ids: string[];
+}
+
+const attemptGlobals = globalThis as unknown as {
+  __llQuizAttemptKey?: Promise<Buffer>;
+  __llQuizAttemptStarts?: Map<string, number>;
+};
+
+async function readKeyFile(file: string): Promise<string | null> {
+  try {
+    const value = (await fs.readFile(file, "utf8")).trim();
+    return value.length >= 32 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Signing key for attempt tokens: `QUIZ_ATTEMPT_SECRET` when set, otherwise a
+ * random key persisted next to the database file so tokens survive restarts.
+ */
+function attemptKey(): Promise<Buffer> {
+  attemptGlobals.__llQuizAttemptKey ??= (async () => {
+    const fromEnv = process.env.QUIZ_ATTEMPT_SECRET?.trim();
+    if (fromEnv) return Buffer.from(fromEnv, "utf8");
+    const file = path.join(path.dirname(path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.dataFile)), ".quiz-attempt-key");
+    const existing = await readKeyFile(file);
+    if (existing) return Buffer.from(existing, "utf8");
+    const fresh = randomBytes(32).toString("hex");
+    try {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, fresh, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch (err) {
+      const raced = (err as NodeJS.ErrnoException).code === "EEXIST" ? await readKeyFile(file) : null;
+      if (raced) return Buffer.from(raced, "utf8");
+      console.error("[quiz] could not persist the attempt signing key; attempts in progress will not survive a restart", err);
+    }
+    return Buffer.from(fresh, "utf8");
+  })();
+  return attemptGlobals.__llQuizAttemptKey;
+}
+
+function hmac(key: Buffer, data: string): string {
+  return createHmac("sha256", key).update(data).digest("base64url");
+}
+
+async function signAttempt(claims: AttemptClaims): Promise<string> {
+  const body = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  return `${body}.${hmac(await attemptKey(), body)}`;
+}
+
+/** Verify a token and check it belongs to this user and quiz. Null when invalid. */
+async function verifyAttempt(token: unknown, userId: string, quizId: string): Promise<AttemptClaims | null> {
+  if (typeof token !== "string" || token.length > 20000) return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const given = Buffer.from(token.slice(dot + 1), "utf8");
+  const expected = Buffer.from(hmac(await attemptKey(), body), "utf8");
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  try {
+    const c = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<AttemptClaims>;
+    if (c.v !== 1 || c.q !== quizId || c.u !== userId) return null;
+    if (typeof c.s !== "number" || typeof c.n !== "number" || !Array.isArray(c.ids)) return null;
+    if (!c.ids.every((id) => typeof id === "string")) return null;
+    return c as AttemptClaims;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Start time of a timed attempt. Restarting the same attempt (same attempt
+ * number, e.g. after reloading the page instead of submitting) keeps the
+ * original start while its time window is open, so abandoning an attempt
+ * does not reset the timer.
+ */
+function stickyStart(key: string, now: number, windowMs: number): number {
+  const starts = (attemptGlobals.__llQuizAttemptStarts ??= new Map());
+  const previous = starts.get(key);
+  if (previous !== undefined && now - previous < windowMs) return previous;
+  starts.set(key, now);
+  if (starts.size > 5000) {
+    for (const [k, t] of starts) if (now - t > 2 * 86400_000) starts.delete(k);
+  }
+  return now;
+}
+
+function usedAttempts(db: Pick<Database, "quizSubmissions">, quizId: string, userId: string): number {
+  return db.quizSubmissions.filter((s) => s.quizId === quizId && s.userId === userId).length;
+}
+
+/**
+ * Start a live attempt: re-checks access, the schedule and the attempt
+ * limit, picks the questions on the server (a random subset when the quiz
+ * limits questions; the same subset for the same attempt number) and signs
+ * the start time. Only the questions of this attempt are sent to the browser.
+ */
+export async function startQuizAttempt(user: User, quizId: string): Promise<ActionResult<StartAttemptResult>> {
+  const db = await getDb();
+  const quiz = db.quizzes.find((q) => q.id === quizId);
+  if (!quiz) return fail("This quiz no longer exists.");
+  const access = await getQuizAccess(user, quiz);
+  if (!access.ok) return fail(access.message);
+
+  const now = Date.now();
+  if (!access.manage && quiz.enableScheduling) {
+    const schedule = getScheduleState(quiz, now);
+    if (schedule.state === "not_started") return fail(`${quiz.title} opens on ${formatWhen(schedule.opensAt)}.`);
+    if (schedule.state === "ended") return fail(`The schedule for ${quiz.title} has ended.`);
+  }
+  const used = usedAttempts(db, quiz.id, user.id);
+  if (quiz.maxAttempts > 0 && used >= quiz.maxAttempts) {
+    return fail(`You have exceeded the maximum number of attempts (${quiz.maxAttempts}) for this quiz.`);
+  }
+
+  const entries = resolveQuizQuestions(db, quiz);
+  if (!entries.length) return fail("This quiz has no questions available yet.");
+  const n = used + 1;
+  const key = await attemptKey();
+  const pool = quiz.shuffleQuestions ? seededShuffle(entries, hmac(key, `order|${quiz.id}|${user.id}|${n}`)) : entries;
+  const picked = pool.slice(0, attemptQuestionCount(quiz, entries.length));
+
+  const startedMs =
+    quiz.durationSeconds > 0
+      ? stickyStart(`${quiz.id}|${user.id}|${n}`, now, (quiz.durationSeconds + SUBMIT_GRACE_SECONDS) * 1000)
+      : now;
+  const token = await signAttempt({ v: 1, q: quiz.id, u: user.id, s: startedMs, n, ids: picked.map((e) => e.question.id) });
+  return {
+    ok: true,
+    data: { token, startedAt: new Date(startedMs).toISOString(), serverTime: now, questions: picked.map(toRunnerQuestion) },
+  };
+}
+
+/**
+ * Grade and store a quiz attempt. Enforces access, schedule, attempts, the
+ * time limit and the proctoring rules; runs the lesson/badge/activity side
+ * effects on success. Live attempts must carry the token issued by
+ * `startQuizAttempt`: the questions and the start time come from it, never
+ * from the client. With `input.preview` (managers only) the attempt is graded
+ * but not stored.
  */
 export async function recordQuizSubmission(user: User, input: SubmitQuizInput): Promise<ActionResult<SubmitResult>> {
   if (!input || typeof input.quizId !== "string") return fail("Invalid submission.");
@@ -454,8 +667,31 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
   if (preview && !access.manage) return fail("Only people who manage this quiz can preview it.");
 
   const now = Date.now();
-  const startedMs = typeof input.startedAt === "string" ? Date.parse(input.startedAt) : NaN;
-  const hasStart = Number.isFinite(startedMs) && startedMs <= now + 60_000;
+  const entries = resolveQuizQuestions(db, quiz);
+  if (!entries.length) return fail("This quiz has no questions available yet.");
+  const byId = new Map(entries.map((e) => [e.question.id, e]));
+
+  let ids: string[];
+  let startedMs: number;
+  let attemptNumber = 0;
+  if (preview) {
+    // Previews store nothing, so the manager's client picks the questions.
+    ids = unique((Array.isArray(input.questionIds) ? input.questionIds : []).filter((id): id is string => typeof id === "string"));
+    if (!ids.length || ids.length !== attemptQuestionCount(quiz, entries.length) || ids.some((id) => !byId.has(id))) {
+      return fail("This quiz was updated while you were taking it. Reload the page and try again.");
+    }
+    const parsed = typeof input.startedAt === "string" ? Date.parse(input.startedAt) : NaN;
+    startedMs = Number.isFinite(parsed) && parsed <= now ? parsed : now;
+  } else {
+    const claims = await verifyAttempt(input.attemptToken, user.id, quiz.id);
+    if (!claims) return fail("This attempt could not be verified. Reload the page and start the quiz again.");
+    ids = unique(claims.ids);
+    startedMs = Math.min(claims.s, now);
+    attemptNumber = claims.n;
+    if (!ids.length || ids.some((id) => !byId.has(id))) {
+      return fail("This quiz was updated while you were taking it. Reload the page and try again.");
+    }
+  }
 
   if (!preview && !access.manage && quiz.enableScheduling) {
     const schedule = getScheduleState(quiz, now);
@@ -463,26 +699,26 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
     if (schedule.state === "ended") {
       const end = Date.parse(schedule.endedAt);
       const allowance = (quiz.durationSeconds || 0) + SUBMIT_GRACE_SECONDS;
-      const startedInWindow = hasStart && startedMs <= end;
-      if (!startedInWindow || now > end + allowance * 1000) return fail(`The schedule for ${quiz.title} has ended.`);
+      if (startedMs > end || now > end + allowance * 1000) return fail(`The schedule for ${quiz.title} has ended.`);
     }
   }
 
-  if (!preview && quiz.maxAttempts > 0) {
-    const used = db.quizSubmissions.filter((s) => s.quizId === quiz.id && s.userId === user.id).length;
-    if (used >= quiz.maxAttempts) return fail(`You have exceeded the maximum number of attempts (${quiz.maxAttempts}) for this quiz.`);
+  if (!preview) {
+    const used = usedAttempts(db, quiz.id, user.id);
+    if (quiz.maxAttempts > 0 && used >= quiz.maxAttempts) {
+      return fail(`You have exceeded the maximum number of attempts (${quiz.maxAttempts}) for this quiz.`);
+    }
+    if (attemptNumber !== used + 1) return fail("This attempt has already been submitted.");
   }
 
-  const entries = resolveQuizQuestions(db, quiz);
-  if (!entries.length) return fail("This quiz has no questions available yet.");
-  const expected = attemptQuestionCount(quiz, entries.length);
-  const byId = new Map(entries.map((e) => [e.question.id, e]));
-  const ids = unique((Array.isArray(input.questionIds) ? input.questionIds : []).filter((id): id is string => typeof id === "string"));
-  if (ids.length !== expected || ids.some((id) => !byId.has(id))) {
-    return fail("This quiz was updated while you were taking it. Reload the page and try again.");
-  }
+  // Time limit, measured from the server-side start. An attempt that arrives
+  // after the time limit plus a grace period for slow networks is recorded
+  // with no answers: nothing was handed in on time.
+  const elapsed = Math.max(0, Math.round((now - startedMs) / 1000));
+  const late = !preview && quiz.durationSeconds > 0 && elapsed > quiz.durationSeconds + SUBMIT_GRACE_SECONDS;
+  const timeTaken = quiz.durationSeconds > 0 ? Math.min(elapsed, quiz.durationSeconds) : elapsed;
 
-  const answers = sanitizeAnswers(input.answers);
+  const answers = late ? {} : sanitizeAnswers(input.answers);
   const results: QuizResultRow[] = ids.map((id) => {
     const { question, marks } = byId.get(id)!;
     const g = gradeAnswer(question, answers[id], marks, quiz);
@@ -501,24 +737,15 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
   const pendingGrading = results.some((r) => !r.graded);
   const passed = !pendingGrading && percentage >= quiz.passingPercentage;
 
-  // Time taken: trust the client only up to the time that actually elapsed on the server.
-  const elapsed = hasStart ? Math.max(0, Math.round((now - startedMs) / 1000)) : null;
-  let timeTaken = clampInt(input.timeTakenSeconds, 0, 7 * 86400);
-  if (elapsed !== null) timeTaken = timeTaken > 0 ? Math.min(timeTaken, elapsed) : elapsed;
-  if (quiz.durationSeconds > 0) timeTaken = Math.min(timeTaken, quiz.durationSeconds);
-
   let reason: string | undefined;
-  if (input.submissionReason === "timer_expired" && quiz.durationSeconds > 0) reason = submissionReasonLabels.timer_expired;
+  if (late || (input.submissionReason === "timer_expired" && quiz.durationSeconds > 0)) reason = submissionReasonLabels.timer_expired;
   else if (input.submissionReason === "browser_closed") reason = submissionReasonLabels.browser_closed;
-  if (!reason && quiz.durationSeconds > 0 && elapsed !== null && elapsed > quiz.durationSeconds + SUBMIT_GRACE_SECONDS) {
-    reason = submissionReasonLabels.timer_expired;
-  }
 
   // Proctoring: the stored events are authoritative; the client count covers events that failed to log.
   let violationCount = 0;
   let linkedViolationIds: string[] = [];
   if (quiz.enableProctoring && !preview) {
-    const since = hasStart ? startedMs - 5000 : now - Math.max(quiz.durationSeconds, 3600) * 1000;
+    const since = startedMs - 5000;
     const events = db.quizViolations.filter(
       (v) => v.quizId === quiz.id && v.userId === user.id && !v.submissionId && Date.parse(v.timestamp) >= since,
     );
@@ -587,19 +814,20 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
     submittedAt,
   };
 
-  const stored = await mutate((d) => {
-    if (quiz.maxAttempts > 0) {
-      const used = d.quizSubmissions.filter((s) => s.quizId === quiz.id && s.userId === user.id).length;
-      if (used >= quiz.maxAttempts) return false;
+  const stored = await mutate((d): string | null => {
+    const used = usedAttempts(d, quiz.id, user.id);
+    if (quiz.maxAttempts > 0 && used >= quiz.maxAttempts) {
+      return `You have exceeded the maximum number of attempts (${quiz.maxAttempts}) for this quiz.`;
     }
+    if (attemptNumber !== used + 1) return "This attempt has already been submitted.";
     d.quizSubmissions.push(submission);
     if (linkedViolationIds.length) {
       const set = new Set(linkedViolationIds);
       for (const v of d.quizViolations) if (set.has(v.id)) v.submissionId = submission.id;
     }
-    return true;
+    return null;
   });
-  if (!stored) return fail(`You have exceeded the maximum number of attempts (${quiz.maxAttempts}) for this quiz.`);
+  if (stored) return fail(stored);
 
   await logActivity(user.id, "quiz_submit", quiz.id);
 
@@ -645,10 +873,49 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
   };
 }
 
+/**
+ * Refresh every page that shows the outcome of a quiz attempt: the admin
+ * lists, the quiz and submission pages, and — because a passing attempt (or a
+ * passing grade) completes the lesson — the lesson player, its course outline,
+ * the course page, the catalog and the dashboard.
+ *
+ * Route patterns include their route groups (`(app)`, `(learn)`) so they match
+ * the page files; the concrete lesson and course URLs are revalidated too.
+ */
+export async function revalidateQuizAttempt(opts: { quizId: string; submissionId?: string; lessonId?: string; courseId?: string }): Promise<void> {
+  revalidatePath("/admin/quizzes");
+  revalidatePath("/admin/quizzes/submissions");
+  revalidatePath(`/admin/quizzes/${opts.quizId}`);
+  revalidatePath("/(app)/quiz/[id]", "page");
+  revalidatePath("/(app)/quiz/submissions/[id]", "page");
+  revalidatePath("/(app)/admin/quizzes/submissions/[id]", "page");
+
+  revalidatePath("/(learn)/courses/[slug]/learn", "layout");
+  revalidatePath("/(learn)/courses/[slug]/learn/[ref]", "page");
+  revalidatePath("/courses/[slug]/learn/[ref]", "page");
+  revalidatePath("/(app)/courses/[slug]", "page");
+  revalidatePath("/courses");
+  revalidatePath("/dashboard");
+
+  const db = await getDb();
+  const submission = opts.submissionId ? db.quizSubmissions.find((s) => s.id === opts.submissionId) : undefined;
+  const lessonId = submission?.lessonId ?? opts.lessonId;
+  const lesson = lessonId ? db.lessons.find((l) => l.id === lessonId) : undefined;
+  const courseIds = unique([lesson?.courseId, submission?.courseId, opts.courseId].filter((id): id is string => !!id));
+  for (const id of courseIds) {
+    const course = db.courses.find((c) => c.id === id);
+    if (course) revalidatePath(`/courses/${course.slug}`);
+  }
+  if (lesson) {
+    const href = await getLessonHref(lesson.id);
+    if (href) revalidatePath(href);
+  }
+}
+
 /** Live answer check for quizzes that reveal answers after each question. */
 export async function checkQuizAnswer(
   user: User,
-  input: { quizId: string; questionId: string; answer: string[] },
+  input: { quizId: string; questionId: string; answer: string[]; attemptToken?: string },
 ): Promise<ActionResult<CheckAnswerResult>> {
   const db = await getDb();
   const quiz = db.quizzes.find((q) => q.id === input.quizId);
@@ -656,6 +923,11 @@ export async function checkQuizAnswer(
   const access = await getQuizAccess(user, quiz);
   if (!access.ok) return fail("You are not authorized to view this quiz.");
   if (!quiz.showAnswers && !access.manage) return fail("Live answer checking is not enabled for this quiz.");
+  if (!access.manage) {
+    // Learners can only check the questions of the attempt they are taking.
+    const claims = await verifyAttempt(input.attemptToken, user.id, quiz.id);
+    if (!claims || !claims.ids.includes(input.questionId)) return fail("This attempt could not be verified. Reload the page and start the quiz again.");
+  }
   const entry = resolveQuizQuestions(db, quiz).find((e) => e.question.id === input.questionId);
   if (!entry) return fail("Question not found in this quiz.");
   if (entry.question.type === "open_ended") return fail("Open-ended answers are graded by your instructor.");
@@ -671,19 +943,6 @@ export async function checkQuizAnswer(
   };
 }
 
-/** Questions for a runner whose schedule has just opened. */
-export async function loadRunnerQuestions(user: User, quizId: string): Promise<ActionResult<RunnerQuestion[]>> {
-  const db = await getDb();
-  const quiz = db.quizzes.find((q) => q.id === quizId);
-  if (!quiz) return fail("This quiz no longer exists.");
-  const access = await getQuizAccess(user, quiz);
-  if (!access.ok) return fail(access.message);
-  const schedule = getScheduleState(quiz, Date.now());
-  if (!access.manage && schedule.state === "not_started") return fail(`${quiz.title} is not open yet.`);
-  if (!access.manage && schedule.state === "ended") return fail(`The schedule for ${quiz.title} has ended.`);
-  return { ok: true, data: resolveQuizQuestions(db, quiz).map(toRunnerQuestion) };
-}
-
 /* ------------------------------------------------------------------ */
 /* Proctoring                                                           */
 /* ------------------------------------------------------------------ */
@@ -692,13 +951,13 @@ const VIOLATION_TYPES: ViolationType[] = ["tab_switch", "focus_loss", "fullscree
 const MAX_EVENTS_PER_ATTEMPT = 200;
 
 /**
- * Log one proctoring event for the attempt that started at `startedAt`.
+ * Log one proctoring event for the attempt identified by `attemptToken`.
  * Events are warnings until the count reaches `maxViolations`; that event is a
  * violation (and the client auto-submits).
  */
 export async function recordQuizViolation(
   user: User,
-  input: { quizId: string; eventType: ViolationType; startedAt: string },
+  input: { quizId: string; eventType: ViolationType; attemptToken: string },
 ): Promise<ActionResult<{ event: ViolationEvent; count: number }>> {
   if (!VIOLATION_TYPES.includes(input.eventType)) return fail("Unknown event type.");
   const db = await getDb();
@@ -707,11 +966,14 @@ export async function recordQuizViolation(
   if (!quiz.enableProctoring) return fail("Proctoring is not enabled for this quiz.");
   const access = await getQuizAccess(user, quiz);
   if (!access.ok) return fail("You are not authorized to take this quiz.");
-  const started = Date.parse(input.startedAt);
+  const claims = await verifyAttempt(input.attemptToken, user.id, quiz.id);
+  if (!claims) return fail("Invalid attempt.");
+  const started = claims.s;
   const now = Date.now();
-  if (!Number.isFinite(started) || started > now + 60_000) return fail("Invalid attempt.");
 
-  const result = await mutate((d): { event: ViolationEvent; count: number } | null => {
+  const result = await mutate((d): { event: ViolationEvent; count: number } | "submitted" | null => {
+    // Events that arrive after the attempt was stored are not attached to a later attempt.
+    if (usedAttempts(d, quiz.id, user.id) >= claims.n) return "submitted";
     const existing = d.quizViolations.filter(
       (v) => v.quizId === quiz.id && v.userId === user.id && !v.submissionId && Date.parse(v.timestamp) >= started - 5000,
     );
@@ -726,6 +988,7 @@ export async function recordQuizViolation(
     d.quizViolations.push({ ...event, quizId: quiz.id, userId: user.id });
     return { event, count };
   });
+  if (result === "submitted") return fail("This attempt has already been submitted.");
   if (!result) return fail("Too many events were recorded for this attempt.");
   return { ok: true, data: result };
 }
@@ -928,11 +1191,15 @@ export interface SubmissionFilters {
   status?: SubmissionStatus | "";
 }
 
-/** Submissions a staff user may see: all for moderators, otherwise those of quizzes they manage. */
+/**
+ * Submissions a staff user may see: all for moderators; otherwise every
+ * submission of the quizzes they manage plus the submissions made in courses
+ * they teach (see `canViewQuizSubmission`).
+ */
 function scopedSubmissions(db: Database, user: User): QuizSubmission[] {
   if (isModerator(user)) return db.quizSubmissions;
-  const manageable = new Set(db.quizzes.filter((q) => canManageQuiz(user, q, db)).map((q) => q.id));
-  return db.quizSubmissions.filter((s) => manageable.has(s.quizId));
+  const quizzes = new Map(db.quizzes.map((q) => [q.id, q]));
+  return db.quizSubmissions.filter((s) => canViewQuizSubmission(user, s, quizzes.get(s.quizId), db));
 }
 
 export async function listQuizSubmissions(user: User, filters: SubmissionFilters): Promise<SubmissionListItem[]> {
@@ -973,7 +1240,7 @@ export async function getScopedSubmissionMap(user: User): Promise<Map<string, Qu
 }
 
 export async function getSubmissionFilterOptions(user: User): Promise<{
-  quizzes: { value: string; label: string }[];
+  quizzes: { value: string; label: string; canEdit: boolean }[];
   members: { value: string; label: string }[];
   courses: { value: string; label: string }[];
 }> {
@@ -981,8 +1248,8 @@ export async function getSubmissionFilterOptions(user: User): Promise<{
   const scoped = scopedSubmissions(db, user);
   const quizIds = new Set(scoped.map((s) => s.quizId));
   const quizzes = db.quizzes
-    .filter((q) => quizIds.has(q.id) || canManageQuiz(user, q, db))
-    .map((q) => ({ value: q.id, label: q.title }))
+    .map((q) => ({ value: q.id, label: q.title, canEdit: canManageQuiz(user, q, db) }))
+    .filter((q) => quizIds.has(q.value) || q.canEdit)
     .sort((a, b) => a.label.localeCompare(b.label));
   const memberIds = new Set(scoped.map((s) => s.userId));
   const members = db.users
@@ -1006,7 +1273,10 @@ export interface SubmissionDetailData {
   breakdown: ResultDetail[];
   revealed: boolean;
   violations: ViolationEvent[];
+  /** Staff access to this submission (quiz manager, or instructor of the submission's course). */
   canManage: boolean;
+  /** The viewer may edit the quiz itself. */
+  canEditQuiz: boolean;
   canGrade: boolean;
   isOwn: boolean;
   /** 1-based attempt number for the learner. */
@@ -1021,7 +1291,8 @@ export async function getSubmissionDetail(user: User, submissionId: string): Pro
   if (!submission) return null;
   const quiz = db.quizzes.find((q) => q.id === submission.quizId) ?? null;
   const isOwn = submission.userId === user.id;
-  const canManage = quiz ? canManageQuiz(user, quiz, db) : isModerator(user);
+  const canManage = canViewQuizSubmission(user, submission, quiz, db);
+  const canEditQuiz = quiz ? canManageQuiz(user, quiz, db) : false;
   if (!isOwn && !canManage) return null;
   const learnerRecord = db.users.find((u) => u.id === submission.userId);
   const course = submission.courseId ? db.courses.find((c) => c.id === submission.courseId) : null;
@@ -1039,6 +1310,7 @@ export async function getSubmissionDetail(user: User, submissionId: string): Pro
     revealed,
     violations: violationsForSubmission(db, submission.id),
     canManage,
+    canEditQuiz,
     canGrade: canManage && !isOwn,
     isOwn,
     attemptNumber: attempts.findIndex((s) => s.id === submission.id) + 1,
@@ -1063,8 +1335,7 @@ export async function gradeSubmission(grader: User, input: { submissionId: strin
   const submission = db.quizSubmissions.find((s) => s.id === input.submissionId);
   if (!submission) return fail("This submission no longer exists.");
   const quiz = db.quizzes.find((q) => q.id === submission.quizId);
-  const canManage = quiz ? canManageQuiz(grader, quiz, db) : isModerator(grader);
-  if (!canManage) return fail("You don't have permission to grade this submission.");
+  if (!canViewQuizSubmission(grader, submission, quiz, db)) return fail("You don't have permission to grade this submission.");
   if (submission.userId === grader.id) return fail("You cannot grade your own submission.");
 
   const marks = input.marks && typeof input.marks === "object" ? input.marks : {};

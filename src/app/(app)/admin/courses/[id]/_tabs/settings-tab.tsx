@@ -1,5 +1,5 @@
 import type { Course, User } from "@/lib/types";
-import { isAdmin } from "@/lib/auth/session";
+import { isAdmin, isModerator } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { listEvaluators } from "@/lib/data/users";
 import { getWorkflowFlags } from "@/lib/data/admin-courses";
@@ -29,6 +29,8 @@ export async function SettingsTab({ course, user }: { course: Course; user: User
           currencies={currencies}
           paymentsConfigured={db.settings.commerce.paymentGateway !== "none"}
           canManagePayments={isAdmin(user)}
+          canCreateMembers={isModerator(user)}
+          canGrantAdmin={isAdmin(user)}
           initial={{
             published: course.published,
             featured: course.featured,
@@ -42,6 +44,8 @@ export async function SettingsTab({ course, user }: { course: Course; user: User
             paidCertificate: course.paidCertificate,
             certificatePrice: course.certificatePrice,
             evaluatorId: course.evaluatorId,
+            metaDescription: course.metaDescription,
+            metaKeywords: course.metaKeywords,
           }}
         />
       </div>

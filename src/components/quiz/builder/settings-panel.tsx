@@ -122,10 +122,11 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
             label="Show Answers"
             description={
               hasOpenEnded
-                ? "Display correct answers after each question is attempted. Open-ended answers are graded by you after submission."
+                ? "Not available for open-ended quizzes: you grade the answers after submission."
                 : "Display correct answers after each question is attempted."
             }
-            checked={s.showAnswers}
+            checked={s.showAnswers && !hasOpenEnded}
+            disabled={hasOpenEnded}
             onChange={(e) => onChange({ showAnswers: e.target.checked })}
           />
           <Switch

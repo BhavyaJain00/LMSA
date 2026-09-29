@@ -5,6 +5,7 @@ import { getSettings } from "@/lib/db/store";
 import {
   batchTabsFor,
   canCreateBatch,
+  ensureBatchReminders,
   getBatchCategories,
   getBatchList,
   getBatchTabCounts,
@@ -51,6 +52,8 @@ export default async function BatchesPage(props: PageProps<"/batches">) {
   const [user, settings, sp] = await Promise.all([getCurrentUser(), getSettings(), props.searchParams]);
   if (!settings.features.batches) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect("/login?next=%2Fbatches");
+  // No scheduler: due batch-start and live-class reminders are sent when members load the page.
+  if (user) await ensureBatchReminders(user.id).catch(() => 0);
 
   const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
   const tab = parseBatchTab(str(sp.tab), user);

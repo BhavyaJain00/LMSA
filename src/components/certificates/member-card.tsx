@@ -13,7 +13,21 @@ export function CertifiedMemberCard({ member }: { member: CertifiedMember }) {
       <div className="flex items-center gap-4">
         <Avatar name={user.name} src={user.avatarUrl} size="lg" />
         <div className="min-w-0">
-          <p className="truncate font-semibold text-ink">{user.name}</p>
+          <p className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-semibold text-ink">{user.name}</span>
+            {user.openTo && (
+              <span
+                className={
+                  user.openTo === "work"
+                    ? "inline-flex shrink-0 items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[11px] font-medium text-success"
+                    : "inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent"
+                }
+              >
+                <Icon.CheckCircle className="size-3" />
+                {user.openTo === "work" ? "Open to Work" : "Hiring"}
+              </span>
+            )}
+          </p>
           <p className="line-clamp-2 text-sm text-ink-muted">
             {user.headline ? (
               user.headline

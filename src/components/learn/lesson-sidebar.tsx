@@ -9,6 +9,7 @@ import { useOptionalLessonRuntime } from "./lesson-runtime";
 import type { CourseProgressInfo, OutlineChapterItem, SidebarTab } from "./types";
 
 const DESKTOP_QUERY = "(min-width: 1024px)";
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex='-1'])";
 
 function subscribeDesktop(callback: () => void) {
   const mq = window.matchMedia(DESKTOP_QUERY);
@@ -60,6 +61,8 @@ export function LessonSidebar({
   const [localOpen, setLocalOpen] = useState(false);
   const isDesktop = useIsDesktop();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const rawTab = rt?.tab ?? localTab;
   const setTab = rt?.setTab ?? setLocalTab;
@@ -75,22 +78,60 @@ export function LessonSidebar({
 
   const sheetMode = !isDesktop;
   const hiddenSheet = sheetMode && !open;
+  const modalSheet = sheetMode && open;
 
-  // Mobile sheet: Escape closes, focus moves into the sheet when it opens.
+  // Mobile sheet is a modal dialog: focus moves in when it opens, Tab stays
+  // inside it, Escape closes it, and focus returns to what opened it.
   useEffect(() => {
-    if (!sheetMode || !open) return;
+    if (!modalSheet) return;
+    const sheet = sheetRef.current;
+    const trigger = triggerRef.current;
+    const returnTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
+    const focusables = () =>
+      Array.from(sheet?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((el) => !el.closest("[hidden],[inert]") && el.getClientRects().length > 0);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !document.querySelector("dialog[open]")) setOpen(false);
+      if (document.querySelector("dialog[open]")) return;
+      if (e.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (!items.length) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      const inside = !!active && !!sheet?.contains(active);
+      if (e.shiftKey && (active === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    // Focus that escapes the sheet (e.g. a click on the backdrop area) is pulled back in.
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node | null;
+      if (!target || sheet?.contains(target) || document.querySelector("dialog[open]")) return;
+      closeRef.current?.focus();
     };
     window.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocusIn);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       window.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", onFocusIn);
       document.body.style.overflow = prevOverflow;
+      const target = returnTo && returnTo.isConnected && !sheet?.contains(returnTo) ? returnTo : trigger;
+      target?.focus({ preventScroll: true });
     };
-  }, [sheetMode, open, setOpen]);
+  }, [modalSheet, setOpen]);
 
   const closeOnMobile = () => {
     if (sheetMode) setOpen(false);
@@ -98,11 +139,16 @@ export function LessonSidebar({
 
   return (
     <>
-      {sheetMode && open && <div className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px] animate-fade-in lg:hidden" onClick={() => setOpen(false)} aria-hidden="true" />}
+      {sheetMode && open && <div className="fixed inset-0 z-40 bg-surface-3/75 backdrop-blur-[2px] animate-fade-in lg:hidden" onClick={() => setOpen(false)} aria-hidden="true" />}
 
       <aside
+        ref={sheetRef}
         id="lesson-sidebar"
-        aria-label="Course outline, notes and discussion"
+        role={modalSheet ? "dialog" : undefined}
+        aria-modal={modalSheet ? true : undefined}
+        aria-label={modalSheet ? undefined : "Course outline, notes and discussion"}
+        aria-labelledby={modalSheet ? "lesson-sheet-title" : undefined}
+        data-lesson-sheet-open={modalSheet ? "" : undefined}
         inert={hiddenSheet}
         className={cn(
           "flex flex-col bg-surface-1",
@@ -116,7 +162,9 @@ export function LessonSidebar({
         {/* Mobile sheet header */}
         <div className="relative flex items-center gap-2 border-b border-border px-4 pb-3 pt-4 lg:hidden">
           <span className="absolute left-1/2 top-1.5 block h-1 w-10 -translate-x-1/2 rounded-full bg-border-strong" aria-hidden="true" />
-          <p className="min-w-0 flex-1 truncate text-base font-semibold text-ink">{courseTitle}</p>
+          <p id="lesson-sheet-title" className="min-w-0 flex-1 truncate text-base font-semibold text-ink">
+            {courseTitle}
+          </p>
           <button ref={closeRef} type="button" onClick={() => setOpen(false)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label="Close">
             <Icon.X className="size-5" />
           </button>
@@ -216,6 +264,7 @@ export function LessonSidebar({
 
       {/* Floating button that opens the sheet on small screens */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => {
           setTab("outline");

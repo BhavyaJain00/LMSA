@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { isAdmin, isModerator, requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
-import { getManagedJobs } from "@/lib/data/jobs";
+import { JOB_AUTO_CLOSE_DAYS, closeExpiredJobs, getManagedJobs } from "@/lib/data/jobs";
 import { ButtonLink } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
-import { CompanyLogo, JOB_TYPE_LABEL, workModeLabel } from "@/components/jobs/job-bits";
+import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel } from "@/components/jobs/job-bits";
 import { JobRowActions } from "@/components/jobs/job-actions";
 import { SearchParamInput } from "@/components/jobs/search-param-input";
 import { formatDate } from "@/lib/utils";
@@ -22,6 +22,7 @@ export default async function AdminJobsPage(props: PageProps<"/admin/jobs">) {
   const [sp, settings] = await Promise.all([props.searchParams, getSettings()]);
   const status = sp.status === "open" || sp.status === "closed" ? sp.status : "all";
   const search = typeof sp.search === "string" ? sp.search : "";
+  await closeExpiredJobs();
 
   const [all, jobs] = await Promise.all([getManagedJobs(viewer, { status: "all" }), getManagedJobs(viewer, { status, search })]);
   const openCount = all.filter((j) => j.status === "open").length;
@@ -31,7 +32,7 @@ export default async function AdminJobsPage(props: PageProps<"/admin/jobs">) {
       <PageHeader
         breadcrumbs={<Breadcrumbs items={[{ label: "Admin", href: "/admin" }, { label: "Job Openings" }]} />}
         title="Job Openings"
-        description={isModerator(viewer) ? "Every job posted on the board. Edit, close or review applications." : "Jobs you have posted. Edit, close or review applications."}
+        description={`${isModerator(viewer) ? "Every job posted on the board." : "Jobs you have posted."} Edit, close or review applications. Openings close automatically after ${JOB_AUTO_CLOSE_DAYS} days.`}
         actions={
           <>
             <ButtonLink href="/jobs" variant="outline" leftIcon={<Icon.Eye className="size-4" />}>
@@ -110,7 +111,7 @@ export default async function AdminJobsPage(props: PageProps<"/admin/jobs">) {
                             {job.title}
                           </Link>
                           <p className="truncate text-xs text-ink-muted">
-                            {job.company} · {job.location} · {workModeLabel(job.remote)}
+                            {job.company} · {formatJobLocation(job)} · {workModeLabel(job)}
                           </p>
                           {job.poster && isModerator(viewer) && <p className="truncate text-xs text-ink-faint">Posted by {job.poster.name}</p>}
                         </div>

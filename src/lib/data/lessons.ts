@@ -11,33 +11,40 @@ import type {
   Settings,
   User,
 } from "@/lib/types";
-import type {
-  LessonKind,
-  LessonNeighbor,
-  LockReason,
-  NoteItem,
-  OutlineChapterItem,
-  OutlineLessonItem,
-  ReplyItem,
-  TopicItem,
-  UserChip,
-} from "@/components/learn/types";
+import type { LessonKind, LockReason, MentionOption, NoteItem, OutlineChapterItem, ReplyItem, TopicItem, UserChip } from "@/components/learn/types";
+import { cache } from "react";
 import { getDb } from "@/lib/db/store";
-import { toPublicUser } from "@/lib/auth/session";
-import { canManageCourse, findLessonByNumbers, getCourseBySlug, getCourseOutline, getEnrollment, lessonHref, parseLessonRef } from "./courses";
-import { getPublicUsers } from "./users";
+import { isStaff, toPublicUser } from "@/lib/auth/session";
+import { canManageCourse, findLessonByNumbers, getCourseBySlug, getCourseOutline, getViewerCourseState, lessonHref, parseLessonRef } from "./courses";
+import { getPublicUsers, listUsers } from "./users";
 import { percent } from "@/lib/utils";
+import { ensureDripNotifications } from "@/lib/services/drip";
+import {
+  legacyLockReason,
+  nextUnlockTime,
+  unmetPrerequisites,
+  type LessonLock,
+  type LessonNeighborWithLock,
+  type LockedLessonState,
+  type OutlineLessonWithLock,
+  type PrerequisiteItem,
+} from "@/components/learn/drip-shared";
 
 /**
  * Data access for the lesson player (/courses/[slug]/learn/[ref]).
  *
- * Access rules (mirrors Frappe LMS get_lesson):
+ * Access rules (Frappe LMS get_lesson plus round-2 drip content):
  *  - Course managers (instructors, moderators, admins) can open every lesson.
- *  - Enrolled learners can open every lesson, except that with
+ *  - Enrolled learners can open every released lesson: scheduled (drip)
+ *    lessons stay locked until their release time, and with
  *    `enforceLessonCompletion` every lesson after the first incomplete one is
  *    locked (lessons that are already complete never lock).
  *  - Everyone else can open only "include in preview" lessons, and only when
- *    the course is published and guest access is enabled in settings.
+ *    the course is published and guest access is enabled in settings (a
+ *    preview with a future `availableFrom` date waits for that date too).
+ *
+ * The locking itself is computed once, by `getCourseOutline` (courses.ts),
+ * with the pure rules in `src/components/learn/drip-shared.ts`.
  */
 
 /* ------------------------------------------------------------------ */
@@ -45,7 +52,10 @@ import { percent } from "@/lib/utils";
 /* ------------------------------------------------------------------ */
 
 export interface LearnLesson extends LessonWithState {
+  /** Legacy reason for existing consumers ("sequential" = enforced order, "enroll"); unset for drip locks. */
   lockReason?: LockReason;
+  /** Detailed lock: drip (with `unlocksAt`), order, enroll or prerequisite. */
+  lock?: LessonLock;
   href: string;
   kind: LessonKind;
 }
@@ -68,6 +78,20 @@ export interface LearnContext {
   chapters: LearnChapter[];
   flat: LearnLesson[];
   progress: { completed: number; total: number; percent: number };
+  /** Prerequisite courses of this course with the viewer's status. */
+  prerequisites: PrerequisiteItem[];
+  /** The soonest future drip unlock for this viewer (ISO), if any. */
+  nextUnlockAt: string | null;
+}
+
+export interface LearnContextOptions {
+  /**
+   * Create due "new content unlocked" notifications for enrolled learners
+   * (default true). Access checks from APIs and actions pass false so
+   * heartbeats do not scan for notifications.
+   */
+  notify?: boolean;
+  now?: number;
 }
 
 /** The kind of a lesson for icons: the first video/quiz/assignment/exercise block wins. */
@@ -81,42 +105,28 @@ export function lessonKind(lesson: Pick<Lesson, "blocks">): LessonKind {
   return "text";
 }
 
-/** Build the outline for a viewer with the Frappe locking semantics applied. */
-export async function getLearnContext(course: Course, viewer: User | null): Promise<LearnContext> {
-  const [raw, db, enrollment] = await Promise.all([
-    getCourseOutline(course, viewer),
-    getDb(),
-    viewer ? getEnrollment(viewer.id, course.id) : Promise.resolve(null),
-  ]);
+/**
+ * Build the outline for a viewer with locking applied (free preview,
+ * prerequisites, drip schedules, enforced order). For enrolled learners it
+ * also creates due "new content unlocked" notifications (never throws).
+ */
+export async function getLearnContext(course: Course, viewer: User | null, options: LearnContextOptions = {}): Promise<LearnContext> {
+  const now = options.now ?? Date.now();
+  const [raw, db] = await Promise.all([getCourseOutline(course, viewer, now), getDb()]);
   const settings = db.settings;
-  const manager = canManageCourse(viewer, course);
-  const enrolled = !!enrollment;
-  const previewAllowed = course.published && settings.learning.allowGuestAccess;
+  const state = getViewerCourseState(db, course, viewer);
+  const { enrollment, manager, enrolled, previewAllowed } = state;
 
-  const rawFlat = raw.flatMap((c) => c.lessons);
-  const firstIncomplete = rawFlat.findIndex((l) => l.status !== "complete");
-
-  let index = 0;
   const chapters: LearnChapter[] = raw.map((chapter, ci) => ({
     ...chapter,
     number: ci + 1,
-    lessons: chapter.lessons.map((lesson) => {
-      const position = index++;
-      let locked = false;
-      let lockReason: LockReason | undefined;
-      if (!manager) {
-        if (!enrolled) {
-          locked = !(previewAllowed && lesson.includeInPreview);
-          if (locked) lockReason = "enroll";
-        } else if (course.enforceLessonCompletion && firstIncomplete !== -1 && position > firstIncomplete && lesson.status !== "complete") {
-          locked = true;
-          lockReason = "sequential";
-        }
-      }
+    lessons: chapter.lessons.map((lesson): LearnLesson => {
+      const { lock, ...rest } = lesson;
       return {
-        ...lesson,
-        locked,
-        lockReason,
+        ...rest,
+        locked: !!lock,
+        ...(lock ? { lock } : {}),
+        lockReason: legacyLockReason(lock),
         href: lessonHref(course.slug, lesson),
         kind: lessonKind(lesson),
       };
@@ -125,6 +135,16 @@ export async function getLearnContext(course: Course, viewer: User | null): Prom
 
   const flat = chapters.flatMap((c) => c.lessons);
   const completed = flat.filter((l) => l.status === "complete").length;
+  const nextUnlock = nextUnlockTime(
+    flat.map((l) => l.lock),
+    now,
+  );
+
+  if (viewer && enrolled && !manager && options.notify !== false) {
+    // Wrapped: notifications must never break the lesson player.
+    await ensureDripNotifications(viewer.id, now).catch(() => 0);
+  }
+
   return {
     course,
     viewer,
@@ -136,6 +156,8 @@ export async function getLearnContext(course: Course, viewer: User | null): Prom
     chapters,
     flat,
     progress: { completed, total: flat.length, percent: percent(completed, flat.length) },
+    prerequisites: state.prerequisites,
+    nextUnlockAt: nextUnlock !== null ? new Date(nextUnlock).toISOString() : null,
   };
 }
 
@@ -149,7 +171,8 @@ export function toOutlineItems(chapters: LearnChapter[]): OutlineChapterItem[] {
   }));
 }
 
-function toOutlineLesson(lesson: LearnLesson): OutlineLessonItem {
+/** Client outline row. Carries the detailed `lock` (drip time etc.) next to the legacy fields. */
+function toOutlineLesson(lesson: LearnLesson): OutlineLessonWithLock {
   return {
     id: lesson.id,
     title: lesson.title,
@@ -159,13 +182,14 @@ function toOutlineLesson(lesson: LearnLesson): OutlineLessonItem {
     status: lesson.status,
     locked: lesson.locked,
     lockReason: lesson.lockReason,
+    ...(lesson.lock ? { lock: lesson.lock } : {}),
     durationSeconds: lesson.durationSeconds,
     kind: lesson.kind,
     preview: lesson.includeInPreview,
   };
 }
 
-export function toNeighbor(lesson: LearnLesson | null | undefined): LessonNeighbor | null {
+export function toNeighbor(lesson: LearnLesson | null | undefined): LessonNeighborWithLock | null {
   if (!lesson) return null;
   return {
     id: lesson.id,
@@ -174,6 +198,7 @@ export function toNeighbor(lesson: LearnLesson | null | undefined): LessonNeighb
     status: lesson.status,
     locked: lesson.locked,
     lockReason: lesson.lockReason,
+    ...(lesson.lock ? { lock: lesson.lock } : {}),
     chapterNumber: lesson.chapterNumber,
     lessonNumber: lesson.lessonNumber,
   };
@@ -182,7 +207,9 @@ export function toNeighbor(lesson: LearnLesson | null | undefined): LessonNeighb
 /**
  * Where "continue learning" should take the viewer: the lesson they last
  * opened (when it is still unlocked and not complete), else the first
- * unlocked incomplete lesson, else the first unlocked lesson.
+ * unlocked incomplete lesson, else the first unlocked lesson. Never a locked
+ * lesson: when nothing is open yet (e.g. all content is still scheduled) the
+ * result is null and callers fall back to the course page.
  */
 export function pickResumeLesson(ctx: Pick<LearnContext, "flat" | "enrollment">): LearnLesson | null {
   const { flat, enrollment } = ctx;
@@ -191,7 +218,7 @@ export function pickResumeLesson(ctx: Pick<LearnContext, "flat" | "enrollment">)
     const current = flat.find((l) => l.id === enrollment.currentLessonId);
     if (current && !current.locked && current.status !== "complete") return current;
   }
-  return flat.find((l) => !l.locked && l.status !== "complete") ?? flat.find((l) => !l.locked) ?? flat[0] ?? null;
+  return flat.find((l) => !l.locked && l.status !== "complete") ?? flat.find((l) => !l.locked) ?? null;
 }
 
 export async function getResumeLessonForCourse(course: Course, viewer: User | null): Promise<LearnLesson | null> {
@@ -213,12 +240,21 @@ export interface LessonAccess {
   /** The viewer may open the lesson page. */
   canView: boolean;
   locked: boolean;
+  /** Legacy reason ("sequential" / "enroll"); unset for drip locks. */
   lockReason?: LockReason;
+  /** Detailed lock: drip (with `unlocksAt`), order, enroll or prerequisite. */
+  lock?: LessonLock;
   status: LearnLesson["status"];
   href: string;
 }
 
-/** Resolve everything needed to authorize an action on a lesson. */
+/**
+ * Resolve everything needed to authorize an action on a lesson. `canView` is
+ * false while the lesson is locked for the viewer for any reason (not
+ * enrolled, prerequisites, drip schedule, enforced order), so every caller
+ * (lesson progress API, completion, notes, discussions, assessments, media
+ * signing) rejects locked lessons consistently.
+ */
 export async function getLessonAccess(user: User | null, lessonId: string): Promise<LessonAccess | null> {
   if (!lessonId) return null;
   const db = await getDb();
@@ -226,7 +262,7 @@ export async function getLessonAccess(user: User | null, lessonId: string): Prom
   if (!lesson) return null;
   const course = db.courses.find((c) => c.id === lesson.courseId);
   if (!course) return null;
-  const ctx = await getLearnContext(course, user);
+  const ctx = await getLearnContext(course, user, { notify: false });
   const item = ctx.flat.find((l) => l.id === lesson.id);
   if (!item) return null;
   const courseVisible = course.published || ctx.manager || ctx.enrolled;
@@ -240,9 +276,49 @@ export async function getLessonAccess(user: User | null, lessonId: string): Prom
     canView: courseVisible && !item.locked,
     locked: item.locked,
     lockReason: item.lockReason,
+    ...(item.lock ? { lock: item.lock } : {}),
     status: item.status,
     href: item.href,
   };
+}
+
+/**
+ * Human-readable refusal for a locked lesson (used by the lesson progress API
+ * and the completion action). Drip locks mention the release time in UTC;
+ * the lesson page itself shows the viewer's local time.
+ */
+export function lockedLessonError(access: Pick<LessonAccess, "lock" | "enrolled">): string {
+  const lock = access.lock;
+  if (!lock) return "You do not have access to this lesson.";
+  switch (lock.reason) {
+    case "drip": {
+      const at = lock.unlocksAt ? new Date(lock.unlocksAt) : null;
+      const when = at && !Number.isNaN(at.getTime()) ? ` It unlocks on ${at.toUTCString().replace(/:\d\d GMT$/, " UTC")}.` : "";
+      return `This lesson is not available yet.${when}`;
+    }
+    case "order":
+      return "Complete the previous lesson before marking this one as done.";
+    case "prerequisite":
+      return "Complete the prerequisite courses and enroll to open this lesson.";
+    case "enroll":
+      return access.enrolled ? "You do not have access to this lesson." : "Enroll in this course to open this lesson.";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Locked lesson (request-scoped)                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The drip/prerequisite lock of the lesson the current request is rendering,
+ * recorded by `getLessonPageData` so the locked-lesson notice can show the
+ * countdown or the prerequisite list. React `cache` scopes it to one request.
+ */
+const lockedLessonSlot = cache((): { current: LockedLessonState | null } => ({ current: null }));
+
+/** The locked lesson recorded for this request (null outside a locked lesson page). */
+export function getRequestLockedLesson(): LockedLessonState | null {
+  return lockedLessonSlot().current;
 }
 
 /* ------------------------------------------------------------------ */
@@ -278,7 +354,13 @@ export type LessonPageData =
   | { kind: "not_found" }
   | { kind: "redirect"; href: string }
   | (LessonPageBase & { kind: "missing"; resume: LearnLesson | null })
-  | (LessonPageBase & { kind: "locked"; lesson: LearnLesson; resume: LearnLesson | null })
+  | (LessonPageBase & {
+      kind: "locked";
+      lesson: LearnLesson;
+      resume: LearnLesson | null;
+      /** Drip or prerequisite details for the locked-lesson notice (null for enforced order). */
+      lockState: LockedLessonState | null;
+    })
   | (LessonPageBase & { kind: "no_preview"; lesson: LearnLesson })
   | LessonPageOk;
 
@@ -299,8 +381,19 @@ export async function getLessonPageData(slug: string, ref: string, viewer: User 
     return { kind: "redirect", href: `/courses/${course.slug}` };
   }
   if (lesson.locked) {
-    if (lesson.lockReason === "sequential") return { kind: "locked", ctx, lesson, resume: pickResumeLesson(ctx) };
-    return { kind: "no_preview", ctx, lesson };
+    const reason = lesson.lock?.reason ?? (lesson.lockReason === "sequential" ? "order" : "enroll");
+    if (reason === "enroll") return { kind: "no_preview", ctx, lesson };
+    const lockState: LockedLessonState | null =
+      lesson.lock && (reason === "drip" || reason === "prerequisite")
+        ? {
+            lessonId: lesson.id,
+            lessonTitle: lesson.title,
+            lock: lesson.lock,
+            prerequisites: reason === "prerequisite" ? unmetPrerequisites(ctx.prerequisites) : [],
+          }
+        : null;
+    lockedLessonSlot().current = lockState;
+    return { kind: "locked", ctx, lesson, resume: pickResumeLesson(ctx), lockState };
   }
 
   const db = await getDb();
@@ -433,10 +526,34 @@ function buildTopics(
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/** People learners can @mention in lesson discussions: the course instructors. */
-export async function getMentionableInstructors(course: Course): Promise<UserChip[]> {
-  const users = await getPublicUsers(course.instructorIds);
-  return users.map((u) => toUserChip(u)).filter((u): u is UserChip => !!u);
+/**
+ * Whether a discussion author may @mention any enabled user (Frappe: mentions
+ * for non-students). Staff roles and the course's own instructors/managers can;
+ * learners are limited to people in the course.
+ */
+export function canMentionAnyone(user: Pick<User, "id" | "roles">, course: Course): boolean {
+  return isStaff(user) || course.instructorIds.includes(user.id) || canManageCourse(user, course);
+}
+
+/**
+ * Everyone `viewer` may @mention in this course's lesson discussions, excluding
+ * the viewer. Staff and instructors get every enabled user; learners get the
+ * course instructors and enrolled members. Instructors come first, then by name.
+ * The discussion actions resolve @username against this same list, so what the
+ * composer suggests and who gets notified never disagree.
+ */
+export async function getMentionCandidates(course: Course, viewer: Pick<User, "id" | "roles">): Promise<MentionOption[]> {
+  const [users, db] = await Promise.all([listUsers(), getDb()]);
+  const instructors = new Set(course.instructorIds);
+  let allowed: Set<string> | null = null;
+  if (!canMentionAnyone(viewer, course)) {
+    allowed = new Set(instructors);
+    for (const e of db.enrollments) if (e.courseId === course.id) allowed.add(e.userId);
+  }
+  return users
+    .filter((u) => u.enabled && u.id !== viewer.id && (!allowed || allowed.has(u.id)))
+    .map((u) => ({ id: u.id, name: u.name, username: u.username, avatarUrl: u.avatarUrl, isInstructor: instructors.has(u.id) }))
+    .sort((a, b) => Number(b.isInstructor) - Number(a.isInstructor) || a.name.localeCompare(b.name));
 }
 
 /* ------------------------------------------------------------------ */

@@ -15,7 +15,8 @@ import { Field, FormError, Input, Textarea } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { MessageQuestionIcon } from "./learn-icons";
-import type { ReplyItem, TopicItem, UserChip } from "./types";
+import { MentionTextarea } from "./mention-textarea";
+import type { MentionOption, ReplyItem, TopicItem } from "./types";
 
 export interface DiscussionPanelProps {
   lessonId: string;
@@ -26,7 +27,8 @@ export interface DiscussionPanelProps {
   canModerate: boolean;
   /** When set, discussions are closed on this lesson and this text explains why. */
   closedReason?: string | null;
-  mentionables: UserChip[];
+  /** People the viewer may @mention (all enabled users for staff and instructors; course members for learners). */
+  mentionables: MentionOption[];
   initialTopicId?: string | null;
 }
 
@@ -144,6 +146,7 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
       <NewTopicDialog
         open={newOpen}
         lessonId={lessonId}
+        mentionables={mentionables}
         onClose={() => setNewOpen(false)}
         onCreated={(id) => {
           setNewOpen(false);
@@ -159,14 +162,28 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
 /* New question                                                         */
 /* ------------------------------------------------------------------ */
 
-function NewTopicDialog({ open, lessonId, onClose, onCreated }: { open: boolean; lessonId: string; onClose: () => void; onCreated: (id: string) => void }) {
+function NewTopicDialog({
+  open,
+  lessonId,
+  mentionables,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  lessonId: string;
+  mentionables: MentionOption[];
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}) {
   const toast = useToast();
   const [formKey, setFormKey] = useState(0);
+  const [details, setDetails] = useState("");
   const [state, formAction, pending] = useActionState<ActionResult<{ topicId: string }> | null, FormData>(async (prev, formData) => {
     const res = await createTopicAction(prev, formData);
     if (res.ok) {
       toast.success("Question posted", "The instructors have been notified.");
       setFormKey((k) => k + 1);
+      setDetails("");
       onCreated(res.data.topicId);
     }
     return res;
@@ -181,8 +198,19 @@ function NewTopicDialog({ open, lessonId, onClose, onCreated }: { open: boolean;
         <Field label="Title" htmlFor="topic-title" error={errors.title} required>
           <Input id="topic-title" name="title" maxLength={160} placeholder="e.g. Why does map return undefined here?" invalid={!!errors.title} autoComplete="off" />
         </Field>
-        <Field label="Details" htmlFor="topic-content" error={errors.content} hint="Include what you tried and any error messages. Mention an instructor with @username." required>
-          <Textarea id="topic-content" name="content" rows={6} maxLength={10000} placeholder="Explain your question…" invalid={!!errors.content} />
+        <Field label="Details" htmlFor="topic-content" error={errors.content} hint="Include what you tried and any error messages. Type @ to mention someone." required>
+          <MentionTextarea
+            id="topic-content"
+            name="content"
+            rows={6}
+            maxLength={10000}
+            placeholder="Explain your question…"
+            invalid={!!errors.content}
+            value={details}
+            onValueChange={setDetails}
+            mentionables={mentionables}
+            placement="below"
+          />
         </Field>
         <div className="flex justify-end gap-2 border-t border-border pt-4">
           <Button variant="outline" onClick={onClose} disabled={pending}>
@@ -212,7 +240,7 @@ function TopicThread({
   topic: TopicItem;
   canPost: boolean;
   canModerate: boolean;
-  mentionables: UserChip[];
+  mentionables: MentionOption[];
   onBack: () => void;
   onDeleted: () => void;
 }) {
@@ -439,7 +467,7 @@ function EditReplyForm({ reply, onDone }: { reply: ReplyItem; onDone: () => void
   );
 }
 
-function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionables: UserChip[] }) {
+function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionables: MentionOption[] }) {
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const [text, setText] = useState("");
@@ -452,6 +480,7 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
     return res;
   }, null);
   const error = state && !state.ok ? (state.fieldErrors?.content ?? state.error) : null;
+  const quickPicks = mentionables.filter((m) => m.isInstructor);
 
   const insertMention = (username: string) => {
     const area = formRef.current?.querySelector<HTMLTextAreaElement>("textarea");
@@ -479,12 +508,13 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
       <label htmlFor={`reply-${topicId}`} className="sr-only">
         Your reply
       </label>
-      <Textarea
+      <MentionTextarea
         id={`reply-${topicId}`}
         name="content"
         rows={3}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onValueChange={setText}
+        mentionables={mentionables}
         placeholder="Type your reply here..."
         maxLength={10000}
         invalid={!!error}
@@ -500,8 +530,8 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
         {mentionables.length > 0 ? (
           <div className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-ink-muted">
             <MessageQuestionIcon className="size-3.5" />
-            <span>Mention:</span>
-            {mentionables.map((m) => (
+            <span>{quickPicks.length > 0 ? "Type @ to mention, or:" : "Type @ to mention someone"}</span>
+            {quickPicks.map((m) => (
               <button
                 key={m.id}
                 type="button"

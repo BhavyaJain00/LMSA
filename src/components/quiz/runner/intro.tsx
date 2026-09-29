@@ -65,9 +65,9 @@ export function QuizIntro({ quiz, mode, inVideo, schedule, attemptsUsed, canMana
   const exhausted = live && quiz.maxAttempts > 0 && attemptsUsed >= quiz.maxAttempts;
   const scheduleClosed = schedule.state !== "open";
   const scheduleBlocked = live && scheduleClosed && !canManage;
-  const noQuestions = !quiz.questionsWithheld && quiz.questions.length === 0;
+  const noQuestions = quiz.poolSize === 0;
   const proctored = live && quiz.enableProctoring;
-  const canStart = !exhausted && !scheduleBlocked && !noQuestions && !loadingQuestions && quiz.questions.length > 0;
+  const canStart = !exhausted && !scheduleBlocked && !noQuestions && !loadingQuestions;
   const remaining = quiz.maxAttempts > 0 ? Math.max(0, quiz.maxAttempts - attemptsUsed) : null;
 
   return (

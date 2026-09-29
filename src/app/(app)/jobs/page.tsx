@@ -1,7 +1,17 @@
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, isStaff } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
-import { JOBS_PAGE_SIZE, canPostJobs, countVisibleClosedJobs, getJobs, parseJobType, parseWorkMode } from "@/lib/data/jobs";
+import {
+  JOBS_PAGE_SIZE,
+  canPostJobs,
+  closeExpiredJobs,
+  countJobsPostedBy,
+  countVisibleClosedJobs,
+  getJobCountries,
+  getJobs,
+  parseJobType,
+  parseWorkMode,
+} from "@/lib/data/jobs";
 import { ButtonLink } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -16,20 +26,26 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
   const [settings, viewer, sp] = await Promise.all([getSettings(), getCurrentUser(), props.searchParams]);
   if (!settings.features.jobs) notFound();
   if (!viewer && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent("/jobs")}`);
+  await closeExpiredJobs();
 
   const one = (k: string) => (typeof sp[k] === "string" ? (sp[k] as string) : "");
-  const closedCount = await countVisibleClosedJobs(viewer);
+  const [closedCount, postedCount] = await Promise.all([countVisibleClosedJobs(viewer), countJobsPostedBy(viewer?.id)]);
   const status = one("status") === "closed" && closedCount > 0 ? "closed" : "open";
   const search = one("search").trim();
   const type = parseJobType(one("type"));
-  const mode = parseWorkMode(one("mode"));
+  // `work_mode` is accepted as an alias so links from the reference app keep working.
+  const mode = parseWorkMode(one("mode") || one("work_mode"));
+  // Country filter is for signed-in members only (hidden for guests).
+  const country = viewer ? one("country").trim().slice(0, 80) : "";
+  const countries = viewer ? await getJobCountries(viewer, status) : null;
+  const canPost = canPostJobs(viewer, settings.features.jobs);
   const pageRaw = Number(one("page") || 1);
   const page = Number.isInteger(pageRaw) && pageRaw > 0 ? Math.min(pageRaw, 100) : 1;
 
-  const jobs = await getJobs(viewer, { status, search, type, workMode: mode });
-  const openTotal = status === "open" && !search && !type && !mode ? jobs.length : undefined;
+  const jobs = await getJobs(viewer, { status, search, type, workMode: mode, country: country || undefined });
+  const filtered = !!(search || type || mode || country);
+  const openTotal = status === "open" && !filtered ? jobs.length : undefined;
   const visible = jobs.slice(0, page * JOBS_PAGE_SIZE);
-  const filtered = !!(search || type || mode);
   const staff = isStaff(viewer);
 
   const moreQuery = new URLSearchParams();
@@ -37,6 +53,7 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
   if (search) moreQuery.set("search", search);
   if (type) moreQuery.set("type", type);
   if (mode) moreQuery.set("mode", mode);
+  if (country) moreQuery.set("country", country);
   moreQuery.set("page", String(page + 1));
 
   return (
@@ -52,8 +69,13 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
                 My applications
               </ButtonLink>
             )}
-            {viewer && canPostJobs(viewer) && (
-              <ButtonLink href="/admin/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
+            {viewer && postedCount > 0 && (
+              <ButtonLink href="/jobs/mine" variant="outline" leftIcon={<Icon.Briefcase className="size-4" />}>
+                My job posts
+              </ButtonLink>
+            )}
+            {canPost && (
+              <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
                 Create
               </ButtonLink>
             )}
@@ -62,7 +84,8 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
       />
 
       <JobFilters
-        values={{ status, search, type: type ?? "", mode: mode ?? "" }}
+        values={{ status, search, type: type ?? "", mode: mode ?? "", country }}
+        countries={countries}
         showClosedTab={closedCount > 0}
         openCount={openTotal}
         closedCount={closedCount}
@@ -74,7 +97,7 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
             <EmptyState
               icon={<Icon.Search />}
               title="No jobs match your filters"
-              description="Try a different search term, job type or work mode."
+              description={viewer ? "Try a different search term, country, job type or work mode." : "Try a different search term, job type or work mode."}
               action={
                 <ButtonLink href={status === "closed" ? "/jobs?status=closed" : "/jobs"} variant="outline">
                   Clear filters
@@ -87,8 +110,8 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
               title="No Job Openings Found"
               description="There are no job openings currently. Keep an eye out, fresh learning experiences are on the way!"
               action={
-                viewer && canPostJobs(viewer) ? (
-                  <ButtonLink href="/admin/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
+                canPost ? (
+                  <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
                     Post a job
                   </ButtonLink>
                 ) : undefined

@@ -10,6 +10,7 @@ import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Avatar } from "@/components/ui/avatar";
 import { VideoPlayer } from "@/components/player";
+import { AddToCalendar } from "@/components/pwa/add-to-calendar";
 import { useNow } from "./hooks";
 import { LocalInstant } from "./local-time";
 import { JOIN_WINDOW_MINUTES, formatClockRange, formatCountdown, formatDayKey, formatGmtOffset, joinWindowState } from "./tz";
@@ -72,9 +73,13 @@ function ClassCard({
               <Icon.Info className="size-3.5" /> Ended
             </span>
           </Tooltip>
-        ) : state === "open" ? (
+        ) : state === "open" && now < item.startsAt ? (
           <Badge tone="warning" dot>
-            {now < item.startsAt ? "Starting soon" : "Just ended"}
+            Starting soon
+          </Badge>
+        ) : now > item.endsAt ? (
+          <Badge tone="warning" dot>
+            Just ended
           </Badge>
         ) : (
           <Badge tone="info">in {formatCountdown(item.startsAt - now)}</Badge>
@@ -127,7 +132,13 @@ function ClassCard({
                 Join
               </ExternalButton>
             ) : (
-              <Tooltip label={`Join opens ${JOIN_WINDOW_MINUTES} minutes before the class`}>
+              <Tooltip
+                label={
+                  state === "early"
+                    ? `Join opens ${JOIN_WINDOW_MINUTES} minutes before the class`
+                    : `Joining closed ${JOIN_WINDOW_MINUTES} minutes after the class started`
+                }
+              >
                 <Button size="sm" disabled leftIcon={<Icon.Video className="size-4" />}>
                   Join
                 </Button>
@@ -139,6 +150,31 @@ function ClassCard({
               </ExternalButton>
             )}
           </>
+        )}
+        {!ended && (canJoin || isManager) && (
+          <AddToCalendar
+            variant="ghost"
+            size="sm"
+            align="start"
+            event={{
+              uid: `live-class-${item.id}`,
+              title: item.title,
+              description: [
+                item.description,
+                item.joinUrl ? `Join: ${item.joinUrl}` : "",
+                item.meetingId ? `Meeting ID: ${item.meetingId}` : "",
+                item.password ? `Passcode: ${item.password}` : "",
+                item.host ? `Hosted by ${item.host.name}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              location: item.joinUrl || providerLabel[item.provider],
+              url: `?tab=classes#class-${item.id}`,
+              start: item.startsAt,
+              end: item.endsAt,
+              icsHref: `/api/calendar/event?type=live_class&id=${encodeURIComponent(item.id)}`,
+            }}
+          />
         )}
         {ended &&
           (item.recordingUrl ? (

@@ -1,11 +1,12 @@
 import "server-only";
 import { cache } from "react";
-import { headers } from "next/headers";
+import { siteConfig } from "@/lib/config";
 import type { PublicUser, Role, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
-import { getCurrentUser, hasRole, isEvaluator, isModerator, toPublicUser } from "@/lib/auth/session";
+import { getCurrentUser, isModerator, toPublicUser } from "@/lib/auth/session";
 import { getUserByUsername } from "@/lib/data/users";
 import { toCourseCard, type CourseCardData } from "@/lib/data/dashboard";
+import { canViewEvaluatorTabs, isEvaluatorRole } from "@/lib/data/certificates";
 
 export interface ProfileStats {
   enrolled: number;
@@ -95,7 +96,8 @@ export const getProfileView = cache(async (username: string): Promise<ProfileVie
     canEdit: canEdit(viewer, target),
     canManageRoles: moderator,
     canSeeEmail,
-    showEvaluatorTabs: !!viewer && isEvaluator(viewer) && hasRole(target, "batch_evaluator", "moderator"),
+    // Same rule as the Slots/Schedule pages (shared with the certificates area).
+    showEvaluatorTabs: !!viewer && isEvaluatorRole(target) && (isSelf || canViewEvaluatorTabs(viewer, target)),
     stats,
   };
 });
@@ -196,10 +198,11 @@ export const MANAGEABLE_ROLES: { role: Role; label: string; description: string 
   { role: "admin", label: "Admin", description: "Full access, including site settings and payments" },
 ];
 
-/** Absolute origin of the current request (used for share links). */
+/**
+ * Public origin used for share links. Comes from APP_URL (siteConfig.appUrl) rather
+ * than the request's Host / X-Forwarded-Host headers, which proxies may rewrite and
+ * clients can spoof.
+ */
 export async function getRequestOrigin(): Promise<string> {
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (/^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http" : "https");
-  return `${proto.split(",")[0]!.trim()}://${host.split(",")[0]!.trim()}`;
+  return siteConfig.appUrl;
 }

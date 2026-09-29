@@ -11,6 +11,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ThemePreferenceControl } from "@/components/profile/theme-preference";
+import { isEmailVerified, isTwoFactorActive } from "@/lib/auth/account-status";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/utils";
 import { PasswordForm } from "./password-form";
 import { SessionsPanel, type SessionRow } from "./sessions-panel";
@@ -46,12 +47,22 @@ function describeDevice(ua: string | undefined): { device: string; kind: "deskto
   return { device: os ? `${browser} on ${os}` : browser, kind: /Mobi|iPhone|Android/.test(ua) ? "mobile" : "desktop" };
 }
 
+/**
+ * The member's unexpired sessions, newest first. Expired rows are only purged when
+ * their token is next presented, so they are filtered out here.
+ */
+async function activeSessions(userId: string): Promise<Session[]> {
+  const now = Date.now();
+  const rows = await filter("sessions", (s) => s.userId === userId && new Date(s.expiresAt).getTime() > now);
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 export default async function AccountSettingsPage() {
   const user = await requireUser("/settings");
   const store = await cookies();
   const token = store.get(siteConfig.sessionCookie)?.value;
   const currentHash = token ? createHash("sha256").update(token).digest("hex") : null;
-  const sessions: Session[] = (await filter("sessions", (s) => s.userId === user.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const sessions = await activeSessions(user.id);
   const rows: SessionRow[] = sessions
     .map((s) => {
       const { device, kind } = describeDevice(s.userAgent);
@@ -118,6 +129,26 @@ export default async function AccountSettingsPage() {
               </div>
             </dl>
             <p className="mt-4 text-xs text-ink-muted">To change the email address on your account, contact an administrator.</p>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Security"
+            description="Two-step verification, email confirmation, sign-in history and signed-in devices."
+            actions={
+              <ButtonLink href="/settings/security" variant="outline" size="sm" leftIcon={<Icon.ShieldCheck className="size-4" />}>
+                Manage security
+              </ButtonLink>
+            }
+          />
+          <CardBody className="flex flex-wrap gap-2">
+            <Badge tone={isTwoFactorActive(user) ? "success" : "neutral"} dot>
+              Two-step verification {isTwoFactorActive(user) ? "on" : "off"}
+            </Badge>
+            <Badge tone={isEmailVerified(user) ? "success" : "warning"} dot>
+              {isEmailVerified(user) ? "Email confirmed" : "Email not confirmed"}
+            </Badge>
           </CardBody>
         </Card>
 

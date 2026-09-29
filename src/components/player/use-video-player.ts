@@ -15,6 +15,8 @@ export interface PlayerState {
   waiting: boolean;
   ready: boolean;
   error: string | null;
+  /** MediaError code of the last error (1 aborted, 2 network, 3 decode, 4 unsupported/not found). */
+  errorCode: number | null;
   currentTime: number;
   duration: number;
   buffered: BufferedRange[];
@@ -26,30 +28,35 @@ export interface PlayerState {
   captionsOn: boolean;
   hasCaptions: boolean;
   seeking: boolean;
+  /** A new source (quality change or refreshed signed URL) is loading; time and play state will be restored. */
+  swapping: boolean;
 }
 
 const PREFS_KEY = "ll-player-prefs";
 
-interface Prefs {
+export interface PlayerPrefs {
   volume?: number;
   muted?: boolean;
   rate?: number;
   captions?: boolean;
+  /** Preferred quality: "auto" or a rendition label such as "720p". */
+  quality?: string;
 }
 
-function loadPrefs(): Prefs {
+export function loadPlayerPrefs(): PlayerPrefs {
   try {
-    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Prefs;
+    const parsed: unknown = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as PlayerPrefs) : {};
   } catch {
     return {};
   }
 }
 
-function savePrefs(patch: Prefs) {
+export function savePlayerPrefs(patch: PlayerPrefs) {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...patch }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPlayerPrefs(), ...patch }));
   } catch {
-    /* ignore */
+    /* storage unavailable (private mode) — preferences are simply not remembered */
   }
 }
 
@@ -60,7 +67,25 @@ export interface UseVideoPlayerOptions {
   /** Return false to cancel a seek (used for "prevent skipping"). */
   canSeekTo?: (time: number) => boolean;
   startAt?: number;
+  /**
+   * Called when the media element reports an error. Return true when the
+   * error is being recovered from (e.g. an expired signed URL is refreshed):
+   * the error screen is then not shown.
+   */
+  onMediaError?: (code: number | undefined) => boolean;
 }
+
+interface PendingRestore {
+  time: number;
+  play: boolean;
+}
+
+const ERROR_MESSAGES: Record<number, string> = {
+  1: "Playback was interrupted.",
+  2: "A network error interrupted the video.",
+  3: "The video could not be decoded.",
+  4: "This video format is not supported or the file could not be found.",
+};
 
 /**
  * Wraps a <video> element's imperative API in React state.
@@ -74,6 +99,7 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     waiting: false,
     ready: false,
     error: null,
+    errorCode: null,
     currentTime: 0,
     duration: 0,
     buffered: [],
@@ -85,6 +111,7 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     captionsOn: false,
     hasCaptions: false,
     seeking: false,
+    swapping: false,
   });
   const lastTimeRef = useRef(0);
   const optsRef = useRef(opts);
@@ -92,6 +119,7 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     optsRef.current = opts;
   });
   const startAtApplied = useRef(false);
+  const restoreRef = useRef<PendingRestore | null>(null);
 
   const patch = useCallback((p: Partial<PlayerState>) => setState((s) => ({ ...s, ...p })), []);
 
@@ -100,10 +128,12 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     const video = videoRef.current;
     if (!video) return;
 
-    const prefs = loadPrefs();
-    video.volume = prefs.volume ?? 1;
+    const prefs = loadPlayerPrefs();
+    video.volume = typeof prefs.volume === "number" ? clamp(prefs.volume, 0, 1) : 1;
     video.muted = prefs.muted ?? false;
-    video.playbackRate = prefs.rate ?? 1;
+    const rate = typeof prefs.rate === "number" && prefs.rate >= 0.25 && prefs.rate <= 4 ? prefs.rate : 1;
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
     patch({ volume: video.volume, muted: video.muted, rate: video.playbackRate, captionsOn: prefs.captions ?? false });
 
     const readBuffered = () => {
@@ -113,7 +143,19 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     };
 
     const onLoadedMetadata = () => {
-      patch({ duration: video.duration || 0, ready: true, error: null, hasCaptions: video.textTracks.length > 0 });
+      patch({ duration: video.duration || 0, ready: true, error: null, errorCode: null, hasCaptions: video.textTracks.length > 0 });
+      const restore = restoreRef.current;
+      if (restore) {
+        restoreRef.current = null;
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        const target = duration ? clamp(restore.time, 0, Math.max(0, duration - 0.25)) : restore.time;
+        if (target > 0) video.currentTime = target;
+        lastTimeRef.current = target;
+        patch({ swapping: false, currentTime: target, waiting: restore.play });
+        if (restore.play) void video.play().catch(() => patch({ waiting: false }));
+        startAtApplied.current = true;
+        return;
+      }
       const startAt = optsRef.current.startAt ?? 0;
       if (!startAtApplied.current && startAt > 0 && Number.isFinite(video.duration) && startAt < video.duration - 3) {
         video.currentTime = startAt;
@@ -123,6 +165,11 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     };
     const onTimeUpdate = () => {
       const t = video.currentTime;
+      if (restoreRef.current) {
+        // A new source is loading from 0: keep showing (and counting from) the restored position.
+        lastTimeRef.current = restoreRef.current.time;
+        return;
+      }
       const delta = t - lastTimeRef.current;
       // Count as "watched" only when playing forward at a natural pace (ignores seeks).
       if (!video.paused && !video.seeking && delta > 0 && delta < 2 * Math.max(1, video.playbackRate)) {
@@ -149,10 +196,15 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
       patch({ seeking: false, currentTime: video.currentTime, ended: false });
     };
     const onError = () => {
+      // Errors of a cleared or replaced source are not the viewer's problem.
+      if (!video.getAttribute("src")) return;
       const code = video.error?.code;
-      const message =
-        code === 4 ? "This video format is not supported or the file could not be found." : code === 2 ? "A network error interrupted the video." : "The video could not be played.";
-      patch({ error: message, waiting: false, playing: false });
+      if (optsRef.current.onMediaError?.(code)) {
+        patch({ waiting: true, error: null, errorCode: code ?? null });
+        return;
+      }
+      restoreRef.current = null;
+      patch({ error: ERROR_MESSAGES[code ?? 0] ?? "The video could not be played.", errorCode: code ?? null, waiting: false, playing: false, swapping: false });
     };
     const onDurationChange = () => patch({ duration: video.duration || 0 });
     const onEnterPip = () => patch({ pip: true });
@@ -265,7 +317,7 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
       const vol = clamp(v, 0, 1);
       video.volume = vol;
       video.muted = vol === 0;
-      savePrefs({ volume: vol, muted: vol === 0 });
+      savePlayerPrefs({ volume: vol, muted: vol === 0 });
     },
     [videoRef],
   );
@@ -279,15 +331,17 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     } else {
       video.muted = true;
     }
-    savePrefs({ muted: video.muted, volume: video.volume });
+    savePlayerPrefs({ muted: video.muted, volume: video.volume });
   }, [videoRef]);
 
   const setRate = useCallback(
     (rate: number) => {
       const video = videoRef.current;
       if (!video) return;
+      // defaultPlaybackRate survives source changes (quality switches, refreshed URLs).
+      video.defaultPlaybackRate = rate;
       video.playbackRate = rate;
-      savePrefs({ rate });
+      savePlayerPrefs({ rate });
     },
     [videoRef],
   );
@@ -318,24 +372,41 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
 
   const toggleCaptions = useCallback(() => {
     setState((s) => {
-      savePrefs({ captions: !s.captionsOn });
+      savePlayerPrefs({ captions: !s.captionsOn });
       return { ...s, captionsOn: !s.captionsOn };
     });
   }, []);
 
+  /**
+   * Prepare for a source change (the caller then updates the <video> src):
+   * the current position and play state are restored once the new source
+   * has loaded its metadata.
+   */
+  const beginSourceSwap = useCallback(
+    (override?: Partial<PendingRestore>) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const hadSource = !!video.getAttribute("src") && video.readyState >= 1;
+      const current = restoreRef.current;
+      const time = override?.time ?? current?.time ?? (hadSource ? video.currentTime : 0);
+      const playing = override?.play ?? current?.play ?? (!video.paused && !video.ended);
+      restoreRef.current = { time, play: playing };
+      patch({ swapping: true, waiting: playing, error: null, errorCode: null, ended: false });
+    },
+    [videoRef, patch],
+  );
+
   const retry = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    const t = video.currentTime;
-    patch({ error: null, waiting: true });
+    restoreRef.current = { time: video.currentTime || lastTimeRef.current, play: true };
+    patch({ error: null, errorCode: null, waiting: true, swapping: true });
     video.load();
-    video.currentTime = t;
-    void play();
-  }, [videoRef, patch, play]);
+  }, [videoRef, patch]);
 
   const actions = useMemo(
-    () => ({ play, pause, toggle, seek, skip, setVolume, toggleMute, setRate, toggleFullscreen, togglePip, toggleCaptions, retry }),
-    [play, pause, toggle, seek, skip, setVolume, toggleMute, setRate, toggleFullscreen, togglePip, toggleCaptions, retry],
+    () => ({ play, pause, toggle, seek, skip, setVolume, toggleMute, setRate, toggleFullscreen, togglePip, toggleCaptions, retry, beginSourceSwap }),
+    [play, pause, toggle, seek, skip, setVolume, toggleMute, setRate, toggleFullscreen, togglePip, toggleCaptions, retry, beginSourceSwap],
   );
 
   return { state, actions };

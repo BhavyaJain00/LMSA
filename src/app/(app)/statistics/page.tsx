@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
-import { requireRole } from "@/lib/auth/session";
+import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getStatistics, parseStatRange, type StatRange } from "@/lib/data/statistics";
 import { StatusBadge } from "@/components/ui/badge";
@@ -22,7 +22,21 @@ export const metadata = { title: "Statistics" };
 
 const rangeLabel: Record<StatRange, string> = { 30: "last 30 days", 90: "last 90 days", 365: "last 12 months" };
 
-function KpiTile({ label, tooltip, value, delta, icon, range }: { label: string; tooltip: string; value: number; delta: number; icon: ReactNode; range: StatRange }) {
+function KpiTile({
+  label,
+  tooltip,
+  value,
+  delta,
+  icon,
+  range,
+}: {
+  label: string;
+  tooltip: string;
+  value: number;
+  delta: number;
+  icon: ReactNode;
+  range: StatRange;
+}) {
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between gap-3">
@@ -47,7 +61,11 @@ function KpiTile({ label, tooltip, value, delta, icon, range }: { label: string;
 function ChartCard({ title, subtitle, total, children }: { title: string; subtitle: string; total?: ReactNode; children: ReactNode }) {
   return (
     <Card className="min-w-0">
-      <CardHeader title={title} description={subtitle} actions={total !== undefined ? <span className="text-2xl font-semibold tabular-nums text-ink">{total}</span> : undefined} />
+      <CardHeader
+        title={title}
+        description={subtitle}
+        actions={total !== undefined ? <span className="text-2xl font-semibold tabular-nums text-ink">{total}</span> : undefined}
+      />
       <div className="px-4 pb-4 pt-3 sm:px-5">{children}</div>
     </Card>
   );
@@ -63,11 +81,14 @@ function Stars({ rating }: { rating: number }) {
 }
 
 export default async function StatisticsPage(props: PageProps<"/statistics">) {
-  const user = await requireRole(["moderator", "course_creator"], "/statistics");
-  const settings = await getSettings();
+  // Open to anyone the sidebar offers it to: members, and guests when guest access is on.
+  const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
   if (!settings.features.statistics) notFound();
   const sp = await props.searchParams;
   const range = parseStatRange(sp.range);
+  if (!user && !settings.learning.allowGuestAccess) {
+    redirect(`/login?next=${encodeURIComponent(range === 30 ? "/statistics" : `/statistics?range=${range}`)}`);
+  }
   const stats = await getStatistics(user, range);
   const f = settings.features;
   const sumSeries = (s: { value: number }[]) => s.reduce((acc, p) => acc + p.value, 0);
@@ -79,8 +100,8 @@ export default async function StatisticsPage(props: PageProps<"/statistics">) {
         description="How people are signing up, enrolling and completing courses across the platform."
         breadcrumbs={
           <nav aria-label="Breadcrumb" className="mb-1 text-xs text-ink-muted">
-            <Link href="/dashboard" className="hover:text-ink">
-              Dashboard
+            <Link href={user ? "/dashboard" : "/courses"} className="hover:text-ink">
+              {user ? "Dashboard" : "Courses"}
             </Link>
             <span className="mx-1.5 text-ink-faint">/</span>
             <span aria-current="page">Statistics</span>
@@ -103,8 +124,22 @@ export default async function StatisticsPage(props: PageProps<"/statistics">) {
       <section aria-label="Totals" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <KpiTile label="Courses" tooltip="Published Courses" value={stats.kpis.courses} delta={stats.inRange.courses} icon={<Icon.BookOpen />} range={range} />
         <KpiTile label="Signups" tooltip="Active Members" value={stats.kpis.users} delta={stats.inRange.users} icon={<Icon.UserPlus />} range={range} />
-        <KpiTile label="Enrollments" tooltip="Course Enrollments" value={stats.kpis.enrollments} delta={stats.inRange.enrollments} icon={<Icon.Users />} range={range} />
-        <KpiTile label="Completions" tooltip="Course Completions" value={stats.kpis.completions} delta={stats.inRange.completions} icon={<Icon.Trophy />} range={range} />
+        <KpiTile
+          label="Enrollments"
+          tooltip="Course Enrollments"
+          value={stats.kpis.enrollments}
+          delta={stats.inRange.enrollments}
+          icon={<Icon.Users />}
+          range={range}
+        />
+        <KpiTile
+          label="Completions"
+          tooltip="Course Completions"
+          value={stats.kpis.completions}
+          delta={stats.inRange.completions}
+          icon={<Icon.Trophy />}
+          range={range}
+        />
         <KpiTile
           label="Certifications"
           tooltip="Certified Members"
@@ -136,7 +171,12 @@ export default async function StatisticsPage(props: PageProps<"/statistics">) {
         <div className={stats.completion.completed > 0 ? "lg:col-span-2" : "lg:col-span-3"}>
           <ChartCard title="Top courses" subtitle="Enrollments per course (top 10)">
             {stats.topCourses.length === 0 ? (
-              <EmptyState compact icon={<Icon.BarChart />} title="No enrollments yet" description="Courses will be ranked here once learners start enrolling." />
+              <EmptyState
+                compact
+                icon={<Icon.BarChart />}
+                title="No enrollments yet"
+                description="Courses will be ranked here once learners start enrolling."
+              />
             ) : (
               <BarList
                 valueLabel="enrollments"
@@ -194,7 +234,7 @@ export default async function StatisticsPage(props: PageProps<"/statistics">) {
         </ChartCard>
       </section>
 
-      {f.batches && (
+      {stats.detailed && f.batches && (
         <section aria-labelledby="batch-stats" className="mt-8">
           <h2 id="batch-stats" className="mb-3 text-lg font-semibold tracking-tight text-ink">
             Batches
@@ -254,65 +294,67 @@ export default async function StatisticsPage(props: PageProps<"/statistics">) {
         </section>
       )}
 
-      <section aria-labelledby="course-stats" className="mt-8">
-        <h2 id="course-stats" className="mb-3 text-lg font-semibold tracking-tight text-ink">
-          Courses
-        </h2>
-        <Table>
-          <THead>
-            <tr>
-              <TH>Course</TH>
-              <TH className="text-right">Enrollments</TH>
-              <TH className="hidden text-right sm:table-cell">Completions</TH>
-              <TH className="w-44">Completion</TH>
-              <TH className="hidden text-right md:table-cell">Avg. progress</TH>
-              <TH className="text-right">Rating</TH>
-              {f.certifications && <TH className="hidden text-right lg:table-cell">Certificates</TH>}
-            </tr>
-          </THead>
-          <TBody>
-            {stats.courses.length === 0 && <TableEmpty colSpan={7}>No courses yet.</TableEmpty>}
-            {stats.courses.map((c) => (
-              <TR key={c.id}>
-                <TD>
-                  <Link href={`/courses/${c.slug}`} className="block min-w-48 font-medium hover:text-accent">
-                    {c.title}
-                  </Link>
-                  <span className="text-xs text-ink-muted">
-                    {c.lessons} {c.lessons === 1 ? "lesson" : "lessons"}
-                    {!c.published && " · Unpublished"}
-                    {c.upcoming && " · Upcoming"}
-                    {c.status === "under_review" && " · Under review"}
-                  </span>
-                </TD>
-                <TD className="text-right tabular-nums">
-                  {c.enrollments}
-                  {c.enrollmentsInRange > 0 && <span className="block text-[11px] text-success">+{c.enrollmentsInRange}</span>}
-                </TD>
-                <TD className="hidden text-right tabular-nums sm:table-cell">{c.completions}</TD>
-                <TD>
-                  <div className="flex items-center gap-2">
-                    <ProgressBar value={c.completionRate} size="xs" tone="success" label={`${c.title} completion rate`} />
-                    <span className="w-9 shrink-0 text-right text-xs tabular-nums text-ink-muted">{c.completionRate}%</span>
-                  </div>
-                </TD>
-                <TD className="hidden text-right tabular-nums md:table-cell">{c.averageProgress}%</TD>
-                <TD className="text-right">
-                  {c.averageRating !== null ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <Stars rating={c.averageRating} />
-                      <span className="text-xs text-ink-faint">({c.reviewCount})</span>
+      {stats.detailed && (
+        <section aria-labelledby="course-stats" className="mt-8">
+          <h2 id="course-stats" className="mb-3 text-lg font-semibold tracking-tight text-ink">
+            Courses
+          </h2>
+          <Table>
+            <THead>
+              <tr>
+                <TH>Course</TH>
+                <TH className="text-right">Enrollments</TH>
+                <TH className="hidden text-right sm:table-cell">Completions</TH>
+                <TH className="w-44">Completion</TH>
+                <TH className="hidden text-right md:table-cell">Avg. progress</TH>
+                <TH className="text-right">Rating</TH>
+                {f.certifications && <TH className="hidden text-right lg:table-cell">Certificates</TH>}
+              </tr>
+            </THead>
+            <TBody>
+              {stats.courses.length === 0 && <TableEmpty colSpan={7}>No courses yet.</TableEmpty>}
+              {stats.courses.map((c) => (
+                <TR key={c.id}>
+                  <TD>
+                    <Link href={`/courses/${c.slug}`} className="block min-w-48 font-medium hover:text-accent">
+                      {c.title}
+                    </Link>
+                    <span className="text-xs text-ink-muted">
+                      {c.lessons} {c.lessons === 1 ? "lesson" : "lessons"}
+                      {!c.published && " · Unpublished"}
+                      {c.upcoming && " · Upcoming"}
+                      {c.status === "under_review" && " · Under review"}
                     </span>
-                  ) : (
-                    <span className="text-ink-faint">—</span>
-                  )}
-                </TD>
-                {f.certifications && <TD className="hidden text-right tabular-nums lg:table-cell">{c.certificates}</TD>}
-              </TR>
-            ))}
-          </TBody>
-        </Table>
-      </section>
+                  </TD>
+                  <TD className="text-right tabular-nums">
+                    {c.enrollments}
+                    {c.enrollmentsInRange > 0 && <span className="block text-[11px] text-success">+{c.enrollmentsInRange}</span>}
+                  </TD>
+                  <TD className="hidden text-right tabular-nums sm:table-cell">{c.completions}</TD>
+                  <TD>
+                    <div className="flex items-center gap-2">
+                      <ProgressBar value={c.completionRate} size="xs" tone="success" label={`${c.title} completion rate`} />
+                      <span className="w-9 shrink-0 text-right text-xs tabular-nums text-ink-muted">{c.completionRate}%</span>
+                    </div>
+                  </TD>
+                  <TD className="hidden text-right tabular-nums md:table-cell">{c.averageProgress}%</TD>
+                  <TD className="text-right">
+                    {c.averageRating !== null ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Stars rating={c.averageRating} />
+                        <span className="text-xs text-ink-faint">({c.reviewCount})</span>
+                      </span>
+                    ) : (
+                      <span className="text-ink-faint">—</span>
+                    )}
+                  </TD>
+                  {f.certifications && <TD className="hidden text-right tabular-nums lg:table-cell">{c.certificates}</TD>}
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </section>
+      )}
     </div>
   );
 }

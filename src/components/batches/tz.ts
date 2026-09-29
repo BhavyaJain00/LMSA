@@ -246,15 +246,23 @@ export function formatCountdown(ms: number): string {
   return `${m}m ${String(s).padStart(2, "0")}s`;
 }
 
-/** Minutes a live class may be joined before it starts and after it ends. */
+/** Minutes around a live class's start time during which learners may join. */
 export const JOIN_WINDOW_MINUTES = 15;
 
-export type JoinWindowState = "early" | "open" | "ended";
+/**
+ * - `early`: more than the join window before the start.
+ * - `open`: within ±JOIN_WINDOW_MINUTES of the start; learners can join.
+ * - `closed`: the join window has passed but the class is still running (or
+ *   ended less than JOIN_WINDOW_MINUTES ago); learners can no longer join.
+ * - `ended`: the class is over and belongs in the past list.
+ */
+export type JoinWindowState = "early" | "open" | "closed" | "ended";
 
-/** Whether a class starting at `startsAt` and ending at `endsAt` can be joined at `now`. */
+/** Where a class starting at `startsAt` and ending at `endsAt` stands at `now`. */
 export function joinWindowState(startsAt: number, endsAt: number, now: number): JoinWindowState {
   const margin = JOIN_WINDOW_MINUTES * 60000;
   if (now < startsAt - margin) return "early";
-  if (now > endsAt + margin) return "ended";
-  return "open";
+  if (now <= startsAt + margin) return "open";
+  if (now <= endsAt + margin) return "closed";
+  return "ended";
 }

@@ -122,7 +122,7 @@ async function TabBody({ tab, batch, summary, user }: { tab: AdminBatchTab; batc
         getBatchChartData(batch),
         getBatchFeedback(batch.id),
         getBatchCertificateCount(batch.id),
-        getBatchLiveClasses(batch.id),
+        getBatchLiveClasses(batch.id, user.id, { forManager: true }),
       ]);
       const averages = feedbackAverages(feedback);
       const avgProgress = students.length ? Math.round(students.reduce((a, s) => a + s.overallProgress, 0) / students.length) : 0;
@@ -210,7 +210,7 @@ async function TabBody({ tab, batch, summary, user }: { tab: AdminBatchTab; batc
       return <AssessmentsPanel batchId={batch.id} assessments={assessments} options={options} studentCount={summary.studentCount} />;
     }
     case "classes": {
-      const [classes, instructors] = await Promise.all([getBatchLiveClasses(batch.id), getInstructorOptions()]);
+      const [classes, instructors] = await Promise.all([getBatchLiveClasses(batch.id, user.id, { forManager: true }), getInstructorOptions()]);
       const hosts = [...instructors.filter((o) => batch.instructorIds.includes(o.value)), ...instructors.filter((o) => !batch.instructorIds.includes(o.value))];
       const students = db.batchEnrollments
         .filter((e) => e.batchId === batch.id)

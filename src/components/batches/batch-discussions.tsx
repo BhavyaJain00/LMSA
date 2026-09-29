@@ -216,12 +216,13 @@ export function BatchDiscussions({
                   <div id={`topic-body-${t.id}`} className="space-y-4 border-t border-border bg-surface-2/40 p-4">
                     {t.replies.length > 0 ? (
                       <ul className="space-y-4">
-                        {t.replies.map((r) => (
+                        {t.replies.map((r, replyIndex) => (
                           <ReplyItem
                             key={r.id}
                             reply={r}
                             canEdit={r.authorId === viewerId}
-                            canDelete={r.authorId === viewerId || canModerate}
+                            // The first reply is the topic's opening message; it goes with "Delete topic".
+                            canDelete={replyIndex > 0 && (r.authorId === viewerId || canModerate)}
                             onDelete={(id) => setConfirm({ kind: "reply", id })}
                           />
                         ))}

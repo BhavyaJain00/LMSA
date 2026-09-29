@@ -1,6 +1,8 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { requireUser } from "@/lib/auth/session";
+import { isCreator, isEvaluator, requireUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
+import { ensureBatchReminders } from "@/lib/data/batches";
 import { getStudentDashboard } from "@/lib/data/dashboard";
 import { profileCompleteness } from "@/lib/data/profile";
 import { ProfileCompletenessCard } from "@/components/profile/profile-sections";
@@ -29,18 +31,40 @@ function subtitleFor(liveCount: number, evalCount: number, hasCoursesInProgress:
   return hasCoursesInProgress ? "Resume where you left off" : "Find a course and start learning today.";
 }
 
-function countUpcoming(classes: { endsAt: string }[]): number {
-  const now = Date.now();
-  return classes.filter((c) => new Date(c.endsAt).getTime() > now).length;
+/** One row of the "Teaching at a glance" card; plain text when the viewer cannot open the linked page. */
+function TeachingRow({ href, icon, label, value }: { href?: string; icon: ReactNode; label: string; value: number }) {
+  const content = (
+    <>
+      <span className="flex items-center gap-2 text-ink-muted">
+        {icon} {label}
+      </span>
+      <span className="font-semibold tabular-nums text-ink">{value}</span>
+    </>
+  );
+  const rowClass = "-mx-2 flex items-center justify-between gap-2 rounded-lg px-2 py-1.5";
+  return (
+    <li>
+      {href ? (
+        <Link href={href} className={`${rowClass} hover:bg-surface-2`}>
+          {content}
+        </Link>
+      ) : (
+        <div className={rowClass}>{content}</div>
+      )}
+    </li>
+  );
 }
 
 export default async function DashboardPage() {
   const user = await requireUser("/dashboard");
   const settings = await getSettings();
+  // No scheduler: send any due "batch starts tomorrow" / "live class today" reminders before reading the dashboard.
+  // Best effort: a failed reminder write must never break the dashboard.
+  if (settings.features.batches) await ensureBatchReminders(user.id).catch(() => 0);
   const data = await getStudentDashboard(user, settings);
   const profileHref = `/user/${user.username}`;
-  const upcomingLive = countUpcoming(data.liveClasses);
-  const hasEnrollments = data.stats.enrolled > 0;
+  // Enrollments in unpublished or deleted courses are not shown, so they don't count here.
+  const hasEnrollments = data.continueLearning.length > 0 || data.completedCourses.length > 0;
   const f = settings.features;
   const completeness = profileCompleteness(user);
   const showCompleteProfile = !user.avatarUrl || !user.headline || !user.bio;
@@ -56,7 +80,7 @@ export default async function DashboardPage() {
             </h1>
             <StreakWidget current={data.streak.current} longest={data.streak.longest} activeToday={data.streak.activeToday} />
           </div>
-          <p className="mt-1 text-base text-ink-muted">{subtitleFor(upcomingLive, data.evaluations.length, data.continueLearning.length > 0)}</p>
+          <p className="mt-1 text-base text-ink-muted">{subtitleFor(data.upcomingCounts.liveClasses, data.upcomingCounts.evaluations, data.continueLearning.length > 0)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CommandPaletteButton className="w-full sm:w-64" />
@@ -263,38 +287,20 @@ export default async function DashboardPage() {
                 </Link>
               </div>
               <ul className="space-y-2 text-sm">
-                <li>
-                  <Link href="/admin/courses" className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 hover:bg-surface-2">
-                    <span className="flex items-center gap-2 text-ink-muted">
-                      <Icon.Book className="size-4" /> Your courses
-                    </span>
-                    <span className="font-semibold tabular-nums text-ink">{data.teaching.courses}</span>
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/admin/batches" className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 hover:bg-surface-2">
-                    <span className="flex items-center gap-2 text-ink-muted">
-                      <Icon.Users className="size-4" /> Upcoming batches
-                    </span>
-                    <span className="font-semibold tabular-nums text-ink">{data.teaching.upcomingBatches}</span>
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/admin/assignments/submissions?status=not_graded" className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 hover:bg-surface-2">
-                    <span className="flex items-center gap-2 text-ink-muted">
-                      <Icon.ClipboardList className="size-4" /> Waiting to be graded
-                    </span>
-                    <span className="font-semibold tabular-nums text-ink">{data.teaching.pendingGrading}</span>
-                  </Link>
-                </li>
-                <li>
-                  <Link href={`${profileHref}/schedule`} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 hover:bg-surface-2">
-                    <span className="flex items-center gap-2 text-ink-muted">
-                      <Icon.Calendar className="size-4" /> Evaluations to run
-                    </span>
-                    <span className="font-semibold tabular-nums text-ink">{data.teaching.evaluations}</span>
-                  </Link>
-                </li>
+                <TeachingRow href={isCreator(user) && f.courses ? "/admin/courses" : undefined} icon={<Icon.Book className="size-4" />} label="Your courses" value={data.teaching.courses} />
+                <TeachingRow href={f.batches ? "/admin/batches" : undefined} icon={<Icon.Users className="size-4" />} label="Upcoming batches" value={data.teaching.upcomingBatches} />
+                <TeachingRow
+                  href="/admin/assignments/submissions?status=not_graded"
+                  icon={<Icon.ClipboardList className="size-4" />}
+                  label="Waiting to be graded"
+                  value={data.teaching.pendingGrading}
+                />
+                <TeachingRow
+                  href={isEvaluator(user) ? `${profileHref}/schedule` : undefined}
+                  icon={<Icon.Calendar className="size-4" />}
+                  label="Evaluations to run"
+                  value={data.teaching.evaluations}
+                />
               </ul>
             </Card>
           )}

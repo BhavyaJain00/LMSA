@@ -15,6 +15,7 @@ import { MarkdownEditor } from "./markdown-editor";
 import { NotSavedBadge } from "./status-badges";
 import { useIsClient } from "./client-time";
 import { ASSIGNMENT_TYPE_OPTIONS } from "./shared";
+import { submitWithoutReset } from "./form-submit";
 
 export interface AssignmentFormValues {
   id: string;
@@ -96,7 +97,7 @@ export function AssignmentForm({
   const editing = !!assignment;
 
   return (
-    <form action={formAction} onChange={() => setDirty(true)} className="space-y-6" noValidate>
+    <form onSubmit={submitWithoutReset(formAction)} onChange={() => setDirty(true)} className="space-y-6" noValidate>
       {assignment && <input type="hidden" name="id" value={assignment.id} />}
       <FormError message={state && !state.ok ? state.error : null} />
 

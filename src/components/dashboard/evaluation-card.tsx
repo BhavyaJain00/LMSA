@@ -10,6 +10,7 @@ import { Dropdown } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { AddToCalendar } from "@/components/pwa/add-to-calendar";
 import { formatInZone, sessionState } from "./time";
 import { useNow } from "./use-now";
 
@@ -50,6 +51,8 @@ export function EvaluationCard({
 
   const person = variant === "student" ? evaluation.evaluator : evaluation.member;
   const showOptions = variant === "student" && evaluation.cancellable && state !== "ended" && state !== "live";
+  // The evaluator variant is one big link to the schedule, so it can't hold a menu.
+  const showCalendar = variant === "student" && state !== "ended";
   const canJoin = !!evaluation.meetingLink && (state === "live" || state === "today");
 
   const cancel = () => {
@@ -70,23 +73,48 @@ export function EvaluationCard({
         <h3 className={cn("min-w-0 font-semibold text-ink", variant === "evaluator" && "text-base")}>
           <span className="line-clamp-2">{evaluation.courseTitle}</span>
         </h3>
-        {showOptions && (
-          <Dropdown
-            trigger={
-              <span className="flex size-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink">
-                <Icon.MoreVertical className="size-4" />
-                <span className="sr-only">Options</span>
-              </span>
-            }
-            items={[
-              {
-                label: "Cancel",
-                icon: <Icon.XCircle />,
-                destructive: true,
-                onClick: () => setConfirming(true),
-              },
-            ]}
-          />
+        {(showCalendar || showOptions) && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {showCalendar && (
+              <AddToCalendar
+                size="xs"
+                event={{
+                  uid: `evaluation-${evaluation.id}`,
+                  title: `Certificate evaluation · ${evaluation.courseTitle}`,
+                  description: [
+                    evaluation.meetingLink ? `Join: ${evaluation.meetingLink}` : "",
+                    evaluation.evaluator ? `Evaluator: ${evaluation.evaluator.name}` : "",
+                    evaluation.batchTitle ? `Batch: ${evaluation.batchTitle}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join("\n"),
+                  location: evaluation.meetingLink,
+                  url: evaluation.courseSlug ? `/courses/${evaluation.courseSlug}` : "/dashboard",
+                  start: start.getTime(),
+                  end: end.getTime(),
+                  icsHref: `/api/calendar/event?type=evaluation&id=${encodeURIComponent(evaluation.id)}`,
+                }}
+              />
+            )}
+            {showOptions && (
+              <Dropdown
+                trigger={
+                  <span className="flex size-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink">
+                    <Icon.MoreVertical className="size-4" />
+                    <span className="sr-only">Options</span>
+                  </span>
+                }
+                items={[
+                  {
+                    label: "Cancel",
+                    icon: <Icon.XCircle />,
+                    destructive: true,
+                    onClick: () => setConfirming(true),
+                  },
+                ]}
+              />
+            )}
+          </div>
         )}
       </div>
       {evaluation.batchTitle && <p className="mt-0.5 truncate text-xs text-ink-muted">{evaluation.batchTitle}</p>}

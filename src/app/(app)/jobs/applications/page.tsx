@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
-import { CompanyLogo, JOB_TYPE_LABEL, workModeLabel } from "@/components/jobs/job-bits";
+import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel, workModeTone } from "@/components/jobs/job-bits";
 import { WithdrawApplicationButton } from "@/components/jobs/job-actions";
 import { formatDate, pluralize, relativeTime, truncate } from "@/lib/utils";
 
@@ -61,11 +61,11 @@ export default async function MyApplicationsPage() {
                         {a.job.title}
                       </Link>
                       <p className="text-sm text-ink-muted">
-                        {a.job.company} · {a.job.location}
+                        {a.job.company} · {formatJobLocation(a.job)}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         <Badge tone="accent">{JOB_TYPE_LABEL[a.job.type]}</Badge>
-                        <Badge tone={a.job.remote ? "info" : "neutral"}>{workModeLabel(a.job.remote)}</Badge>
+                        <Badge tone={workModeTone(a.job)}>{workModeLabel(a.job)}</Badge>
                         {a.job.status === "closed" ? (
                           <Badge tone="neutral" dot>
                             Closed

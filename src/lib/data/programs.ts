@@ -2,7 +2,7 @@ import "server-only";
 import type { Course, Database, Program, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { hasRole, isModerator, toPublicUser } from "@/lib/auth/session";
-import { getNextLesson, lessonHref } from "@/lib/data/courses";
+import { canManageCourse, getNextLesson, lessonHref } from "@/lib/data/courses";
 import type {
   AdminProgramCourse,
   AdminProgramTab,
@@ -18,6 +18,26 @@ type Viewer = Pick<User, "id" | "roles"> | null | undefined;
 /* ------------------------------------------------------------------ */
 /* Permissions                                                         */
 /* ------------------------------------------------------------------ */
+
+export type ProgramCourseAccess = { ok: true; paymentId?: string } | { ok: false; reason: "unpublished" | "payment" };
+
+/**
+ * Whether a program member may enroll themselves in one of the program's
+ * courses. Joining a program never bypasses a course's own gates: unpublished
+ * courses stay closed to learners, and paid courses need a completed payment.
+ * Existing enrollments, course managers and moderators are always allowed.
+ */
+export function programCourseAccess(db: Database, user: Viewer, course: Course): ProgramCourseAccess {
+  if (!user) return { ok: false, reason: "unpublished" };
+  if (db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) return { ok: true };
+  if (isModerator(user) || canManageCourse(user, course)) return { ok: true };
+  if (!course.published) return { ok: false, reason: "unpublished" };
+  if (course.paidCourse && course.price > 0) {
+    const payment = db.payments.find((p) => p.userId === user.id && p.itemType === "course" && p.itemId === course.id && p.status === "paid");
+    return payment ? { ok: true, paymentId: payment.id } : { ok: false, reason: "payment" };
+  }
+  return { ok: true };
+}
 
 /** Moderators and course creators can author programs. */
 export function canCreateProgram(user: Viewer): boolean {
@@ -35,11 +55,15 @@ export function canManageProgram(user: Viewer, program: Pick<Program, "createdBy
 /* Progress                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Program progress = average course progress across the program's courses. */
+/** Program progress = ceil(average course progress across the program's courses), capped at 100. */
 export function computeProgramProgress(db: Database, program: Program, userId: string): number {
   if (!program.courseIds.length) return 0;
-  const values = program.courseIds.map((cid) => db.enrollments.find((e) => e.userId === userId && e.courseId === cid)?.progress ?? 0);
-  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+  const values = program.courseIds.map((cid) => {
+    const e = db.enrollments.find((x) => x.userId === userId && x.courseId === cid);
+    if (!e) return 0;
+    return e.completedAt ? 100 : Math.min(100, Math.max(0, e.progress));
+  });
+  return Math.min(100, Math.ceil(values.reduce((a, b) => a + b, 0) / values.length));
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,6 +152,7 @@ export async function getProgramCourses(program: Program, viewer: User | null): 
     const enrollment = viewer ? db.enrollments.find((e) => e.userId === viewer.id && e.courseId === course.id) : undefined;
     const completed = !!enrollment && (enrollment.progress >= 100 || !!enrollment.completedAt);
     const eligible = !program.enforceCourseOrder || index === 0 || previousComplete;
+    const access = programCourseAccess(db, viewer, course);
     let continueHref: string | null = null;
     if (enrollment && viewer && eligible) {
       const next = await getNextLesson(course, viewer);
@@ -153,6 +178,7 @@ export async function getProgramCourses(program: Program, viewer: User | null): 
       completed,
       eligible,
       continueHref,
+      access: access.ok ? "open" : access.reason,
     });
     previousComplete = completed;
   }

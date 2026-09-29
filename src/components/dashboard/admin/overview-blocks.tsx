@@ -241,9 +241,13 @@ export function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
                   {item.target && (
                     <>
                       {" "}
-                      <Link href={item.target.href} className="font-medium text-ink hover:text-accent">
-                        {item.target.label}
-                      </Link>
+                      {item.target.href ? (
+                        <Link href={item.target.href} className="font-medium text-ink hover:text-accent">
+                          {item.target.label}
+                        </Link>
+                      ) : (
+                        <span className="font-medium text-ink">{item.target.label}</span>
+                      )}
                     </>
                   )}
                 </p>

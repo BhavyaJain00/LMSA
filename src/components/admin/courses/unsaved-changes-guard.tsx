@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { markUnsaved } from "./unsaved-registry";
 
 /**
  * Warns before leaving a page with unsaved edits: the browser prompt on
@@ -11,6 +12,12 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 export function UnsavedChangesGuard({ dirty, message }: { dirty: boolean; message?: string }) {
   const router = useRouter();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const sourceId = useId();
+
+  useEffect(() => {
+    markUnsaved(sourceId, dirty);
+    return () => markUnsaved(sourceId, false);
+  }, [sourceId, dirty]);
 
   useEffect(() => {
     if (!dirty) return;

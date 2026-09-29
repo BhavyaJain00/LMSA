@@ -1,13 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth/session";
-import { recordQuizSubmission } from "@/lib/data/quiz";
+import { recordQuizSubmission, revalidateQuizAttempt } from "@/lib/data/quiz";
 import type { SubmitQuizInput } from "@/components/quiz/types";
 
 /**
  * Beacon endpoint: when a learner closes or refreshes the tab mid-attempt the
- * runner posts its answers here with `navigator.sendBeacon`, and the attempt
- * is graded and stored with the reason "Browser closed".
+ * runner posts its answers and attempt token here with `navigator.sendBeacon`,
+ * and the attempt is graded and stored with the reason "Browser closed".
  */
 export async function POST(req: NextRequest, ctx: RouteContext<"/quiz/[id]/submit">) {
   const { id } = await ctx.params;
@@ -28,18 +27,14 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/quiz/[id]/submi
     quizId: id,
     lessonId: typeof body.lessonId === "string" ? body.lessonId : undefined,
     courseId: typeof body.courseId === "string" ? body.courseId : undefined,
-    questionIds: Array.isArray(body.questionIds) ? body.questionIds : [],
+    attemptToken: typeof body.attemptToken === "string" ? body.attemptToken : undefined,
     answers: body.answers && typeof body.answers === "object" ? body.answers : {},
-    startedAt: typeof body.startedAt === "string" ? body.startedAt : "",
-    timeTakenSeconds: typeof body.timeTakenSeconds === "number" ? body.timeTakenSeconds : 0,
     violationCount: typeof body.violationCount === "number" ? body.violationCount : 0,
     submissionReason: "browser_closed",
     preview: false,
   });
   if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 400 });
 
-  revalidatePath("/admin/quizzes/submissions");
-  revalidatePath("/quiz/[id]", "page");
-  revalidatePath("/courses/[slug]/learn/[ref]", "page");
+  await revalidateQuizAttempt({ quizId: id, submissionId: result.data.submission.id });
   return NextResponse.json({ ok: true, id: result.data.submission.id });
 }

@@ -280,7 +280,7 @@ function CouponFormDialog({
             label={discountType === "percentage" ? "Discount Percentage" : "Discount Amount"}
             htmlFor={`${formId}-value`}
             error={errors.value}
-            hint={discountType === "fixed" ? `In the item's currency (e.g. ${currency}).` : undefined}
+            hint={discountType === "fixed" ? `In ${currency}. Only applies to items priced in ${currency}.` : undefined}
             required
           >
             <Input

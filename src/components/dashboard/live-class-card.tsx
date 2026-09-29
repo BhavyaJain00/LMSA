@@ -8,6 +8,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { AddToCalendar } from "@/components/pwa/add-to-calendar";
 import { formatInZone, sessionState, timeUntil } from "./time";
 import { useNow } from "./use-now";
 
@@ -41,7 +42,8 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
       : `${start.toLocaleTimeString("en-US", timeOpts)} – ${end.toLocaleTimeString("en-US", { ...timeOpts, timeZoneName: "short" })}`;
 
   const canJoin = state === "live" || state === "today";
-  const startHref = liveClass.startUrl || liveClass.joinUrl;
+  // startUrl is only present for viewers allowed to start the meeting.
+  const startHref = liveClass.canStart ? liveClass.startUrl || liveClass.joinUrl : liveClass.joinUrl;
 
   return (
     <article
@@ -58,16 +60,35 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
             {liveClass.batch.title}
           </Link>
         </div>
-        {state === "live" && (
-          <Badge tone="success" dot className="shrink-0 animate-pulse">
-            Live now
-          </Badge>
-        )}
-        {state === "today" && (
-          <Badge tone="info" className="shrink-0">
-            Today
-          </Badge>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {state === "live" && (
+            <Badge tone="success" dot className="shrink-0 animate-pulse">
+              Live now
+            </Badge>
+          )}
+          {state === "today" && (
+            <Badge tone="info" className="shrink-0">
+              Today
+            </Badge>
+          )}
+          {state !== "ended" && (
+            <AddToCalendar
+              size="xs"
+              event={{
+                uid: `live-class-${liveClass.id}`,
+                title: liveClass.title,
+                description: [liveClass.description, liveClass.joinUrl ? `Join: ${liveClass.joinUrl}` : "", `Batch: ${liveClass.batch.title}`]
+                  .filter(Boolean)
+                  .join("\n\n"),
+                location: liveClass.joinUrl || providerLabel[liveClass.provider],
+                url: `/batches/${liveClass.batch.slug}?tab=classes#class-${liveClass.id}`,
+                start: start.getTime(),
+                end: end.getTime(),
+                icsHref: `/api/calendar/event?type=live_class&id=${encodeURIComponent(liveClass.id)}`,
+              }}
+            />
+          )}
+        </div>
       </div>
       {liveClass.description && <p className="mt-2 line-clamp-2 text-sm text-ink-muted">{liveClass.description}</p>}
 

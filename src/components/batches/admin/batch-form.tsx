@@ -234,6 +234,15 @@ export function BatchSettingsForm({
   const [values, setValues] = useState<SettingsValues>(() => toSettingsValues(batch));
   const [saved, setSaved] = useState<SettingsValues>(values);
   const [slugTouched, setSlugTouched] = useState(batch.slug !== slugify(batch.title));
+  // The header's Publish/Unpublish button changes `published` outside this form.
+  // Follow the server value so saving other fields never reverts that change,
+  // while keeping any other unsaved edits intact.
+  const [serverPublished, setServerPublished] = useState(batch.published);
+  if (serverPublished !== batch.published) {
+    setServerPublished(batch.published);
+    setValues((v) => ({ ...v, published: batch.published }));
+    setSaved((v) => ({ ...v, published: batch.published }));
+  }
   const submitted = useRef<SettingsValues>(values);
   const formRef = useRef<HTMLFormElement>(null);
   const { submit, pending, error, fieldErrors } = useActionForm(updateBatchAction, { onSuccess: () => setSaved(submitted.current) });

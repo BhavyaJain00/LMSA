@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { LessonBlock } from "@/lib/types";
 import type { VideoWatchInfo } from "@/lib/data/lessons";
+import { getCurrentUser } from "@/lib/auth/session";
+import { prepareLessonVideos } from "@/lib/media/sign";
 import { QuizBlock } from "@/components/quiz/quiz-block";
 import { AssignmentBlock } from "@/components/assessments/assignment-block";
 import { ExerciseBlock } from "@/components/assessments/exercise-block";
@@ -43,7 +45,7 @@ function resumePosition(watch: VideoWatchInfo | undefined, duration: number | un
 }
 
 /** Renders a lesson's content blocks (server component; interactive blocks hydrate on the client). */
-export function LessonBlocks({
+export async function LessonBlocks({
   blocks,
   lessonId,
   courseId,
@@ -56,6 +58,9 @@ export function LessonBlocks({
   exercisesEnabled,
 }: LessonBlocksProps) {
   const primaryVideoId = blocks.find((b) => b.type === "video")?.id;
+  const lastVideoId = blocks.findLast((b) => b.type === "video")?.id;
+  // Signed URLs for protected uploads + watermark/preview/autoplay options (Settings → Video).
+  const videos = await prepareLessonVideos(blocks, lessonId, loggedIn ? await getCurrentUser() : null);
 
   const renderBlock = (block: LessonBlock): ReactNode => {
     switch (block.type) {
@@ -69,7 +74,7 @@ export function LessonBlocks({
         for (const marker of block.quizMarkers ?? []) {
           if (quizNodes[marker.quizId]) continue;
           quizNodes[marker.quizId] = loggedIn ? (
-            <QuizBlock quizId={marker.quizId} lessonId={lessonId} courseId={courseId} />
+            <QuizBlock inVideo quizId={marker.quizId} lessonId={lessonId} courseId={courseId} />
           ) : (
             <LoginRequiredBlock kind="quiz" loginHref={loginHref} />
           );
@@ -77,7 +82,10 @@ export function LessonBlocks({
         return (
           <VideoBlock
             blockId={block.id}
-            src={block.src}
+            src={videos.media[block.id]?.src ?? block.src}
+            sources={videos.media[block.id]?.sources}
+            player={videos.player}
+            lastVideo={block.id === lastVideoId}
             posterUrl={block.posterUrl}
             captionsUrl={block.captionsUrl}
             title={block.title}

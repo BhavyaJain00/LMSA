@@ -7,12 +7,14 @@ import { jobTypes } from "@/lib/config";
 import { Input, Select } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { WORK_MODES } from "./work-mode";
 
 export interface JobFilterValues {
   status: "open" | "closed";
   search: string;
   type: string;
   mode: string;
+  country: string;
 }
 
 function buildQuery(v: JobFilterValues): string {
@@ -21,11 +23,28 @@ function buildQuery(v: JobFilterValues): string {
   if (v.search.trim()) qs.set("search", v.search.trim());
   if (v.type) qs.set("type", v.type);
   if (v.mode) qs.set("mode", v.mode);
+  if (v.country) qs.set("country", v.country);
   return qs.toString();
 }
 
-/** Open/Closed tabs + search, type and work mode filters (URL-driven). */
-export function JobFilters({ values, showClosedTab, openCount, closedCount }: { values: JobFilterValues; showClosedTab: boolean; openCount?: number; closedCount?: number }) {
+/**
+ * Open/Closed tabs + search, country, type and work mode filters (URL-driven).
+ * The Country filter is only offered to signed-in members (`countries` is
+ * null for guests), matching the reference board.
+ */
+export function JobFilters({
+  values,
+  showClosedTab,
+  openCount,
+  closedCount,
+  countries,
+}: {
+  values: JobFilterValues;
+  showClosedTab: boolean;
+  openCount?: number;
+  closedCount?: number;
+  countries: string[] | null;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [pending, startTransition] = useTransition();
@@ -71,20 +90,36 @@ export function JobFilters({ values, showClosedTab, openCount, closedCount }: { 
           })}
         </div>
       )}
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_11rem_11rem]" aria-busy={pending}>
-        <Input
-          type="search"
-          aria-label="Search jobs"
-          placeholder="Search by title, company or location"
-          value={search}
-          onChange={(e) => {
-            const value = e.target.value;
-            setSearch(value);
-            if (timer.current) clearTimeout(timer.current);
-            timer.current = setTimeout(() => go({ search: value }), 300);
-          }}
-          leftAddon={pending ? <Spinner className="size-4" /> : <Icon.Search className="size-4" />}
-        />
+      <div
+        className={cn("grid gap-2 sm:grid-cols-2", countries ? "lg:grid-cols-[minmax(0,1fr)_11rem_11rem_11rem]" : "lg:grid-cols-[minmax(0,1fr)_11rem_11rem]")}
+        aria-busy={pending}
+      >
+        <div className="sm:col-span-2 lg:col-span-1">
+          <Input
+            type="search"
+            aria-label="Search jobs"
+            placeholder="Search by title, company or location"
+            value={search}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSearch(value);
+              if (timer.current) clearTimeout(timer.current);
+              timer.current = setTimeout(() => go({ search: value }), 300);
+            }}
+            leftAddon={pending ? <Spinner className="size-4" /> : <Icon.Search className="size-4" />}
+          />
+        </div>
+        {countries && (
+          <Select aria-label="Country" value={values.country} onChange={(e) => go({ country: e.target.value })}>
+            <option value="">Any country</option>
+            {values.country && !countries.includes(values.country) && <option value={values.country}>{values.country}</option>}
+            {countries.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </Select>
+        )}
         <Select aria-label="Type" value={values.type} onChange={(e) => go({ type: e.target.value })}>
           <option value="">All types</option>
           {jobTypes.map((t) => (
@@ -95,8 +130,11 @@ export function JobFilters({ values, showClosedTab, openCount, closedCount }: { 
         </Select>
         <Select aria-label="Work Mode" value={values.mode} onChange={(e) => go({ mode: e.target.value })}>
           <option value="">Any work mode</option>
-          <option value="remote">Remote</option>
-          <option value="onsite">On-site</option>
+          {WORK_MODES.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
         </Select>
       </div>
     </div>

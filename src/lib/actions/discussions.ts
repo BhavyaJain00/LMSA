@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, Course, DiscussionReply, DiscussionTopic, User } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
-import { getLessonAccess, lessonHasQuiz, type LessonAccess } from "@/lib/data/lessons";
+import { getLessonAccess, getMentionCandidates, lessonHasQuiz, type LessonAccess } from "@/lib/data/lessons";
 import { notifyMany } from "@/lib/services/notifications";
+import { awardDiscussionReplyPoints, revokePoints } from "@/lib/services/points";
 import { fd, truncate, uid } from "@/lib/utils";
 
 /**
@@ -47,19 +48,21 @@ function revalidateLessons(lessonHref?: string) {
   revalidatePath("/(learn)/courses/[slug]/learn/[ref]", "page");
 }
 
-/** @username mentions that resolve to instructors of the course. */
-async function mentionedInstructors(content: string, course: Course, exclude: string): Promise<string[]> {
+/**
+ * @username mentions that resolve to people the author may mention: any
+ * enabled user for staff and course instructors, course members and
+ * instructors for learners (see getMentionCandidates). Never the author.
+ */
+async function mentionedUsers(content: string, course: Course, author: User): Promise<string[]> {
   const handles = new Set<string>();
   for (const m of content.matchAll(/(^|[^\w@])@([a-z0-9][a-z0-9._-]{0,63})/gi)) handles.add(m[2]!.toLowerCase().replace(/[._-]+$/, ""));
   if (!handles.size) return [];
-  const db = await getDb();
-  return db.users
-    .filter((u) => u.enabled && handles.has(u.username.toLowerCase()) && course.instructorIds.includes(u.id) && u.id !== exclude)
-    .map((u) => u.id);
+  const candidates = await getMentionCandidates(course, author);
+  return candidates.filter((u) => handles.has(u.username.toLowerCase())).map((u) => u.id);
 }
 
 /**
- * Notify people about new activity: mentioned instructors get a "mention",
+ * Notify people about new activity: mentioned users get a "mention",
  * the topic author and the remaining course instructors get a "reply".
  */
 async function notifyParticipants(opts: {
@@ -71,7 +74,7 @@ async function notifyParticipants(opts: {
 }) {
   const { access, topic, author, content, isNewTopic } = opts;
   const link = topicLink(access, topic.id);
-  const mentioned = await mentionedInstructors(content, access.course, author.id);
+  const mentioned = await mentionedUsers(content, access.course, author);
   if (mentioned.length) {
     await notifyMany(mentioned, {
       type: "mention",
@@ -157,6 +160,7 @@ export async function createReplyAction(_prev: ActionResult<{ replyId: string }>
     if (topic) topic.updatedAt = now;
   });
   await notifyParticipants({ access: g.access, topic: loaded.topic, author: g.user, content, isNewTopic: false });
+  await awardDiscussionReplyPoints(reply.id);
   revalidateLessons(g.access.href);
   return { ok: true, data: { replyId: reply.id }, message: "Reply posted" };
 }
@@ -230,6 +234,7 @@ export async function deleteReplyAction(replyId: string): Promise<ActionResult<{
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
   const topicDeleted = first?.id === reply.id;
 
+  await revokePoints("discussion_reply", db.discussionReplies.filter((r) => (topicDeleted ? r.topicId === reply.topicId : r.id === reply.id)).map((r) => r.id));
   await mutate((d) => {
     if (topicDeleted) {
       d.discussionTopics = d.discussionTopics.filter((t) => t.id !== reply.topicId);
@@ -250,6 +255,7 @@ export async function deleteTopicAction(topicId: string): Promise<ActionResult> 
   if (!g.ok) return g;
   if (loaded.topic.authorId !== g.user.id && !g.access.manager) return { ok: false, error: "You can only delete your own questions." };
 
+  await revokePoints("discussion_reply", (await getDb()).discussionReplies.filter((r) => r.topicId === loaded.topic.id).map((r) => r.id));
   await mutate((d) => {
     d.discussionTopics = d.discussionTopics.filter((t) => t.id !== loaded.topic.id);
     d.discussionReplies = d.discussionReplies.filter((r) => r.topicId !== loaded.topic.id);

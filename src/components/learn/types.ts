@@ -51,6 +51,12 @@ export interface UserChip {
   avatarUrl?: string;
 }
 
+/** Someone the viewer can @mention in a lesson discussion. */
+export interface MentionOption extends UserChip {
+  /** One of the course instructors (listed first and offered as quick picks). */
+  isInstructor: boolean;
+}
+
 export interface NoteItem {
   id: string;
   color: NoteColor;

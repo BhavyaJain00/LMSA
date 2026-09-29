@@ -174,6 +174,20 @@ export async function getCategoryBySlug(slug: string | undefined): Promise<Categ
 /* ------------------------------------------------------------------ */
 
 /**
+ * Summary of one course for its detail page. Visible courses come from the
+ * regular "all" listing; an unpublished course the viewer cannot manage is
+ * still returned when the viewer is enrolled in it (the lesson player allows
+ * enrolled members in, so the course page must too).
+ */
+export async function getCourseSummaryForViewer(courseId: string, viewer: User | null, enrolled: boolean): Promise<CourseSummary | null> {
+  const visible = await getCourseSummaries(viewer, { includeUnpublished: true, tab: "all" });
+  const found = visible.find((c) => c.id === courseId);
+  if (found || !enrolled || !viewer) return found ?? null;
+  const mine = await getCourseSummaries(viewer, { includeUnpublished: true, tab: "enrolled" });
+  return mine.find((c) => c.id === courseId) ?? null;
+}
+
+/**
  * Related courses: the course's explicit list first, then (when none are
  * set) published courses from the same category. Only courses the viewer
  * may see are returned.

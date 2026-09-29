@@ -2,24 +2,24 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ActionResult, CardGradient, Category, Course, MemberType, User } from "@/lib/types";
+import type { ActionResult, CardGradient, Category, Course, Database, MemberType, User } from "@/lib/types";
 import type { CourseFormValues, EnrollCandidate, StudentProgressDetail } from "@/components/admin/courses/types";
 import { isBlockedVideoHost } from "@/components/admin/courses/blocks";
 import { cardGradients, currencies } from "@/lib/config";
 import { findById, getDb, insert, mutate, update } from "@/lib/db/store";
 import { getCurrentUser, hasRole, isModerator } from "@/lib/auth/session";
 import { canManageCourse } from "@/lib/data/courses";
-import { canCreateCourses, getStudentProgressDetail, getWorkflowFlags, searchEnrollCandidates } from "@/lib/data/admin-courses";
+import { RESERVED_COURSE_SLUGS, canCreateCourses, getStudentProgressDetail, getWorkflowFlags, searchEnrollCandidates } from "@/lib/data/admin-courses";
 import { enrollUserInCourse, unenrollUserFromCourse } from "@/lib/services/enrollment";
 import { notify, notifyMany, notifyModerators } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
-import { fd, fdBool, isValidUrl, slugify, toDateKey, uid, unique, uniqueSlug } from "@/lib/utils";
+import { fd, fdBool, isValidUrl, toDateKey, uid, unique, uniqueSlug } from "@/lib/utils";
+import { MAX_PREREQUISITES, findPrerequisiteCycle } from "@/components/learn/drip-shared";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const RESERVED_SLUGS = new Set(["new", "import", "edit", "learn"]);
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function revalidateCourse(course: Pick<Course, "id" | "slug">) {
@@ -55,6 +55,22 @@ function parsePrice(raw: string): number | null {
   return Math.round(n * 100);
 }
 
+const META_DESCRIPTION_MAX = 160;
+const META_KEYWORDS_MAX = 500;
+
+/** "a, b ,,A" → "a, b": trimmed, de-duplicated (case-insensitive), comma separated. */
+function normalizeKeywords(raw: string): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[,;\r\n]/)) {
+    const kw = part.trim().replace(/\s+/g, " ");
+    if (!kw || seen.has(kw.toLowerCase())) continue;
+    seen.add(kw.toLowerCase());
+    out.push(kw);
+  }
+  return out.join(", ");
+}
+
 interface ParsedCourseForm {
   values: CourseFormValues;
   fieldErrors: Record<string, string>;
@@ -71,11 +87,16 @@ async function parseCourseForm(formData: FormData, user: User, existing: Course 
 
   const rawSlug = fd(formData, "slug").toLowerCase();
   const slugProvided = rawSlug.length > 0;
-  const slug = slugProvided ? rawSlug : slugify(title);
+  // A blank slug keeps the current one when editing, or derives a free, non-reserved slug from the title.
+  const slug = slugProvided
+    ? rawSlug
+    : existing
+      ? existing.slug
+      : uniqueSlug(title, [...db.courses.map((c) => c.slug), ...RESERVED_COURSE_SLUGS]);
   if (slugProvided) {
     if (!SLUG_RE.test(slug)) fieldErrors.slug = "Use lowercase letters, numbers and single hyphens only.";
     else if (slug.length > 80) fieldErrors.slug = "Keep the slug under 80 characters.";
-    else if (RESERVED_SLUGS.has(slug)) fieldErrors.slug = `"${slug}" is reserved. Pick another slug.`;
+    else if (RESERVED_COURSE_SLUGS.includes(slug)) fieldErrors.slug = `"${slug}" is reserved. Pick another slug.`;
     else if (db.courses.some((c) => c.slug === slug && c.id !== existing?.id)) fieldErrors.slug = "This slug is already used by another course.";
   }
 
@@ -177,7 +198,7 @@ export async function createCourseAction(_prev: ActionResult | null, formData: F
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the highlighted fields.", fieldErrors };
 
   const db = await getDb();
-  const slug = slugProvided ? values.slug : uniqueSlug(values.title, [...db.courses.map((c) => c.slug), ...RESERVED_SLUGS]);
+  const slug = slugProvided ? values.slug : uniqueSlug(values.title, [...db.courses.map((c) => c.slug), ...RESERVED_COURSE_SLUGS]);
   const now = new Date().toISOString();
   const course: Course = {
     ...values,
@@ -269,6 +290,19 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
     }
   }
   if (enableCertification && paidCertificate) fieldErrors.enableCertification = "A course cannot have both paid certificate and certificate of completion.";
+  const metaDescription = fd(formData, "metaDescription").replace(/\s+/g, " ");
+  if (metaDescription.length > META_DESCRIPTION_MAX) fieldErrors.metaDescription = `Keep the meta description under ${META_DESCRIPTION_MAX} characters.`;
+  const metaKeywords = normalizeKeywords(fd(formData, "metaKeywords"));
+  if (metaKeywords.length > META_KEYWORDS_MAX) fieldErrors.metaKeywords = `Keep the meta keywords under ${META_KEYWORDS_MAX} characters.`;
+
+  // Prerequisites are saved only when the form rendered that section (the marker field), so a
+  // submission from a form that never loaded them cannot wipe them.
+  let prerequisiteCourseIds: string[] | undefined;
+  if (fd(formData, "prerequisitesField") === "1") {
+    const parsed = parsePrerequisites(getList(formData, "prerequisiteCourseIds"), course, db);
+    if ("error" in parsed) fieldErrors.prerequisiteCourseIds = parsed.error;
+    else prerequisiteCourseIds = parsed.ids;
+  }
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the highlighted settings.", fieldErrors };
 
   const next = await update("courses", course.id, {
@@ -283,11 +317,39 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
     paidCertificate,
     certificatePrice: paidCertificate ? (certificatePrice ?? 0) : 0,
     evaluatorId,
+    metaDescription: metaDescription || undefined,
+    metaKeywords: metaKeywords || undefined,
+    ...(prerequisiteCourseIds !== undefined ? { prerequisiteCourseIds: prerequisiteCourseIds.length ? prerequisiteCourseIds : undefined } : {}),
     updatedAt: new Date().toISOString(),
   });
   if (!next) return { ok: false, error: "This course no longer exists." };
   revalidateCourse(next);
   return { ok: true, data: undefined, message: "Course settings saved" };
+}
+
+/**
+ * Validate the prerequisite course ids of a settings submission: existing
+ * courses other than this one, published (a prerequisite that was already set
+ * may stay while unpublished), at most MAX_PREREQUISITES, and no cycles
+ * (A requires B … requires A would lock learners out of every course in the loop).
+ */
+function parsePrerequisites(raw: string[], course: Course, db: Database): { ids: string[] } | { error: string } {
+  const ids = unique(raw);
+  if (ids.includes(course.id)) return { error: "A course can't be its own prerequisite." };
+  if (ids.length > MAX_PREREQUISITES) return { error: `Pick at most ${MAX_PREREQUISITES} prerequisite courses.` };
+  const current = new Set(course.prerequisiteCourseIds ?? []);
+  for (const id of ids) {
+    const target = db.courses.find((c) => c.id === id);
+    if (!target) return { error: "One of the prerequisite courses no longer exists. Reload the page and try again." };
+    if (!target.published && !current.has(id)) return { error: `“${target.title}” is not published, so learners can't complete it. Pick a published course.` };
+  }
+  const graph = new Map(db.courses.filter((c) => c.id !== course.id).map((c) => [c.id, c.prerequisiteCourseIds ?? []]));
+  const loop = findPrerequisiteCycle(course.id, ids, graph);
+  if (loop) {
+    const title = db.courses.find((c) => c.id === loop)?.title ?? "One of the selected courses";
+    return { error: `“${title}” already requires this course (directly or through other courses), so it can't be a prerequisite too.` };
+  }
+  return { ids };
 }
 
 /* ------------------------------------------------------------------ */
@@ -432,7 +494,11 @@ export async function deleteCourseAction(courseId: string): Promise<ActionResult
       return copy;
     };
 
-    db.courses = db.courses.filter((c) => c.id !== id).map((c) => (c.relatedCourseIds.includes(id) ? { ...c, relatedCourseIds: c.relatedCourseIds.filter((r) => r !== id) } : c));
+    db.courses = db.courses
+      .filter((c) => c.id !== id)
+      .map((c) => (c.relatedCourseIds.includes(id) ? { ...c, relatedCourseIds: c.relatedCourseIds.filter((r) => r !== id) } : c))
+      // A deleted course can no longer be a prerequisite of another course.
+      .map((c) => (c.prerequisiteCourseIds?.includes(id) ? { ...c, prerequisiteCourseIds: c.prerequisiteCourseIds.filter((p) => p !== id) } : c));
     db.chapters = db.chapters.filter((c) => c.courseId !== id);
     db.lessons = db.lessons.filter((l) => l.courseId !== id);
     db.enrollments = db.enrollments.filter((e) => e.courseId !== id);

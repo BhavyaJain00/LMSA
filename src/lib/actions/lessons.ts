@@ -5,9 +5,10 @@ import type { ActionResult, Course, Lesson, LessonBlock, User } from "@/lib/type
 import { findById, getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { canManageCourse } from "@/lib/data/courses";
-import { recomputeEnrollmentProgress, renumberOutline } from "@/lib/data/admin-courses";
+import { recomputeEnrollmentProgress, renumberOutline, touchCourseContent, withReviewNote } from "@/lib/data/admin-courses";
 import { computeLessonDuration, createBlock, sanitizeBlocks } from "@/components/admin/courses/blocks";
 import { fd, fdBool, uid, uniqueSlug } from "@/lib/utils";
+import { cleanReleaseRule, hasReleaseRule, validateReleaseInput, type ReleaseRule } from "@/components/learn/drip-shared";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -35,11 +36,6 @@ async function loadLesson(lessonId: string): Promise<{ user: User; course: Cours
   return { ...loaded, lesson };
 }
 
-function touchCourse(db: { courses: Course[] }, courseId: string) {
-  const row = db.courses.find((c) => c.id === courseId);
-  if (row) row.updatedAt = new Date().toISOString();
-}
-
 /* ------------------------------------------------------------------ */
 /* Outline operations                                                  */
 /* ------------------------------------------------------------------ */
@@ -50,7 +46,7 @@ export async function createLessonAction(
 ): Promise<ActionResult<{ lessonId: string; editHref: string }>> {
   const loaded = await loadCourse(fd(formData, "courseId"));
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course } = loaded;
+  const { user, course } = loaded;
   const chapterId = fd(formData, "chapterId");
   const title = fd(formData, "title").replace(/\s+/g, " ") || "Untitled lesson";
   if (title.length > 160) return { ok: false, error: "Keep the title under 160 characters.", fieldErrors: { title: "Keep the title under 160 characters." } };
@@ -61,6 +57,7 @@ export async function createLessonAction(
 
   const now = new Date().toISOString();
   const lessonId = uid("les");
+  let reviewReset = false;
   await mutate((d) => {
     const siblings = d.lessons.filter((l) => l.chapterId === chapter.id);
     const lesson: Lesson = {
@@ -78,10 +75,10 @@ export async function createLessonAction(
     };
     d.lessons.push(lesson);
     recomputeEnrollmentProgress(d, course.id);
-    touchCourse(d, course.id);
+    reviewReset = touchCourseContent(d, course.id, user);
   });
   revalidateLessonPaths(course);
-  return { ok: true, data: { lessonId, editHref: `/admin/courses/${course.id}/lessons/${lessonId}` }, message: "Lesson created successfully" };
+  return { ok: true, data: { lessonId, editHref: `/admin/courses/${course.id}/lessons/${lessonId}` }, message: withReviewNote("Lesson created successfully", reviewReset) };
 }
 
 export async function renameLessonAction(lessonId: string, title: string): Promise<ActionResult> {
@@ -91,29 +88,35 @@ export async function renameLessonAction(lessonId: string, title: string): Promi
   if (!clean) return { ok: false, error: "Title is required" };
   if (clean.length > 160) return { ok: false, error: "Keep the title under 160 characters." };
   if (clean === loaded.lesson.title) return { ok: true, data: undefined };
+  let reviewReset = false;
   await mutate((db) => {
     const row = db.lessons.find((l) => l.id === lessonId);
-    if (row) {
-      row.title = clean;
-      row.updatedAt = new Date().toISOString();
-    }
+    if (!row) return;
+    row.title = clean;
+    row.updatedAt = new Date().toISOString();
+    reviewReset = touchCourseContent(db, loaded.course.id, loaded.user);
   });
   revalidateLessonPaths(loaded.course, lessonId);
-  return { ok: true, data: undefined, message: "Lesson renamed" };
+  return { ok: true, data: undefined, message: withReviewNote("Lesson renamed", reviewReset) };
 }
 
 export async function setLessonPreviewAction(lessonId: string, includeInPreview: boolean): Promise<ActionResult> {
   const loaded = await loadLesson(lessonId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
+  let reviewReset = false;
   await mutate((db) => {
     const row = db.lessons.find((l) => l.id === lessonId);
-    if (row) {
-      row.includeInPreview = !!includeInPreview;
-      row.updatedAt = new Date().toISOString();
-    }
+    if (!row) return;
+    row.includeInPreview = !!includeInPreview;
+    row.updatedAt = new Date().toISOString();
+    reviewReset = touchCourseContent(db, loaded.course.id, loaded.user);
   });
   revalidateLessonPaths(loaded.course, lessonId);
-  return { ok: true, data: undefined, message: includeInPreview ? "Lesson is now a free preview" : "Lesson is visible to enrolled students only" };
+  return {
+    ok: true,
+    data: undefined,
+    message: withReviewNote(includeInPreview ? "Lesson is now a free preview" : "Lesson is visible to enrolled students only", reviewReset),
+  };
 }
 
 /**
@@ -123,8 +126,9 @@ export async function setLessonPreviewAction(lessonId: string, includeInPreview:
 export async function moveLessonAction(lessonId: string, direction: "up" | "down"): Promise<ActionResult> {
   const loaded = await loadLesson(lessonId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course, lesson } = loaded;
+  const { user, course, lesson } = loaded;
   let moved = false;
+  let reviewReset = false;
 
   await mutate((db) => {
     const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
@@ -161,22 +165,23 @@ export async function moveLessonAction(lessonId: string, direction: "up" | "down
     }
     if (moved) {
       row.updatedAt = new Date().toISOString();
-      touchCourse(db, course.id);
+      reviewReset = touchCourseContent(db, course.id, user);
     }
   });
   if (!moved) return { ok: false, error: "This lesson can't move any further." };
   revalidateLessonPaths(course, lessonId);
-  return { ok: true, data: undefined, message: "Lesson moved successfully" };
+  return { ok: true, data: undefined, message: withReviewNote("Lesson moved successfully", reviewReset) };
 }
 
 export async function moveLessonToChapterAction(lessonId: string, chapterId: string): Promise<ActionResult> {
   const loaded = await loadLesson(lessonId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course, lesson } = loaded;
+  const { user, course, lesson } = loaded;
   if (lesson.chapterId === chapterId) return { ok: true, data: undefined };
   const target = await findById("chapters", chapterId);
   if (!target || target.courseId !== course.id) return { ok: false, error: "Pick a chapter of this course." };
 
+  let reviewReset = false;
   await mutate((db) => {
     const row = db.lessons.find((l) => l.id === lessonId);
     if (!row) return;
@@ -186,17 +191,18 @@ export async function moveLessonToChapterAction(lessonId: string, chapterId: str
     row.updatedAt = new Date().toISOString();
     for (const p of db.progress) if (p.lessonId === lessonId) p.chapterId = chapterId;
     renumberOutline(db, course.id);
-    touchCourse(db, course.id);
+    reviewReset = touchCourseContent(db, course.id, user);
   });
   revalidateLessonPaths(course, lessonId);
-  return { ok: true, data: undefined, message: `Lesson moved to "${target.title}"` };
+  return { ok: true, data: undefined, message: withReviewNote(`Lesson moved to "${target.title}"`, reviewReset) };
 }
 
 export async function deleteLessonAction(lessonId: string): Promise<ActionResult> {
   const loaded = await loadLesson(lessonId);
   if ("error" in loaded) return { ok: false, error: "You do not have permission to delete this lesson." };
-  const { course } = loaded;
+  const { user, course } = loaded;
 
+  let reviewReset = false;
   await mutate((db) => {
     const topicIds = new Set(db.discussionTopics.filter((t) => t.refType === "lesson" && t.refId === lessonId).map((t) => t.id));
     const unlink = <T extends { lessonId?: string }>(row: T): T => {
@@ -220,10 +226,10 @@ export async function deleteLessonAction(lessonId: string): Promise<ActionResult
     );
     renumberOutline(db, course.id);
     recomputeEnrollmentProgress(db, course.id);
-    touchCourse(db, course.id);
+    reviewReset = touchCourseContent(db, course.id, user);
   });
   revalidateLessonPaths(course);
-  return { ok: true, data: undefined, message: "Lesson deleted successfully" };
+  return { ok: true, data: undefined, message: withReviewNote("Lesson deleted successfully", reviewReset) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,12 +242,15 @@ export interface SavedLesson {
   blocks: LessonBlock[];
   durationSeconds: number;
   updatedAt: string;
+  /** Release schedule after the save (round 2 drip). */
+  dripDays?: number;
+  availableFrom?: string;
 }
 
 export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, formData: FormData): Promise<ActionResult<SavedLesson>> {
   const loaded = await loadLesson(fd(formData, "lessonId"));
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course, lesson } = loaded;
+  const { user, course, lesson } = loaded;
   const db = await getDb();
   const fieldErrors: Record<string, string> = {};
 
@@ -258,6 +267,17 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
   const includeInPreview = fdBool(formData, "includeInPreview");
   const instructorNotes = fd(formData, "instructorNotes");
   if (instructorNotes.length > 50_000) fieldErrors.instructorNotes = "Instructor notes are too long (max 50,000 characters).";
+
+  // Release schedule (drip): saved only when the editor rendered the section (marker field).
+  let release: ReleaseRule | null = null;
+  if (fd(formData, "releaseSchedule") === "1") {
+    const parsed = validateReleaseInput({ dripDays: fd(formData, "dripDays"), availableFrom: fd(formData, "availableFrom") });
+    if (parsed.ok) release = parsed.rule;
+    else {
+      if (parsed.errors.dripDays) fieldErrors.dripDays = parsed.errors.dripDays;
+      if (parsed.errors.availableFrom) fieldErrors.availableFrom = parsed.errors.availableFrom;
+    }
+  }
 
   let rawBlocks: unknown;
   try {
@@ -284,6 +304,8 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
 
   const durationSeconds = computeLessonDuration(blocks);
   const updatedAt = new Date().toISOString();
+  let reviewReset = false;
+  let schedule: ReleaseRule = { dripDays: lesson.dripDays, availableFrom: lesson.availableFrom };
   await mutate((d) => {
     const row = d.lessons.find((l) => l.id === lesson.id);
     if (!row) return;
@@ -295,8 +317,65 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
     row.updatedAt = updatedAt;
     if (instructorNotes) row.instructorNotes = instructorNotes;
     else delete row.instructorNotes;
-    touchCourse(d, course.id);
+    applyLessonRelease(row, release);
+    schedule = { dripDays: row.dripDays, availableFrom: row.availableFrom };
+    reviewReset = touchCourseContent(d, course.id, user);
   });
   revalidateLessonPaths(course, lesson.id);
-  return { ok: true, data: { slug, title, blocks, durationSeconds, updatedAt }, message: "Lesson saved" };
+  return {
+    ok: true,
+    data: { slug, title, blocks, durationSeconds, updatedAt, ...cleanReleaseRule(schedule) },
+    message: withReviewNote("Lesson saved", reviewReset),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Release schedule (drip)                                             */
+/* ------------------------------------------------------------------ */
+
+/** Write a validated release rule onto a lesson row (null = leave unchanged, {} = available immediately). */
+function applyLessonRelease(row: Lesson, release: ReleaseRule | null): void {
+  if (!release) return;
+  if (release.dripDays) row.dripDays = release.dripDays;
+  else delete row.dripDays;
+  if (release.availableFrom) row.availableFrom = release.availableFrom;
+  else delete row.availableFrom;
+}
+
+/**
+ * Set a lesson's release schedule from the outline editor ("Release
+ * schedule…"). Empty values make the lesson available immediately; the
+ * chapter's own schedule still applies (the later time wins).
+ */
+export async function setLessonReleaseAction(
+  lessonId: string,
+  input: { dripDays?: string | number | null; availableFrom?: string | null },
+): Promise<ActionResult<ReleaseRule>> {
+  const loaded = await loadLesson(typeof lessonId === "string" ? lessonId : "");
+  if ("error" in loaded) return { ok: false, error: loaded.error };
+  const parsed = validateReleaseInput({ dripDays: input?.dripDays ?? "", availableFrom: input?.availableFrom ?? "" });
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: parsed.errors.dripDays ?? parsed.errors.availableFrom ?? "Check the release schedule.",
+      fieldErrors: { ...(parsed.errors.dripDays ? { dripDays: parsed.errors.dripDays } : {}), ...(parsed.errors.availableFrom ? { availableFrom: parsed.errors.availableFrom } : {}) },
+    };
+  }
+  const { user, course, lesson } = loaded;
+  const before = cleanReleaseRule(lesson);
+  const after = parsed.rule;
+  if (before.dripDays === after.dripDays && before.availableFrom === after.availableFrom) {
+    return { ok: true, data: after, message: "Release schedule unchanged" };
+  }
+  let reviewReset = false;
+  await mutate((db) => {
+    const row = db.lessons.find((l) => l.id === lesson.id);
+    if (!row) return;
+    applyLessonRelease(row, after);
+    row.updatedAt = new Date().toISOString();
+    reviewReset = touchCourseContent(db, course.id, user);
+  });
+  revalidateLessonPaths(course, lesson.id);
+  const label = hasReleaseRule(after) ? "Release schedule saved" : "Lesson is now available immediately";
+  return { ok: true, data: after, message: withReviewNote(label, reviewReset) };
 }

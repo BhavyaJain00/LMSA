@@ -9,8 +9,9 @@ export const metadata = { title: "Log in" };
 export default async function LoginPage(props: PageProps<"/login">) {
   const user = await getCurrentUser();
   const sp = await props.searchParams;
-  const next = typeof sp.next === "string" ? sp.next : undefined;
-  if (user) redirect(next && next.startsWith("/") ? next : "/dashboard");
+  const next = typeof sp.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : undefined;
+  const email = typeof sp.email === "string" ? sp.email.slice(0, 254) : undefined;
+  if (user) redirect(next ?? "/dashboard");
   const settings = await getSettings();
 
   return (
@@ -19,7 +20,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Welcome back</h1>
         <p className="mt-1 text-sm text-ink-muted">Log in to continue learning on {settings.brand.name}.</p>
         <div className="mt-6">
-          <LoginForm next={next} />
+          <LoginForm next={next} defaultEmail={email} />
         </div>
       </div>
       {!settings.learning.disableSignup && (

@@ -1,9 +1,14 @@
 import Link from "next/link";
+import { getCurrentUser } from "@/lib/auth/session";
+import { getSettings } from "@/lib/db/store";
 import { Icon } from "@/components/ui/icons";
 import { VerifyForm } from "@/components/certificates/verify-form";
 
 /** Invalid or unpublished certificate code. */
-export default function CertificateNotFound() {
+export default async function CertificateNotFound() {
+  const [settings, viewer] = await Promise.all([getSettings(), getCurrentUser()]);
+  // The directory is members-only, so guests are not sent there.
+  const showDirectory = !!viewer && settings.features.certifications && settings.features.certifiedMembers;
   return (
     <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
       <span className="flex size-14 items-center justify-center rounded-full bg-danger/10 text-danger">
@@ -16,9 +21,11 @@ export default function CertificateNotFound() {
       <div className="mt-6 w-full text-left">
         <VerifyForm />
       </div>
-      <Link href="/certified-members" className="mt-6 text-sm font-medium text-accent hover:underline">
-        Browse certified members
-      </Link>
+      {showDirectory && (
+        <Link href="/certified-members" className="mt-6 text-sm font-medium text-accent hover:underline">
+          Browse certified members
+        </Link>
+      )}
     </div>
   );
 }

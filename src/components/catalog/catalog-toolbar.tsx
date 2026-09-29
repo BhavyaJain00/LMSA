@@ -37,10 +37,21 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
   const urlSearch = searchParams.get("search") ?? searchParams.get("title") ?? "";
   const [query, setQuery] = useState(urlSearch);
   const [syncedSearch, setSyncedSearch] = useState(urlSearch);
+  // Search values this toolbar has pushed to the URL that have not committed yet, oldest first.
+  const [ownSearches, setOwnSearches] = useState<string[]>([]);
   // Keep the input in sync when the search changes from elsewhere (e.g. the header search box).
+  // URL updates caused by our own debounced navigation are ignored: they commit after a server
+  // round-trip, by which time the user may have typed more, and copying the older value back
+  // would overwrite (and then drop) those keystrokes.
   if (urlSearch !== syncedSearch) {
     setSyncedSearch(urlSearch);
-    if (urlSearch.trim() !== query.trim()) setQuery(urlSearch);
+    const own = ownSearches.lastIndexOf(urlSearch);
+    if (own === -1) {
+      if (ownSearches.length) setOwnSearches([]);
+      if (urlSearch.trim() !== query.trim()) setQuery(urlSearch);
+    } else {
+      setOwnSearches(ownSearches.slice(own + 1));
+    }
   }
 
   useEffect(() => {
@@ -52,6 +63,11 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
   const apply = (updates: Updates) => {
     // Read the live URL so a debounced search never overwrites a filter picked meanwhile.
     const params = new URLSearchParams(window.location.search);
+    const currentSearch = params.get("search") ?? params.get("title") ?? "";
+    if ("search" in updates) {
+      const next = updates.search ?? "";
+      if (next !== currentSearch) setOwnSearches((prev) => [...prev, next].slice(-20));
+    }
     for (const [key, value] of Object.entries(updates)) {
       if (value) params.set(key, value);
       else params.delete(key);

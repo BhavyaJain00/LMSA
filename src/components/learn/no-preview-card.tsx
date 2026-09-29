@@ -9,6 +9,8 @@ import { EnrollButton } from "./enroll-button";
 export interface NoPreviewCardProps {
   course: Pick<Course, "id" | "slug" | "title" | "paidCourse" | "price" | "currency" | "disableSelfLearning" | "upcoming" | "published">;
   lessonTitle: string;
+  /** Lesson being viewed: enrolling returns here instead of the first lesson. */
+  lessonHref?: string;
   loggedIn: boolean;
   /** The viewer already paid for the course (enrollment still pending). */
   hasPaid: boolean;
@@ -23,7 +25,7 @@ export interface NoPreviewCardProps {
  * explains why and offers the right next step (enroll, buy, log in, or
  * contact the administrator).
  */
-export function NoPreviewCard({ course, lessonTitle, loggedIn, hasPaid, loginHref, signupHref, guestAccessDisabled }: NoPreviewCardProps) {
+export function NoPreviewCard({ course, lessonTitle, lessonHref, loggedIn, hasPaid, loginHref, signupHref, guestAccessDisabled }: NoPreviewCardProps) {
   const paid = course.paidCourse && course.price > 0;
 
   let action: ReactNode;
@@ -64,7 +66,7 @@ export function NoPreviewCard({ course, lessonTitle, loggedIn, hasPaid, loginHre
       </div>
     );
   } else {
-    action = <EnrollButton slug={course.slug} />;
+    action = <EnrollButton slug={course.slug} returnTo={lessonHref} />;
   }
 
   return (

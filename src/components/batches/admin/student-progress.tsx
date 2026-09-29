@@ -133,8 +133,13 @@ export function StudentProgressTable({ batchId, students, courseTitles }: { batc
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-ink">Students</h2>
-        <div className="w-full sm:w-64">
-          <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search students" leftAddon={<Icon.Search className="size-4" />} />
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
+            <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search students" leftAddon={<Icon.Search className="size-4" />} />
+          </div>
+          <ButtonLink href={`/admin/batches/${batchId}?tab=students`} variant="outline" leftIcon={<Icon.UserPlus className="size-4" />}>
+            Enroll
+          </ButtonLink>
         </div>
       </div>
       <Table>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BatchFeedback } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 import { submitBatchFeedbackAction } from "@/lib/actions/batch-feedback";
@@ -21,7 +21,12 @@ const labels = ["Poor", "Fair", "Good", "Very good", "Excellent"];
 export function StarRatingInput({ name, label, error }: { name: string; label: string; error?: string }) {
   const [value, setValue] = useState(0);
   const [hover, setHover] = useState(0);
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   const shown = hover || value;
+  const choose = (n: number) => {
+    setValue(n);
+    buttons.current[n - 1]?.focus();
+  };
   return (
     <fieldset>
       <legend className="mb-1.5 text-sm font-medium text-ink">
@@ -34,6 +39,9 @@ export function StarRatingInput({ name, label, error }: { name: string; label: s
           return (
             <button
               key={n}
+              ref={(el) => {
+                buttons.current[i] = el;
+              }}
               type="button"
               role="radio"
               aria-checked={value === n}
@@ -44,10 +52,16 @@ export function StarRatingInput({ name, label, error }: { name: string; label: s
               onKeyDown={(e) => {
                 if (e.key === "ArrowRight" || e.key === "ArrowUp") {
                   e.preventDefault();
-                  setValue(Math.min(5, (value || 0) + 1));
+                  choose(Math.min(5, (value || 0) + 1));
                 } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
                   e.preventDefault();
-                  setValue(Math.max(1, (value || 2) - 1));
+                  choose(Math.max(1, (value || 2) - 1));
+                } else if (e.key === "Home") {
+                  e.preventDefault();
+                  choose(1);
+                } else if (e.key === "End") {
+                  e.preventDefault();
+                  choose(5);
                 }
               }}
               className="rounded p-0.5 transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-accent"

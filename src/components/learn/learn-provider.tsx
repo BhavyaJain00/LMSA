@@ -8,11 +8,17 @@ import { FocusExitIcon } from "./learn-icons";
  * between lessons (the provider lives in the course "learn" layout):
  *  - zen mode: hides the top bar and sidebar for distraction-free reading and
  *    asks the browser for fullscreen (Esc leaves it);
- *  - theater mode: hides the sidebar and lets videos use the full width.
+ *  - theater mode: hides the sidebar and lets videos use the full width
+ *    (only on lessons that have a video; see LessonFrame);
+ *  - zen panel: in zen mode, the notes/discussion sidebar can be shown as an
+ *    overlay ("Toggle discussions").
  */
 interface LearnPrefs {
   zen: boolean;
   theater: boolean;
+  /** Zen mode only: the sidebar (notes / discussion) is shown as an overlay. */
+  zenPanel: boolean;
+  setZenPanel: (value: boolean) => void;
   setZen: (value: boolean) => void;
   toggleZen: () => void;
   setTheater: (value: boolean) => void;
@@ -24,6 +30,8 @@ const LearnPrefsContext = createContext<LearnPrefs | null>(null);
 const FALLBACK: LearnPrefs = {
   zen: false,
   theater: false,
+  zenPanel: false,
+  setZenPanel: () => undefined,
   setZen: () => undefined,
   toggleZen: () => undefined,
   setTheater: () => undefined,
@@ -34,14 +42,19 @@ export function useLearnPrefs(): LearnPrefs {
   return useContext(LearnPrefsContext) ?? FALLBACK;
 }
 
+/** Open layers that handle Escape themselves; zen mode must not also exit on that key press. */
+const OPEN_LAYER_SELECTOR = "dialog[open], [role='menu'], [role='toolbar'][data-selection-toolbar], [data-lesson-sheet-open]";
+
 export function LearnProvider({ children }: { children: ReactNode }) {
   const [zen, setZenState] = useState(false);
   const [theater, setTheater] = useState(false);
+  const [zenPanel, setZenPanel] = useState(false);
   /** Whether zen mode put the document into fullscreen (so we know to leave it). */
   const zenFullscreen = useRef(false);
 
   const setZen = useCallback((value: boolean) => {
     setZenState(value);
+    if (!value) setZenPanel(false);
     if (typeof document === "undefined") return;
     if (value) {
       const root = document.documentElement;
@@ -70,27 +83,45 @@ export function LearnProvider({ children }: { children: ReactNode }) {
       if (!document.fullscreenElement && zenFullscreen.current) {
         zenFullscreen.current = false;
         setZenState(false);
+        setZenPanel(false);
       }
     };
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
-  // Esc leaves zen mode when the browser did not go fullscreen.
+  // Esc leaves zen mode when the browser did not go fullscreen. Menus, the
+  // selection toolbar, the mobile sheet and dialogs close on Escape without
+  // preventDefault, and may already be unmounted by the time the event
+  // bubbles to window, so whether one was open is recorded in the capture phase.
   useEffect(() => {
     if (!zen) return;
+    let layerOpen = false;
+    const onCapture = (e: KeyboardEvent) => {
+      if (e.key === "Escape") layerOpen = !!document.querySelector(OPEN_LAYER_SELECTOR);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (document.querySelector("dialog[open]")) return;
+      const blocked = layerOpen || !!document.querySelector(OPEN_LAYER_SELECTOR);
+      layerOpen = false;
+      if (blocked) return;
+      if (zenPanel) {
+        setZenPanel(false);
+        return;
+      }
       setZen(false);
     };
+    window.addEventListener("keydown", onCapture, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [zen, setZen]);
+    return () => {
+      window.removeEventListener("keydown", onCapture, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [zen, zenPanel, setZen]);
 
   const value = useMemo<LearnPrefs>(
-    () => ({ zen, theater, setZen, toggleZen, setTheater, toggleTheater }),
-    [zen, theater, setZen, toggleZen, toggleTheater],
+    () => ({ zen, theater, zenPanel, setZenPanel, setZen, toggleZen, setTheater, toggleTheater }),
+    [zen, theater, zenPanel, setZen, toggleZen, toggleTheater],
   );
 
   return (

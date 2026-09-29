@@ -1,6 +1,8 @@
 export { VideoPlayer } from "./video-player";
-export type { VideoPlayerProps, HeartbeatPayload } from "./video-player";
+export type { VideoPlayerProps, HeartbeatPayload, PlayerWatermarkOptions } from "./video-player";
 export type { SeekChapter, SeekMarker } from "./seek-bar";
 export { useVideoPlayer } from "./use-video-player";
 export type { PlayerState, PlayerActions } from "./use-video-player";
+export { useMediaSource } from "./use-media-source";
+export type { MediaPlayerConfig, MediaSourceState } from "./use-media-source";
 export { AudioPlayer } from "./audio-player";

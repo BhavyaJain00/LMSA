@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
 import { Checkbox, Field, FormError, Input, RadioCard, Select, Switch } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
+import { submitWithoutReset } from "@/components/assessments/form-submit";
+import { CertificateTemplateField } from "./template-field";
 
 export function IssueCertificateForm({
   options,
@@ -30,7 +32,7 @@ export function IssueCertificateForm({
   const learners = q ? options.learners.filter((l) => l.label.toLowerCase().includes(q) || l.value === userId) : options.learners;
 
   return (
-    <form action={formAction} noValidate>
+    <form onSubmit={submitWithoutReset(formAction)} noValidate>
       <Card>
         <CardHeader title="Issue a certificate" description="The learner is notified and the certificate gets a public verification link." />
         <CardBody className="space-y-5">
@@ -135,6 +137,8 @@ export function IssueCertificateForm({
               ))}
             </Select>
           </Field>
+
+          <CertificateTemplateField id="cert-template" error={errors?.templateId} />
 
           <Switch id="cert-published" name="published" defaultChecked label="Published" description="Make this certificate visible on the certified members page." />
         </CardBody>

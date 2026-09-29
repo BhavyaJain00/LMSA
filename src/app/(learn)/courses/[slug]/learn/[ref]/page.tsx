@@ -8,7 +8,7 @@ import {
   getLessonNotes,
   getLessonPageData,
   getLessonTopics,
-  getMentionableInstructors,
+  getMentionCandidates,
   lessonHasQuiz,
   lessonHasVideo,
   toNeighbor,
@@ -22,7 +22,7 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { CompletedBadge, CompletionPanel, type ViewerMode } from "@/components/learn/completion-panel";
 import { DiscussionPanel } from "@/components/learn/discussion-panel";
 import { LessonBlocks } from "@/components/learn/lesson-blocks";
-import { HideInZen, LessonFrame, ZenOnly, ZenToggle } from "@/components/learn/lesson-frame";
+import { HideInZen, LessonFrame, ZenOnly, ZenPanelToggle, ZenToggle } from "@/components/learn/lesson-frame";
 import { InstructorNotesBox, InstructorsRow, LessonBreadcrumbs, LessonMeta } from "@/components/learn/lesson-header";
 import { LessonNavButtons, LessonPager, MobilePager } from "@/components/learn/lesson-nav";
 import { LessonRuntimeProvider } from "@/components/learn/lesson-runtime";
@@ -31,7 +31,7 @@ import { LockedLessonNotice } from "@/components/learn/locked-notice";
 import { NoPreviewCard } from "@/components/learn/no-preview-card";
 import { NotesPanel } from "@/components/learn/notes-panel";
 import { SelectableContent } from "@/components/learn/selectable-content";
-import type { OutlineChapterItem, SidebarTab } from "@/components/learn/types";
+import type { LessonNeighbor, OutlineChapterItem, SidebarTab } from "@/components/learn/types";
 import { KeyboardIcon } from "@/components/learn/learn-icons";
 
 /** One load per request, shared by generateMetadata and the page. */
@@ -139,6 +139,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           <NoPreviewCard
             course={course}
             lessonTitle={data.lesson.title}
+            lessonHref={data.lesson.href}
             loggedIn={!!viewer}
             hasPaid={hasPaid}
             loginHref={`/login?next=${next}`}
@@ -164,7 +165,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
   const [notes, topics, mentionables] = await Promise.all([
     notesEnabled ? getLessonNotes((viewer as User).id, lesson.id) : Promise.resolve([]),
     discussionsEnabled && !discussionsClosed ? getLessonTopics(lesson.id, course, viewer?.id ?? null) : Promise.resolve([]),
-    discussionsEnabled && !discussionsClosed ? getMentionableInstructors(course) : Promise.resolve([]),
+    discussionsEnabled && !discussionsClosed ? getMentionCandidates(course, viewer as User) : Promise.resolve([]),
   ]);
 
   const requestedTab = parseTab(sp.tab);
@@ -172,7 +173,15 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
     requestedTab === "notes" && notesEnabled ? "notes" : requestedTab === "discussion" && discussionsEnabled ? "discussion" : "outline";
   const initialTopicId = typeof sp.topic === "string" ? sp.topic : null;
 
-  const nextNeighbor = toNeighbor(next);
+  // Student view is a query flag: keep it on every lesson link so previewing managers stay in it.
+  const withView = (href: string) => (studentView ? `${href}?studentView=1` : href);
+  const withViewNeighbor = (neighbor: LessonNeighbor | null): LessonNeighbor | null =>
+    neighbor && studentView ? { ...neighbor, href: withView(neighbor.href) } : neighbor;
+  const lessonOutline = studentView
+    ? outline.map((ch) => ({ ...ch, lessons: ch.lessons.map((l) => ({ ...l, href: withView(l.href) })) }))
+    : outline;
+
+  const nextNeighbor = withViewNeighbor(toNeighbor(next));
   const nextUnlocksOnComplete = tracking && !!next && next.locked && next.lockReason === "sequential" && lesson.status !== "complete";
   const mode: ViewerMode = tracking ? "learner" : ctx.manager ? (studentView ? "preview" : "instructor") : viewer ? "preview" : "guest";
   const canZen = ctx.manager || ctx.enrolled || isEvaluator(viewer);
@@ -203,7 +212,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
   const sidebar = (
     <LessonSidebar
       courseTitle={course.title}
-      outline={markCurrentStarted(outline, lesson.id, tracking)}
+      outline={markCurrentStarted(lessonOutline, lesson.id, tracking)}
       currentLessonId={lesson.id}
       progress={sidebarProgress(ctx)}
       tracking={tracking}
@@ -236,7 +245,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
       status={lesson.status}
       tracking={tracking}
       hasVideo={hasVideo}
-      prev={toNeighbor(prev)}
+      prev={withViewNeighbor(toNeighbor(prev))}
       next={nextNeighbor}
       nextUnlocksOnComplete={nextUnlocksOnComplete}
       notes={notes}
@@ -259,7 +268,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
 
           <header className="mx-auto w-full max-w-(--lesson-w)">
             <HideInZen>
-              <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={lesson.title} lessonHref={studentView ? `${lesson.href}?studentView=1` : lesson.href} />
+              <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={lesson.title} lessonHref={withView(lesson.href)} />
             </HideInZen>
             <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
@@ -297,6 +306,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
                   </ButtonLink>
                 )}
                 {certificateButton}
+                {canZen && (notesEnabled || discussionsEnabled) && <ZenPanelToggle tab={discussionsEnabled ? "discussion" : "notes"} />}
                 {canZen && <ZenToggle />}
                 <LessonNavButtons className="hidden lg:flex" />
               </div>

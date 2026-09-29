@@ -321,7 +321,7 @@ export function LiveClassesPanel({
               rel="noopener noreferrer"
               className={cn(
                 "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium",
-                state === "open" ? "bg-accent text-accent-fg hover:brightness-110" : "border border-border-strong text-ink hover:bg-surface-2",
+                state === "open" || state === "closed" ? "bg-accent text-accent-fg hover:brightness-110" : "border border-border-strong text-ink hover:bg-surface-2",
               )}
             >
               <Icon.Monitor className="size-4" /> Start
@@ -334,8 +334,9 @@ export function LiveClassesPanel({
           )}
           <Dropdown
             trigger={
-              <span className="inline-flex size-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label={`Actions for ${c.title}`}>
+              <span className="inline-flex size-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink">
                 <Icon.MoreVertical className="size-4" />
+                <span className="sr-only">Actions for {c.title}</span>
               </span>
             }
             items={[
@@ -356,7 +357,7 @@ export function LiveClassesPanel({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-ink">Live classes</h2>
-          <p className="text-sm text-ink-muted">Learners can join from {JOIN_WINDOW_MINUTES} minutes before a class until it ends.</p>
+          <p className="text-sm text-ink-muted">Learners can join from {JOIN_WINDOW_MINUTES} minutes before a class starts until {JOIN_WINDOW_MINUTES} minutes after it starts.</p>
         </div>
         <Button onClick={() => setDialog({ kind: "form", item: null })} leftIcon={<Icon.Plus className="size-4" />}>
           Schedule live class

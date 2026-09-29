@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { MembersFilters } from "@/components/admin/settings/members-filters";
 import { isRole } from "@/components/admin/settings/roles";
+import { MemberRowActions } from "@/components/admin/settings/member-row-actions";
 import { formatDate, formatNumber, relativeTime } from "@/lib/utils";
 
 export const metadata = { title: "Members" };
@@ -67,6 +68,9 @@ export default async function MembersPage(props: PageProps<"/admin/members">) {
                 Settings
               </ButtonLink>
             )}
+            <ButtonLink href="/admin/members/import" variant="outline" leftIcon={<Icon.Upload className="size-4" />}>
+              Import
+            </ButtonLink>
             <ButtonLink href="/admin/members/new" leftIcon={<Icon.UserPlus className="size-4" />}>
               Add member
             </ButtonLink>
@@ -74,7 +78,7 @@ export default async function MembersPage(props: PageProps<"/admin/members">) {
         }
       />
 
-      <div className="mb-5 grid grid-cols-3 gap-3">
+      <div className="mb-5 grid gap-3 sm:grid-cols-3">
         <StatCard label="Members" value={formatNumber(db.users.length)} icon={<Icon.Users className="size-5" />} />
         <StatCard label="Staff" value={formatNumber(staffCount)} hint="Any role besides student" icon={<Icon.ShieldCheck className="size-5" />} />
         <StatCard label="Disabled" value={formatNumber(disabledCount)} icon={<Icon.Lock className="size-5" />} />
@@ -86,9 +90,14 @@ export default async function MembersPage(props: PageProps<"/admin/members">) {
           title="No Users Found"
           description="Add one to get started."
           action={
-            <ButtonLink href="/admin/members/new" leftIcon={<Icon.UserPlus className="size-4" />}>
-              Add member
-            </ButtonLink>
+            <div className="flex flex-wrap justify-center gap-2">
+              <ButtonLink href="/admin/members/new" leftIcon={<Icon.UserPlus className="size-4" />}>
+                Add member
+              </ButtonLink>
+              <ButtonLink href="/admin/members/import" variant="outline" leftIcon={<Icon.Upload className="size-4" />}>
+                Import from CSV
+              </ButtonLink>
+            </div>
           }
         />
       ) : (
@@ -102,8 +111,8 @@ export default async function MembersPage(props: PageProps<"/admin/members">) {
                 <TH className="hidden sm:table-cell">Enrollments</TH>
                 <TH className="hidden lg:table-cell">Last active</TH>
                 <TH className="hidden lg:table-cell">Joined</TH>
-                <TH className="w-10">
-                  <span className="sr-only">Open</span>
+                <TH className="w-20">
+                  <span className="sr-only">Actions</span>
                 </TH>
               </tr>
             </THead>
@@ -156,7 +165,7 @@ export default async function MembersPage(props: PageProps<"/admin/members">) {
                       <TD className="hidden whitespace-nowrap text-ink-muted lg:table-cell">{u.lastActiveAt ? relativeTime(u.lastActiveAt) : "Never"}</TD>
                       <TD className="hidden whitespace-nowrap text-ink-muted lg:table-cell">{formatDate(u.createdAt)}</TD>
                       <TD>
-                        <Icon.ChevronRight className="size-4 text-ink-faint" />
+                        <MemberRowActions member={{ id: u.id, name: u.name, username: u.username }} canDelete={isAdmin(viewer) && u.id !== viewer.id} />
                       </TD>
                     </TR>
                   );

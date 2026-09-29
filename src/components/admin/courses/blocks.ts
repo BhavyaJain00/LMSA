@@ -3,6 +3,7 @@
  * Server Actions (validation, duration). No server-only imports here.
  */
 import type { LessonBlock, LessonBlockType, VideoChapterMarker, VideoQuizMarker } from "@/lib/types";
+import { siteConfig } from "@/lib/config";
 import { isValidUrl, readingTimeSeconds, uid } from "@/lib/utils";
 
 export interface BlockTypeMeta {
@@ -193,10 +194,50 @@ const num = (v: unknown): number | undefined => {
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 };
 
+/** Last path segment of a URL, decoded when possible ("Download" when empty). */
+export function fileNameFromUrl(url: string): string {
+  const last = url.split(/[?#]/)[0]!.split("/").pop() || "Download";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
 function checkUrl(url: string, label: string, opts: { required?: boolean; noVideoHosts?: boolean } = {}): string | null {
   if (!url) return opts.required ? `Add ${label}.` : null;
   if (!isValidUrl(url)) return `Enter a valid URL for ${label} (https://… or an uploaded file).`;
   if (opts.noVideoHosts && isBlockedVideoHost(url)) return "YouTube and Vimeo links can't be used. Upload the video file or use a direct .mp4/.webm URL.";
+  return null;
+}
+
+/** Hostnames that serve this site (configured APP_URL plus local aliases). */
+function appHostnames(): Set<string> {
+  const hosts = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+  try {
+    hosts.add(new URL(siteConfig.appUrl).hostname.toLowerCase());
+  } catch {
+    // An invalid APP_URL leaves only the local aliases.
+  }
+  return hosts;
+}
+
+/**
+ * Embeds render in an iframe that third-party pages need to be scriptable, so
+ * pages from this site (uploads included) must never be embedded: they would
+ * run with the viewer's session. Only absolute http(s) URLs on other hosts pass.
+ */
+export function checkEmbedUrl(src: string): string | null {
+  if (src.startsWith("/") || src.startsWith("\\")) return "Embeds must use a full http(s) URL to another site.";
+  let u: URL;
+  try {
+    u = new URL(src);
+  } catch {
+    return "Enter a valid URL for the page to embed.";
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "Embeds must use an http(s) URL.";
+  const host = u.hostname.toLowerCase();
+  if (appHostnames().has(host)) return "Pages and files from this site can't be embedded. Use an Image, PDF or File block for uploads.";
   return null;
 }
 
@@ -337,7 +378,7 @@ export function sanitizeBlocks(raw: unknown, ctx: BlockValidationContext): Block
         const src = str(r.src, 2000).trim();
         const err = checkUrl(src, "a file or URL", { required: true });
         if (err) fail(err);
-        const title = optStr(r.title, 200) ?? (src ? decodeURIComponent(src.split("/").pop() ?? "Download") : "");
+        const title = optStr(r.title, 200) ?? (src ? fileNameFromUrl(src) : "");
         if (!title) fail("Give the file a title.");
         const sizeBytes = num(r.sizeBytes);
         blocks.push({ id, type: "file", src, title: title ?? "", sizeBytes: sizeBytes !== undefined ? Math.round(sizeBytes) : undefined });
@@ -346,7 +387,7 @@ export function sanitizeBlocks(raw: unknown, ctx: BlockValidationContext): Block
       case "embed": {
         const src = str(r.src, 2000).trim();
         let err = checkUrl(src, "the page URL to embed", { required: true, noVideoHosts: true });
-        if (!err && src && !/^https?:\/\//.test(src) && !src.startsWith("/")) err = "Embeds must use an http(s) URL.";
+        if (!err) err = checkEmbedUrl(src);
         if (err) fail(err);
         const rawHeight = num(r.height);
         const height = rawHeight ? Math.min(1600, Math.max(150, Math.round(rawHeight))) : DEFAULT_EMBED_HEIGHT;

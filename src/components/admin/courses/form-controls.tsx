@@ -246,6 +246,8 @@ export function MultiSelect({
   emptyText = "No matches",
   invalid,
   max,
+  onCreate,
+  createLabel = "Create new",
 }: {
   id?: string;
   name: string;
@@ -257,6 +259,9 @@ export function MultiSelect({
   emptyText?: string;
   invalid?: boolean;
   max?: number;
+  /** Adds a trailing "create" option; called with the current search text. */
+  onCreate?: (query: string) => void;
+  createLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -268,6 +273,16 @@ export function MultiSelect({
   const q = query.trim().toLowerCase();
   const filtered = options.filter((o) => !q || o.label.toLowerCase().includes(q) || o.description?.toLowerCase().includes(q));
   const atMax = max !== undefined && value.length >= max;
+  const createIndex = onCreate ? filtered.length : -1;
+  const lastIndex = onCreate ? filtered.length : filtered.length - 1;
+
+  const create = () => {
+    if (!onCreate) return;
+    const q = query;
+    setOpen(false);
+    setQuery("");
+    onCreate(q);
+  };
 
   const toggle = (v: string) => {
     if (value.includes(v)) onChange(value.filter((x) => x !== v));
@@ -278,14 +293,15 @@ export function MultiSelect({
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setOpen(true);
-      setActive((a) => Math.min(filtered.length - 1, a + 1));
+      setActive((a) => Math.min(lastIndex, a + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => Math.max(0, a - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
       const option = filtered[active];
-      if (open && option) toggle(option.value);
+      if (open && active === createIndex) create();
+      else if (open && option) toggle(option.value);
       else setOpen(true);
     } else if (e.key === "Escape") {
       if (open) {
@@ -360,7 +376,9 @@ export function MultiSelect({
           className="scrollbar-thin absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in"
         >
           {filtered.length === 0 ? (
-            <li className="px-3 py-2.5 text-sm text-ink-muted">{emptyText}</li>
+            <li role="presentation" className="px-3 py-2.5 text-sm text-ink-muted">
+              {emptyText}
+            </li>
           ) : (
             filtered.map((o, i) => {
               const isSelected = value.includes(o.value);
@@ -390,6 +408,23 @@ export function MultiSelect({
                 </li>
               );
             })
+          )}
+          {onCreate && (
+            <li
+              role="option"
+              aria-selected={false}
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setActive(createIndex)}
+              onClick={create}
+              className={cn(
+                "mt-1 flex cursor-pointer items-center gap-2.5 rounded-lg border-t border-border px-2.5 py-2 text-sm font-medium text-accent",
+                active === createIndex ? "bg-surface-2" : "",
+              )}
+            >
+              <Icon.Plus className="size-4 shrink-0" />
+              <span className="truncate">{query.trim() ? `${createLabel} “${query.trim()}”` : createLabel}</span>
+            </li>
           )}
         </ul>
       )}

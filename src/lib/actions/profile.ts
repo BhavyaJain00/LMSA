@@ -16,7 +16,8 @@ import { fd, isValidUrl, toDateKey, uid } from "@/lib/utils";
 /* Validation helpers                                                  */
 /* ------------------------------------------------------------------ */
 
-const USERNAME_RE = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])?$/;
+// Same rule as the member admin (actions/members.ts): 3–40 characters.
+const USERNAME_RE = /^[a-z0-9](?:[a-z0-9_-]{1,38}[a-z0-9])?$/;
 const RESERVED_USERNAMES = new Set(["new", "edit", "admin", "me", "you", "settings", "api", "login", "logout", "register"]);
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const ALL_ROLES: Role[] = ["student", "course_creator", "moderator", "batch_evaluator", "admin"];
@@ -172,16 +173,23 @@ export async function updateProfileAction(_prev: ActionResult<{ username: string
   const username = fd(formData, "username").toLowerCase();
   const headline = fd(formData, "headline");
   const location = fd(formData, "location");
+  const openToRaw = fd(formData, "openTo");
   const bio = fd(formData, "bio");
   const avatarUrl = fd(formData, "avatarUrl");
   const coverImageUrl = fd(formData, "coverImageUrl");
 
   if (name.length < 2) errors.name = "Please enter your full name.";
   else if (name.length > 80) errors.name = "Name must be 80 characters or fewer.";
-  if (!USERNAME_RE.test(username)) errors.username = "Use 3–30 lowercase letters, numbers, dashes or underscores.";
-  else if (RESERVED_USERNAMES.has(username)) errors.username = "This username is reserved. Please pick another.";
+  // Only a new username is checked against the format and reserved names, so accounts
+  // whose existing username predates these rules (e.g. the bootstrap "admin") can still save.
+  const usernameChanged = username !== target.username.toLowerCase();
+  if (!username) errors.username = "Please choose a username.";
+  else if (usernameChanged && !USERNAME_RE.test(username)) errors.username = "Use 3–40 lowercase letters, numbers, dashes or underscores.";
+  else if (usernameChanged && RESERVED_USERNAMES.has(username)) errors.username = "This username is reserved. Please pick another.";
   if (headline.length > 120) errors.headline = "Headline must be 120 characters or fewer.";
   if (location.length > 80) errors.location = "Location must be 80 characters or fewer.";
+  const openTo: User["openTo"] = openToRaw === "work" || openToRaw === "hiring" ? openToRaw : undefined;
+  if (openToRaw && !openTo) errors.openTo = "Choose Work, Hiring or leave it empty.";
   if (bio.length > 5000) errors.bio = "Bio must be 5,000 characters or fewer.";
   if (avatarUrl && !isAssetUrl(avatarUrl)) errors.avatarUrl = "Please upload a valid image.";
   if (coverImageUrl && !isAssetUrl(coverImageUrl)) errors.coverImageUrl = "Please upload a valid image.";
@@ -198,7 +206,7 @@ export async function updateProfileAction(_prev: ActionResult<{ username: string
   const education = parseEducation(fd(formData, "education"), errors);
   const workExperience = parseWork(fd(formData, "workExperience"), errors);
 
-  if (!errors.username && username !== target.username.toLowerCase()) {
+  if (!errors.username && usernameChanged) {
     const db = await getDb();
     if (db.users.some((u) => u.id !== target.id && u.username.toLowerCase() === username)) errors.username = "This username is already taken.";
   }
@@ -212,6 +220,7 @@ export async function updateProfileAction(_prev: ActionResult<{ username: string
     username,
     headline: headline || undefined,
     location: location || undefined,
+    openTo,
     bio: bio || undefined,
     avatarUrl: avatarUrl || undefined,
     coverImageUrl: coverImageUrl || undefined,

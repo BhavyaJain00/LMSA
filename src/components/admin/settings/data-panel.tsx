@@ -8,8 +8,12 @@ import { Icon } from "@/components/ui/icons";
 import { Dialog } from "@/components/ui/dialog";
 import { useFormAction } from "./use-form-action";
 
-/** Backup download + typed-confirmation "Reload demo data". */
-export function DataPanel() {
+/**
+ * Backup download + typed-confirmation "Reload demo data". `seedDemoData`
+ * mirrors SEED_DEMO_DATA so the reset dialog can warn when the site was
+ * started without demo content.
+ */
+export function DataPanel({ seedDemoData }: { seedDemoData: boolean }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState("");
   const { onSubmit, pending, errors } = useFormAction(resetDemoDataAction, { toastSuccess: false });
@@ -38,6 +42,15 @@ export function DataPanel() {
         <p className="mt-1 flex-1 text-sm text-ink-muted">
           Replaces everything — members, courses, progress, payments and settings — with the original demo content. Download a backup first if you want to keep your data.
         </p>
+        {!seedDemoData && (
+          <p className="mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
+            <Icon.AlertTriangle className="mt-px size-4 shrink-0 text-warning" />
+            <span>
+              This site was started with <code className="font-mono">SEED_DEMO_DATA=false</code>. Reloading replaces your content with the demo courses and members, and the admin account from
+              your .env file will no longer exist.
+            </span>
+          </p>
+        )}
         <Button variant="danger" className="mt-4 self-start" leftIcon={<Icon.Refresh className="size-4" />} onClick={() => setOpen(true)}>
           Reload demo data
         </Button>

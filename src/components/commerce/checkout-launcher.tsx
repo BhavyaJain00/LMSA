@@ -1,0 +1,201 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { confirmRazorpayPaymentAction } from "@/lib/actions/payments";
+import type { CheckoutNext, RazorpayLaunchOptions } from "@/lib/payments/types";
+import { useToast } from "@/components/ui/toast";
+
+/**
+ * Client side of checkout: follows the server's `CheckoutNext` instruction —
+ * a redirect (Stripe's hosted page, or an internal page) or the Razorpay
+ * Checkout modal. Razorpay's script is only loaded when a Razorpay payment
+ * is actually about to happen.
+ */
+
+const RAZORPAY_SRC = "https://checkout.razorpay.com/v1/checkout.js";
+
+interface RazorpaySuccess {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}
+
+interface RazorpayFailure {
+  error?: { code?: string; description?: string; reason?: string; metadata?: { order_id?: string; payment_id?: string } };
+}
+
+interface RazorpayInstance {
+  open(): void;
+  on(event: "payment.failed", handler: (response: RazorpayFailure) => void): void;
+}
+
+type RazorpayConstructor = new (options: Record<string, unknown>) => RazorpayInstance;
+
+declare global {
+  interface Window {
+    Razorpay?: RazorpayConstructor;
+  }
+}
+
+let razorpayLoader: Promise<RazorpayConstructor> | null = null;
+
+/** Load Razorpay Checkout once per page (deduplicated, retried after a failure). */
+export function loadRazorpayScript(): Promise<RazorpayConstructor> {
+  if (typeof window === "undefined") return Promise.reject(new Error("Razorpay can only load in the browser."));
+  if (window.Razorpay) return Promise.resolve(window.Razorpay);
+  if (razorpayLoader) return razorpayLoader;
+  razorpayLoader = new Promise<RazorpayConstructor>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${RAZORPAY_SRC}"]`);
+    const script = existing ?? document.createElement("script");
+    const fail = () => {
+      razorpayLoader = null;
+      script.remove();
+      reject(new Error("Razorpay Checkout could not be loaded. Check your connection or disable content blockers, then try again."));
+    };
+    script.addEventListener("load", () => (window.Razorpay ? resolve(window.Razorpay) : fail()), { once: true });
+    script.addEventListener("error", fail, { once: true });
+    if (!existing) {
+      script.src = RAZORPAY_SRC;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+  });
+  return razorpayLoader;
+}
+
+/** Preload Razorpay Checkout while the learner fills in the form (only when Razorpay is the gateway). */
+export function usePreloadRazorpay(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    loadRazorpayScript().catch(() => undefined);
+  }, [enabled]);
+}
+
+export type LaunchStatus = "idle" | "redirecting" | "paying" | "verifying";
+
+export function useCheckoutLauncher() {
+  const toast = useToast();
+  const router = useRouter();
+  const [status, setStatus] = useState<LaunchStatus>("idle");
+  const settledRef = useRef(false);
+
+  // Coming back from Stripe with the browser's back button restores this page from the
+  // back/forward cache: the buttons must not stay stuck in "Redirecting…".
+  useEffect(() => {
+    const onShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setStatus("idle");
+    };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, []);
+
+  /** External URLs (Stripe Checkout) need a full page load; app pages use the router and refresh server data. */
+  const navigate = useCallback(
+    (url: string) => {
+      if (/^https?:\/\//i.test(url)) {
+        setStatus("redirecting");
+        window.location.assign(url);
+        return;
+      }
+      router.push(url);
+      router.refresh();
+      setStatus("idle");
+    },
+    [router],
+  );
+
+  const openRazorpay = useCallback(
+    async (options: RazorpayLaunchOptions) => {
+      let Razorpay: RazorpayConstructor;
+      try {
+        Razorpay = await loadRazorpayScript();
+      } catch (error) {
+        toast.error("Payment could not start", error instanceof Error ? error.message : undefined);
+        setStatus("idle");
+        return;
+      }
+      settledRef.current = false;
+      setStatus("paying");
+      const cancelledUrl = `/billing/cancelled?order=${encodeURIComponent(options.orderId)}`;
+      const rzp = new Razorpay({
+        key: options.keyId,
+        amount: options.amount,
+        currency: options.currency,
+        name: options.name,
+        description: options.description,
+        image: options.image,
+        order_id: options.razorpayOrderId,
+        prefill: { name: options.prefill.name, email: options.prefill.email },
+        notes: { orderId: options.orderId },
+        theme: options.themeColor ? { color: options.themeColor } : undefined,
+        modal: {
+          escape: true,
+          confirm_close: true,
+          ondismiss: () => {
+            if (settledRef.current) return;
+            settledRef.current = true;
+            navigate(cancelledUrl);
+          },
+        },
+        handler: (response: RazorpaySuccess) => {
+          settledRef.current = true;
+          setStatus("verifying");
+          void (async () => {
+            try {
+              const res = await confirmRazorpayPaymentAction({
+                orderId: options.orderId,
+                razorpayOrderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature,
+              });
+              if (res.ok) {
+                if (res.message) toast.success(res.message);
+                navigate(res.data.redirectTo);
+                return;
+              }
+              toast.error("We couldn't confirm the payment", res.error);
+            } catch {
+              toast.error("We couldn't confirm the payment", "Your order is saved. Refresh the order page in a moment to see its status.");
+            }
+            navigate(`/billing/success/${encodeURIComponent(options.orderId)}`);
+          })();
+        },
+      });
+      rzp.on("payment.failed", (response) => {
+        const description = response.error?.description;
+        toast.error("Payment failed", description ? `${description} You can try again or choose another method.` : "You can try again or choose another method.");
+      });
+      rzp.open();
+    },
+    [toast, navigate],
+  );
+
+  const launch = useCallback(
+    async (next: CheckoutNext) => {
+      if (next.kind === "redirect") {
+        navigate(next.url);
+        return;
+      }
+      await openRazorpay(next.options);
+    },
+    [openRazorpay, navigate],
+  );
+
+  const reset = useCallback(() => setStatus("idle"), []);
+
+  return { launch, status, busy: status !== "idle", reset };
+}
+
+export function launchStatusLabel(status: LaunchStatus, gatewayName: string): string | null {
+  switch (status) {
+    case "redirecting":
+      return `Redirecting to ${gatewayName}…`;
+    case "paying":
+      return `Complete the payment in the ${gatewayName} window.`;
+    case "verifying":
+      return "Confirming your payment…";
+    default:
+      return null;
+  }
+}

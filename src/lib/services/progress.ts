@@ -5,6 +5,8 @@ import { percent, shortCode, toDateKey, uid } from "@/lib/utils";
 import { evaluateBadges } from "./badges";
 import { logActivity, getStreak } from "./activity";
 import { notify } from "./notifications";
+import { awardPoints } from "./points";
+import { computeProgramProgress } from "@/lib/data/programs";
 
 /**
  * Central place for everything that happens when a learner makes progress:
@@ -114,6 +116,7 @@ export async function setLessonStatus(user: User, lesson: Lesson, status: Progre
     if (enrollment) enrollment.currentLessonId = lesson.id;
   });
   await logActivity(user.id, status === "complete" ? "lesson_complete" : "lesson_view", lesson.id);
+  if (finalStatus === "complete") await awardPoints(user.id, "lesson_complete", { refId: lesson.id, courseId: lesson.courseId });
   if (finalStatus === "complete") await recalculateCourseProgress(user, lesson.courseId);
   return finalStatus;
 }
@@ -149,13 +152,12 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
       enrollment.completedAt = new Date().toISOString();
       justCompleted = true;
     }
-    // Program progress = average of member's course progress within the program.
+    // Program progress = ceil(average course progress within the program), same rule as the programs area.
     for (const program of d.programs) {
       if (!program.courseIds.includes(courseId)) continue;
       const member = d.programMembers.find((m) => m.programId === program.id && m.userId === user.id);
       if (!member) continue;
-      const values = program.courseIds.map((cid) => d.enrollments.find((e) => e.userId === user.id && e.courseId === cid)?.progress ?? 0);
-      member.progress = values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : 0;
+      member.progress = computeProgramProgress(d, program, user.id);
     }
   });
 
@@ -167,6 +169,7 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
       link: `/courses/${course.slug}`,
     });
     await evaluateBadges(user.id, "course_completed");
+    await awardPoints(user.id, "course_complete", { refId: courseId, courseId });
     if (course.enableCertification && !course.paidCertificate && db.settings.features.certifications) {
       await issueCertificate(user, course);
     }
@@ -205,5 +208,6 @@ export async function issueCertificate(user: User, course: Course, opts: { batch
     link: `/certificates/${cert.code}`,
   });
   await evaluateBadges(user.id, "certificate_issued");
+  await awardPoints(user.id, "certificate", { refId: cert.id, courseId: course.id });
   return cert;
 }

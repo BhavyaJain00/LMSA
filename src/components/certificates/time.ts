@@ -167,3 +167,34 @@ export function formatClock12(hhmm: string | undefined): string {
   const hour = h % 12 === 0 ? 12 : h % 12;
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
+
+/* ------------------------------------------------------------------ */
+/* Evaluator unavailability                                            */
+/* ------------------------------------------------------------------ */
+
+export interface UnavailabilityRange {
+  /** YYYY-MM-DD, inclusive */
+  from: string;
+  /** YYYY-MM-DD, inclusive */
+  to: string;
+}
+
+/**
+ * The evaluator's unavailability as stored on their slot rows (every row
+ * carries the same values). Returns the raw From/To (either may be empty).
+ */
+export function unavailabilityOf(slots: readonly { unavailableFrom?: string; unavailableTo?: string }[]): { from: string; to: string } {
+  const row = slots.find((s) => s.unavailableFrom || s.unavailableTo);
+  return { from: row?.unavailableFrom ?? "", to: row?.unavailableTo ?? "" };
+}
+
+/** The blocking range: only when both dates are set (as in Frappe). */
+export function activeUnavailability(slots: readonly { unavailableFrom?: string; unavailableTo?: string }[]): UnavailabilityRange | null {
+  const { from, to } = unavailabilityOf(slots);
+  if (!from || !to || !isValidDateKey(from) || !isValidDateKey(to) || from > to) return null;
+  return { from, to };
+}
+
+export function isDateInRange(dateKey: string, range: UnavailabilityRange | null | undefined): boolean {
+  return !!range && dateKey >= range.from && dateKey <= range.to;
+}

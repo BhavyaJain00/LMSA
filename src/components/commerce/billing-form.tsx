@@ -4,10 +4,12 @@ import { useState } from "react";
 import type { PaymentItemType, Settings } from "@/lib/types";
 import { placeOrderAction } from "@/lib/actions/payments";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox, Field, FormError, Input, Select } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { BILLING_SOURCES, COUNTRIES, INDIAN_STATES } from "./countries";
+import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
 
 export interface BillingDefaults {
   billingName: string;
@@ -28,8 +30,10 @@ const GATEWAY_NAME: Record<Gateway, string> = { none: "", manual: "Manual paymen
 
 /**
  * Billing details + payment section of the checkout page. Submits to
- * `placeOrderAction`, which validates everything again and redirects to the
- * order page on success.
+ * `placeOrderAction`, which validates everything again and computes the
+ * amount on the server. Free and manual orders redirect to the order page;
+ * Stripe returns its hosted checkout URL and Razorpay the options for its
+ * payment window, which `useCheckoutLauncher` opens.
  */
 export function BillingForm({
   itemType,
@@ -38,6 +42,8 @@ export function BillingForm({
   expectedTotal,
   totalLabel,
   gateway,
+  gatewayReady,
+  gatewayMode,
   applyTax,
   taxLabel,
   defaults,
@@ -49,15 +55,28 @@ export function BillingForm({
   expectedTotal: number;
   totalLabel: string;
   gateway: Gateway;
+  /** False when the active gateway is Stripe/Razorpay but its keys are missing. */
+  gatewayReady: boolean;
+  gatewayMode: "test" | "live" | null;
   applyTax: boolean;
   taxLabel: string;
   defaults: BillingDefaults;
   contactEmail?: string;
 }) {
   const [country, setCountry] = useState(defaults.country);
-  const { onSubmit, pending, errors, formError } = useFormAction(placeOrderAction, { toastSuccess: false, toastError: false });
+  const launcher = useCheckoutLauncher();
+  const { onSubmit, pending, errors, formError } = useFormAction(placeOrderAction, {
+    toastSuccess: false,
+    toastError: false,
+    onSuccess: (result) => void launcher.launch(result.data),
+  });
   const free = expectedTotal <= 0 || gateway === "none";
+  const online = !free && (gateway === "stripe" || gateway === "razorpay");
+  const unavailable = online && !gatewayReady;
+  usePreloadRazorpay(!free && gateway === "razorpay" && gatewayReady);
   const india = country === "India";
+  const busy = pending || launcher.busy;
+  const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] || "payment");
 
   return (
     <form onSubmit={onSubmit} noValidate aria-labelledby="billing-address-heading">
@@ -146,7 +165,14 @@ export function BillingForm({
       </div>
 
       <div className="mt-5 rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
-        <h2 className="text-lg font-semibold text-ink">Payment</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-ink">Payment</h2>
+          {online && gatewayReady && gatewayMode === "test" && (
+            <Badge tone="warning" dot>
+              Test mode
+            </Badge>
+          )}
+        </div>
         {free ? (
           <p className="mt-2 flex items-start gap-2 text-sm text-ink-muted">
             <Icon.Gift className="mt-0.5 size-4 shrink-0 text-success" />
@@ -171,12 +197,56 @@ export function BillingForm({
               </p>
             )}
           </div>
-        ) : (
-          <div className="mt-2 flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-sm text-ink">
-            <Icon.CreditCard className="mt-0.5 size-4 shrink-0 text-info" />
+        ) : unavailable ? (
+          <div role="alert" className="mt-2 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-ink">
+            <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
             <span>
-              {GATEWAY_NAME[gateway]} is running in <strong>test mode</strong>. “Test payment” simulates a successful payment of {totalLabel} — no card is charged.
+              Online payments are unavailable right now. Please try again later
+              {contactEmail ? (
+                <>
+                  {" "}
+                  or write to{" "}
+                  <a href={`mailto:${contactEmail}`} className="font-medium text-accent hover:underline">
+                    {contactEmail}
+                  </a>
+                </>
+              ) : null}
+              .
             </span>
+          </div>
+        ) : gateway === "stripe" ? (
+          <div className="mt-2 space-y-2 text-sm text-ink-muted">
+            <p className="flex items-start gap-2">
+              <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
+              <span>
+                You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{totalLabel}</strong> by card or wallet. Card details never touch our
+                servers.
+              </span>
+            </p>
+            {gatewayMode === "test" && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
+                <Icon.Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span>
+                  Test mode: no real money moves. Pay with card <span className="font-mono">4242 4242 4242 4242</span>, any future expiry date and any CVC.
+                </span>
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="mt-2 space-y-2 text-sm text-ink-muted">
+            <p className="flex items-start gap-2">
+              <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
+              <span>
+                Pay <strong className="text-ink">{totalLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you place
+                the order.
+              </span>
+            </p>
+            {gatewayMode === "test" && (
+              <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
+                <Icon.Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span>Test mode: no real money moves. Use Razorpay&apos;s test cards or the &ldquo;success&rdquo; option in test UPI/netbanking.</span>
+              </p>
+            )}
           </div>
         )}
 
@@ -185,9 +255,22 @@ export function BillingForm({
             <Checkbox id="consent" name="consent" label="I consent to my personal information being stored for invoicing" aria-invalid={!!errors.consent || undefined} />
             {errors.consent && <p className="mt-1.5 pl-6.5 text-xs text-danger">{errors.consent}</p>}
           </div>
-          <Button type="submit" loading={pending} className="w-full sm:w-auto" leftIcon={free ? undefined : gateway === "manual" ? <Icon.Receipt className="size-4" /> : <Icon.CreditCard className="size-4" />}>
-            {free ? "Enroll for Free" : gateway === "manual" ? `Place order · ${totalLabel}` : `Test payment · ${totalLabel}`}
-          </Button>
+          <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
+            <Button
+              type="submit"
+              loading={busy}
+              disabled={unavailable}
+              className="w-full sm:w-auto"
+              leftIcon={free ? undefined : online ? <Icon.Lock className="size-4" /> : <Icon.Receipt className="size-4" />}
+            >
+              {free ? "Enroll for Free" : gateway === "manual" ? `Place order · ${totalLabel}` : gateway === "stripe" ? `Continue to payment · ${totalLabel}` : `Pay ${totalLabel}`}
+            </Button>
+            {statusLabel && (
+              <p className="text-xs text-ink-muted" role="status" aria-live="polite">
+                {statusLabel}
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </form>

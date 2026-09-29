@@ -1,12 +1,12 @@
 "use client";
 
-import { useActionState, useRef, useState, type DragEvent } from "react";
-import type { ActionResult } from "@/lib/types";
-import { importCourseAction } from "@/lib/actions/course-import";
+import { useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { cn, formatBytes, pluralize } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { FormError } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
+import { useToast } from "@/components/ui/toast";
 
 interface Preview {
   title: string;
@@ -18,7 +18,12 @@ interface Preview {
   exportedAt?: string;
 }
 
+/** Must match MAX_IMPORT_BYTES in src/lib/actions/course-import.ts. */
 const MAX_BYTES = 5 * 1024 * 1024;
+/** Route handler that performs the import (Server Actions are limited to 1 MB bodies). */
+const UPLOAD_URL = "/admin/courses/import/upload";
+
+type UploadResponse = { ok: true; redirectTo: string; message: string; tone: "success" | "warning" } | { ok: false; error: string };
 
 async function inspect(file: File): Promise<{ preview: Preview } | { error: string }> {
   if (!/\.json$/i.test(file.name) && file.type !== "application/json") return { error: "Please upload a valid JSON export (.json)." };
@@ -55,11 +60,49 @@ export function ImportCourseForm() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(importCourseAction, null);
+  const [pending, setPending] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const router = useRouter();
+  const toast = useToast();
+
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!file || !preview || pending) return;
+    setPending(true);
+    setSubmitError(null);
+    const body = new FormData();
+    body.set("file", file);
+    try {
+      const res = await fetch(UPLOAD_URL, { method: "POST", body });
+      let data: UploadResponse | null = null;
+      try {
+        data = (await res.json()) as UploadResponse;
+      } catch {
+        data = null;
+      }
+      if (!data) {
+        setSubmitError(res.status === 413 ? "This file is too large (max 5 MB)." : "Error importing course. Please try again.");
+        setPending(false);
+        return;
+      }
+      if (!data.ok) {
+        setSubmitError(data.error);
+        setPending(false);
+        return;
+      }
+      toast.toast({ title: data.message, tone: data.tone });
+      // Keep the button busy while the new course loads.
+      router.push(data.redirectTo);
+    } catch {
+      setSubmitError("Could not reach the server. Check your connection and try again.");
+      setPending(false);
+    }
+  };
 
   const choose = async (next: File | null) => {
     setPreview(null);
     setError(null);
+    setSubmitError(null);
     setFile(next);
     if (!next) {
       if (inputRef.current) inputRef.current.value = "";
@@ -82,8 +125,8 @@ export function ImportCourseForm() {
   };
 
   return (
-    <form action={formAction} className="space-y-5">
-      <FormError message={state && !state.ok ? state.error : null} />
+    <form onSubmit={(e) => void submit(e)} className="space-y-5">
+      <FormError message={submitError} />
       <div
         onDragOver={(e) => {
           e.preventDefault();

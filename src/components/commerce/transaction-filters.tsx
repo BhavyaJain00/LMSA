@@ -68,7 +68,7 @@ export function TransactionFilters({ values }: { values: TransactionFilterValues
           { value: "all", label: "All Payments" },
           { value: "paid", label: "Paid" },
           { value: "pending", label: "Unpaid (pending)" },
-          { value: "failed", label: "Cancelled" },
+          { value: "failed", label: "Cancelled / failed" },
           { value: "refunded", label: "Refunded" },
         ]}
       />

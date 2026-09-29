@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { VideoChapterMarker, VideoQuizMarker } from "@/lib/types";
+import type { VideoChapterMarker, VideoQuizMarker, VideoSource } from "@/lib/types";
 import { cn, formatTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
@@ -9,9 +9,19 @@ import { LessonVideo } from "../lesson-video";
 import { useLearnPrefs } from "../learn-provider";
 import { useLessonRuntime } from "../lesson-runtime";
 
+/** Site-wide player options for the viewer (from Settings → Video). */
+export interface VideoBlockPlayerOptions {
+  watermark: { text: string; opacity: number } | null;
+  seekThumbnails: boolean;
+  autoplayNext: boolean;
+}
+
 export interface VideoBlockProps {
   blockId: string;
+  /** Playable src (pre-signed by the server for protected uploads). */
   src: string;
+  /** Extra renditions for the quality menu (pre-signed as well). */
+  sources?: VideoSource[];
   posterUrl?: string;
   captionsUrl?: string;
   title?: string;
@@ -26,6 +36,10 @@ export interface VideoBlockProps {
   quizNodes: Record<string, ReactNode>;
   quizTitles: Record<string, string>;
   passedQuizIds: string[];
+  /** Watermark, seek previews and autoplay-next settings. */
+  player?: VideoBlockPlayerOptions;
+  /** The last video of the lesson: only it counts down to the next lesson. */
+  lastVideo?: boolean;
 }
 
 interface ActiveQuiz {
@@ -37,12 +51,13 @@ interface ActiveQuiz {
 const COUNTDOWN = 7;
 
 /** Keys the player uses as shortcuts; they must not reach it while a quiz is open. */
-const PLAYER_KEYS = new Set([" ", "k", "j", "l", "m", "f", "c", "p", "t", ",", ".", "<", ">", "home", "end", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
+const PLAYER_KEYS = new Set([" ", "k", "j", "l", "m", "f", "c", "p", "t", "?", ",", ".", "<", ">", "home", "end", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
 
 /** A lesson video with resume, notes seeking, in-video quizzes and a chapter list. */
 export function VideoBlock({
   blockId,
   src,
+  sources,
   posterUrl,
   captionsUrl,
   title,
@@ -55,6 +70,8 @@ export function VideoBlock({
   quizNodes,
   quizTitles,
   passedQuizIds,
+  player,
+  lastVideo = true,
 }: VideoBlockProps) {
   const rt = useLessonRuntime();
   const { theater, toggleTheater } = useLearnPrefs();
@@ -77,7 +94,13 @@ export function VideoBlock({
   const onQuizMarker = useCallback((quizId: string, resume: () => void) => {
     if (typeof document !== "undefined" && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     // Markers clicked on the seek bar do not pause playback by themselves.
-    wrapperRef.current?.querySelector("video")?.pause();
+    wrapperRef.current?.querySelector<HTMLVideoElement>("video[data-ll-main-video]")?.pause();
+    // A docked mini-player returns to its place: bring the quiz into view.
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (rect && (rect.bottom < 0 || rect.top > window.innerHeight)) {
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      wrapperRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+    }
     const marker = quizMarkers?.find((m) => m.quizId === quizId);
     setActive({ quizId, resume, time: marker?.time ?? 0 });
   }, [quizMarkers]);
@@ -118,6 +141,7 @@ export function VideoBlock({
         lessonId={rt.lessonId}
         blockId={blockId}
         src={src}
+        sources={sources}
         posterUrl={posterUrl}
         captionsUrl={captionsUrl}
         title={title}
@@ -132,6 +156,11 @@ export function VideoBlock({
         onQuizMarker={onQuizMarker}
         onNext={rt.canGoNext ? () => void rt.goNext() : undefined}
         nextLabel={rt.next?.locked ? "Complete and continue" : "Next lesson"}
+        nextTitle={rt.next?.title}
+        autoplayNext={!!player?.autoplayNext && lastVideo && !active}
+        watermark={player?.watermark ?? null}
+        seekThumbnails={player?.seekThumbnails ?? false}
+        miniPlayer
         theater={theater}
         onToggleTheater={toggleTheater}
         seekRequest={seek}

@@ -1707,6 +1707,10 @@ export async function buildSeedDatabase(): Promise<Database> {
     coupons,
     jobs,
     jobApplications,
+    emails: [],
+    authTokens: [],
+    loginEvents: [],
+    points: [],
     settings: defaultSettings(),
   };
 }

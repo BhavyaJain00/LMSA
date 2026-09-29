@@ -43,8 +43,14 @@ import { SettingsPanel } from "./settings-panel";
 /* Validation helpers                                                   */
 /* ------------------------------------------------------------------ */
 
-function settingsErrors(s: QuizSettingsInput, rows: QuizQuestionRow[]): Record<string, string> {
+/** Mirrors saveQuizAction: a quiz is either entirely open ended or has no open-ended questions. */
+const OPEN_ENDED_MIX_ERROR = "If you want open ended questions then make sure each question in the quiz is of open ended type.";
+const OPEN_ONLY: UiQuestionType[] = ["open_ended"];
+const CLOSED_ONLY: UiQuestionType[] = ["single", "multiple", "user_input"];
+
+function settingsErrors(s: QuizSettingsInput, rows: QuizQuestionRow[], mixedTypes = false): Record<string, string> {
   const e: Record<string, string> = {};
+  if (mixedTypes) e.questions = OPEN_ENDED_MIX_ERROR;
   if (!s.title.trim()) e.title = "Title is required.";
   if (!Number.isFinite(s.passingPercentage) || s.passingPercentage < 0 || s.passingPercentage > 100) e.passingPercentage = "Passing percentage must be between 0 and 100.";
   if (!Number.isInteger(s.maxAttempts) || s.maxAttempts < 0 || s.maxAttempts > 1000) e.maxAttempts = "Enter 0 (unlimited) or a whole number.";
@@ -136,6 +142,12 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
 
   const dirty = version !== savedVersion;
   const openDirty = openValue !== null && JSON.stringify(openValue) !== openOriginal;
+  /** The open question's own content changed (not just its marks in this quiz). */
+  const openContentDirty = (() => {
+    if (!openValue || !openOriginal) return false;
+    const original = JSON.parse(openOriginal) as QuestionInput;
+    return JSON.stringify({ ...openValue, marks: 0 }) !== JSON.stringify({ ...original, marks: 0 });
+  })();
   const unsaved = dirty || !!draft || openDirty;
   const guard = useLeaveGuard(unsaved);
   const [noticeDismissed, setNoticeDismissed] = useSessionFlag(`lms:quiz:${data.quizId}:open-ended-notice-dismissed`);
@@ -149,8 +161,24 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
   const hasOpenEnded = rowsHaveOpen || draft?.uiType === "open_ended" || openValue?.uiType === "open_ended";
   const limit = settings.shuffleQuestions && Number.isInteger(settings.limitQuestionsTo) ? settings.limitQuestionsTo : 0;
   const totalMarks = computeTotalMarks(rows, settings.shuffleQuestions, limit);
-  const bankScope: BankScope = "any";
-  const clientErrors = settingsErrors(settings, rows);
+  // Quizzes that mixed both kinds before the rule existed stay saveable until a question is added (see saveQuizAction).
+  const legacyMixed = (() => {
+    const initial = data.rows.map((r) => data.questions[r.questionId]).filter((q): q is Question => !!q);
+    const mixed = initial.some((q) => q.type === "open_ended") && initial.some((q) => q.type !== "open_ended");
+    return mixed && rows.every((r) => data.rows.some((i) => i.questionId === r.questionId));
+  })();
+  const mixedTypes = rowsHaveOpen && rowsHaveClosed && !legacyMixed;
+  // Open-ended questions can't be mixed with auto-graded ones: restrict the bank and the type picker accordingly.
+  const bankScope: BankScope = mixedTypes ? "any" : rowsHaveOpen ? "open_ended" : rowsHaveClosed ? "closed" : "any";
+  const allowedTypesFor = (excludeId: string | null): UiQuestionType[] | undefined => {
+    const others = rows.filter((r) => r.questionId !== excludeId).map((r) => questions[r.questionId]).filter((q): q is Question => !!q);
+    const open = others.some((q) => q.type === "open_ended");
+    const closed = others.some((q) => q.type !== "open_ended");
+    if (open === closed) return undefined;
+    return open ? OPEN_ONLY : CLOSED_ONLY;
+  };
+  const clientErrors = settingsErrors(settings, rows, mixedTypes);
+  const settingsNeedAttention = Object.keys(clientErrors).some((k) => k !== "questions");
   const errors = { ...serverErrors, ...clientErrors };
   const canReorder = !openId && !draft && !search.trim() && rows.length > 1;
 
@@ -183,7 +211,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
   const saveQuiz = async (explicit: boolean): Promise<boolean> => {
     if (saving) return false;
     const v = version;
-    const local = settingsErrors(settings, rows);
+    const local = settingsErrors(settings, rows, mixedTypes);
     if (Object.keys(local).length) {
       setFailedVersion(v);
       if (explicit) toast({ title: Object.values(local)[0] ?? "Please fix the highlighted fields.", tone: "error" });
@@ -267,10 +295,11 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
     if (!canEdit && (!Number.isInteger(openValue.marks) || openValue.marks < 1 || openValue.marks > MAX_MARKS)) return;
     const id = openId;
     const marks = openValue.marks;
-    if (canEdit && openDirty) {
+    if (canEdit && openContentDirty) {
       setPersisting(true);
       try {
-        const res = await saveQuestionAction({ ...openValue, id });
+        // The marks field is "Marks in this quiz": it only changes the quiz row, never the bank question's default marks.
+        const res = await saveQuestionAction({ ...openValue, marks: questions[id]?.marks ?? openValue.marks, id });
         if (!res.ok) {
           setEditorServerErrors(res.fieldErrors ?? {});
           toast({ title: res.error, tone: "error" });
@@ -426,7 +455,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
         totalMarks,
         passingPercentage: settings.passingPercentage,
         maxAttempts: settings.maxAttempts,
-        showAnswers: settings.showAnswers,
+        showAnswers: settings.showAnswers && !open,
         showSubmissionHistory: settings.showSubmissionHistory,
         shuffleQuestions: settings.shuffleQuestions,
         limitQuestionsTo: limit,
@@ -447,6 +476,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
           options: e.q.type === "choices" ? e.q.options.map((o) => ({ id: o.id, text: o.text })) : [],
         })),
         questionsWithheld: false,
+        poolSize: entries.length,
         hasOpenEnded: open,
       },
       attempts: [],
@@ -469,9 +499,13 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
       return;
     }
     setOpeningPreview(true);
-    const ok = dirty ? await saveQuiz(false) : true;
+    const ok = dirty ? await saveQuiz(true) : true;
     setOpeningPreview(false);
-    if (!ok) return;
+    if (!ok) {
+      // The field errors live in the "Details & settings" tab, which is hidden on small screens.
+      if (settingsNeedAttention) setMobileTab("settings");
+      return;
+    }
     setBankOpen(false);
     setMobileTab("questions");
     setPreview(buildPreview(currentTime()));
@@ -531,6 +565,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
       disabled={persisting}
       autoFocus={isDraft}
       marksLabel={isDraft ? "Marks" : "Marks in this quiz"}
+      allowedTypes={allowedTypesFor(excludeId)}
     />
   );
 
@@ -581,6 +616,21 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
       {saveError && (
         <Notice tone="danger" role="alert" title="Your changes are not saved" className="mb-4" action={<Button size="sm" variant="outline" onClick={() => void saveQuiz(true)}>Retry</Button>}>
           {saveError} Do not close this tab until they are.
+        </Notice>
+      )}
+
+      {settingsNeedAttention && mobileTab === "questions" && (
+        <Notice
+          tone="warning"
+          role="status"
+          className="mb-4 lg:hidden"
+          action={
+            <Button size="sm" variant="outline" onClick={() => setMobileTab("settings")}>
+              Review settings
+            </Button>
+          }
+        >
+          Some settings need attention before your changes can be saved.
         </Notice>
       )}
 

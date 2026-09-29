@@ -1,17 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import type { LessonBlock } from "@/lib/types";
+import { useCallback, useEffect, useState } from "react";
+import type { LessonBlock, VideoSource } from "@/lib/types";
 import { cn, formatBytes, formatTime, isValidUrl, parseTime } from "@/lib/utils";
-import { VideoPlayer, AudioPlayer } from "@/components/player";
+import { VideoPlayer, AudioPlayer, useMediaSource } from "@/components/player";
 import type { SeekMarker } from "@/components/player";
+import { PROTECTED_VIDEO_PREFIX } from "@/lib/media/paths";
+import { MAX_SOURCE_HEIGHT, MAX_SOURCE_LABEL, MAX_VIDEO_SOURCES, MIN_SOURCE_HEIGHT, heightFromLabel, labelForHeight } from "@/lib/media/sources";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import type { AssessmentKind, AssessmentOption } from "./types";
-import { CALLOUT_LABELS, CALLOUT_TONES, CODE_LANGUAGES, DEFAULT_EMBED_HEIGHT, isBlockedVideoHost, type CalloutTone } from "./blocks";
+import { CALLOUT_LABELS, CALLOUT_TONES, CODE_LANGUAGES, DEFAULT_EMBED_HEIGHT, checkEmbedUrl, isBlockedVideoHost, type CalloutTone } from "./blocks";
 import { MarkdownEditor } from "./markdown-editor";
 import { MediaField } from "./form-controls";
 import { ASSESSMENT_COPY, AssessmentPickerDialog } from "./assessment-picker";
@@ -54,6 +56,27 @@ function TimeInput({ value, onChange, label, invalid }: { value: number | undefi
       }}
     />
   );
+}
+
+/** How long a typed media URL must stay unchanged before its metadata is fetched. */
+const MEDIA_URL_SETTLE_MS = 600;
+
+/** The value, once it has stopped changing for `ms` milliseconds. */
+function useSettledValue<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), ms);
+    return () => window.clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
+function isSameHostAsPage(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === window.location.hostname.toLowerCase();
+  } catch {
+    return true;
+  }
 }
 
 function UrlHint({ url, allowVideoHosts = true }: { url: string; allowVideoHosts?: boolean }) {
@@ -148,7 +171,10 @@ export function CodeBlockEditor({ block, onChange }: EditorProps<"code">) {
 
 export function EmbedBlockEditor({ block, onChange }: EditorProps<"embed">) {
   const [preview, setPreview] = useState(false);
-  const embeddable = !!block.src && /^https?:\/\//.test(block.src) && isValidUrl(block.src) && !isBlockedVideoHost(block.src);
+  const embedError = block.src && isValidUrl(block.src) && !isBlockedVideoHost(block.src) ? checkEmbedUrl(block.src) : null;
+  const embeddable = !!block.src && isValidUrl(block.src) && !isBlockedVideoHost(block.src) && !embedError;
+  // The preview only renders after a click, so reading window here cannot cause a hydration mismatch.
+  const previewSameHost = preview && embeddable && isSameHostAsPage(block.src);
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
@@ -175,6 +201,7 @@ export function EmbedBlockEditor({ block, onChange }: EditorProps<"embed">) {
         </Field>
       </div>
       <UrlHint url={block.src} allowVideoHosts={false} />
+      {embedError && <p className="text-xs text-danger">{embedError}</p>}
       <Field label="Title" htmlFor={`embed-title-${block.id}`} hint="Describes the embedded page for screen readers.">
         <Input id={`embed-title-${block.id}`} value={block.title ?? ""} onChange={(e) => onChange({ ...block, title: e.target.value })} placeholder="e.g. Interactive flexbox playground" maxLength={200} />
       </Field>
@@ -183,7 +210,8 @@ export function EmbedBlockEditor({ block, onChange }: EditorProps<"embed">) {
           <Button variant="ghost" size="sm" onClick={() => setPreview((p) => !p)} leftIcon={preview ? <Icon.EyeOff className="size-4" /> : <Icon.Eye className="size-4" />}>
             {preview ? "Hide preview" : "Show preview"}
           </Button>
-          {preview && (
+          {preview && previewSameHost && <p className="mt-2 text-xs text-danger">Pages and files from this site can&apos;t be embedded.</p>}
+          {preview && !previewSameHost && (
             <iframe
               src={block.src}
               title={block.title || "Embedded content preview"}
@@ -286,6 +314,9 @@ export function PdfBlockEditor({ block, onChange }: EditorProps<"pdf">) {
 
 export function AudioBlockEditor({ block, onChange }: EditorProps<"audio">) {
   const [detect, setDetect] = useState(block.duration ? "" : block.src);
+  // Typing a link changes src on every keystroke; only load metadata once it settles.
+  const settledSrc = useSettledValue(block.src, MEDIA_URL_SETTLE_MS);
+  const srcSettled = settledSrc === block.src;
   return (
     <div className="space-y-3">
       <div className="grid gap-4 lg:grid-cols-2">
@@ -309,7 +340,7 @@ export function AudioBlockEditor({ block, onChange }: EditorProps<"audio">) {
           </p>
         </div>
       </div>
-      {detect && detect === block.src && isValidUrl(block.src) && (
+      {detect && detect === block.src && srcSettled && isValidUrl(block.src) && (
         <audio
           key={block.src}
           src={block.src}
@@ -323,7 +354,7 @@ export function AudioBlockEditor({ block, onChange }: EditorProps<"audio">) {
           onError={() => setDetect("")}
         />
       )}
-      {block.src && isValidUrl(block.src) && <AudioPlayer key={block.src} src={block.src} title={block.title} />}
+      {srcSettled && block.src && isValidUrl(block.src) && <AudioPlayer key={block.src} src={block.src} title={block.title} />}
     </div>
   );
 }
@@ -331,6 +362,193 @@ export function AudioBlockEditor({ block, onChange }: EditorProps<"audio">) {
 /* ------------------------------------------------------------------ */
 /* Video                                                               */
 /* ------------------------------------------------------------------ */
+
+/** Loads a video's metadata through a (signed, when protected) URL to read its duration and size. */
+function VideoMetadataProbe({ src, onLoaded, onFailed }: { src: string; onLoaded: (meta: { duration: number; height: number }) => void; onFailed: () => void }) {
+  const media = useMediaSource(src);
+  const blocked = media.status === "denied" || (media.status === "error" && !media.url);
+  useEffect(() => {
+    if (!blocked) return;
+    const timer = window.setTimeout(onFailed, 0);
+    return () => window.clearTimeout(timer);
+  }, [blocked, onFailed]);
+  if (!media.url) return null;
+  return (
+    <video
+      key={media.url}
+      src={media.url}
+      preload="metadata"
+      muted
+      className="hidden"
+      onLoadedMetadata={(e) => onLoaded({ duration: e.currentTarget.duration, height: e.currentTarget.videoHeight })}
+      onError={onFailed}
+    />
+  );
+}
+
+/** Extra renditions (quality menu): upload or link, label like "1080p", optional pixel height, ordered. */
+function VideoQualitiesEditor({ block, onChange }: EditorProps<"video">) {
+  const sources = block.sources ?? [];
+  const [keys, setKeys] = useState(() => sources.map(() => nextRowKey()));
+  const [probing, setProbing] = useState<Record<number, boolean>>({});
+
+  const commit = (next: VideoSource[], nextKeys: number[]) => {
+    setKeys(nextKeys);
+    onChange({ ...block, sources: next.length ? next : undefined });
+  };
+  const patchRow = (i: number, patch: Partial<VideoSource>) => commit(sources.map((s, j) => (j === i ? { ...s, ...patch } : s)), keys);
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= sources.length) return;
+    const next = [...sources];
+    const nextKeys = [...keys];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    [nextKeys[i], nextKeys[j]] = [nextKeys[j]!, nextKeys[i]!];
+    commit(next, nextKeys);
+  };
+  const labelCounts = new Map<string, number>();
+  for (const s of sources) {
+    const key = s.label.trim().toLowerCase();
+    if (key) labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+  }
+
+  return (
+    <section aria-labelledby={`qualities-${block.id}`} className="rounded-xl border border-border p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 id={`qualities-${block.id}`} className="text-sm font-semibold text-ink">
+            Video qualities
+          </h4>
+          <p className="text-xs text-ink-muted">Optional smaller or larger versions of the same video. Learners pick one in the player&apos;s Quality menu, or let Auto choose.</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          leftIcon={<Icon.Plus className="size-4" />}
+          disabled={sources.length >= MAX_VIDEO_SOURCES}
+          title={sources.length >= MAX_VIDEO_SOURCES ? `Up to ${MAX_VIDEO_SOURCES} extra qualities` : undefined}
+          onClick={() => commit([...sources, { src: "", label: "" }], [...keys, nextRowKey()])}
+        >
+          Add quality
+        </Button>
+      </div>
+      {sources.length === 0 ? (
+        <p className="text-sm text-ink-muted">Only the main video file is used. Add a 480p or 720p version to help learners on slow connections.</p>
+      ) : (
+        <ol className="space-y-3">
+          {sources.map((s, i) => {
+            const rowKey = keys[i] ?? i;
+            const label = s.label.trim();
+            const duplicate = !!label && (labelCounts.get(label.toLowerCase()) ?? 0) > 1;
+            const sameAsMain = !!s.src && s.src === block.src;
+            const srcOk = !!s.src && isValidUrl(s.src) && !isBlockedVideoHost(s.src);
+            const heightInvalid = s.height !== undefined && (s.height < MIN_SOURCE_HEIGHT || s.height > MAX_SOURCE_HEIGHT);
+            return (
+              <li key={rowKey} className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3">
+                <div className="flex flex-wrap items-end gap-2">
+                  <Field label="Label" htmlFor={`q-label-${block.id}-${rowKey}`} className="w-32">
+                    <Input
+                      id={`q-label-${block.id}-${rowKey}`}
+                      value={s.label}
+                      maxLength={MAX_SOURCE_LABEL}
+                      placeholder="720p"
+                      invalid={duplicate || (!!s.src && !label)}
+                      onChange={(e) => {
+                        const nextLabel = e.target.value;
+                        // Keep the height in sync with labels like "720p" unless it was entered separately.
+                        const derived = s.height === undefined || s.height === heightFromLabel(s.label);
+                        patchRow(i, { label: nextLabel, height: derived ? (heightFromLabel(nextLabel) ?? undefined) : s.height });
+                      }}
+                    />
+                  </Field>
+                  <Field label="Height (px)" htmlFor={`q-height-${block.id}-${rowKey}`} className="w-28">
+                    <Input
+                      id={`q-height-${block.id}-${rowKey}`}
+                      type="number"
+                      inputMode="numeric"
+                      min={MIN_SOURCE_HEIGHT}
+                      max={MAX_SOURCE_HEIGHT}
+                      step={1}
+                      placeholder="720"
+                      value={s.height ?? ""}
+                      invalid={heightInvalid}
+                      onChange={(e) => {
+                        const n = e.target.value.trim() ? Math.round(Number(e.target.value)) : NaN;
+                        patchRow(i, { height: Number.isFinite(n) && n > 0 ? n : undefined });
+                      }}
+                    />
+                  </Field>
+                  <div className="ml-auto flex items-center gap-1 pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => move(i, -1)}
+                      disabled={i === 0}
+                      className="rounded-md p-2 text-ink-faint hover:bg-surface-3 hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+                      aria-label={`Move quality ${i + 1} up`}
+                    >
+                      <Icon.ChevronUp className="size-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => move(i, 1)}
+                      disabled={i === sources.length - 1}
+                      className="rounded-md p-2 text-ink-faint hover:bg-surface-3 hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+                      aria-label={`Move quality ${i + 1} down`}
+                    >
+                      <Icon.ChevronDown className="size-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        commit(
+                          sources.filter((_, j) => j !== i),
+                          keys.filter((_, j) => j !== i),
+                        )
+                      }
+                      className="rounded-md p-2 text-ink-faint hover:bg-danger/10 hover:text-danger"
+                      aria-label={`Remove quality ${label || i + 1}`}
+                    >
+                      <Icon.Trash className="size-4" />
+                    </button>
+                  </div>
+                </div>
+                <MediaField
+                  kind="video"
+                  value={s.src}
+                  onChange={(src) => {
+                    setProbing((p) => ({ ...p, [rowKey]: !!src }));
+                    patchRow(i, { src });
+                  }}
+                  urlPlaceholder="https://example.com/lesson-720p.mp4"
+                  hint="The same video, encoded at another resolution."
+                />
+                <UrlHint url={s.src} allowVideoHosts={false} />
+                {probing[rowKey] && srcOk && (
+                  <VideoMetadataProbe
+                    src={s.src}
+                    onLoaded={({ height }) => {
+                      setProbing((p) => ({ ...p, [rowKey]: false }));
+                      if (height > 0 && s.height === undefined) patchRow(i, { height, label: s.label.trim() ? s.label : labelForHeight(height) });
+                    }}
+                    onFailed={() => setProbing((p) => ({ ...p, [rowKey]: false }))}
+                  />
+                )}
+                {duplicate && <p className="text-xs text-danger">Another quality already uses the label &ldquo;{label}&rdquo;.</p>}
+                {!!s.src && !label && <p className="text-xs text-danger">Add a label such as 720p so learners know which quality this is.</p>}
+                {sameAsMain && <p className="text-xs text-warning">This is the main video file; it is always offered, so this row will be ignored.</p>}
+                {heightInvalid && (
+                  <p className="text-xs text-danger">
+                    Height must be between {MIN_SOURCE_HEIGHT} and {MAX_SOURCE_HEIGHT} pixels.
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
 
 export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"video"> & { quizzes: AssessmentOption[] }) {
   const [detect, setDetect] = useState<{ src: string; status: "loading" | "error" } | null>(() => (block.src && !block.duration ? { src: block.src, status: "loading" } : null));
@@ -344,8 +562,11 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
 
   const srcOk = !!block.src && isValidUrl(block.src) && !isBlockedVideoHost(block.src);
   const detecting = detect?.src === block.src && detect.status === "loading" && srcOk;
+  // Typing a link changes src on every keystroke; only load metadata once it settles.
+  const srcSettled = useSettledValue(block.src, MEDIA_URL_SETTLE_MS) === block.src;
   const duration = block.duration;
   const quizTitle = new Map(quizzes.map((q) => [q.id, q.title]));
+  const isProtectedUpload = block.src.startsWith(PROTECTED_VIDEO_PREFIX);
 
   const setSrc = (src: string) => {
     setDetect(src ? { src, status: "loading" } : null);
@@ -357,11 +578,13 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
     const last = chapters[chapters.length - 1]?.time;
     return last !== undefined && Number.isFinite(last) ? last + 60 : 0;
   };
+  const onDetectFailed = useCallback(() => setDetect((d) => (d && d.status === "loading" ? { src: d.src, status: "error" } : d)), []);
 
   const validChapters = chapters.filter((c) => Number.isFinite(c.time) && c.title.trim()).sort((a, b) => a.time - b.time);
   const seekMarkers: SeekMarker[] = markers
     .filter((m) => Number.isFinite(m.time) && m.quizId)
     .map((m, i) => ({ time: m.time, id: `${m.quizId}-${i}`, label: quizTitle.get(m.quizId) ?? "Quiz", kind: "quiz" }));
+  const previewSources = (block.sources ?? []).filter((s) => s.src && s.label.trim() && isValidUrl(s.src) && !isBlockedVideoHost(s.src));
 
   return (
     <div className="space-y-5">
@@ -371,6 +594,12 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
             <MediaField kind="video" value={block.src} onChange={setSrc} urlPlaceholder="https://example.com/lesson.mp4" hint="MP4, WebM or OGG. Upload the file or paste a direct link — YouTube and Vimeo aren't supported." />
           </Field>
           <UrlHint url={block.src} allowVideoHosts={false} />
+          {isProtectedUpload && (
+            <p className="flex items-start gap-1.5 text-xs text-ink-muted">
+              <Icon.ShieldCheck className="mt-px size-3.5 shrink-0 text-success" />
+              Uploaded videos can be protected with expiring, per-learner links and a watermark in Settings → Video.
+            </p>
+          )}
         </div>
         <div className="space-y-3">
           <Field label="Title" htmlFor={`video-title-${block.id}`}>
@@ -402,24 +631,21 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
         </div>
       </div>
 
-      {detecting && (
-        <video
+      {detecting && srcSettled && (
+        <VideoMetadataProbe
           key={block.src}
           src={block.src}
-          preload="metadata"
-          muted
-          className="hidden"
-          onLoadedMetadata={(e) => {
-            const d = Math.round(e.currentTarget.duration);
-            if (Number.isFinite(d) && d > 0) {
+          onLoaded={({ duration: d }) => {
+            const seconds = Math.round(d);
+            if (Number.isFinite(seconds) && seconds > 0) {
               setDetect(null);
               setDurationKey((k) => k + 1);
-              onChange({ ...block, duration: d });
+              onChange({ ...block, duration: seconds });
             } else {
               setDetect({ src: block.src, status: "error" });
             }
           }}
-          onError={() => setDetect({ src: block.src, status: "error" })}
+          onFailed={onDetectFailed}
         />
       )}
 
@@ -431,6 +657,8 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
           <MediaField kind="document" accept=".vtt,text/vtt" value={block.captionsUrl ?? ""} onChange={(captionsUrl) => onChange({ ...block, captionsUrl: captionsUrl || undefined })} urlPlaceholder="https://example.com/captions.vtt" />
         </Field>
       </div>
+
+      <VideoQualitiesEditor block={block} onChange={onChange} />
 
       <section aria-labelledby={`chapters-${block.id}`} className="rounded-xl border border-border p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -561,14 +789,17 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
           {preview && (
             <div className="mt-2 overflow-hidden rounded-xl border border-border">
               <VideoPlayer
-                key={`${block.src}|${block.captionsUrl ?? ""}`}
+                key={`${block.src}|${block.captionsUrl ?? ""}|${previewSources.map((s) => s.src).join(",")}`}
                 src={block.src}
+                sources={previewSources}
                 poster={block.posterUrl}
                 captionsUrl={block.captionsUrl}
                 title={block.title}
                 chapters={validChapters}
                 markers={seekMarkers}
                 onTimeChange={setCurrentTime}
+                watermark={null}
+                seekThumbnails
               />
             </div>
           )}

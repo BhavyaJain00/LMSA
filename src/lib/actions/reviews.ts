@@ -6,6 +6,7 @@ import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { findById, getDb, insert, remove, update } from "@/lib/db/store";
 import { getCourseBySlug, getEnrollment } from "@/lib/data/courses";
 import { notifyMany } from "@/lib/services/notifications";
+import { awardPoints, revokePoints } from "@/lib/services/points";
 import { fd, fdNumber, truncate, uid } from "@/lib/utils";
 
 const MAX_REVIEW_LENGTH = 2000;
@@ -71,6 +72,7 @@ export async function createReviewAction(_prev: ActionResult<Review> | null, for
     createdAt: new Date().toISOString(),
   };
   await insert("reviews", review);
+  await awardPoints(user.id, "review", { refId: course.id, courseId: course.id });
   await notifyMany(
     course.instructorIds.filter((id) => id !== user.id),
     {
@@ -119,6 +121,7 @@ export async function deleteReviewAction(_prev: ActionResult | null, formData: F
   if (existing.userId !== user.id && !isModerator(user)) return { ok: false, error: "You can only delete your own review." };
 
   await remove("reviews", existing.id);
+  await revokePoints("review", existing.courseId, existing.userId);
   const course = await findById("courses", existing.courseId);
   if (course) revalidateCourse(course);
   return { ok: true, data: undefined, message: existing.userId === user.id ? "Your review was deleted." : "Review deleted." };

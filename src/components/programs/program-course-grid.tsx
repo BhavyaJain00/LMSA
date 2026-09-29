@@ -91,6 +91,12 @@ export function ProgramCourseGrid({ programId, courses, isMember }: { programId:
                         {course.completed ? "Review course" : (course.progress ?? 0) > 0 ? "Continue" : "Start"}
                       </ButtonLink>
                     </>
+                  ) : course.access === "payment" ? (
+                    <ButtonLink href={`/billing/course/${course.id}`} size="sm" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
+                      Buy this course
+                    </ButtonLink>
+                  ) : course.access === "unpublished" ? (
+                    <p className="rounded-lg bg-surface-2 px-3 py-2 text-center text-sm text-ink-muted">This course is not available yet.</p>
                   ) : (
                     <StartProgramCourseButton programId={programId} courseId={course.id} />
                   )}

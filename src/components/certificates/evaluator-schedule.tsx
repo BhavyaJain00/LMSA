@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { EvaluateDialog } from "./evaluate-dialog";
-import { addDaysToKey, formatClock12, formatLongDate, formatMonthYear, startOfWeekKey, WEEKDAYS, weekdayOfDateKey } from "./time";
+import { addDaysToKey, formatClock12, formatLongDate, formatMonthYear, isDateInRange, startOfWeekKey, WEEKDAYS, weekdayOfDateKey, type UnavailabilityRange } from "./time";
 
 function eventTone(ev: ScheduleEvent): { label: string; tone: "success" | "info" | "warning" | "danger" | "neutral" } {
   if (ev.evaluation?.status === "pass") return { label: "Passed", tone: "success" };
@@ -46,12 +46,15 @@ export function EvaluatorSchedule({
   today,
   viewer,
   emptyAction,
+  unavailable,
 }: {
   events: ScheduleEvent[];
   today: string;
   /** The assigned evaluator (or a moderator) can record results. */
   viewer: { id: string; moderator: boolean };
   emptyAction?: React.ReactNode;
+  /** The evaluator's blocked date range (no bookings accepted); marked on the calendar. */
+  unavailable?: UnavailabilityRange | null;
 }) {
   const canEdit = (ev: ScheduleEvent) => viewer.moderator || ev.evaluator.id === viewer.id;
   const [weekStart, setWeekStart] = useState(() => startOfWeekKey(today));
@@ -61,9 +64,33 @@ export function EvaluatorSchedule({
   const inWeek = events.filter((e) => e.date >= weekStart && e.date <= weekEnd);
   const awaiting = events.filter((e) => e.awaitingResult && !e.evaluation);
   const nextWeekWithEvents = events.find((e) => e.date > weekEnd)?.date;
+  const upcomingBlock = unavailable && unavailable.to >= today ? unavailable : null;
+  const bookedWhileAway = upcomingBlock ? events.filter((e) => e.status === "upcoming" && isDateInRange(e.date, upcomingBlock)).length : 0;
 
   return (
     <div className="space-y-6">
+      {upcomingBlock && (
+        <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface-2 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex items-start gap-2 text-ink-muted">
+            <Icon.Calendar className="mt-0.5 size-4 shrink-0 text-ink" />
+            <span>
+              Unavailable from <strong className="font-semibold text-ink">{formatLongDate(upcomingBlock.from)}</strong> to{" "}
+              <strong className="font-semibold text-ink">{formatLongDate(upcomingBlock.to)}</strong>. Learners can&apos;t book evaluations on these dates.
+              {bookedWhileAway > 0 && (
+                <span className="mt-1 block text-warning">
+                  {bookedWhileAway} evaluation{bookedWhileAway === 1 ? " was" : "s were"} booked in this range before it was blocked.
+                </span>
+              )}
+            </span>
+          </p>
+          {upcomingBlock.from > weekEnd && (
+            <Button variant="outline" size="sm" className="shrink-0" onClick={() => setWeekStart(startOfWeekKey(upcomingBlock.from))}>
+              Show week
+            </Button>
+          )}
+        </div>
+      )}
+
       {awaiting.length > 0 && (
         <div className="rounded-xl border border-warning/30 bg-warning/10 p-4">
           <p className="flex items-center gap-2 text-sm font-medium text-warning">
@@ -103,14 +130,28 @@ export function EvaluatorSchedule({
           {days.map((day) => {
             const dayEvents = inWeek.filter((e) => e.date === day).sort((a, b) => a.startTime.localeCompare(b.startTime));
             const isToday = day === today;
+            const away = isDateInRange(day, unavailable);
             return (
-              <section key={day} aria-label={formatLongDate(day)} className={cn("min-h-0 p-3 lg:min-h-64", isToday && "bg-accent/5")}>
+              <section
+                key={day}
+                aria-label={away ? `${formatLongDate(day)}, unavailable` : formatLongDate(day)}
+                className={cn(
+                  "min-h-0 p-3 lg:min-h-64",
+                  isToday && "bg-accent/5",
+                  away && "bg-[repeating-linear-gradient(135deg,var(--surface-2)_0_6px,transparent_6px_12px)]",
+                )}
+              >
                 <p className={cn("mb-2 flex items-baseline gap-1.5 text-sm lg:flex-col lg:items-start lg:gap-0", isToday ? "text-accent" : "text-ink-muted")}>
                   <span className="text-xs font-medium uppercase tracking-wide">{WEEKDAYS[weekdayOfDateKey(day)]?.slice(0, 3)}</span>
                   <span className={cn("font-semibold lg:text-xl", isToday ? "text-accent" : "text-ink")}>{Number(day.slice(8, 10))}</span>
                 </p>
+                {away && (
+                  <Badge tone="neutral" size="xs" className="mb-2">
+                    Unavailable
+                  </Badge>
+                )}
                 {dayEvents.length === 0 ? (
-                  <p className="text-xs text-ink-faint lg:hidden">No evaluations</p>
+                  !away && <p className="text-xs text-ink-faint lg:hidden">No evaluations</p>
                 ) : (
                   <ul className="space-y-1.5">
                     {dayEvents.map((ev) => (

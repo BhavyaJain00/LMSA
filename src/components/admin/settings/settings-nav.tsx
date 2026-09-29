@@ -21,6 +21,8 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "SEO", href: "/admin/settings/seo", icon: "Search" },
       { label: "Features", href: "/admin/settings/features", icon: "Sliders" },
       { label: "Learning", href: "/admin/settings/learning", icon: "GraduationCap" },
+      { label: "Video", href: "/admin/settings/video", icon: "Video" },
+      { label: "Installable app", href: "/admin/settings/pwa", icon: "Smartphone" },
     ],
   },
   {
@@ -28,11 +30,23 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
     items: [
       { label: "Categories", href: "/admin/settings/categories", icon: "Tag" },
       { label: "Badges", href: "/admin/settings/badges", icon: "Award" },
+      { label: "Points & leaderboard", href: "/admin/settings/gamification", icon: "Trophy" },
     ],
   },
   {
     group: "User management",
-    items: [{ label: "Members", href: "/admin/members", icon: "Users" }],
+    items: [
+      { label: "Members", href: "/admin/members", icon: "Users" },
+      { label: "Security", href: "/admin/settings/security", icon: "ShieldCheck" },
+      { label: "Login activity", href: "/admin/security", icon: "Shield" },
+    ],
+  },
+  {
+    group: "Communication",
+    items: [
+      { label: "Email", href: "/admin/settings/email", icon: "Mail" },
+      { label: "Outbox", href: "/admin/emails", icon: "Send" },
+    ],
   },
   {
     group: "Payment",

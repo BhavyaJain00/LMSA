@@ -13,6 +13,7 @@ import {
 } from "@/lib/data/batches";
 import { enrollUserInBatch, enrollUserInCourse } from "@/lib/services/enrollment";
 import { notifyMany } from "@/lib/services/notifications";
+import { awardDiscussionReplyPoints, revokePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, isValidUrl, slugify, truncate, stripMarkdown, uid, uniqueSlug } from "@/lib/utils";
@@ -761,6 +762,7 @@ export async function replyBatchTopicAction(_prev: ActionResult | null, formData
     fromUserId: user.id,
   });
   await notifyMentions(db, batch, user, content, link, participants);
+  await awardDiscussionReplyPoints(db.discussionReplies.find((r) => r.topicId === topic.id && r.authorId === user.id && r.createdAt === now)?.id);
   revalidatePath(`/batches/${batch.slug}`);
   return { ok: true, data: undefined, message: "Reply posted" };
 }
@@ -797,6 +799,13 @@ export async function deleteBatchReplyAction(replyId: string): Promise<ActionRes
   const batch = topic ? db.batches.find((b) => b.id === topic.refId) : null;
   if (!reply || !topic || !batch) return { ok: false, error: "This reply no longer exists." };
   if (reply.authorId !== user.id && !canManageBatch(user, batch)) return { ok: false, error: "You can only delete your own replies." };
+  // The earliest reply holds the topic's opening message; removing it would
+  // leave a discussion without a body. Delete the discussion instead.
+  const opening = db.discussionReplies
+    .filter((r) => r.topicId === topic.id)
+    .reduce<typeof reply | null>((first, r) => (!first || r.createdAt.localeCompare(first.createdAt) < 0 ? r : first), null);
+  if (opening?.id === reply.id) return { ok: false, error: "This is the discussion's opening message. Delete the discussion instead." };
+  await revokePoints("discussion_reply", reply.id);
   await mutate((d) => {
     d.discussionReplies = d.discussionReplies.filter((r) => r.id !== reply.id);
   });
@@ -812,6 +821,7 @@ export async function deleteBatchTopicAction(topicId: string): Promise<ActionRes
   const batch = topic ? db.batches.find((b) => b.id === topic.refId) : null;
   if (!topic || !batch) return { ok: false, error: "This discussion no longer exists." };
   if (topic.authorId !== user.id && !canManageBatch(user, batch)) return { ok: false, error: "You can only delete discussions you started." };
+  await revokePoints("discussion_reply", db.discussionReplies.filter((r) => r.topicId === topic.id).map((r) => r.id));
   await mutate((d) => {
     d.discussionTopics = d.discussionTopics.filter((t) => t.id !== topic.id);
     d.discussionReplies = d.discussionReplies.filter((r) => r.topicId !== topic.id);

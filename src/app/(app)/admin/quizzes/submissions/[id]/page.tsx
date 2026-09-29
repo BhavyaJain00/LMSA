@@ -44,7 +44,7 @@ export default async function GradeSubmissionPage(props: PageProps<"/admin/quizz
         }
         actions={
           <>
-            {quiz && (
+            {quiz && data.canEditQuiz && (
               <ButtonLink href={`/admin/quizzes/${quiz.id}`} variant="subtle" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
                 Edit quiz
               </ButtonLink>

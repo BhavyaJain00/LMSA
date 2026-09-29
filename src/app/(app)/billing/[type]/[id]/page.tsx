@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, parseItemType, validateCoupon } from "@/lib/data/commerce";
+import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
@@ -110,6 +111,8 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
             expectedTotal={summary.total}
             totalLabel={money(summary.total, summary.currency)}
             gateway={settings.commerce.paymentGateway}
+            gatewayReady={isConfigured(settings.commerce.paymentGateway)}
+            gatewayMode={gatewayMode(settings.commerce.paymentGateway)}
             applyTax={settings.commerce.applyTax}
             taxLabel={settings.commerce.taxLabel}
             contactEmail={settings.contact.email}

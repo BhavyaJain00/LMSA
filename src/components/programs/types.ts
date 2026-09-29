@@ -36,6 +36,11 @@ export interface ProgramCourseView {
   /** Whether the viewer may open this course (enforced order). */
   eligible: boolean;
   continueHref: string | null;
+  /**
+   * Whether the viewer can start this course from the program: "open", or
+   * blocked because the course is unpublished or needs a payment first.
+   */
+  access: "open" | "unpublished" | "payment";
 }
 
 export interface ProgramMemberView {

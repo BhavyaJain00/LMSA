@@ -1,17 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ActionResult, PublicUser } from "@/lib/types";
 import { updateCourseSettingsAction } from "@/lib/actions/courses";
+import type { PrerequisiteSettings } from "@/lib/actions/drip";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Field, FormError, Input, Select, Switch, type InputProps } from "@/components/ui/input";
+import { Field, FormError, Input, Select, Switch, Textarea, type InputProps } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import type { CourseSettingsValues } from "./types";
 import { UnsavedChangesGuard } from "./unsaved-changes-guard";
+import { CREATE_MEMBER_OPTION, CreateMemberDialog, memberQualifies } from "./create-member-dialog";
+import { CERTIFICATE_TEMPLATES } from "@/components/certificates/templates";
+import { CoursePrerequisitesField, usePrerequisiteField } from "./course-prerequisites-field";
 
 export interface CourseSettingsFormProps {
   courseId: string;
@@ -20,7 +25,14 @@ export interface CourseSettingsFormProps {
   currencies: readonly string[];
   paymentsConfigured: boolean;
   canManagePayments: boolean;
+  /** Moderators can add a new evaluator without leaving the form. */
+  canCreateMembers?: boolean;
+  canGrantAdmin?: boolean;
+  /** Current prerequisites and pickable courses; loaded by the form when omitted. */
+  prerequisites?: PrerequisiteSettings | null;
 }
+
+const META_DESCRIPTION_MAX = 160;
 
 const toMajor = (cents: number) => (cents > 0 ? (cents / 100).toFixed(2).replace(/\.00$/, "") : "");
 
@@ -42,7 +54,17 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-export function CourseSettingsForm({ courseId, initial, evaluators, currencies, paymentsConfigured, canManagePayments }: CourseSettingsFormProps) {
+export function CourseSettingsForm({
+  courseId,
+  initial,
+  evaluators: initialEvaluators,
+  currencies,
+  paymentsConfigured,
+  canManagePayments,
+  canCreateMembers = false,
+  canGrantAdmin = false,
+  prerequisites: providedPrerequisites,
+}: CourseSettingsFormProps) {
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const [upcoming, setUpcoming] = useState(initial.upcoming);
@@ -56,9 +78,14 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
   const [paidCertificate, setPaidCertificate] = useState(initial.paidCertificate);
   const [certificatePrice, setCertificatePrice] = useState(toMajor(initial.certificatePrice));
   const [evaluatorId, setEvaluatorId] = useState(initial.evaluatorId ?? "");
+  const [metaDescription, setMetaDescription] = useState(initial.metaDescription ?? "");
+  const [metaKeywords, setMetaKeywords] = useState(initial.metaKeywords ?? "");
   const [paymentsDialog, setPaymentsDialog] = useState(false);
+  const [memberDialog, setMemberDialog] = useState(false);
+  const [evaluators, setEvaluators] = useState(initialEvaluators);
+  const prerequisites = usePrerequisiteField(courseId, providedPrerequisites);
 
-  const snapshot = JSON.stringify([upcoming, featured, selfEnrollment, enforceLessonCompletion, paidCourse, paidCourse ? price : "", currency, enableCertification, paidCertificate, paidCertificate ? certificatePrice : "", paidCertificate ? evaluatorId : ""]);
+  const snapshot = JSON.stringify([upcoming, featured, selfEnrollment, enforceLessonCompletion, paidCourse, paidCourse ? price : "", currency, enableCertification, paidCertificate, paidCertificate ? certificatePrice : "", paidCertificate ? evaluatorId : "", metaDescription.trim(), metaKeywords.trim()]);
   const [baseline] = useState(() =>
     JSON.stringify([
       initial.upcoming,
@@ -72,9 +99,11 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
       initial.paidCertificate,
       initial.paidCertificate ? toMajor(initial.certificatePrice) : "",
       initial.paidCertificate ? (initial.evaluatorId ?? "") : "",
+      (initial.metaDescription ?? "").trim(),
+      (initial.metaKeywords ?? "").trim(),
     ]),
   );
-  const dirty = snapshot !== baseline;
+  const dirty = snapshot !== baseline || prerequisites.dirty;
 
   const [state, formAction, pending] = useActionState(async (prev: ActionResult | null, formData: FormData): Promise<ActionResult | null> => {
     const result = await updateCourseSettingsAction(null, formData);
@@ -135,6 +164,10 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
           label="Enforce Lesson Completion"
           description="Students must complete each lesson before the next one opens."
         />
+      </Section>
+
+      <Section title="Prerequisites" description="Courses learners must complete before they can enroll in this one.">
+        <CoursePrerequisitesField state={prerequisites} error={errors.prerequisiteCourseIds} />
       </Section>
 
       <Section title="Pricing and certification" description="Charge for the course or its certificate, and choose how certificates are issued.">
@@ -222,13 +255,23 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
                   />
                 </Field>
                 <Field label="Evaluator" htmlFor="settings-evaluator" required error={errors.evaluatorId} hint="Learners book an evaluation with this person to earn the certificate." className="sm:col-span-2">
-                  <Select id="settings-evaluator" name="evaluatorId" value={evaluatorId} onChange={(e) => setEvaluatorId(e.target.value)} invalid={!!errors.evaluatorId}>
+                  <Select
+                    id="settings-evaluator"
+                    name="evaluatorId"
+                    value={evaluatorId}
+                    onChange={(e) => {
+                      if (e.target.value === CREATE_MEMBER_OPTION) setMemberDialog(true);
+                      else setEvaluatorId(e.target.value);
+                    }}
+                    invalid={!!errors.evaluatorId}
+                  >
                     <option value="">Select evaluator</option>
                     {evaluators.map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.name} ({u.email})
                       </option>
                     ))}
+                    {canCreateMembers && <option value={CREATE_MEMBER_OPTION}>+ Add New Member…</option>}
                   </Select>
                 </Field>
               </div>
@@ -238,9 +281,47 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
         {(enableCertification || paidCertificate) && (
           <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-muted">
             <Icon.Certificate className="mt-px size-4 shrink-0" />
-            Certificates are rendered from the platform certificate template and can be verified publicly with their code.
+            <span>
+              Certificates render from a template ({CERTIFICATE_TEMPLATES.map((t) => t.name).join(", ")}) chosen when they are issued or evaluated; certificates issued automatically use{" "}
+              {CERTIFICATE_TEMPLATES[0]!.name}. Every certificate can be verified publicly with its code.{" "}
+              <Link href="/admin/certificates" className="font-medium text-ink underline underline-offset-2">
+                Manage certificates
+              </Link>
+            </span>
           </p>
         )}
+      </Section>
+
+      <Section title="Meta Tags" description="These tags help search engines describe and rank your course in results.">
+        <Field
+          label="Meta description"
+          htmlFor="settings-meta-description"
+          error={errors.metaDescription}
+          hint={`${metaDescription.length}/${META_DESCRIPTION_MAX} · Shown under the course title in search results.`}
+        >
+          <Textarea
+            id="settings-meta-description"
+            name="metaDescription"
+            rows={3}
+            value={metaDescription}
+            onChange={(e) => setMetaDescription(e.target.value)}
+            maxLength={META_DESCRIPTION_MAX}
+            placeholder="A short summary of the course for search results."
+            invalid={!!errors.metaDescription}
+          />
+        </Field>
+        <Field label="Meta keywords" htmlFor="settings-meta-keywords" error={errors.metaKeywords} hint="Separate keywords with commas.">
+          <Textarea
+            id="settings-meta-keywords"
+            name="metaKeywords"
+            rows={2}
+            value={metaKeywords}
+            onChange={(e) => setMetaKeywords(e.target.value)}
+            maxLength={500}
+            placeholder="Comma separated keywords for SEO"
+            invalid={!!errors.metaKeywords}
+          />
+        </Field>
       </Section>
 
       <div className="flex items-center justify-end gap-3">
@@ -265,7 +346,7 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
               Close
             </Button>
             {canManagePayments && (
-              <ButtonLink href="/admin/settings?tab=payments" variant="primary">
+              <ButtonLink href="/admin/settings/payments" variant="primary">
                 Open payment settings
               </ButtonLink>
             )}
@@ -276,6 +357,17 @@ export function CourseSettingsForm({ courseId, initial, evaluators, currencies, 
           Selling a paid course or certificate needs a payment gateway. {canManagePayments ? "Choose one in the platform settings, then turn on pricing here." : "Ask an administrator to configure one, then turn on pricing here."}
         </p>
       </Dialog>
+      <CreateMemberDialog
+        open={memberDialog}
+        onClose={() => setMemberDialog(false)}
+        purpose="evaluator"
+        canGrantAdmin={canGrantAdmin}
+        onCreated={(user) => {
+          if (!memberQualifies(user, "evaluator")) return;
+          setEvaluators((list) => (list.some((u) => u.id === user.id) ? list : [...list, user].sort((a, b) => a.name.localeCompare(b.name))));
+          setEvaluatorId(user.id);
+        }}
+      />
     </form>
   );
 }

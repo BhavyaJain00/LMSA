@@ -7,14 +7,16 @@ import { getCurrentUser, isCreator, isModerator } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { setFlash } from "@/lib/flash";
+import { awardQuizPoints } from "@/lib/services/points";
 import { fd, fdNumber, uid } from "@/lib/utils";
 import {
   canManageQuiz,
   checkQuizAnswer,
   gradeSubmission,
-  loadRunnerQuestions,
   recordQuizSubmission,
+  revalidateQuizAttempt,
   recordQuizViolation,
+  startQuizAttempt,
   type GradeOutcome,
   type QuizDoc,
 } from "@/lib/data/quiz";
@@ -23,8 +25,8 @@ import {
   MAX_MARKS,
   type CheckAnswerResult,
   type QuizQuestionRow,
-  type RunnerQuestion,
   type SaveQuizInput,
+  type StartAttemptResult,
   type SubmitQuizInput,
   type SubmitResult,
   type ViolationEvent,
@@ -34,11 +36,13 @@ import {
 /* Helpers                                                              */
 /* ------------------------------------------------------------------ */
 
+/** Pages that list or render quizzes (route patterns carry their route groups so they match the page files). */
 function revalidateQuizPages(quizId?: string) {
   revalidatePath("/admin/quizzes");
   revalidatePath("/admin/quizzes/submissions");
   if (quizId) revalidatePath(`/admin/quizzes/${quizId}`);
-  revalidatePath("/quiz/[id]", "page");
+  revalidatePath("/(app)/quiz/[id]", "page");
+  revalidatePath("/(learn)/courses/[slug]/learn/[ref]", "page");
   revalidatePath("/courses/[slug]/learn/[ref]", "page");
 }
 
@@ -181,6 +185,21 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
   });
   if (duplicates.length) fieldErrors.questions = `Rows ${Array.from(new Set(duplicates)).sort((a, b) => a - b).join(", ")} have the duplicate questions.`;
 
+  // Open-ended questions are graded by hand, so a quiz is either entirely open ended or has none.
+  // Quizzes that already mixed both (created before this rule) can still be saved as long as no
+  // question is added to them; removing questions is how they get back in line.
+  const typeOf = (id: string) => db.questions.find((q) => q.id === id)?.type;
+  const isMixed = (ids: string[]) => {
+    const types = ids.map(typeOf);
+    return types.includes("open_ended") && types.some((t) => t !== "open_ended");
+  };
+  const hasOpenEnded = rows.some((r) => typeOf(r.questionId) === "open_ended");
+  if (isMixed(rows.map((r) => r.questionId))) {
+    const previous = new Set(quiz.questions.map((r) => r.questionId));
+    const legacy = isMixed(Array.from(previous)) && rows.every((r) => previous.has(r.questionId));
+    if (!legacy) fieldErrors.questions = "If you want open ended questions then make sure each question in the quiz is of open ended type.";
+  }
+
   const shuffleQuestions = !!s.shuffleQuestions;
   let limitQuestionsTo = shuffleQuestions ? num(s.limitQuestionsTo, NaN) : 0;
   if (shuffleQuestions) {
@@ -224,8 +243,8 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
     return { ok: false, error: Object.values(fieldErrors)[0] ?? "Please fix the highlighted fields.", fieldErrors };
   }
 
-  // Open-ended answers are always graded after submission; "show answers" applies to auto-graded questions.
-  const showAnswers = !!s.showAnswers;
+  // Open-ended answers are graded after submission, so there is nothing to reveal while answering.
+  const showAnswers = !hasOpenEnded && !!s.showAnswers;
   const totalMarks = computeTotalMarks(rows, shuffleQuestions, limitQuestionsTo);
   const updatedAt = new Date().toISOString();
 
@@ -254,9 +273,7 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
     row.updatedAt = updatedAt;
   });
 
-  revalidatePath("/admin/quizzes");
-  revalidatePath("/quiz/[id]", "page");
-  revalidatePath("/courses/[slug]/learn/[ref]", "page");
+  revalidateQuizPages(quiz.id);
   return { ok: true, data: { updatedAt, totalMarks, showAnswers, limitQuestionsTo }, message: "Quiz updated successfully" };
 }
 
@@ -316,18 +333,45 @@ export async function deleteQuizzesAction(ids: string[]): Promise<ActionResult<{
 /* Taking a quiz                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Grade and store an attempt. `recordQuizSubmission` re-checks access, the
+ * schedule and the attempt limit, and — for a passing attempt taken inside a
+ * lesson — completes the lesson (services/progress.completeLesson with a
+ * dwell of 9999s), evaluates "quiz_passed" badges and logs the activity.
+ * The lesson player, course page and dashboard are revalidated so the
+ * lesson's completion shows up immediately (the runner also calls
+ * router.refresh()).
+ */
 export async function submitQuizAction(input: SubmitQuizInput): Promise<ActionResult<SubmitResult>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Your session expired. Log in again to submit the quiz." };
   const result = await recordQuizSubmission(user, input);
   if (result.ok && !result.data.preview) {
-    revalidateQuizPages(input.quizId);
-    revalidatePath("/dashboard");
+    await awardQuizPoints(result.data.submission.id);
+    await revalidateQuizAttempt({
+      quizId: input.quizId,
+      submissionId: result.data.submission.id,
+      lessonId: typeof input.lessonId === "string" ? input.lessonId : undefined,
+      courseId: typeof input.courseId === "string" ? input.courseId : undefined,
+    });
   }
   return result;
 }
 
-export async function checkAnswerAction(input: { quizId: string; questionId: string; answer: string[] }): Promise<ActionResult<CheckAnswerResult>> {
+/** Issue a live attempt (server-side start time and question selection). */
+export async function startQuizAttemptAction(quizId: string): Promise<ActionResult<StartAttemptResult>> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Please log in to access the quiz." };
+  if (typeof quizId !== "string") return { ok: false, error: "Invalid request." };
+  return startQuizAttempt(user, quizId);
+}
+
+export async function checkAnswerAction(input: {
+  quizId: string;
+  questionId: string;
+  answer: string[];
+  attemptToken?: string;
+}): Promise<ActionResult<CheckAnswerResult>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Your session expired. Log in again." };
   return checkQuizAnswer(user, input);
@@ -336,17 +380,11 @@ export async function checkAnswerAction(input: { quizId: string; questionId: str
 export async function logQuizViolationAction(input: {
   quizId: string;
   eventType: ViolationType;
-  startedAt: string;
+  attemptToken: string;
 }): Promise<ActionResult<{ event: ViolationEvent; count: number }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Your session expired." };
   return recordQuizViolation(user, input);
-}
-
-export async function getQuizQuestionsAction(quizId: string): Promise<ActionResult<RunnerQuestion[]>> {
-  const user = await getCurrentUser();
-  if (!user) return { ok: false, error: "Please log in to access the quiz." };
-  return loadRunnerQuestions(user, quizId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,10 +397,14 @@ export async function gradeSubmissionAction(input: { submissionId: string; marks
   if (!isCreator(user)) return { ok: false, error: "Only instructors and moderators can grade quizzes." };
   const result = await gradeSubmission(user, input);
   if (result.ok) {
-    revalidatePath("/admin/quizzes/submissions");
+    await awardQuizPoints(input.submissionId);
+    const db = await getDb();
+    const submission = db.quizSubmissions.find((s) => s.id === input.submissionId);
     revalidatePath(`/admin/quizzes/submissions/${input.submissionId}`);
     revalidatePath(`/quiz/submissions/${input.submissionId}`);
-    revalidatePath("/admin/quizzes");
+    // A passing grade can complete the learner's lesson, so refresh the learning pages too.
+    if (submission) await revalidateQuizAttempt({ quizId: submission.quizId, submissionId: submission.id });
+    else revalidateQuizPages();
   }
   return result;
 }

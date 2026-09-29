@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { isModerator, requireUser } from "@/lib/auth/session";
 import { getUserByUsername } from "@/lib/data/users";
-import { canViewEvaluatorTabs, getEvaluatorSchedule, isEvaluatorRole, platformNow } from "@/lib/data/certificates";
+import { canViewEvaluatorTabs, getEvaluatorSchedule, getEvaluatorUnavailability, isEvaluatorRole, platformNow } from "@/lib/data/certificates";
 import { ButtonLink } from "@/components/ui/button";
 import { StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
@@ -22,7 +22,7 @@ export default async function EvaluatorSchedulePage(props: PageProps<"/user/[use
   const owner = viewer.id === profile.id;
   if (!isEvaluatorRole(profile) || (!owner && !canViewEvaluatorTabs(viewer, profile))) redirect(`/user/${profile.username}`);
 
-  const events = await getEvaluatorSchedule(profile.id);
+  const [events, unavailable] = await Promise.all([getEvaluatorSchedule(profile.id), getEvaluatorUnavailability(profile.id)]);
   const { dateKey: today } = platformNow();
   const upcoming = events.filter((e) => e.status === "upcoming" && !e.awaitingResult).length;
   const awaiting = events.filter((e) => e.awaitingResult && !e.evaluation).length;
@@ -47,6 +47,7 @@ export default async function EvaluatorSchedulePage(props: PageProps<"/user/[use
       <EvaluatorSchedule
         events={events}
         today={today}
+        unavailable={unavailable}
         viewer={{ id: viewer.id, moderator: isModerator(viewer) }}
         emptyAction={
           owner ? (

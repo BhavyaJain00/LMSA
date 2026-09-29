@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
+import { siteConfig } from "@/lib/config";
 import { Markdown } from "@/lib/markdown";
 import { cn, formatBytes, formatDuration } from "@/lib/utils";
 import { AudioPlayer } from "@/components/player";
@@ -140,17 +141,43 @@ export function AudioBlock({ src, title, duration }: { src: string; title?: stri
 
 const BLOCKED_EMBED_HOSTS = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|vimeo\.com)$/i;
 
-function embedTarget(src: string): { ok: true; url: string; host: string } | { ok: false; reason: "invalid" | "video" } {
-  if (src.startsWith("/")) return { ok: true, url: src, host: "" };
+type EmbedTarget =
+  | { ok: true; url: string; host: string; sameOrigin: boolean }
+  | { ok: false; reason: "invalid" | "video" | "unsafe" };
+
+/** Uploaded files that a browser would run as a document (and so could execute script). */
+const UNSAFE_UPLOAD_EMBED = /\.(svg|svgz|xml|xhtml|html?)$/i;
+
+function embedTarget(src: string): EmbedTarget {
+  const raw = src.trim();
+  // A single leading slash is a path on this site; "//host" is protocol-relative and must go through URL parsing.
+  const relative = raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\");
+  let u: URL;
   try {
-    const u = new URL(src);
-    if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "invalid" };
-    if (BLOCKED_EMBED_HOSTS.test(u.hostname)) return { ok: false, reason: "video" };
-    return { ok: true, url: u.toString(), host: u.hostname.replace(/^www\./, "") };
+    u = relative ? new URL(raw, siteConfig.appUrl) : new URL(raw.startsWith("//") ? `https:${raw}` : raw);
   } catch {
     return { ok: false, reason: "invalid" };
   }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return { ok: false, reason: "invalid" };
+  if (BLOCKED_EMBED_HOSTS.test(u.hostname)) return { ok: false, reason: "video" };
+  let appOrigin = "";
+  try {
+    appOrigin = new URL(siteConfig.appUrl).origin;
+  } catch {
+    appOrigin = "";
+  }
+  const sameOrigin = relative || u.origin === appOrigin;
+  if (sameOrigin && UNSAFE_UPLOAD_EMBED.test(u.pathname)) return { ok: false, reason: "unsafe" };
+  if (relative) return { ok: true, url: `${u.pathname}${u.search}${u.hash}`, host: "", sameOrigin: true };
+  return { ok: true, url: u.toString(), host: u.hostname.replace(/^www\./, ""), sameOrigin };
 }
+
+/**
+ * Third-party embeds keep allow-same-origin so they can use their own storage. Pages on this site never get it:
+ * allow-scripts + allow-same-origin on a same-origin frame would cancel the sandbox entirely.
+ */
+const EMBED_SANDBOX_CROSS_ORIGIN = "allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-downloads";
+const EMBED_SANDBOX_SAME_ORIGIN = "allow-scripts allow-forms allow-popups allow-presentation allow-downloads";
 
 export function EmbedBlock({ src, title, height }: { src: string; title?: string; height?: number }) {
   const target = embedTarget(src);
@@ -164,7 +191,9 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
             <p className="mt-0.5 text-ink-muted">
               {target.reason === "video"
                 ? "Videos from third-party video sites are not embedded here. Open it in a new tab to watch it."
-                : "The embedded content has an invalid address. Let your instructor know."}
+                : target.reason === "unsafe"
+                  ? "This type of uploaded file cannot be embedded. Let your instructor know."
+                  : "The embedded content has an invalid address. Let your instructor know."}
             </p>
             {target.reason === "video" && (
               <a href={src} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 font-medium text-accent hover:underline">
@@ -186,7 +215,7 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
           loading="lazy"
           className="block h-60 w-full bg-surface-2 sm:h-(--embed-h)"
           style={{ "--embed-h": `${h}px` } as CSSProperties}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-downloads"
+          sandbox={target.sameOrigin ? EMBED_SANDBOX_SAME_ORIGIN : EMBED_SANDBOX_CROSS_ORIGIN}
           referrerPolicy="strict-origin-when-cross-origin"
           allow="clipboard-write; fullscreen"
           allowFullScreen

@@ -1,20 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { JobOpening } from "@/lib/types";
 import { saveJobAction } from "@/lib/actions/jobs";
 import { jobTypes } from "@/lib/config";
 import { Button, ButtonLink } from "@/components/ui/button";
-import { Field, Input, Select, Switch } from "@/components/ui/input";
+import { Field, Input, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { FileUpload } from "@/components/ui/file-upload";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { MarkdownField } from "@/components/admin/settings/markdown-field";
+import { UnsavedChangesGuard } from "@/components/admin/settings/unsaved-changes-guard";
+import { COUNTRIES } from "@/components/commerce/countries";
+import type { JobFormValues } from "./job-form-values";
+import { WORK_MODES, resolveWorkMode } from "./work-mode";
 
-export type JobFormValues = Pick<
-  JobOpening,
-  "id" | "slug" | "title" | "company" | "companyLogoUrl" | "companyWebsite" | "location" | "remote" | "type" | "description" | "salaryRange" | "status"
->;
+export type { JobFormValues };
 
 /**
  * Create / edit a job opening (Frappe: JobForm). Sections: Job Details,
@@ -36,18 +36,10 @@ export function JobForm({ job, cancelHref }: { job: JobFormValues | null; cancel
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
-
   return (
     <form ref={formRef} onSubmit={onSubmit} onChange={markDirty} noValidate className="pb-10">
       {job && <input type="hidden" name="id" value={job.id} />}
+      <UnsavedChangesGuard when={dirty && !pending} />
       <div className="mb-5 flex flex-wrap items-center justify-end gap-2">
         {dirty && (
           <Badge tone="warning" dot className="mr-auto">
@@ -73,7 +65,15 @@ export function JobForm({ job, cancelHref }: { job: JobFormValues | null; cancel
             <Field label="Type" htmlFor="job-type" error={errors.type} required>
               <Select id="job-type" name="type" defaultValue={job?.type ?? "full_time"} options={jobTypes.map((t) => ({ value: t.value, label: t.label }))} />
             </Field>
-            <Field label="Salary range" htmlFor="job-salary" error={errors.salaryRange} className="sm:col-span-2">
+            <Field label="Work Mode" htmlFor="job-work-mode" error={errors.workMode} required>
+              <Select
+                id="job-work-mode"
+                name="workMode"
+                defaultValue={job ? resolveWorkMode(job) : "onsite"}
+                options={WORK_MODES.map((m) => ({ value: m.value, label: m.label }))}
+              />
+            </Field>
+            <Field label="Salary range" htmlFor="job-salary" error={errors.salaryRange}>
               <Input id="job-salary" name="salaryRange" defaultValue={job?.salaryRange} placeholder="$80k – $100k" maxLength={60} invalid={!!errors.salaryRange} />
             </Field>
           </div>
@@ -109,9 +109,19 @@ export function JobForm({ job, cancelHref }: { job: JobFormValues | null; cancel
           <section className="space-y-4 rounded-card border border-border bg-surface-1 p-5 shadow-card">
             <h2 className="text-base font-semibold text-ink">Location</h2>
             <Field label="City" htmlFor="job-location" error={errors.location} required>
-              <Input id="job-location" name="location" defaultValue={job?.location} placeholder="Berlin, Germany" maxLength={120} invalid={!!errors.location} />
+              <Input id="job-location" name="location" defaultValue={job?.location} placeholder="Berlin" maxLength={120} invalid={!!errors.location} />
             </Field>
-            <Switch id="job-remote" name="remote" defaultChecked={job?.remote ?? false} label="Remote" description="Candidates can work from anywhere." />
+            <Field label="Country" htmlFor="job-country" error={errors.country} hint="Lets candidates filter the board by country.">
+              <Select id="job-country" name="country" defaultValue={job?.country ?? ""} invalid={!!errors.country}>
+                <option value="">Select a country</option>
+                {job?.country && !(COUNTRIES as readonly string[]).includes(job.country) && <option value={job.country}>{job.country}</option>}
+                {COUNTRIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </section>
           <section className="space-y-4 rounded-card border border-border bg-surface-1 p-5 shadow-card">
             <h2 className="text-base font-semibold text-ink">Company Details</h2>

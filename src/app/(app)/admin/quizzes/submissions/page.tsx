@@ -49,11 +49,11 @@ export default async function QuizSubmissionsPage(props: PageProps<"/admin/quizz
         description={
           selectedQuiz
             ? `Attempts for “${selectedQuiz.label}”. Open one to review answers and grade written responses.`
-            : "Every quiz attempt in quizzes you manage. Open one to review answers and grade written responses."
+            : "Every attempt at the quizzes you manage and in the courses you teach. Open one to review answers and grade written responses."
         }
         actions={
           <>
-            {selectedQuiz && (
+            {selectedQuiz?.canEdit && (
               <ButtonLink href={`/admin/quizzes/${selectedQuiz.value}`} variant="subtle" leftIcon={<Icon.Edit className="size-4" />}>
                 Edit quiz
               </ButtonLink>

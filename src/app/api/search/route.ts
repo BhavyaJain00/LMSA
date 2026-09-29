@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { User } from "@/lib/types";
-import { getCurrentUser, hasRole, isModerator, isStaff } from "@/lib/auth/session";
+import { getCurrentUser, hasRole, isModerator } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { fuzzyMatch } from "@/components/command-palette/fuzzy";
@@ -192,7 +192,7 @@ export async function GET(req: NextRequest) {
         .map((u) => ({
           id: u.id,
           title: u.name,
-          extra: `${u.username} ${u.headline ?? ""} ${isStaff(viewer) ? u.email : ""}`,
+          extra: `${u.username} ${u.headline ?? ""} ${moderator ? u.email : ""}`,
           subtitle: u.headline ? truncate(u.headline, 70) : `@${u.username}`,
           href: `/user/${u.username}`,
           updatedAt: u.lastActiveAt,

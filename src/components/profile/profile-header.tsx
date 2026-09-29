@@ -5,7 +5,9 @@ import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { cn, formatDate, gradientFor } from "@/lib/utils";
 import { cardGradients, roleLabels } from "@/lib/config";
+import { ProfileLevel } from "@/components/gamification/profile-level";
 import { CoverEditor } from "./cover-editor";
+import { OpenToBadge, openToOptions } from "./open-to-badge";
 import { SocialLinks } from "./social-icons";
 
 function coverGradient(seed: string): string {
@@ -55,7 +57,10 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
       <div className="relative px-1 sm:px-6">
         <div className="-mt-12 flex flex-col gap-4 sm:-mt-14 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:gap-5">
-            <Avatar name={user.name} src={user.avatarUrl} size="2xl" className="size-24 shadow-card ring-4 ring-surface sm:size-28" />
+            <span className="relative inline-flex w-fit shrink-0" title={openToOptions.find((o) => o.value === user.openTo)?.description}>
+              <Avatar name={user.name} src={user.avatarUrl} size="2xl" className="size-24 shadow-card ring-4 ring-surface sm:size-28" />
+              <OpenToBadge value={user.openTo} overlay />
+            </span>
             <div className="min-w-0 pb-1">
               <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">{user.name}</h1>
               {user.headline && <p className="mt-0.5 text-base text-ink-muted">{user.headline}</p>}
@@ -78,6 +83,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-muted">
+          <ProfileLevel userId={user.id} username={user.username} isSelf={isSelf} canViewHistory={!!view.viewer?.roles.some((r) => r === "admin" || r === "moderator")} />
           {roles.length > 0 && (
             <span className="flex flex-wrap gap-1.5">
               {roles.map((r) => (

@@ -2,6 +2,7 @@ import "server-only";
 import type { ActivityType } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { addDays, toDateKey, uid } from "@/lib/utils";
+import { awardPoints, isLearningActivity } from "./points";
 
 /** Record learning activity (used for streaks and the activity heatmap). */
 export async function logActivity(userId: string, type: ActivityType, refId?: string): Promise<void> {
@@ -13,6 +14,7 @@ export async function logActivity(userId: string, type: ActivityType, refId?: st
       db.activities.push({ id: uid("act"), userId, date, type, refId, createdAt: new Date().toISOString() });
     }
   });
+  if (isLearningActivity(type)) await awardPoints(userId, "streak_day", { refId: date });
 }
 
 export interface StreakInfo {

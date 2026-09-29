@@ -12,6 +12,7 @@ import { evaluateBadges } from "@/lib/services/badges";
 import { setFlash } from "@/lib/flash";
 import { fd, fdBool, shortCode, toDateKey, uid } from "@/lib/utils";
 import { isValidDateKey } from "@/components/certificates/time";
+import { DEFAULT_CERTIFICATE_TEMPLATE_ID, isCertificateTemplateId } from "@/components/certificates/templates";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -23,6 +24,8 @@ interface IssueOptions {
   evaluatorId?: string;
   published: boolean;
   batchId?: string;
+  /** Registered certificate template id (templates.ts). */
+  templateId: string;
 }
 
 function revalidateCertificates(extra: string[] = []) {
@@ -43,6 +46,16 @@ function parseDates(issueRaw: string, expiryRaw: string): { issueDate?: string; 
     else expiryDate = expiryRaw;
   }
   return { issueDate, expiryDate, errors };
+}
+
+/** The submitted "Template" value: empty → the default template; unknown ids are rejected. */
+function parseTemplate(raw: string, errors: Record<string, string>): string {
+  if (!raw) return DEFAULT_CERTIFICATE_TEMPLATE_ID;
+  if (!isCertificateTemplateId(raw)) {
+    errors.templateId = "Choose one of the available certificate templates.";
+    return DEFAULT_CERTIFICATE_TEMPLATE_ID;
+  }
+  return raw;
 }
 
 /** Why a learner cannot receive a course certificate, or null when they can. */
@@ -73,16 +86,22 @@ async function batchCertificateBlocker(learner: User, batch: Batch): Promise<str
 /** Course certificate through the shared progress service, then apply form overrides. */
 async function issueCourseCertificate(learner: User, course: Course, opts: IssueOptions): Promise<Certificate> {
   const cert = await issueCertificate(learner, course, { batchId: opts.batchId, evaluatorId: opts.evaluatorId, expiryDate: opts.expiryDate });
-  if (cert.issueDate !== opts.issueDate || cert.published !== opts.published || (opts.evaluatorId && cert.evaluatorId !== opts.evaluatorId)) {
+  if (
+    cert.issueDate !== opts.issueDate ||
+    cert.published !== opts.published ||
+    cert.templateId !== opts.templateId ||
+    (opts.evaluatorId && cert.evaluatorId !== opts.evaluatorId)
+  ) {
     await mutate((d) => {
       const row = d.certificates.find((c) => c.id === cert.id);
       if (!row) return;
       row.issueDate = opts.issueDate;
       row.published = opts.published;
+      row.templateId = opts.templateId;
       if (opts.evaluatorId) row.evaluatorId = opts.evaluatorId;
     });
   }
-  return { ...cert, issueDate: opts.issueDate, published: opts.published };
+  return { ...cert, issueDate: opts.issueDate, published: opts.published, templateId: opts.templateId };
 }
 
 /**
@@ -99,6 +118,7 @@ async function issueBatchCertificate(learner: User, batch: Batch, opts: IssueOpt
     issueDate: opts.issueDate,
     expiryDate: opts.expiryDate,
     published: opts.published,
+    templateId: opts.templateId,
   };
   await mutate((d) => {
     d.certificates.push(cert);
@@ -130,6 +150,7 @@ export async function issueCertificateAction(_prev: ActionResult<{ code: string 
   const published = fdBool(formData, "published");
   const allowIncomplete = fdBool(formData, "allowIncomplete");
   const { issueDate, expiryDate, errors } = parseDates(fd(formData, "issueDate"), fd(formData, "expiryDate"));
+  const templateId = parseTemplate(fd(formData, "templateId"), errors);
 
   const db = await getDb();
   const learner = db.users.find((u) => u.id === learnerId);
@@ -146,7 +167,7 @@ export async function issueCertificateAction(_prev: ActionResult<{ code: string 
   }
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
 
-  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published };
+  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, templateId };
   let cert: Certificate;
   if (course) {
     const blocker = await courseCertificateBlocker(learner!, course, { allowIncomplete });
@@ -184,6 +205,7 @@ export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueR
   const published = fdBool(formData, "published");
   const userIds = Array.from(new Set(formData.getAll("userIds").filter((v): v is string => typeof v === "string" && v.length > 0)));
   const { issueDate, expiryDate, errors } = parseDates(fd(formData, "issueDate"), fd(formData, "expiryDate"));
+  const templateId = parseTemplate(fd(formData, "templateId"), errors);
 
   const db = await getDb();
   const batch = db.batches.find((b) => b.id === batchId);
@@ -201,7 +223,7 @@ export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueR
   if (!userIds.length) errors.userIds = "Select at least one student.";
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
 
-  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, batchId: batch.id };
+  const opts: IssueOptions = { issueDate: issueDate!, expiryDate, evaluatorId: evaluatorId || undefined, published, batchId: batch.id, templateId };
   const result: BulkIssueResult = { issued: [], skipped: [] };
   for (const id of userIds) {
     const learner = db.users.find((u) => u.id === id);
@@ -314,6 +336,12 @@ export async function claimCompletionCertificateAction(courseId: string): Promis
   if (!course.enableCertification || course.paidCertificate) return { ok: false, error: "Certification is not enabled for this course." };
   if (enrollment.progress < 100) return { ok: false, error: "You have not completed the course yet." };
   const cert = await issueCertificate(user, course);
+  if (!cert.templateId) {
+    await mutate((d) => {
+      const row = d.certificates.find((c) => c.id === cert.id);
+      if (row && !row.templateId) row.templateId = DEFAULT_CERTIFICATE_TEMPLATE_ID;
+    });
+  }
   revalidateCertificates([`/courses/${course.slug}/certification`, `/courses/${course.slug}`, `/user/${user.username}`]);
   return { ok: true, data: { code: cert.code, href: `/certificates/${cert.code}` }, message: "Your certificate is ready" };
 }

@@ -9,6 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { ColourModeRow } from "@/components/profile/theme-preference";
+import { buildMobileTabs } from "@/components/layout/mobile-tabs";
 import { SearchRow } from "./you-rows";
 
 export const metadata = { title: "You" };
@@ -78,7 +79,8 @@ export default async function YouPage() {
 
   const unread = settings.features.notifications ? await getUnreadCount(user.id) : 0;
   const sections = buildNavigation(user, settings);
-  const skip = new Set(["/notifications", `/user/${user.username}`]);
+  // Destinations already on the phone tab bar are not repeated under "Pages".
+  const skip = new Set(["/notifications", `/user/${user.username}`, ...buildMobileTabs(user, settings).map((t) => t.href)]);
   const pageGroups = sections
     .map((section) => ({
       title: section.title === "Manage" ? "Manage" : section.title === "Links" ? "More" : "Pages",

@@ -42,7 +42,7 @@ const state: StoreState = (g.__llStore ??= {
   flushTimer: null,
 });
 
-const DATA_PATH = path.resolve(process.cwd(), siteConfig.dataFile);
+const DATA_PATH = path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.dataFile);
 
 export const COLLECTIONS: CollectionName[] = [
   "users",
@@ -86,6 +86,10 @@ export const COLLECTIONS: CollectionName[] = [
   "coupons",
   "jobs",
   "jobApplications",
+  "emails",
+  "authTokens",
+  "loginEvents",
+  "points",
 ];
 
 /** Make sure every collection exists and settings have all keys. */

@@ -6,12 +6,15 @@ import type {
   Category,
   Course,
   Database,
+  Notification,
+  NotificationType,
   PublicUser,
   TimetableItemType,
   User,
 } from "@/lib/types";
-import { getDb } from "@/lib/db/store";
-import { hasRole, isModerator, toPublicUser } from "@/lib/auth/session";
+import { getDb, mutate } from "@/lib/db/store";
+import { uid } from "@/lib/utils";
+import { hasRole, isEvaluator, isModerator, toPublicUser } from "@/lib/auth/session";
 import { getNextLesson, lessonHref } from "@/lib/data/courses";
 import type {
   AdminBatchRow,
@@ -30,7 +33,14 @@ import type {
   StudentProgressRow,
   TimetableEntry,
 } from "@/components/batches/types";
-import { addMinutesToClock, zonedTimeToUtc } from "@/components/batches/tz";
+import {
+  addMinutesToClock,
+  dayKeyInZone,
+  formatClock12,
+  formatTzLabel,
+  shiftDayKey,
+  zonedTimeToUtc,
+} from "@/components/batches/tz";
 
 /* ------------------------------------------------------------------ */
 /* Time & status                                                       */
@@ -88,9 +98,10 @@ export function canManageBatch(user: Viewer, batch: Pick<Batch, "instructorIds" 
   return hasRole(user, "course_creator", "batch_evaluator") && (batch.instructorIds.includes(user.id) || batch.createdById === user.id);
 }
 
+/** Published batches are public; unpublished ones are visible to enrolled learners, managers, evaluators and moderators. */
 export function canViewBatch(user: Viewer, batch: Batch, enrolled: boolean): boolean {
   if (batch.published) return true;
-  return enrolled || canManageBatch(user, batch);
+  return enrolled || canManageBatch(user, batch) || isEvaluator(user);
 }
 
 /* ------------------------------------------------------------------ */
@@ -394,14 +405,30 @@ export async function getBatchAssessmentRows(batch: Batch, userId: string | null
 /* Live classes                                                        */
 /* ------------------------------------------------------------------ */
 
-export function buildLiveClassViews(db: Database, batchId: string, viewerId?: string | null): LiveClassView[] {
+/**
+ * Builds live class rows for display. Pass `forManager: false` (the default)
+ * for learners: host-only fields (`startUrl`) and the full attendance list are
+ * stripped so they never reach the client payload; the viewer only learns
+ * whether they themselves attended.
+ */
+export function buildLiveClassViews(
+  db: Database,
+  batchId: string,
+  viewerId?: string | null,
+  opts: { forManager?: boolean } = {},
+): LiveClassView[] {
+  const forManager = opts.forManager === true;
   return db.liveClasses
     .filter((c) => c.batchId === batchId)
     .map((c): LiveClassView => {
       const startsAt = zonedTimeToUtc(c.date, c.time, c.timezone);
       const host = db.users.find((u) => u.id === c.hostId);
+      const { startUrl, attendeeIds, ...pub } = c;
+      const isHost = !!viewerId && c.hostId === viewerId;
       return {
-        ...c,
+        ...pub,
+        startUrl: forManager || isHost ? startUrl : undefined,
+        attendeeIds: forManager ? attendeeIds : [],
         host: host ? toPublicUser(host) : null,
         startsAt,
         endsAt: startsAt + c.durationMinutes * 60000,
@@ -412,9 +439,13 @@ export function buildLiveClassViews(db: Database, batchId: string, viewerId?: st
     .sort((a, b) => a.startsAt - b.startsAt);
 }
 
-export async function getBatchLiveClasses(batchId: string, viewerId?: string | null): Promise<LiveClassView[]> {
+export async function getBatchLiveClasses(
+  batchId: string,
+  viewerId?: string | null,
+  opts: { forManager?: boolean } = {},
+): Promise<LiveClassView[]> {
   const db = await getDb();
-  return buildLiveClassViews(db, batchId, viewerId);
+  return buildLiveClassViews(db, batchId, viewerId, opts);
 }
 
 /* ------------------------------------------------------------------ */
@@ -679,6 +710,66 @@ export async function getBatchChartData(batch: Batch): Promise<ChartDatum[]> {
   return out;
 }
 
+/* ------------------------------------------------------------------ */
+/* Certification (learner view)                                        */
+/* ------------------------------------------------------------------ */
+
+export interface BatchCertificationCourse {
+  id: string;
+  title: string;
+  slug: string;
+  /** Learner's course progress 0-100 (null when not enrolled). */
+  progress: number | null;
+  /** Verification code of the learner's certificate for this course, if issued. */
+  certificateCode: string | null;
+  /** The learner has an upcoming evaluation booked for this course. */
+  booked: boolean;
+  /** Latest evaluation outcome for this course within the batch, if any. */
+  result: "pass" | "fail" | null;
+}
+
+export interface BatchCertificationInfo {
+  /** Last day to schedule evaluations (batch `evaluationEndDate`). */
+  deadline: { date: string; passed: boolean } | null;
+  courses: BatchCertificationCourse[];
+}
+
+/**
+ * Per-course certification status of one learner in a batch: issued
+ * certificates, booked evaluations and results, plus the scheduling deadline
+ * (compared against today in the batch timezone).
+ */
+export async function getBatchCertificationInfo(batch: Batch, userId: string, now: number = Date.now()): Promise<BatchCertificationInfo> {
+  const db = await getDb();
+  const todayKey = dayKeyInZone(now, batch.timezone);
+  const courses = batch.courseIds
+    .map((cid) => db.courses.find((c) => c.id === cid))
+    .filter((c): c is Course => !!c)
+    .map((course): BatchCertificationCourse => {
+      const enrollment = db.enrollments.find((e) => e.userId === userId && e.courseId === course.id);
+      const certificate =
+        db.certificates.find((c) => c.userId === userId && c.courseId === course.id && c.batchId === batch.id && c.published) ??
+        db.certificates.find((c) => c.userId === userId && c.courseId === course.id && c.published);
+      const booked = db.certificateRequests.some((r) => r.userId === userId && r.courseId === course.id && r.status === "upcoming" && (!r.batchId || r.batchId === batch.id));
+      const evaluation = db.certificateEvaluations
+        .filter((e) => e.userId === userId && e.courseId === course.id && (!e.batchId || e.batchId === batch.id) && (e.status === "pass" || e.status === "fail"))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      return {
+        id: course.id,
+        title: course.title,
+        slug: course.slug,
+        progress: enrollment ? Math.round(enrollment.progress) : null,
+        certificateCode: certificate?.code ?? null,
+        booked,
+        result: evaluation ? (evaluation.status as "pass" | "fail") : null,
+      };
+    });
+  return {
+    deadline: batch.evaluationEndDate ? { date: batch.evaluationEndDate, passed: todayKey > batch.evaluationEndDate } : null,
+    courses,
+  };
+}
+
 export async function getBatchCertificateCount(batchId: string): Promise<number> {
   const db = await getDb();
   return db.certificates.filter((c) => c.batchId === batchId).length;
@@ -846,4 +937,126 @@ export async function getTimetableRefOptions(batch: Batch): Promise<TimetableRef
 /** Current server time (kept out of components so render stays pure). */
 export function serverNow(): number {
   return Date.now();
+}
+
+/* ------------------------------------------------------------------ */
+/* Reminders                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Idempotency keys stored in `Notification.dedupeKey`. Together with the
+ * recipient they identify one (batch or class, member, kind) reminder. The
+ * scheduled day is part of the key, so rescheduling a batch or class to another
+ * day produces a fresh reminder while page reloads never repeat one.
+ */
+export function batchStartReminderKey(batch: Pick<Batch, "id" | "startDate">): string {
+  return `batch-start:${batch.id}:${batch.startDate}`;
+}
+
+export function liveClassReminderKey(liveClass: { id: string; date: string }): string {
+  return `live-class:${liveClass.id}:${liveClass.date}`;
+}
+
+interface PendingReminder {
+  key: string;
+  type: NotificationType;
+  subject: string;
+  message: string;
+  link: string;
+}
+
+/** Reminders due right now for one member, across every batch they are enrolled in. */
+function collectDueReminders(db: Database, userId: string, now: number): PendingReminder[] {
+  const member = db.users.find((u) => u.id === userId);
+  if (!member || !member.enabled) return [];
+  const batchIds = new Set(db.batchEnrollments.filter((e) => e.userId === userId).map((e) => e.batchId));
+  if (!batchIds.size) return [];
+  const out: PendingReminder[] = [];
+
+  for (const batchId of batchIds) {
+    const batch = db.batches.find((b) => b.id === batchId);
+    if (!batch) continue;
+
+    // The day before a published batch starts (in the batch's own timezone).
+    if (batch.published && dayKeyInZone(now, batch.timezone) === shiftDayKey(batch.startDate, -1)) {
+      const startsAt = batchStartsAt(batch);
+      const when = Number.isNaN(startsAt)
+        ? `Starts tomorrow at ${formatClock12(batch.startTime)} (${batch.timezone}).`
+        : `Starts tomorrow at ${formatClock12(batch.startTime)} · ${formatTzLabel(batch.timezone, startsAt)}.`;
+      out.push({
+        key: batchStartReminderKey(batch),
+        type: "system",
+        ...(batch.showLiveClass
+          ? { subject: `Your batch ${batch.title} is starting tomorrow`, message: when }
+          : {
+              subject: `You're enrolled in ${batch.title} – start whenever you're ready`,
+              message: "Your batch opens tomorrow. Its courses and schedule are waiting for you.",
+            }),
+        link: `/batches/${batch.slug}`,
+      });
+    }
+
+    // The day of each live class (in the class's timezone), until it ends.
+    for (const c of db.liveClasses) {
+      if (c.batchId !== batch.id) continue;
+      if (dayKeyInZone(now, c.timezone) !== c.date) continue;
+      const startsAt = zonedTimeToUtc(c.date, c.time, c.timezone);
+      if (Number.isNaN(startsAt) || now > startsAt + c.durationMinutes * 60000) continue;
+      out.push({
+        key: liveClassReminderKey(c),
+        type: "live_class",
+        subject: `Live class today: ${c.title}`,
+        message: `${batch.title} · ${formatClock12(c.time)} – ${formatClock12(addMinutesToClock(c.time, c.durationMinutes))} · ${formatTzLabel(c.timezone, startsAt)}`,
+        link: `/batches/${batch.slug}?tab=classes#class-${c.id}`,
+      });
+    }
+  }
+  return out;
+}
+
+function sentReminderKeys(db: Database, userId: string): Set<string> {
+  const sent = new Set<string>();
+  for (const n of db.notifications) if (n.userId === userId && n.dedupeKey) sent.add(n.dedupeKey);
+  return sent;
+}
+
+/**
+ * In-app reminders for a batch member: the day before a published batch starts,
+ * and on the day of each live class (until the class has ended). There is no
+ * scheduler, so pages call this on load (like `closeExpiredJobs`): the batch
+ * list, the batch page and the dashboard. It is idempotent: each
+ * (batch or class, member, kind) reminder is sent at most once, keyed by
+ * `Notification.dedupeKey`, and it only writes when something is due.
+ * Returns the number of notifications created.
+ */
+export async function ensureBatchReminders(userId: string, now: number = Date.now()): Promise<number> {
+  if (!userId) return 0;
+  const db = await getDb();
+  const sent = sentReminderKeys(db, userId);
+  if (!collectDueReminders(db, userId, now).some((r) => !sent.has(r.key))) return 0;
+
+  return mutate((d) => {
+    // Re-check inside the serialized write so concurrent page loads cannot double-send.
+    const already = sentReminderKeys(d, userId);
+    const stamp = new Date(now).toISOString();
+    let created = 0;
+    for (const r of collectDueReminders(d, userId, now)) {
+      if (already.has(r.key)) continue;
+      already.add(r.key);
+      const n: Notification = {
+        id: uid("ntf"),
+        userId,
+        type: r.type,
+        subject: r.subject,
+        message: r.message,
+        link: r.link,
+        read: false,
+        dedupeKey: r.key,
+        createdAt: stamp,
+      };
+      d.notifications.push(n);
+      created++;
+    }
+    return created;
+  });
 }

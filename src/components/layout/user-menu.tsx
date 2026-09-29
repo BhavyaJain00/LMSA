@@ -30,6 +30,7 @@ export function UserMenu({ user }: { user: PublicUser }) {
         { label: "Edit profile", href: `/user/${user.username}/edit`, icon: <Icon.Edit /> },
         ...(isStaff ? [{ label: "Admin", href: "/admin", icon: <Icon.Layout /> }] : []),
         { label: "Account settings", href: "/settings", icon: <Icon.Settings /> },
+        { label: "You", description: "Your account hub and shortcuts", href: "/you", icon: <Icon.Smartphone /> },
         { label: "Log out", action: logoutAction, icon: <Icon.LogOut />, separator: true, destructive: true },
       ]}
     />

@@ -178,6 +178,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
             }
             items={[
               { label: "New Course", icon: <Icon.BookOpen />, href: "/admin/courses/new", description: "Start a course from scratch" },
+              { label: "Import course", icon: <Icon.Upload />, href: "/admin/courses/import", description: "Create a course from a JSON export" },
               { label: "Manage courses", icon: <Icon.Layout />, href: "/admin/courses", description: "Edit, publish and track your courses" },
             ]}
           />
@@ -279,7 +280,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
       </div>
 
       <div className="mb-5 mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-ink-muted" role="status">
+        <p className="text-sm text-ink-muted">
           {courses.length === 0 ? (
             "No Courses Found"
           ) : (
@@ -314,8 +315,15 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
       {courses.length > 0 && (
         <CatalogFooter shown={visible.length} total={courses.length} pageSize={pageSize} pageSizes={CATALOG_PAGE_SIZES} nextHref={nextHref} />
       )}
-      <p className="sr-only" aria-live="polite">
-        {visible.length === 1 ? "1 result loaded" : `${visible.length} results loaded`}
+      {/* Single polite live region for result changes (filters, tabs and "load more"). */}
+      <p className="sr-only" role="status">
+        {courses.length === 0
+          ? "No courses found"
+          : visible.length < courses.length
+            ? `Showing ${visible.length} of ${courses.length} courses`
+            : courses.length === 1
+              ? "1 course found"
+              : `${courses.length} courses found`}
       </p>
     </div>
   );

@@ -70,6 +70,8 @@ export interface User {
   education?: EducationDetail[];
   workExperience?: WorkExperience[];
   skills?: string[];
+  /** Profile status shown as a badge on the avatar: looking for work, or hiring talent. */
+  openTo?: "work" | "hiring";
   /** Whether the user finished the onboarding persona form. */
   personaCaptured?: boolean;
   persona?: {
@@ -81,6 +83,36 @@ export interface User {
   enabled: boolean;
   lastActiveAt?: string;
   createdAt: string; // ISO date
+
+  /* ----- round 2: account security, email, calendar ----- */
+  /** Set once the user confirmed their email address. */
+  emailVerifiedAt?: string;
+  /** True for self-registered accounts that must verify their email (seed/admin-created accounts leave it unset). */
+  emailVerificationRequired?: boolean;
+  twoFactorEnabled?: boolean;
+  /** TOTP secret, encrypted at rest (AES-256-GCM, key derived from APP_SECRET). */
+  twoFactorSecretEnc?: string;
+  /** Last accepted TOTP time step (replay protection). */
+  twoFactorLastStep?: number;
+  /** SHA-256 hashes of unused recovery codes. */
+  recoveryCodeHashes?: string[];
+  failedLoginCount?: number;
+  lockedUntil?: string;
+  emailPreferences?: EmailPreferences;
+  /** Secret token for the personal calendar (ICS) feed. */
+  calendarToken?: string;
+}
+
+/** Which categories of email a user wants to receive (round 2). */
+export interface EmailPreferences {
+  enrollment: boolean;
+  announcements: boolean;
+  liveClasses: boolean;
+  grading: boolean;
+  certificates: boolean;
+  discussions: boolean;
+  reminders: boolean;
+  payments: boolean;
 }
 
 /** Public-safe projection of a user (never send passwordHash to the client). */
@@ -163,6 +195,12 @@ export interface Course {
   relatedCourseIds: string[];
   outcomes: string[];
   requirements: string[];
+  /** SEO summary for search results (max 160 characters). */
+  metaDescription?: string;
+  /** Comma-separated SEO keywords. */
+  metaKeywords?: string;
+  /** Round 2: courses that must be completed before enrolling. */
+  prerequisiteCourseIds?: string[];
   createdById: string;
   createdAt: string;
   updatedAt: string;
@@ -174,6 +212,10 @@ export interface Chapter {
   title: string;
   description?: string;
   order: number;
+  /** Round 2 drip: unlocks N days after enrollment (or batch start). */
+  dripDays?: number;
+  /** Round 2 drip: unlocks on this date (YYYY-MM-DD, 00:00 UTC). */
+  availableFrom?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -190,6 +232,14 @@ export interface VideoQuizMarker {
   /** Seconds from the start; playback pauses and the quiz opens. */
   time: number;
   quizId: string;
+}
+
+/** A rendition of a lesson video (round 2 quality selector). */
+export interface VideoSource {
+  src: string;
+  /** e.g. "1080p", "720p", "Data saver" */
+  label: string;
+  height?: number;
 }
 
 export type LessonBlock =
@@ -211,6 +261,8 @@ export type LessonBlock =
       chapters?: VideoChapterMarker[];
       quizMarkers?: VideoQuizMarker[];
       title?: string;
+      /** Round 2: alternative renditions for the quality selector (the main `src` is the default). */
+      sources?: VideoSource[];
     }
   | {
       id: string;
@@ -292,6 +344,10 @@ export interface Lesson {
   includeInPreview: boolean;
   /** Estimated duration in seconds (sum of video durations + reading time). */
   durationSeconds: number;
+  /** Round 2 drip: unlocks N days after enrollment (or batch start). */
+  dripDays?: number;
+  /** Round 2 drip: unlocks on this date (YYYY-MM-DD, 00:00 UTC). */
+  availableFrom?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -335,6 +391,8 @@ export interface QuizQuestionRef {
 export interface Quiz {
   id: string;
   title: string;
+  /** Optional markdown instructions shown on the quiz intro card. */
+  description?: string;
   courseId?: string;
   lessonId?: string;
   questions: QuizQuestionRef[];
@@ -560,6 +618,8 @@ export interface VideoWatch {
   durationSeconds: number;
   /** True once ≥ 95% watched. */
   completed: boolean;
+  /** Round 2 retention analytics: 100 bins, each counting viewing passes over that 1% of the video. */
+  bins?: number[];
   updatedAt: string;
 }
 
@@ -822,6 +882,13 @@ export interface EvaluatorSlot {
   day: number;
   startTime: string;
   endTime: string;
+  /**
+   * Evaluator unavailability range (Frappe: unavailable_from / unavailable_to),
+   * YYYY-MM-DD, inclusive. Stored on every slot row of the evaluator with the
+   * same values; no bookings are offered or accepted on these dates.
+   */
+  unavailableFrom?: string;
+  unavailableTo?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -900,6 +967,8 @@ export interface Notification {
   message?: string;
   link?: string;
   read: boolean;
+  /** Optional idempotency key (e.g. "batch-start:<batchId>:<date>") so automatic reminders are sent once. */
+  dedupeKey?: string;
   createdAt: string;
 }
 
@@ -969,6 +1038,19 @@ export interface Payment {
   status: PaymentStatus;
   createdAt: string;
   paidAt?: string;
+  /** When the learner was last reminded to complete this unpaid order. */
+  lastReminderAt?: string;
+  /* ----- round 2: real gateways ----- */
+  /** Stripe Checkout Session id or Razorpay order id. */
+  gatewayOrderId?: string;
+  /** Hosted checkout URL (Stripe) to resume a pending payment. */
+  checkoutUrl?: string;
+  /** Sequential invoice number assigned when paid, e.g. INV-2026-00042. */
+  invoiceNumber?: string;
+  refundId?: string;
+  refundedAmount?: number;
+  refundedAt?: string;
+  failureReason?: string;
 }
 
 export interface Coupon {
@@ -1001,7 +1083,12 @@ export interface JobOpening {
   companyLogoUrl?: string;
   companyWebsite?: string;
   location: string;
+  /** Kept for backward compatibility; mirrors `workMode === "remote"`. */
   remote: boolean;
+  /** Optional country (added for the Country filter on /jobs). */
+  country?: string;
+  /** On-site, remote or hybrid. When missing, derived from `remote`. */
+  workMode?: "onsite" | "remote" | "hybrid";
   type: JobType;
   /** Markdown */
   description: string;
@@ -1095,7 +1182,135 @@ export interface Settings {
   /** Markdown shown on the signup page. */
   customSignupContent?: string;
   textDirection: "auto" | "ltr" | "rtl";
+  /* ----- round 2 ----- */
+  email: {
+    /** Master switch for sending email notifications (transactional auth emails always send). */
+    enabled: boolean;
+    fromName: string;
+    replyTo?: string;
+    footerText?: string;
+    /** In-app notification types that also send an email. */
+    notifyTypes: NotificationType[];
+  };
+  security: {
+    requireEmailVerification: boolean;
+    allowTwoFactor: boolean;
+    enforceTwoFactorForStaff: boolean;
+    maxLoginAttempts: number;
+    lockoutMinutes: number;
+    passwordMinLength: number;
+  };
+  video: {
+    /** Require signed, expiring URLs for uploaded lesson videos. */
+    protectUploads: boolean;
+    signedUrlMinutes: number;
+    watermark: boolean;
+    /** 0.05 – 0.5 */
+    watermarkOpacity: number;
+    seekThumbnails: boolean;
+    autoplayNext: boolean;
+  };
+  pwa: {
+    enabled: boolean;
+    installPrompt: boolean;
+    offlinePage: boolean;
+  };
+  gamification: {
+    enabled: boolean;
+    showLeaderboard: boolean;
+    /** Exclude admins/moderators from leaderboards. */
+    excludeStaff: boolean;
+    points: Record<PointsReason, number>;
+  };
   updatedAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 2: email outbox, auth tokens, login events, points            */
+/* ------------------------------------------------------------------ */
+
+export type EmailStatus = "queued" | "sending" | "sent" | "failed";
+
+export type EmailCategory =
+  | "password_reset"
+  | "email_verification"
+  | "welcome"
+  | "notification"
+  | "announcement"
+  | "batch"
+  | "payment"
+  | "reminder"
+  | "test"
+  | "other";
+
+export interface EmailMessage {
+  id: string;
+  to: string;
+  toName?: string;
+  cc?: string[];
+  userId?: string;
+  subject: string;
+  html: string;
+  text: string;
+  category: EmailCategory;
+  status: EmailStatus;
+  attempts: number;
+  lastError?: string;
+  /** SMTP Message-ID of the delivered message. */
+  messageId?: string;
+  nextAttemptAt?: string;
+  createdAt: string;
+  sentAt?: string;
+}
+
+export type AuthTokenPurpose = "password_reset" | "email_verification" | "two_factor_login";
+
+export interface AuthToken {
+  id: string;
+  userId: string;
+  purpose: AuthTokenPurpose;
+  /** SHA-256 hex of the raw token; the raw token is never stored. */
+  tokenHash: string;
+  expiresAt: string;
+  usedAt?: string;
+  createdAt: string;
+}
+
+export interface LoginEvent {
+  id: string;
+  userId?: string;
+  email: string;
+  success: boolean;
+  /** e.g. "bad_password", "unknown_email", "locked", "disabled", "2fa_failed", "2fa_ok", "password_reset" */
+  reason?: string;
+  ip?: string;
+  userAgent?: string;
+  createdAt: string;
+}
+
+export type PointsReason =
+  | "lesson_complete"
+  | "quiz_pass"
+  | "quiz_perfect"
+  | "assignment_submit"
+  | "assignment_pass"
+  | "exercise_pass"
+  | "course_complete"
+  | "certificate"
+  | "streak_day"
+  | "discussion_reply"
+  | "review"
+  | "manual";
+
+export interface PointsEntry {
+  id: string;
+  userId: string;
+  points: number;
+  reason: PointsReason;
+  refId?: string;
+  courseId?: string;
+  note?: string;
+  createdAt: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1144,6 +1359,11 @@ export interface Database {
   coupons: Coupon[];
   jobs: JobOpening[];
   jobApplications: JobApplication[];
+  /* round 2 */
+  emails: EmailMessage[];
+  authTokens: AuthToken[];
+  loginEvents: LoginEvent[];
+  points: PointsEntry[];
   settings: Settings;
 }
 

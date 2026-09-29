@@ -325,7 +325,16 @@ export function LandingTestimonials({ testimonials }: { testimonials: Testimonia
 /* Final call to action                                                */
 /* ------------------------------------------------------------------ */
 
-export function LandingCta({ brandName, signupEnabled }: { brandName: string; signupEnabled: boolean }) {
+export function LandingCta({
+  brandName,
+  signupEnabled,
+  browse,
+}: {
+  brandName: string;
+  signupEnabled: boolean;
+  /** Secondary catalog link; null hides it. */
+  browse: { href: string; label: string } | null;
+}) {
   return (
     <section aria-labelledby="landing-cta" className="relative isolate overflow-hidden rounded-3xl bg-accent px-6 py-12 text-center text-accent-fg sm:px-12">
       <div
@@ -350,9 +359,11 @@ export function LandingCta({ brandName, signupEnabled }: { brandName: string; si
           {signupEnabled ? "Create your free account" : "Log in"}
           <Icon.ArrowRight className="size-4" aria-hidden="true" />
         </Link>
-        <ButtonLink href="/courses" size="lg" variant="ghost" className="text-accent-fg ring-1 ring-accent-fg/40 hover:bg-accent-fg/10">
-          Explore the catalog
-        </ButtonLink>
+        {browse && (
+          <ButtonLink href={browse.href} size="lg" variant="ghost" className="text-accent-fg ring-1 ring-accent-fg/40 hover:bg-accent-fg/10">
+            {browse.label}
+          </ButtonLink>
+        )}
       </div>
     </section>
   );

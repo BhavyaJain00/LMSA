@@ -9,8 +9,20 @@ import { Icon } from "@/components/ui/icons";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 
-/** Row menu on the admin jobs list: view, edit, applications, close/reopen, delete. */
-export function JobRowActions({ job }: { job: { id: string; slug: string; title: string; status: "open" | "closed"; applicantCount: number } }) {
+/**
+ * Row menu on the jobs management lists: view, edit, applications,
+ * close/reopen, delete. `area` picks the admin routes (/admin/jobs/…) or the
+ * poster's own routes (/jobs/[slug]/edit, /jobs/[slug]/applications).
+ */
+export function JobRowActions({
+  job,
+  area = "admin",
+}: {
+  job: { id: string; slug: string; title: string; status: "open" | "closed"; applicantCount: number };
+  area?: "admin" | "member";
+}) {
+  const editHref = area === "admin" ? `/admin/jobs/${job.id}` : `/jobs/${job.slug}/edit`;
+  const applicationsHref = area === "admin" ? `/admin/jobs/${job.id}/applications` : `/jobs/${job.slug}/applications`;
   const toast = useToast();
   const router = useRouter();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -46,8 +58,8 @@ export function JobRowActions({ job }: { job: { id: string; slug: string; title:
         }
         items={[
           { label: "View job", icon: <Icon.Eye />, href: `/jobs/${job.slug}` },
-          { label: "Edit", icon: <Icon.Edit />, href: `/admin/jobs/${job.id}` },
-          { label: `Applications (${job.applicantCount})`, icon: <Icon.Users />, href: `/admin/jobs/${job.id}/applications` },
+          { label: "Edit", icon: <Icon.Edit />, href: editHref },
+          { label: `Applications (${job.applicantCount})`, icon: <Icon.Users />, href: applicationsHref },
           {
             label: job.status === "open" ? "Close job" : "Reopen job",
             icon: job.status === "open" ? <Icon.Lock /> : <Icon.Unlock />,

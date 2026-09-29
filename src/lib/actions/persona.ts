@@ -3,12 +3,20 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionResult } from "@/lib/types";
-import { update } from "@/lib/db/store";
+import { getSettings, update } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { setFlash } from "@/lib/flash";
 import { fd } from "@/lib/utils";
 
-const STATIC_DESTINATIONS = new Set(["/dashboard", "/courses", "/batches", "/programs"]);
+/** Starting points the questionnaire may send people to; feature pages only while enabled. */
+async function allowedDestinations(): Promise<Set<string>> {
+  const { features } = await getSettings();
+  const out = new Set(["/dashboard"]);
+  if (features.courses) out.add("/courses");
+  if (features.batches) out.add("/batches");
+  if (features.programs) out.add("/programs");
+  return out;
+}
 const MAX_LEN = 80;
 
 function clean(value: string): string {
@@ -52,7 +60,7 @@ export async function savePersonaAction(_prev: ActionResult | null, formData: Fo
   const destination =
     intent === "skip"
       ? "/dashboard"
-      : STATIC_DESTINATIONS.has(destinationRaw) || destinationRaw === `/user/${user.username}/edit`
+      : (await allowedDestinations()).has(destinationRaw) || destinationRaw === `/user/${user.username}/edit`
         ? destinationRaw
         : "/dashboard";
 

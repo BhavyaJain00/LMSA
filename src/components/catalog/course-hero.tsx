@@ -161,7 +161,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
         </ul>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-border bg-black shadow-card">
+      <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
         {course.videoUrl ? (
           <VideoPlayer src={course.videoUrl} poster={course.imageUrl} title={`${course.title} — course preview`} className="rounded-none" />
         ) : (

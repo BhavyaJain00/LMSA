@@ -14,6 +14,8 @@ import { ProgressBar } from "@/components/ui/progress";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { submitWithoutReset } from "@/components/assessments/form-submit";
+import { CertificateTemplateField } from "./template-field";
 
 type BulkState = ActionResult<BulkIssueResult> | null;
 
@@ -49,7 +51,7 @@ export function BulkIssueForm({ roster, evaluators, today }: { roster: BulkRoste
     });
 
   return (
-    <form action={formAction} className="space-y-6" noValidate>
+    <form onSubmit={submitWithoutReset(formAction)} className="space-y-6" noValidate>
       <input type="hidden" name="batchId" value={roster.batch.id} />
       {selected.map((s) => (
         <input key={s.user.id} type="hidden" name="userIds" value={s.user.id} />
@@ -113,6 +115,7 @@ export function BulkIssueForm({ roster, evaluators, today }: { roster: BulkRoste
           <Field label="Expiry Date" htmlFor="bulk-expiry" error={errors?.expiryDate} hint="Optional.">
             <Input id="bulk-expiry" type="date" name="expiryDate" min={issueDate || undefined} invalid={!!errors?.expiryDate} />
           </Field>
+          <CertificateTemplateField id="bulk-template" error={errors?.templateId} className="sm:col-span-2" />
           <div className="sm:col-span-2">
             <Switch id="bulk-published" name="published" defaultChecked label="Published" description="Enabling this will publish the certificate on the certified participants page." />
           </div>

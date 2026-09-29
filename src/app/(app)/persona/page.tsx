@@ -18,6 +18,11 @@ export default async function PersonaPage() {
       <PersonaForm
         brandName={settings.brand.name}
         username={user.username}
+        features={{
+          courses: settings.features.courses,
+          batches: settings.features.batches,
+          programs: settings.features.programs,
+        }}
         initial={{
           referrer: user.persona?.referrer,
           role: user.persona?.role,

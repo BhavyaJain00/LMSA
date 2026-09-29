@@ -4,6 +4,7 @@ import type { PublicUser } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getLandingData } from "@/lib/data/catalog";
+import { siteConfig } from "@/lib/config";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { CourseGrid } from "@/components/catalog/course-grid";
@@ -23,6 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const settings = await getSettings();
   const title = `${settings.brand.name} — ${settings.brand.tagline}`;
   return {
+    metadataBase: new URL(`${siteConfig.appUrl}/`),
     title: { absolute: title },
     description: settings.brand.metaDescription,
     openGraph: {
@@ -30,22 +32,31 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: settings.brand.name,
       title,
       description: settings.brand.metaDescription,
-      images: settings.brand.metaImageUrl ? [settings.brand.metaImageUrl] : undefined,
+      images: settings.brand.metaImageUrl ? [new URL(settings.brand.metaImageUrl, `${siteConfig.appUrl}/`).href] : undefined,
     },
   };
 }
 
 /**
- * Home. Signed-in users go straight to their dashboard; guests get the
- * marketing landing page built from live platform data.
+ * Home. Signed-in users go straight to the home page the admin configured
+ * (Settings → Learning → Default home page); guests get the marketing landing
+ * page built from live platform data.
  */
 export default async function HomePage() {
   const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
-  if (user) redirect("/dashboard");
+  if (user) redirect(settings.learning.defaultHome === "courses" && settings.features.courses ? "/courses" : "/dashboard");
 
   const data = await getLandingData();
   const signupEnabled = !settings.learning.disableSignup;
-  const coursesOn = settings.features.courses;
+  // With guest access off, /courses, /courses/<slug> and /batches send guests to the login
+  // page, so the landing page doesn't advertise individual courses or batches then.
+  const guestsCanBrowse = settings.learning.allowGuestAccess;
+  const coursesOn = settings.features.courses && guestsCanBrowse;
+  const browse = guestsCanBrowse
+    ? { hero: { href: "/courses", label: "Browse courses" }, cta: { href: "/courses", label: "Explore the catalog" } }
+    : signupEnabled
+      ? { hero: { href: "/login?next=%2Fcourses", label: "Log in to browse courses" }, cta: { href: "/login?next=%2Fcourses", label: "Log in to browse courses" } }
+      : null;
 
   const instructorMap = new Map<string, PublicUser>();
   for (const course of data.featured) for (const instructor of course.instructors) instructorMap.set(instructor.id, instructor);
@@ -58,6 +69,7 @@ export default async function HomePage() {
         tagline={settings.brand.tagline || `Learn with ${settings.brand.name}`}
         description={settings.brand.metaDescription}
         signupEnabled={signupEnabled}
+        browse={settings.features.courses ? (browse?.hero ?? null) : null}
         spotlight={coursesOn ? (data.featured[0] ?? null) : null}
         instructors={instructors}
         courseCount={data.stats.courses}
@@ -92,7 +104,7 @@ export default async function HomePage() {
 
       {coursesOn && <LandingCategories categories={data.categories} />}
 
-      {settings.features.batches && <LandingBatches batches={data.batches} />}
+      {settings.features.batches && guestsCanBrowse && <LandingBatches batches={data.batches} />}
 
       {coursesOn && data.upcoming.length > 0 && (
         <LandingSection
@@ -108,9 +120,9 @@ export default async function HomePage() {
 
       <LandingFeatures features={settings.features} />
 
-      {settings.features.reviews && <LandingTestimonials testimonials={data.testimonials} />}
+      {settings.features.reviews && guestsCanBrowse && <LandingTestimonials testimonials={data.testimonials} />}
 
-      <LandingCta brandName={settings.brand.name} signupEnabled={signupEnabled} />
+      <LandingCta brandName={settings.brand.name} signupEnabled={signupEnabled} browse={settings.features.courses ? (browse?.cta ?? null) : null} />
 
       {settings.contact.email && (
         <p className="text-center text-sm text-ink-muted">

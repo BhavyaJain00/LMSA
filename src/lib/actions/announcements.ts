@@ -6,6 +6,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { canManageBatch } from "@/lib/data/batches";
 import { notifyMany } from "@/lib/services/notifications";
+import { batchAudienceText, sendBatchAnnouncementEmails } from "@/lib/email";
 import { fd, isValidEmail, splitList, stripMarkdown, truncate, uid } from "@/lib/utils";
 
 /**
@@ -53,16 +54,21 @@ export async function createAnnouncementAction(_prev: ActionResult | null, formD
     students.filter((id) => id !== user.id),
     {
       type: "announcement",
-      subject,
-      message: truncate(stripMarkdown(body), 160),
+      subject: batchAudienceText(db, batch, subject),
+      message: truncate(stripMarkdown(batchAudienceText(db, batch, body)), 160),
       link: `/batches/${batch.slug}?tab=announcements`,
       fromUserId: user.id,
+      // Students get the full announcement by email below instead of a notification copy.
+      email: false,
     },
   );
+  const mail = await sendBatchAnnouncementEmails(announcement.id);
   revalidatePath(`/batches/${batch.slug}`);
   revalidatePath(`/admin/batches/${batch.id}`);
   revalidatePath("/", "layout");
-  return { ok: true, data: undefined, message: "Announcement has been sent successfully" };
+  revalidatePath("/admin/emails");
+  const emailed = mail.disabled ? "" : mail.queued ? ` and emailed to ${mail.queued} ${mail.queued === 1 ? "student" : "students"}` : "";
+  return { ok: true, data: undefined, message: `Announcement has been sent successfully${emailed}` };
 }
 
 export async function deleteAnnouncementAction(announcementId: string): Promise<ActionResult> {
