@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { getCurrentPublicUser } from "@/lib/auth/session";
 import { getDb, getSettings } from "@/lib/db/store";
 import { cn } from "@/lib/utils";
-import { buildNavigation } from "@/lib/nav";
+import { buildNavigation, managesOrganization } from "@/lib/nav";
 import { getNotifications, getUnreadCount } from "@/lib/services/notifications";
 import { AccountSecurityBanner } from "@/components/security/account-security-banner";
 import { Header } from "./header";
@@ -19,14 +19,16 @@ export async function AppShell({ children, contained = true }: { children: React
   let notifications: Awaited<ReturnType<typeof getNotifications>> = [];
   let unread = 0;
   let grading = 0;
+  let managesOrg = false;
   if (user) {
     [notifications, unread] = await Promise.all([getNotifications(user.id, 10), getUnreadCount(user.id)]);
+    const db = await getDb();
     if (user.roles.some((r) => r !== "student")) {
-      const db = await getDb();
       grading = db.assignmentSubmissions.filter((s) => s.status === "not_graded").length;
     }
+    managesOrg = managesOrganization(db.organizations, user.id);
   }
-  const sections = buildNavigation(user, settings, { unread, grading });
+  const sections = buildNavigation(user, settings, { unread, grading, managesOrg });
   const tabs = buildMobileTabs(user, settings, settings.features.notifications ? unread : 0);
 
   return (

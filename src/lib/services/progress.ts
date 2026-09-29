@@ -7,6 +7,7 @@ import { logActivity, getStreak } from "./activity";
 import { notify } from "./notifications";
 import { awardCertificatePoints, awardPoints } from "./points";
 import { computeProgramProgress } from "@/lib/data/programs";
+import { emit } from "@/lib/events";
 
 /**
  * Central place for everything that happens when a learner makes progress:
@@ -87,6 +88,7 @@ export async function getCompletionRequirements(user: User, lesson: Lesson, dwel
 export async function setLessonStatus(user: User, lesson: Lesson, status: ProgressStatus, dwellDelta = 0): Promise<ProgressStatus> {
   const now = new Date().toISOString();
   let finalStatus = status;
+  let newlyCompleted = false;
   await mutate((db) => {
     let row = db.progress.find((p) => p.userId === user.id && p.lessonId === lesson.id);
     if (!row) {
@@ -107,7 +109,10 @@ export async function setLessonStatus(user: User, lesson: Lesson, status: Progre
       finalStatus = "complete";
     } else {
       row.status = status;
-      if (status === "complete") row.completedAt = now;
+      if (status === "complete") {
+        row.completedAt = now;
+        newlyCompleted = true;
+      }
     }
     row.dwellSeconds += Math.max(0, dwellDelta);
     row.updatedAt = now;
@@ -115,6 +120,7 @@ export async function setLessonStatus(user: User, lesson: Lesson, status: Progre
     const enrollment = db.enrollments.find((e) => e.userId === user.id && e.courseId === lesson.courseId);
     if (enrollment) enrollment.currentLessonId = lesson.id;
   });
+  if (newlyCompleted) emit("lesson.completed", { userId: user.id, courseId: lesson.courseId, chapterId: lesson.chapterId, lessonId: lesson.id });
   await logActivity(user.id, status === "complete" ? "lesson_complete" : "lesson_view", lesson.id);
   if (finalStatus === "complete") await awardPoints(user.id, "lesson_complete", { refId: lesson.id, courseId: lesson.courseId });
   if (finalStatus === "complete") await recalculateCourseProgress(user, lesson.courseId);
@@ -143,6 +149,7 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
   const pct = percent(done, total);
   const course = db.courses.find((c) => c.id === courseId);
   let justCompleted = false;
+  let enrollmentId: string | undefined;
 
   await mutate((d) => {
     const enrollment = d.enrollments.find((e) => e.userId === user.id && e.courseId === courseId);
@@ -151,6 +158,7 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
     if (pct >= 100 && total > 0 && !enrollment.completedAt) {
       enrollment.completedAt = new Date().toISOString();
       justCompleted = true;
+      enrollmentId = enrollment.id;
     }
     // Program progress = ceil(average course progress within the program), same rule as the programs area.
     for (const program of d.programs) {
@@ -161,6 +169,7 @@ export async function recalculateCourseProgress(user: User, courseId: string): P
     }
   });
 
+  if (justCompleted && enrollmentId) emit("course.completed", { enrollmentId, userId: user.id, courseId });
   if (justCompleted && course) {
     await notify(user.id, {
       type: "system",
@@ -210,6 +219,7 @@ export async function issueCertificate(
     return null;
   });
   if (duplicate) return duplicate;
+  emit("certificate.issued", { certificateId: cert.id, code: cert.code, userId: user.id, courseId: cert.courseId, batchId: cert.batchId });
   await notify(user.id, {
     type: "certificate",
     subject: "Your certificate is ready",

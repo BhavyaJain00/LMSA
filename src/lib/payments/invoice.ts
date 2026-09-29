@@ -134,7 +134,15 @@ export interface InvoiceView {
   paidAt?: string;
 }
 
-const ITEM_TYPE_LABELS: Record<PaymentItemType, string> = { course: "Course", batch: "Batch", certificate: "Certificate" };
+const ITEM_TYPE_LABELS: Record<PaymentItemType, string> = {
+  course: "Course",
+  batch: "Batch",
+  certificate: "Certificate",
+  plan: "Membership",
+  bundle: "Bundle",
+  gift: "Gift",
+  seats: "Team seats",
+};
 
 /**
  * Tax rate for the invoice. The order stores amounts, not the rate, so the

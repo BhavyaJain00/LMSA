@@ -8,7 +8,15 @@ import { SlidingWindowRateLimiter, type RateLimitRule } from "@/lib/auth/rate-li
  * the limit check and the write that reserves a use happen atomically.
  */
 
-const ITEM_LABELS: Record<PaymentItemType, string> = { course: "Course", batch: "Batch", certificate: "Certificate" };
+const ITEM_LABELS: Record<PaymentItemType, string> = {
+  course: "Course",
+  batch: "Batch",
+  certificate: "Certificate",
+  plan: "Membership",
+  bundle: "Bundle",
+  gift: "Gift",
+  seats: "Team seats",
+};
 
 export const COUPON_LIMIT_REACHED = "This coupon has reached its maximum usage limit.";
 

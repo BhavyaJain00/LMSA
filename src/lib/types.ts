@@ -215,9 +215,32 @@ export interface Course {
   ogImageUrl?: string;
   /** Lets enrolled learners chat with the AI tutor about this course (requires `settings.ai.enabled`). */
   aiTutorEnabled?: boolean;
+  /* ----- round 3 wave B: installments, multi-currency, scheduled publish ----- */
+  /** Pay in parts (requires `settings.growth.installmentsEnabled`). */
+  installments?: CourseInstallmentPlan;
+  /** Fixed prices in other currencies (smallest unit), used when `settings.growth.multiCurrency` is on. */
+  prices?: CurrencyPrice[];
+  /** ISO date-time: the course becomes visible in the catalog from then on (scheduled publish). */
+  publishAt?: string;
   createdById: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Round 3 wave B: a fixed price in a specific currency (amount in the smallest currency unit). */
+export interface CurrencyPrice {
+  /** ISO 4217 code, e.g. "EUR". */
+  currency: string;
+  amount: number;
+}
+
+/** Round 3 wave B: split a course price into equal parts paid every `intervalDays`. */
+export interface CourseInstallmentPlan {
+  /** Number of payments (2 or more). */
+  count: number;
+  intervalDays: number;
+  /** Extra charged on top of the price when paying in parts, 0-100. */
+  surchargePercent: number;
 }
 
 /** Round 3: one block of a course sales page. */
@@ -425,12 +448,14 @@ export interface Lesson {
   dripDays?: number;
   /** Round 2 drip: unlocks on this date (YYYY-MM-DD, 00:00 UTC). */
   availableFrom?: string;
+  /** Round 3 wave B: ISO date-time the lesson becomes visible to learners (scheduled publish). */
+  publishAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 /* ------------------------------------------------------------------ */
-/* Quizzes                                                             */
+/* Quizzes                                                           */
 /* ------------------------------------------------------------------ */
 
 export type QuestionType = "choices" | "user_input" | "open_ended";
@@ -566,9 +591,24 @@ export interface Assignment {
   enableScheduling: boolean;
   scheduleStart?: string;
   scheduleEnd?: string;
+  /* ----- round 3 wave B: rubrics, peer review ----- */
+  /** Rubric used to grade submissions. */
+  rubricId?: string;
+  peerReview?: PeerReviewSettings;
   authorId: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Round 3 wave B: peer review configuration of an assignment. */
+export interface PeerReviewSettings {
+  enabled: boolean;
+  /** How many peers review each submission. */
+  reviewsPerSubmission: number;
+  /** Days a reviewer has after being assigned. */
+  dueDays: number;
+  /** Hide reviewer and author names from each other. */
+  anonymous: boolean;
 }
 
 export type AssignmentStatus = "pass" | "fail" | "not_graded" | "not_applicable";
@@ -589,6 +629,8 @@ export interface AssignmentSubmission {
   comments?: string;
   evaluatorId?: string;
   gradedAt?: string;
+  /** Round 3 wave B: per-criterion scores when the assignment is graded with a rubric. */
+  rubricScores?: RubricScore[];
   submittedAt: string;
   updatedAt: string;
 }
@@ -1081,7 +1123,11 @@ export interface DiscussionReply {
 /* Commerce                                                            */
 /* ------------------------------------------------------------------ */
 
-export type PaymentItemType = "course" | "batch" | "certificate";
+/**
+ * What an order buys. Round 3 wave B adds membership plans, bundles, gifts
+ * (a course/bundle/plan bought for someone else) and team seats.
+ */
+export type PaymentItemType = "course" | "batch" | "certificate" | "plan" | "bundle" | "gift" | "seats";
 export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
 
 export interface Payment {
@@ -1130,6 +1176,26 @@ export interface Payment {
   failureReason?: string;
   /** Gateway refunds recorded on this order (deduplicates redelivered refund webhooks). */
   refunds?: { id: string; amount: number; at: string }[];
+  /* ----- round 3 wave B: plans, bundles, gifts, teams, installments, affiliates, tax ----- */
+  planId?: string;
+  bundleId?: string;
+  giftId?: string;
+  /** Organization the seats were bought for (itemType "seats"). */
+  orgId?: string;
+  /** Number of seats bought (itemType "seats"). */
+  seats?: number;
+  subscriptionId?: string;
+  /** 1-based part number when the course is paid in installments. */
+  installmentNumber?: number;
+  installmentsTotal?: number;
+  /** Affiliate credited with the sale (last click within the cookie window). */
+  affiliateId?: string;
+  /** ISO 3166-1 alpha-2 country the tax was computed for. */
+  taxCountry?: string;
+  /** Tax rate applied, in percent. */
+  taxRate?: number;
+  /** Set on a one-click upsell order: the order whose checkout offered it. */
+  upsellOfPaymentId?: string;
 }
 
 export interface Coupon {
@@ -1270,6 +1336,10 @@ export interface Settings {
     footerText?: string;
     /** In-app notification types that also send an email. */
     notifyTypes: NotificationType[];
+    /** Round 3 wave B: add an open-tracking pixel to marketing emails (broadcasts, sequences). */
+    trackOpens: boolean;
+    /** Round 3 wave B: rewrite links in marketing emails through the click tracker. */
+    trackClicks: boolean;
   };
   security: {
     requireEmailVerification: boolean;
@@ -1357,6 +1427,47 @@ export interface Settings {
     renditions: number[];
     /** Generate captions automatically with the configured transcription API. */
     autoTranscribe: boolean;
+  };
+  /* ----- round 3 wave B ----- */
+  growth: {
+    affiliatesEnabled: boolean;
+    /** New affiliates are active immediately (otherwise an admin approves them). */
+    affiliateAutoApprove: boolean;
+    /** Commission for new affiliates, in percent of the net (tax-exclusive) sale. */
+    defaultCommissionPercent: number;
+    /** How long a referral cookie keeps attributing sales. */
+    cookieDays: number;
+    abandonedCheckoutEnabled: boolean;
+    /** Hours after the checkout was abandoned at which reminders are sent, e.g. [1, 24, 72]. */
+    abandonedCheckoutDelaysHours: number[];
+    /** Discount of the coupon included in the last reminder (0 = none). */
+    abandonedCheckoutCouponPercent: number;
+    giftsEnabled: boolean;
+    teamsEnabled: boolean;
+    subscriptionsEnabled: boolean;
+    bundlesEnabled: boolean;
+    installmentsEnabled: boolean;
+    taxMode: "none" | "by_country";
+    /** Show and charge fixed prices in the buyer's currency when an item defines one. */
+    multiCurrency: boolean;
+  };
+  marketplace: {
+    /** Multi-instructor marketplace with revenue sharing. */
+    enabled: boolean;
+    /** Instructor share of net course revenue, in percent. */
+    defaultRevenueSharePercent: number;
+    /** Members can apply to teach from /teach. */
+    allowApplications: boolean;
+  };
+  api: {
+    /** Public REST API (/api/v1) and outgoing webhooks. */
+    enabled: boolean;
+  };
+  messaging: {
+    /** Direct messages between learners and instructors. */
+    enabled: boolean;
+    /** Learners may also message other learners. */
+    studentToStudent: boolean;
   };
   updatedAt: string;
 }
@@ -1700,6 +1811,478 @@ export interface AiMessage {
 }
 
 /* ------------------------------------------------------------------ */
+/* Round 3 wave B: memberships, bundles, gifts, upsells, tax            */
+/* ------------------------------------------------------------------ */
+
+export type PlanInterval = "month" | "year" | "one_time";
+
+/** What a membership plan unlocks. */
+export type PlanAccess = { type: "all" } | { type: "courses"; courseIds: string[] };
+
+export interface MembershipPlan {
+  id: string;
+  slug: string;
+  name: string;
+  /** Markdown */
+  description: string;
+  interval: PlanInterval;
+  /** Price per interval in the smallest currency unit. */
+  price: number;
+  currency: string;
+  /** Free days before the first charge (0 = none). */
+  trialDays: number;
+  access: PlanAccess;
+  active: boolean;
+  /** Bullet points shown on the pricing page. */
+  features: string[];
+  /** Recurring price ids created on the gateways. */
+  gatewayPriceIds?: { stripe?: string; razorpay?: string };
+  prices?: CurrencyPrice[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SubscriptionStatus = "trialing" | "active" | "past_due" | "cancelled" | "expired";
+
+export interface Subscription {
+  id: string;
+  userId: string;
+  planId: string;
+  status: SubscriptionStatus;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+  /** The member cancelled; access continues until `currentPeriodEnd`. */
+  cancelAtPeriodEnd: boolean;
+  gateway: string;
+  gatewaySubscriptionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Several courses sold together at one price. */
+export interface Bundle {
+  id: string;
+  slug: string;
+  title: string;
+  /** Markdown */
+  description: string;
+  courseIds: string[];
+  /** Smallest currency unit. */
+  price: number;
+  currency: string;
+  prices?: CurrencyPrice[];
+  imageUrl?: string;
+  published: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A course, bundle or plan bought for someone else, redeemed with a code. */
+export interface Gift {
+  id: string;
+  /** Redemption code (share-safe, e.g. "GIFT-8F3K-2Q9Z"). */
+  code: string;
+  purchaserId: string;
+  recipientEmail: string;
+  recipientName?: string;
+  message?: string;
+  itemType: "course" | "bundle" | "plan";
+  itemId: string;
+  paymentId: string;
+  /** Deliver the gift email at this time (immediately when unset). */
+  sendAt?: string;
+  sentAt?: string;
+  redeemedBy?: string;
+  redeemedAt?: string;
+  createdAt: string;
+}
+
+/** One-click offer shown after buying the trigger item. */
+export interface Upsell {
+  id: string;
+  triggerItemType: "course" | "bundle";
+  triggerItemId: string;
+  offerItemType: "course" | "bundle";
+  offerItemId: string;
+  /** 0-100 */
+  discountPercent: number;
+  headline: string;
+  active: boolean;
+  createdAt: string;
+}
+
+/** Tax rate for buyers in one country (used when `settings.growth.taxMode` is "by_country"). */
+export interface TaxRule {
+  id: string;
+  /** ISO 3166-1 alpha-2, e.g. "IN". */
+  country: string;
+  /** Label on invoices, e.g. "GST", "VAT". */
+  name: string;
+  /** Percent, e.g. 18. */
+  rate: number;
+  /** Prices already include the tax (the tax is carved out instead of added). */
+  inclusive: boolean;
+}
+
+/** A started checkout, tracked for abandoned-checkout recovery emails. */
+export interface CheckoutSession {
+  id: string;
+  userId?: string;
+  email?: string;
+  itemType: string;
+  itemId: string;
+  startedAt: string;
+  lastStepAt: string;
+  completedPaymentId?: string;
+  /** The buyer completed a purchase after a reminder. */
+  recoveredAt?: string;
+  reminderCount: number;
+  lastReminderAt?: string;
+  /** Coupon code sent with the last reminder. */
+  couponSent?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3 wave B: affiliates, teams, analytics                         */
+/* ------------------------------------------------------------------ */
+
+export interface Affiliate {
+  id: string;
+  userId: string;
+  /** Referral code used in `?ref=CODE` links. */
+  code: string;
+  commissionPercent: number;
+  status: "pending" | "active" | "paused";
+  payoutEmail?: string;
+  createdAt: string;
+}
+
+/** A visit that arrived through an affiliate link. */
+export interface AffiliateReferral {
+  id: string;
+  affiliateId: string;
+  /** Anonymous visitor id (`ll_anon` cookie). */
+  visitorId: string;
+  landingPath: string;
+  createdAt: string;
+  convertedPaymentId?: string;
+}
+
+export interface Commission {
+  id: string;
+  affiliateId: string;
+  paymentId: string;
+  amount: number;
+  currency: string;
+  status: "pending" | "approved" | "paid" | "void";
+  createdAt: string;
+  paidAt?: string;
+}
+
+/** A company or team that buys seats for its members. */
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  ownerId: string;
+  /** Members who can manage seats and see team progress (the owner always can). */
+  managerIds: string[];
+  seatCount: number;
+  /** Courses every seat holder gets. */
+  courseIds: string[];
+  createdAt: string;
+}
+
+export interface OrgSeat {
+  id: string;
+  orgId: string;
+  /** Set once the invitation was accepted. */
+  userId?: string;
+  email: string;
+  /** SHA-256 hex of the invitation token (the raw token is only emailed). */
+  inviteTokenHash?: string;
+  status: "invited" | "active" | "revoked";
+  assignedAt: string;
+  activatedAt?: string;
+}
+
+/** First-party analytics event (page views, funnel steps, purchases). */
+export interface AnalyticsEvent {
+  id: string;
+  /** e.g. "page_view", "checkout_started", "purchase", "signup". */
+  name: string;
+  path?: string;
+  userId?: string;
+  anonId?: string;
+  referrer?: string;
+  utm?: { source?: string; medium?: string; campaign?: string };
+  itemType?: string;
+  itemId?: string;
+  value?: number;
+  currency?: string;
+  createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3 wave B: broadcasts, sequences, direct messages               */
+/* ------------------------------------------------------------------ */
+
+/** Audience of a broadcast (all conditions must match). */
+export interface SegmentFilter {
+  courseIds?: string[];
+  notEnrolledCourseIds?: string[];
+  roles?: Role[];
+  /** No activity for at least this many days. */
+  inactiveDays?: number;
+  /** true = has a paid order, false = never paid. */
+  purchased?: boolean;
+  /** Marketing leads without an account. */
+  leadsOnly?: boolean;
+}
+
+export interface Broadcast {
+  id: string;
+  subject: string;
+  /** Markdown */
+  body: string;
+  segment: SegmentFilter;
+  status: "draft" | "scheduled" | "sending" | "sent";
+  scheduledAt?: string;
+  sentAt?: string;
+  recipients: number;
+  opens: number;
+  clicks: number;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SequenceTrigger = "signup" | "lead" | "enrollment" | "purchase" | "inactive";
+
+export interface EmailSequenceStep {
+  id: string;
+  /** Hours after the previous step (or the trigger for the first step). */
+  delayHours: number;
+  subject: string;
+  /** Markdown */
+  body: string;
+}
+
+/** Automated drip email series. */
+export interface EmailSequence {
+  id: string;
+  name: string;
+  trigger: SequenceTrigger;
+  /** Limit "enrollment"/"purchase" triggers to one course. */
+  courseId?: string;
+  /** For the "inactive" trigger. */
+  inactiveDays?: number;
+  steps: EmailSequenceStep[];
+  active: boolean;
+  createdAt: string;
+}
+
+export interface SequenceEnrollment {
+  id: string;
+  sequenceId: string;
+  userId?: string;
+  leadId?: string;
+  email: string;
+  nextStepIndex: number;
+  nextRunAt: string;
+  status: "active" | "completed" | "stopped";
+  createdAt: string;
+}
+
+/** Open/click recorded for a tracked email. */
+export interface EmailEvent {
+  id: string;
+  /** Id of the `EmailMessage`. */
+  emailId: string;
+  type: "open" | "click";
+  url?: string;
+  createdAt: string;
+}
+
+export interface Conversation {
+  id: string;
+  participantIds: string[];
+  /** Course the conversation is about (e.g. "Message instructor"). */
+  courseId?: string;
+  subject?: string;
+  lastMessageAt: string;
+  /** A participant reported the conversation to moderators. */
+  reported?: boolean;
+  createdAt: string;
+}
+
+export interface DirectMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  /** Plain text / markdown (rendered escaped). */
+  body: string;
+  /** Users who have read the message (the sender included). */
+  readBy: string[];
+  createdAt: string;
+  editedAt?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3 wave B: public API & webhooks                                */
+/* ------------------------------------------------------------------ */
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** First characters of the key, shown to identify it (e.g. "ll_live_ab12"). */
+  prefix: string;
+  /** SHA-256 hex of the full key; the key itself is shown once. */
+  keyHash: string;
+  /** e.g. "courses:read", "enrollments:write". */
+  scopes: string[];
+  createdById: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+export interface WebhookEndpoint {
+  id: string;
+  url: string;
+  /** Signing secret, encrypted at rest. */
+  secretEnc: string;
+  /** Subscribed domain event names. */
+  events: string[];
+  active: boolean;
+  /** Consecutive failed deliveries (reset on success). */
+  failureCount: number;
+  createdAt: string;
+  lastDeliveryAt?: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  endpointId: string;
+  event: string;
+  /** JSON body sent to the endpoint. */
+  payload: string;
+  status: "pending" | "success" | "failed";
+  attempts: number;
+  responseStatus?: number;
+  /** Truncated response body. */
+  responseBody?: string;
+  nextAttemptAt?: string;
+  createdAt: string;
+  deliveredAt?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round 3 wave B: rubrics, peer review, versions, marketplace          */
+/* ------------------------------------------------------------------ */
+
+export interface RubricLevel {
+  label: string;
+  points: number;
+  description?: string;
+}
+
+export interface RubricCriterion {
+  id: string;
+  title: string;
+  description?: string;
+  /** Performance levels, usually from lowest to highest. */
+  levels: RubricLevel[];
+}
+
+export interface Rubric {
+  id: string;
+  title: string;
+  criteria: RubricCriterion[];
+  /** Percentage of the maximum points needed to pass (0-100). */
+  passPercent: number;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RubricScore {
+  criterionId: string;
+  /** Index into the criterion's `levels`. */
+  levelIndex: number;
+  points: number;
+  comment?: string;
+}
+
+export interface PeerReview {
+  id: string;
+  submissionId: string;
+  reviewerId: string;
+  assignmentId: string;
+  scores?: RubricScore[];
+  comment: string;
+  status: "assigned" | "submitted";
+  assignedAt: string;
+  submittedAt?: string;
+}
+
+/** Snapshot of a lesson taken before each save (lesson history). */
+export interface LessonVersion {
+  id: string;
+  lessonId: string;
+  title: string;
+  blocks: LessonBlock[];
+  instructorNotes?: string;
+  savedById: string;
+  note?: string;
+  createdAt: string;
+}
+
+export interface InstructorProfile {
+  id: string;
+  userId: string;
+  /** Instructor share of net course revenue, in percent. */
+  revenueSharePercent: number;
+  status: "applied" | "approved" | "rejected";
+  /** Application text (bio, expertise, sample). */
+  application?: string;
+  rejectionReason?: string;
+  payoutEmail?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+/** An instructor's share of one paid order. */
+export interface Earning {
+  id: string;
+  /** User id of the instructor. */
+  instructorId: string;
+  paymentId: string;
+  courseId: string;
+  /** Net amount of the order attributed to the course. */
+  gross: number;
+  /** Instructor share of `gross`. */
+  share: number;
+  currency: string;
+  status: "pending" | "paid" | "void";
+  createdAt: string;
+  paidAt?: string;
+}
+
+/** Money paid out to an instructor or an affiliate. */
+export interface Payout {
+  id: string;
+  instructorId?: string;
+  affiliateId?: string;
+  amount: number;
+  currency: string;
+  /** e.g. "bank_transfer", "paypal". */
+  method: string;
+  reference?: string;
+  createdAt: string;
+}
+
+/* ------------------------------------------------------------------ */
 /* Persisted database                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1766,6 +2349,35 @@ export interface Database {
   dataRequests: DataRequest[];
   aiConversations: AiConversation[];
   aiMessages: AiMessage[];
+  /* round 3 wave B */
+  plans: MembershipPlan[];
+  subscriptions: Subscription[];
+  bundles: Bundle[];
+  gifts: Gift[];
+  upsells: Upsell[];
+  taxRules: TaxRule[];
+  checkoutSessions: CheckoutSession[];
+  affiliates: Affiliate[];
+  affiliateReferrals: AffiliateReferral[];
+  commissions: Commission[];
+  organizations: Organization[];
+  orgSeats: OrgSeat[];
+  analyticsEvents: AnalyticsEvent[];
+  broadcasts: Broadcast[];
+  emailSequences: EmailSequence[];
+  sequenceEnrollments: SequenceEnrollment[];
+  emailEvents: EmailEvent[];
+  conversations: Conversation[];
+  directMessages: DirectMessage[];
+  apiKeys: ApiKey[];
+  webhookEndpoints: WebhookEndpoint[];
+  webhookDeliveries: WebhookDelivery[];
+  rubrics: Rubric[];
+  peerReviews: PeerReview[];
+  lessonVersions: LessonVersion[];
+  instructorProfiles: InstructorProfile[];
+  earnings: Earning[];
+  payouts: Payout[];
   settings: Settings;
 }
 

@@ -36,7 +36,15 @@ export interface SummaryLines {
   usdEquivalent?: number | null;
 }
 
-const TYPE_LABEL: Record<PaymentItemType, string> = { course: "Course", batch: "Batch", certificate: "Certificate" };
+const TYPE_LABEL: Record<PaymentItemType, string> = {
+  course: "Course",
+  batch: "Batch",
+  certificate: "Certificate",
+  plan: "Membership",
+  bundle: "Bundle",
+  gift: "Gift",
+  seats: "Team seats",
+};
 
 /** Order summary card (Frappe: Billing → order summary). Server-safe. */
 export function OrderSummary({

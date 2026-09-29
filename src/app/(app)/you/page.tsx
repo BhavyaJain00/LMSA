@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getCurrentPublicUser } from "@/lib/auth/session";
-import { getSettings } from "@/lib/db/store";
-import { buildNavigation } from "@/lib/nav";
+import { getDb, getSettings } from "@/lib/db/store";
+import { buildNavigation, managesOrganization } from "@/lib/nav";
 import { getUnreadCount } from "@/lib/services/notifications";
 import { logoutAction } from "@/lib/actions/auth";
 import { Avatar } from "@/components/ui/avatar";
@@ -78,7 +78,7 @@ export default async function YouPage() {
   }
 
   const unread = settings.features.notifications ? await getUnreadCount(user.id) : 0;
-  const sections = buildNavigation(user, settings);
+  const sections = buildNavigation(user, settings, { managesOrg: managesOrganization((await getDb()).organizations, user.id) });
   // Destinations already on the phone tab bar are not repeated under "Pages".
   const skip = new Set(["/notifications", `/user/${user.username}`, ...buildMobileTabs(user, settings).map((t) => t.href)]);
   const pageGroups = sections

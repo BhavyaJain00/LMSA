@@ -7,6 +7,7 @@ import { evaluateBadges } from "./badges";
 import { logActivity } from "./activity";
 import { computeProgramProgress } from "@/lib/data/programs";
 import { sendBatchConfirmationEmail, sendCourseEnrollmentEmail } from "@/lib/email";
+import { emit } from "@/lib/events";
 
 /**
  * Enroll a user in a course (idempotent). Handles the side effects every
@@ -63,6 +64,14 @@ export async function enrollUserInCourse(
     return null;
   });
   if (raced) return raced;
+  emit("enrollment.created", {
+    enrollmentId: enrollment.id,
+    userId,
+    courseId,
+    memberType: enrollment.memberType,
+    paymentId: enrollment.paymentId,
+    batchId: enrollment.batchId,
+  });
   await logActivity(userId, "enroll", courseId);
   const course = db.courses.find((c) => c.id === courseId);
   const user = db.users.find((u) => u.id === userId);

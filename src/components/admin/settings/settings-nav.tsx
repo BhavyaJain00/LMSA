@@ -24,6 +24,7 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "Video", href: "/admin/settings/video", icon: "Video" },
       { label: "Storage & video", href: "/admin/settings/storage", icon: "Database" },
       { label: "AI tutor", href: "/admin/settings/ai", icon: "Sparkles" },
+      { label: "API & webhooks", href: "/admin/settings/api", icon: "Code" },
       { label: "Installable app", href: "/admin/settings/pwa", icon: "Smartphone" },
     ],
   },
@@ -32,6 +33,8 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
     items: [
       { label: "Blog", href: "/admin/blog", icon: "FileText" },
       { label: "Leads", href: "/admin/leads", icon: "Inbox" },
+      { label: "Analytics", href: "/admin/analytics", icon: "BarChart" },
+      { label: "Affiliates", href: "/admin/affiliates", icon: "Handshake" },
     ],
   },
   {
@@ -40,12 +43,15 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "Categories", href: "/admin/settings/categories", icon: "Tag" },
       { label: "Badges", href: "/admin/settings/badges", icon: "Award" },
       { label: "Points & leaderboard", href: "/admin/settings/gamification", icon: "Trophy" },
+      { label: "Rubrics", href: "/admin/rubrics", icon: "ClipboardList" },
     ],
   },
   {
     group: "User management",
     items: [
       { label: "Members", href: "/admin/members", icon: "Users" },
+      { label: "Teams", href: "/admin/teams", icon: "Building" },
+      { label: "Instructors & payouts", href: "/admin/marketplace", icon: "Presentation" },
       { label: "Security", href: "/admin/settings/security", icon: "ShieldCheck" },
       { label: "Login activity", href: "/admin/security", icon: "Shield" },
     ],
@@ -54,6 +60,8 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
     group: "Communication",
     items: [
       { label: "Email", href: "/admin/settings/email", icon: "Mail" },
+      { label: "Broadcasts", href: "/admin/broadcasts", icon: "Megaphone" },
+      { label: "Email sequences", href: "/admin/sequences", icon: "Zap" },
       { label: "Outbox", href: "/admin/emails", icon: "Send" },
     ],
   },
@@ -63,6 +71,9 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "Payments", href: "/admin/settings/payments", icon: "CreditCard" },
       { label: "Transactions", href: "/admin/settings/transactions", icon: "Receipt" },
       { label: "Coupons", href: "/admin/settings/coupons", icon: "Ticket" },
+      { label: "Plans & bundles", href: "/admin/settings/plans", icon: "Layers" },
+      { label: "Taxes & currencies", href: "/admin/settings/taxes", icon: "Percent" },
+      { label: "Upsells", href: "/admin/upsells", icon: "TrendingUp" },
     ],
   },
   {

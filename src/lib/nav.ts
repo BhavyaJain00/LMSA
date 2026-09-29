@@ -1,5 +1,5 @@
 import type { IconName } from "@/components/ui/icons";
-import type { PublicUser, Settings } from "@/lib/types";
+import type { Organization, PublicUser, Settings } from "@/lib/types";
 
 export interface NavItem {
   label: string;
@@ -21,14 +21,36 @@ function has(user: PublicUser | null, ...roles: string[]): boolean {
   return roles.some((r) => user.roles.includes(r as PublicUser["roles"][number]));
 }
 
+/** Per-viewer facts the navigation needs besides the user and settings. */
+export interface NavContext {
+  /** Unread notifications. */
+  unread?: number;
+  /** Assignment submissions waiting to be graded (staff). */
+  grading?: number;
+  /** Round 3 wave B: unread direct messages. */
+  messages?: number;
+  /** Round 3 wave B: the viewer owns or manages an organization (shows "My team"). */
+  managesOrg?: boolean;
+}
+
+/** Whether a user owns or manages any of the given organizations (round 3 wave B teams). */
+export function managesOrganization(organizations: readonly Pick<Organization, "ownerId" | "managerIds">[], userId: string | null | undefined): boolean {
+  if (!userId) return false;
+  return organizations.some((o) => o.ownerId === userId || o.managerIds.includes(userId));
+}
+
 /** Build the sidebar navigation for a viewer (mirrors Frappe LMS's role-aware sidebar). */
-export function buildNavigation(user: PublicUser | null, settings: Settings, counts: { unread?: number; grading?: number } = {}): NavSection[] {
+export function buildNavigation(user: PublicUser | null, settings: Settings, counts: NavContext = {}): NavSection[] {
   const f = settings.features;
   const main: NavItem[] = [];
   if (user) main.push({ label: "Dashboard", href: "/dashboard", icon: "Home" });
   if (f.courses) main.push({ label: "Courses", href: "/courses", icon: "BookOpen", prefix: true });
   if (f.batches) main.push({ label: "Batches", href: "/batches", icon: "Users", prefix: true });
   if (f.programs) main.push({ label: "Programs", href: "/programs", icon: "Layers", prefix: true });
+  // Round 3 wave B: course bundles and membership plans are public sales pages.
+  const g = settings.growth;
+  if (g.bundlesEnabled && f.courses) main.push({ label: "Bundles", href: "/bundles", icon: "Gift", prefix: true });
+  if (g.subscriptionsEnabled) main.push({ label: "Membership", href: "/pricing", icon: "Star" });
   if (user && f.certifications && f.certifiedMembers) main.push({ label: "Certified Members", href: "/certified-members", icon: "Award" });
   if (f.jobs) main.push({ label: "Jobs", href: "/jobs", icon: "Briefcase", prefix: true });
   // Round 3: public blog (articles are always readable by guests; the switch lives in SEO settings).
@@ -46,6 +68,11 @@ export function buildNavigation(user: PublicUser | null, settings: Settings, cou
   if (user) {
     const learn: NavItem[] = [];
     if (f.notifications) learn.push({ label: "Notifications", href: "/notifications", icon: "Bell", badge: counts.unread });
+    // Round 3 wave B: direct messages, team management, affiliate programme and the instructor marketplace.
+    if (settings.messaging.enabled) learn.push({ label: "Messages", href: "/messages", icon: "MessageCircle", prefix: true, badge: counts.messages });
+    if (counts.managesOrg) learn.push({ label: "My team", href: "/team", icon: "Building", prefix: true });
+    if (g.affiliatesEnabled) learn.push({ label: "Affiliate", href: "/affiliate", icon: "Handshake", prefix: true });
+    if (settings.marketplace.enabled && settings.marketplace.allowApplications) learn.push({ label: "Teach", href: "/teach", icon: "Presentation", prefix: true });
     learn.push({ label: "My Profile", href: `/user/${user.username}`, icon: "User", prefix: true });
     sections.push({ title: "You", items: learn });
   }

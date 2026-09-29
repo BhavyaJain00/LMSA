@@ -29,6 +29,7 @@ import {
 import { describeUserAgent } from "@/lib/auth/user-agent";
 import { getUserByEmail } from "@/lib/data/users";
 import { evaluateBadges } from "@/lib/services/badges";
+import { emit } from "@/lib/events";
 import { fd, isValidEmail, slugify, uid } from "@/lib/utils";
 import { setFlash } from "@/lib/flash";
 
@@ -350,6 +351,7 @@ export async function registerAction(_prev: ActionResult | null, formData: FormD
     return row;
   });
   if (!user) return DUPLICATE;
+  emit("user.registered", { userId: user.id, email: user.email, name: user.name, source: "signup" });
 
   let emailSent = true;
   try {

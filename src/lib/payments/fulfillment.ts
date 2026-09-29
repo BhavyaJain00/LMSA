@@ -5,6 +5,7 @@ import { enrollUserInBatch, enrollUserInCourse } from "@/lib/services/enrollment
 import { issueCertificate } from "@/lib/services/progress";
 import { notify, notifyMany, type NotifyInput } from "@/lib/services/notifications";
 import { formatPrice } from "@/lib/utils";
+import { emit } from "@/lib/events";
 import { couponOverflow } from "./coupon-rules";
 import { assignInvoiceNumber, isInvoiceable } from "./invoice";
 
@@ -173,6 +174,21 @@ export async function fulfillPayment(
   const payment = claim.row;
   console.info(`[payments] order ${payment.orderId} paid (${payment.gateway}${opts.source ? `, via ${opts.source}` : ""})`);
   const granted = (await runGrant(payment, true)) ?? { learnerExists: true, failed: false };
+  emit("payment.paid", {
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    userId: payment.userId,
+    itemType: payment.itemType,
+    itemId: payment.itemId,
+    itemTitle: payment.itemTitle,
+    amount: payment.amount,
+    taxAmount: payment.taxAmount,
+    discountAmount: payment.discountAmount,
+    currency: payment.currency,
+    gateway: payment.gateway,
+    couponCode: payment.couponCode,
+    affiliateId: payment.affiliateId,
+  });
   const couponNotice = claim.overLimit
     ? `Coupon ${claim.overLimit.code} has now been used ${claim.overLimit.used} times, more than its usage limit of ${claim.overLimit.limit}.`
     : undefined;
@@ -470,6 +486,21 @@ function closeAsRefunded(d: Database, row: Payment, at: string): void {
   revokeAccessIn(d, row);
 }
 
+/** Publish `payment.refunded` for a refund that was just recorded (`full`: the order is now refunded). */
+function emitRefunded(payment: Payment, full: boolean): void {
+  emit("payment.refunded", {
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    userId: payment.userId,
+    itemType: payment.itemType,
+    itemId: payment.itemId,
+    amount: payment.amount,
+    refundedAmount: payment.refundedAmount ?? (full ? payment.amount : 0),
+    currency: payment.currency,
+    full,
+  });
+}
+
 async function notifyRefunded(payment: Payment): Promise<void> {
   const partial = (payment.refundedAmount ?? payment.amount) < payment.amount;
   await notify(payment.userId, {
@@ -504,6 +535,7 @@ export async function applyRefund(paymentId: string, update: RefundUpdate): Prom
   if (claim.kind === "missing") return { ok: false, error: "Payment not found." };
   if (claim.kind === "not_paid") return { ok: false, error: "Only paid orders can be refunded." };
   if (claim.kind === "already") return { ok: true, data: { payment: claim.row, changed: false } };
+  emitRefunded(claim.row, true);
   await notifyRefunded(claim.row);
   return { ok: true, data: { payment: claim.row, changed: true } };
 }
@@ -543,6 +575,7 @@ export async function recordGatewayRefund(paymentId: string, update: RefundUpdat
     }
     return { kind: changed ? "partial" : "unchanged", payment: { ...row } };
   });
+  if (res.kind === "refunded" || res.kind === "partial") emitRefunded(res.payment, res.kind === "refunded");
   if (res.kind === "refunded") await notifyRefunded(res.payment);
   return res;
 }

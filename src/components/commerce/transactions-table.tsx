@@ -72,7 +72,15 @@ export interface TransactionView {
   canSync: boolean;
 }
 
-const TYPE_LABEL: Record<PaymentItemType, string> = { course: "Course", batch: "Batch", certificate: "Certificate" };
+const TYPE_LABEL: Record<PaymentItemType, string> = {
+  course: "Course",
+  batch: "Batch",
+  certificate: "Certificate",
+  plan: "Membership",
+  bundle: "Bundle",
+  gift: "Gift",
+  seats: "Team seats",
+};
 
 function money(cents: number, currency: string) {
   return formatPrice(cents, currency, formatZero(currency));

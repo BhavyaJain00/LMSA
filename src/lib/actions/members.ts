@@ -12,6 +12,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { isRole } from "@/components/admin/settings/roles";
 import { MEMBER_IMPORT_MAX_ROWS, parseRoleList, type MemberImportRow } from "@/components/admin/settings/member-import-csv";
 import { setFlash } from "@/lib/flash";
+import { emit } from "@/lib/events";
 import { fd, isValidEmail, slugify, uid } from "@/lib/utils";
 
 /**
@@ -133,7 +134,10 @@ async function insertMember(actor: User, formData: FormData): Promise<ActionResu
     d.users.push(user);
     return { ok: true, data: user };
   });
-  if (result.ok) revalidateMember();
+  if (result.ok) {
+    emit("user.registered", { userId: result.data.id, email: result.data.email, name: result.data.name, source: "admin" });
+    revalidateMember();
+  }
   return result;
 }
 
@@ -526,6 +530,7 @@ export async function importMembersAction(rows: MemberImportRow[]): Promise<Acti
   });
 
   skipped.sort((a, b) => a.line - b.line);
+  for (const member of created) emit("user.registered", { userId: member.id, email: member.email, name: member.name, source: "import" });
   if (created.length) revalidateMember();
   const message = created.length
     ? `Imported ${created.length} ${created.length === 1 ? "member" : "members"}${skipped.length ? `, skipped ${skipped.length}` : ""}.`

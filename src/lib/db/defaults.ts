@@ -69,6 +69,8 @@ export function defaultSettings(): Settings {
       replyTo: undefined,
       footerText: "You are receiving this email because you have an account on LearnLoop.",
       notifyTypes: ["enrollment", "live_class", "assignment_graded", "quiz_graded", "certificate", "announcement", "reply", "mention"],
+      trackOpens: true,
+      trackClicks: true,
     },
     security: {
       requireEmailVerification: false,
@@ -146,6 +148,34 @@ export function defaultSettings(): Settings {
       renditions: [1080, 720, 480],
       autoTranscribe: false,
     },
+    growth: {
+      affiliatesEnabled: true,
+      affiliateAutoApprove: true,
+      defaultCommissionPercent: 20,
+      cookieDays: 30,
+      abandonedCheckoutEnabled: true,
+      abandonedCheckoutDelaysHours: [1, 24, 72],
+      abandonedCheckoutCouponPercent: 10,
+      giftsEnabled: true,
+      teamsEnabled: true,
+      subscriptionsEnabled: true,
+      bundlesEnabled: true,
+      installmentsEnabled: true,
+      taxMode: "none",
+      multiCurrency: false,
+    },
+    marketplace: {
+      enabled: false,
+      defaultRevenueSharePercent: 70,
+      allowApplications: true,
+    },
+    api: {
+      enabled: true,
+    },
+    messaging: {
+      enabled: true,
+      studentToStudent: false,
+    },
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -155,6 +185,13 @@ function normalizeRenditions(value: unknown, fallback: number[]): number[] {
   if (!Array.isArray(value)) return fallback;
   const heights = [...new Set(value.map(Number).filter((h) => Number.isInteger(h) && h >= 144 && h <= 2160))].sort((a, b) => b - a);
   return heights.length ? heights : fallback;
+}
+
+/** Keep reminder delays that are whole hours between 1 hour and 30 days, unique, earliest first (at most 5). */
+function normalizeDelays(value: unknown, fallback: number[]): number[] {
+  if (!Array.isArray(value)) return fallback;
+  const hours = [...new Set(value.map(Number).filter((h) => Number.isInteger(h) && h >= 1 && h <= 720))].sort((a, b) => a - b).slice(0, 5);
+  return hours.length ? hours : fallback;
 }
 
 /** Deep-merge stored settings over defaults so new keys always exist. */
@@ -191,6 +228,15 @@ export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
       ...(stored.storage ?? {}),
       renditions: normalizeRenditions(stored.storage?.renditions, d.storage.renditions),
     },
+    growth: {
+      ...d.growth,
+      ...(stored.growth ?? {}),
+      abandonedCheckoutDelaysHours: normalizeDelays(stored.growth?.abandonedCheckoutDelaysHours, d.growth.abandonedCheckoutDelaysHours),
+      taxMode: stored.growth?.taxMode === "by_country" ? "by_country" : "none",
+    },
+    marketplace: { ...d.marketplace, ...(stored.marketplace ?? {}) },
+    api: { ...d.api, ...(stored.api ?? {}) },
+    messaging: { ...d.messaging, ...(stored.messaging ?? {}) },
     updatedAt: stored.updatedAt ?? d.updatedAt,
   };
 }

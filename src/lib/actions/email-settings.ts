@@ -69,6 +69,8 @@ export async function saveEmailSettingsAction(_prev: ActionResult | null, formDa
   const notifyTypes = Array.from(new Set(rawTypes)) as NotificationType[];
   await mutate((db) => {
     db.settings.email = {
+      // Keeps settings this form does not edit (round 3 open/click tracking).
+      ...db.settings.email,
       enabled,
       fromName,
       replyTo: replyTo ? replyTo.toLowerCase() : undefined,

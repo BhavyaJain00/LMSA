@@ -42,6 +42,7 @@ import type {
 import { hashPassword } from "@/lib/auth/password";
 import { defaultSettings } from "./defaults";
 import { buildSeedBlogPosts, buildSeedLegalPages } from "./seed-round3";
+import { buildSeedBundles, buildSeedPlans, buildSeedRubrics, buildSeedTaxRules } from "./seed-round3b";
 import { readingTimeSeconds, toDateKey, addDays } from "@/lib/utils";
 
 /**
@@ -1727,6 +1728,35 @@ export async function buildSeedDatabase(): Promise<Database> {
     dataRequests: [],
     aiConversations: [],
     aiMessages: [],
+    // round 3 wave B
+    plans: buildSeedPlans(NOW),
+    subscriptions: [],
+    bundles: buildSeedBundles(NOW),
+    gifts: [],
+    upsells: [],
+    taxRules: buildSeedTaxRules(),
+    checkoutSessions: [],
+    affiliates: [],
+    affiliateReferrals: [],
+    commissions: [],
+    organizations: [],
+    orgSeats: [],
+    analyticsEvents: [],
+    broadcasts: [],
+    emailSequences: [],
+    sequenceEnrollments: [],
+    emailEvents: [],
+    conversations: [],
+    directMessages: [],
+    apiKeys: [],
+    webhookEndpoints: [],
+    webhookDeliveries: [],
+    rubrics: buildSeedRubrics(NOW),
+    peerReviews: [],
+    lessonVersions: [],
+    instructorProfiles: [],
+    earnings: [],
+    payouts: [],
     settings: defaultSettings(),
   };
 }

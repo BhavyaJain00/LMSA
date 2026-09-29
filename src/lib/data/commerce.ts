@@ -34,6 +34,10 @@ export const ITEM_TYPE_LABELS: Record<PaymentItemType, string> = {
   course: "Course",
   batch: "Batch",
   certificate: "Certificate",
+  plan: "Membership",
+  bundle: "Bundle",
+  gift: "Gift",
+  seats: "Team seats",
 };
 
 export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
@@ -132,6 +136,8 @@ export async function getBillingItem(type: PaymentItemType, idOrSlug: string): P
     const batch = db.batches.find((b) => b.id === idOrSlug || b.slug === idOrSlug);
     return batch ? itemFromBatch(batch) : null;
   }
+  // Round 3 wave B item types (plans, bundles, gifts, seats) are resolved by their own checkout flows.
+  if (type !== "course" && type !== "certificate") return null;
   const course = db.courses.find((c) => c.id === idOrSlug || c.slug === idOrSlug);
   return course ? itemFromCourse(course, type) : null;
 }
