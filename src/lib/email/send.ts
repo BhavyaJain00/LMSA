@@ -214,7 +214,7 @@ export async function sendPaymentReceiptEmail(paymentId: string): Promise<EmailM
     gatewayPaymentId: payment.gatewayPaymentId,
     billingName: payment.billingName,
     accessUrl: batch ? `/batches/${batch.slug}` : course ? `/courses/${course.slug}` : "/",
-    invoiceUrl: `${siteConfig.appUrl}/billing/success/${encodeURIComponent(payment.orderId)}`,
+    invoiceUrl: `${siteConfig.appUrl}/billing/${payment.invoiceNumber ? "invoice" : "success"}/${encodeURIComponent(payment.orderId)}`,
     footer: { reason: `You received this receipt because you made a purchase on ${brand.name}.`, preferencesUrl: preferencesUrl() },
   });
   return enqueueEmail(input(rendered, user, "payment"));

@@ -100,9 +100,7 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
           <Icon.ShieldCheck className="mt-0.5 size-5 shrink-0 text-accent" />
           <div className="text-sm">
             <p className="font-medium text-ink">Two-step verification is required for your role</p>
-            <p className="text-ink-muted">
-              {brand} asks staff to protect their accounts with an authenticator app. Set it up below to continue to admin and teaching tools.
-            </p>
+            <p className="text-ink-muted">{brand} asks staff to protect their accounts with an authenticator app. Set it up below to continue to admin and teaching tools.</p>
           </div>
         </div>
       )}
@@ -123,7 +121,11 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
           <CardHeader title="Security checkup" description="A quick look at how well your account is protected." />
           <CardBody>
             <ul className="grid gap-4 sm:grid-cols-3">
-              <CheckItem ok={verified} label={verified ? "Email confirmed" : "Email not confirmed"} detail={user.emailVerifiedAt ? `Confirmed ${formatDate(user.emailVerifiedAt)}` : verified ? "Added by your organisation" : "Check your inbox for the link"} />
+              <CheckItem
+                ok={verified}
+                label={verified ? "Email confirmed" : "Email not confirmed"}
+                detail={user.emailVerifiedAt ? `Confirmed ${formatDate(user.emailVerifiedAt)}` : verified ? "Added by your organisation" : "Check your inbox for the link"}
+              />
               <CheckItem
                 ok={twoFactorOn}
                 label={twoFactorOn ? "Two-step verification on" : "Two-step verification off"}
@@ -227,7 +229,9 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
               />
             ) : pendingSetup ? (
               <div className="space-y-3">
-                <p className="text-sm text-danger">The setup key for your unfinished setup can&apos;t be read any more (the server key changed). Start again to get a new QR code.</p>
+                <p className="text-sm text-danger">
+                  The setup key for your unfinished setup can&apos;t be read any more (the server key changed). Start again to get a new QR code.
+                </p>
                 <StartTwoFactorButton label="Start again" />
               </div>
             ) : settings.security.allowTwoFactor ? (

@@ -139,7 +139,7 @@ function paymentPlan(db: Database, brand: EmailBrand, n: Notification, user: Use
       gatewayPaymentId: payment.gatewayPaymentId,
       billingName: payment.billingName,
       accessUrl: itemAccessUrl(db, payment),
-      invoiceUrl: `${brand.appUrl}/billing/success/${encodeURIComponent(payment.orderId)}`,
+      invoiceUrl: `${brand.appUrl}/billing/${payment.invoiceNumber ? "invoice" : "success"}/${encodeURIComponent(payment.orderId)}`,
       footer: footer(brand, user, null, `You received this receipt because you made a purchase on ${brand.name}.`),
     });
     return { input: toInput(rendered, user, "payment") };

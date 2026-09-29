@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
+import { verificationError } from "@/lib/auth/verification";
 import { getSettings } from "@/lib/db/store";
 import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, parseItemType, validateCoupon } from "@/lib/data/commerce";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
@@ -58,6 +59,17 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
       <>
         {header}
         <NotPermitted message={access.message} actionHref={access.backHref} actionLabel={access.backLabel} />
+      </>
+    );
+  }
+
+  // Purchasing is blocked until the member confirms their email (when the platform requires it).
+  const blocked = await verificationError(user);
+  if (blocked) {
+    return (
+      <>
+        {header}
+        <NotPermitted message={blocked} actionHref="/settings/security" actionLabel="Go to security settings" />
       </>
     );
   }

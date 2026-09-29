@@ -5,6 +5,7 @@
 import type { LessonBlock, LessonBlockType, VideoChapterMarker, VideoQuizMarker } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
 import { isValidUrl, readingTimeSeconds, uid } from "@/lib/utils";
+import { sanitizeVideoSources } from "@/lib/media/sources";
 
 export interface BlockTypeMeta {
   type: LessonBlockType;
@@ -349,6 +350,11 @@ export function sanitizeBlocks(raw: unknown, ctx: BlockValidationContext): Block
           chapters,
           quizMarkers,
           title: optStr(r.title, 200),
+          sources: sanitizeVideoSources(r.sources, {
+            checkUrl: (u) => checkUrl(u, "the video quality file or URL", { required: true, noVideoHosts: true }),
+            onError: fail,
+            mainSrc: src,
+          }),
         });
         break;
       }

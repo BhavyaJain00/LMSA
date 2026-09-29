@@ -62,11 +62,7 @@ export async function sendEmailVerification(user: Pick<User, "id" | "email" | "n
   await sendVerificationEmail(user, token);
 }
 
-export type VerifyEmailOutcome =
-  | { status: "verified"; user: User }
-  | { status: "already_verified"; user: User }
-  | { status: "expired"; user?: User }
-  | { status: "invalid" };
+export type VerifyEmailOutcome = { status: "verified"; user: User } | { status: "already_verified"; user: User } | { status: "expired"; user?: User } | { status: "invalid" };
 
 /**
  * Confirm an email with a token from a verification link. Idempotent: a used

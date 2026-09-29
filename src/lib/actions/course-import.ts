@@ -19,6 +19,7 @@ import { RESERVED_COURSE_SLUGS, canCreateCourses, canEvaluateCertificates } from
 import { computeLessonDuration, isBlockedVideoHost, sanitizeBlocks } from "@/components/admin/courses/blocks";
 import { cardGradients, currencies } from "@/lib/config";
 import { isValidUrl, slugify, uid, unique, uniqueSlug } from "@/lib/utils";
+import { MAX_PREREQUISITES, cleanReleaseRule } from "@/components/learn/drip-shared";
 
 /**
  * Largest accepted export file. The upload goes through a route handler (not a
@@ -47,6 +48,8 @@ const optUrl = (v: unknown): string | undefined => {
   const s = optText(v);
   return s && isValidUrl(s) ? s : undefined;
 };
+/** Drip release rule of an imported chapter/lesson (invalid values are dropped). */
+const releaseRuleOf = (r: Raw) => cleanReleaseRule({ dripDays: typeof r.dripDays === "number" ? r.dripDays : undefined, availableFrom: typeof r.availableFrom === "string" ? r.availableFrom : undefined });
 
 const QUESTION_TYPES: QuestionType[] = ["choices", "user_input", "open_ended"];
 const ASSIGNMENT_TYPES: AssignmentType[] = ["document", "pdf", "url", "image", "text"];
@@ -221,7 +224,14 @@ export async function importCourseFile(file: FormDataEntryValue | null): Promise
     .map((c, i) => {
       const id = uid("chp");
       chapterMap.set(text(c.id, 100), id);
-      return { id, courseId, title: text(c.title, 120).trim() || `Chapter ${i + 1}`, description: optText(c.description, 1000), order: i + 1 };
+      return {
+        id,
+        courseId,
+        title: text(c.title, 120).trim() || `Chapter ${i + 1}`,
+        description: optText(c.description, 1000),
+        order: i + 1,
+        ...releaseRuleOf(c),
+      };
     });
 
   /* ------------------------------- Lessons ---------------------------------- */
@@ -272,6 +282,7 @@ export async function importCourseFile(file: FormDataEntryValue | null): Promise
         instructorNotes: optText(l.instructorNotes, 50_000),
         includeInPreview: bool(l.includeInPreview),
         durationSeconds: computeLessonDuration(kept),
+        ...releaseRuleOf(l),
         createdAt: now,
         updatedAt: now,
       });
@@ -302,6 +313,9 @@ export async function importCourseFile(file: FormDataEntryValue | null): Promise
   const videoUrl = optUrl(rawCourse.videoUrl);
   const takenCourseSlugs = [...db.courses.map((c) => c.slug), ...RESERVED_COURSE_SLUGS];
   const slugBase = text(rawCourse.slug, 80) || slugify(title);
+  const prerequisiteCourseIds = strList(rawCourse.prerequisiteCourseIds)
+    .filter((id) => id !== oldCourseId && db.courses.some((c) => c.id === id))
+    .slice(0, MAX_PREREQUISITES);
 
   const course: Course = {
     id: courseId,
@@ -329,6 +343,8 @@ export async function importCourseFile(file: FormDataEntryValue | null): Promise
     enforceLessonCompletion: bool(rawCourse.enforceLessonCompletion),
     status: "in_progress",
     relatedCourseIds: strList(rawCourse.relatedCourseIds).filter((id) => id !== oldCourseId && db.courses.some((c) => c.id === id)),
+    // Prerequisites only survive when those courses exist here (the new course can't be part of a cycle yet).
+    ...(prerequisiteCourseIds.length ? { prerequisiteCourseIds } : {}),
     outcomes: strList(rawCourse.outcomes, 20),
     requirements: strList(rawCourse.requirements, 20),
     metaDescription: optText(rawCourse.metaDescription, 160)?.replace(/\s+/g, " "),

@@ -675,6 +675,7 @@ export function summarizeExport(file: CourseExportFile): CourseExportSummary {
         addUpload(b.src);
         addUpload(b.posterUrl);
         addUpload(b.captionsUrl);
+        for (const s of b.sources ?? []) addUpload(s.src);
       } else if (b.type === "audio" || b.type === "pdf" || b.type === "image" || b.type === "file") {
         addUpload(b.src);
       }

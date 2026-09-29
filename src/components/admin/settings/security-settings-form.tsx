@@ -67,7 +67,17 @@ export function SecuritySettingsForm({ initial, adminHasTwoFactor }: { initial: 
           error={errors.maxLoginAttempts}
           required
         >
-          <Input id="maxLoginAttempts" name="maxLoginAttempts" type="number" inputMode="numeric" min={3} max={20} step={1} defaultValue={initial.maxLoginAttempts} invalid={!!errors.maxLoginAttempts} />
+          <Input
+            id="maxLoginAttempts"
+            name="maxLoginAttempts"
+            type="number"
+            inputMode="numeric"
+            min={3}
+            max={20}
+            step={1}
+            defaultValue={initial.maxLoginAttempts}
+            invalid={!!errors.maxLoginAttempts}
+          />
         </SettingsRow>
         <SettingsRow
           label="Lockout duration (minutes)"
@@ -76,7 +86,17 @@ export function SecuritySettingsForm({ initial, adminHasTwoFactor }: { initial: 
           error={errors.lockoutMinutes}
           required
         >
-          <Input id="lockoutMinutes" name="lockoutMinutes" type="number" inputMode="numeric" min={1} max={1440} step={1} defaultValue={initial.lockoutMinutes} invalid={!!errors.lockoutMinutes} />
+          <Input
+            id="lockoutMinutes"
+            name="lockoutMinutes"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={1440}
+            step={1}
+            defaultValue={initial.lockoutMinutes}
+            invalid={!!errors.lockoutMinutes}
+          />
         </SettingsRow>
       </SettingsSection>
 
@@ -88,7 +108,17 @@ export function SecuritySettingsForm({ initial, adminHasTwoFactor }: { initial: 
           error={errors.passwordMinLength}
           required
         >
-          <Input id="passwordMinLength" name="passwordMinLength" type="number" inputMode="numeric" min={8} max={64} step={1} defaultValue={initial.passwordMinLength} invalid={!!errors.passwordMinLength} />
+          <Input
+            id="passwordMinLength"
+            name="passwordMinLength"
+            type="number"
+            inputMode="numeric"
+            min={8}
+            max={64}
+            step={1}
+            defaultValue={initial.passwordMinLength}
+            invalid={!!errors.passwordMinLength}
+          />
         </SettingsRow>
       </SettingsSection>
 

@@ -89,6 +89,14 @@ export function coursePlaceholderValues(db: Database, course: Course, member?: P
   };
 }
 
+/** Batch placeholder values without the member-specific ones (for client previews). */
+export function batchAudienceValues(db: Database, batch: Batch): Record<string, string> {
+  const { member_name: _name, member_email: _email, ...rest } = batchPlaceholderValues(db, batch, null);
+  void _name;
+  void _email;
+  return rest;
+}
+
 /** Fill placeholders for an audience-wide copy (e.g. the in-app notification). */
 export function batchAudienceText(db: Database, batch: Batch, text: string): string {
   return fillPlaceholders(text, batchPlaceholderValues(db, batch, null));

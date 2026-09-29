@@ -32,10 +32,25 @@ export default async function SecuritySettingsAdminPage() {
         }
       />
       <div className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatCard label="Two-step verification" value={`${percent(withTwoFactor, users.length)}%`} hint={`${formatNumber(withTwoFactor)} of ${formatNumber(users.length)} members`} icon={<Icon.ShieldCheck className="size-5" />} />
-        <StatCard label="Staff protected" value={`${formatNumber(staffWithTwoFactor)}/${formatNumber(staff.length)}`} hint="Staff with two-step verification" icon={<Icon.Users className="size-5" />} />
+        <StatCard
+          label="Two-step verification"
+          value={`${percent(withTwoFactor, users.length)}%`}
+          hint={`${formatNumber(withTwoFactor)} of ${formatNumber(users.length)} members`}
+          icon={<Icon.ShieldCheck className="size-5" />}
+        />
+        <StatCard
+          label="Staff protected"
+          value={`${formatNumber(staffWithTwoFactor)}/${formatNumber(staff.length)}`}
+          hint="Staff with two-step verification"
+          icon={<Icon.Users className="size-5" />}
+        />
         <StatCard label="Unconfirmed emails" value={formatNumber(unverified)} hint="Self-registered, not yet confirmed" icon={<Icon.Mail className="size-5" />} />
-        <StatCard label="Locked right now" value={formatNumber(locked)} hint={locked ? "Unlock from Login activity" : "No accounts locked"} icon={<Icon.Lock className="size-5" />} />
+        <StatCard
+          label="Locked right now"
+          value={formatNumber(locked)}
+          hint={locked ? "Unlock from Login activity" : "No accounts locked"}
+          icon={<Icon.Lock className="size-5" />}
+        />
       </div>
       <SecuritySettingsForm initial={db.settings.security} adminHasTwoFactor={isTwoFactorActive(admin)} />
     </>

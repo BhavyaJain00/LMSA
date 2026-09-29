@@ -6,6 +6,7 @@ import { Card, CardHeader, StatCard } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Icon } from "@/components/ui/icons";
+import { ButtonLink } from "@/components/ui/button";
 import { ProgressSummary } from "@/components/admin/courses/progress-summary";
 import { EnrollStudentButton, LessonCompletionList, StudentsPanel } from "@/components/admin/courses/students-panel";
 
@@ -24,7 +25,12 @@ export async function DashboardTab({ course }: { course: Course }) {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-ink-muted">Enrollment, progress and feedback for learners in this course.</p>
-        <EnrollStudentButton courseId={course.id} paidCertificate={course.paidCertificate} variant="outline" />
+        <div className="flex flex-wrap items-center gap-2">
+          <ButtonLink href={`/admin/courses/${course.id}/video-analytics`} variant="outline" leftIcon={<Icon.BarChart className="size-4" />}>
+            Video analytics
+          </ButtonLink>
+          <EnrollStudentButton courseId={course.id} paidCertificate={course.paidCertificate} variant="outline" />
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">

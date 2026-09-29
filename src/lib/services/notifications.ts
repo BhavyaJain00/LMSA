@@ -16,6 +16,11 @@ export interface NotifyInput {
    * queued when Settings → Email and the member's preferences allow it.
    */
   email?: boolean;
+  /**
+   * Optional idempotency key (e.g. "drip:<lessonId>"). When set, a user who
+   * already has a notification with this key is not notified (or emailed) again.
+   */
+  dedupeKey?: string;
 }
 
 /** Create an in-app notification for one user (and its email copy when enabled). */
@@ -29,11 +34,18 @@ export async function notify(userId: string, input: NotifyInput): Promise<Notifi
     message: input.message,
     link: input.link,
     read: false,
+    dedupeKey: input.dedupeKey || undefined,
     createdAt: new Date().toISOString(),
   };
-  await mutate((db) => {
+  const existing = await mutate((db) => {
+    if (n.dedupeKey) {
+      const found = db.notifications.find((x) => x.userId === userId && x.dedupeKey === n.dedupeKey);
+      if (found) return found;
+    }
     db.notifications.push(n);
+    return null;
   });
+  if (existing) return existing;
   if (input.email !== false) await emailNotifications([n]);
   return n;
 }
@@ -42,21 +54,29 @@ export async function notifyMany(userIds: string[], input: NotifyInput): Promise
   const unique = Array.from(new Set(userIds)).filter(Boolean);
   if (!unique.length) return;
   const now = new Date().toISOString();
-  const created: Notification[] = unique.map((userId) => ({
-    id: uid("ntf"),
-    userId,
-    fromUserId: input.fromUserId,
-    type: input.type,
-    subject: input.subject,
-    message: input.message,
-    link: input.link,
-    read: false,
-    createdAt: now,
-  }));
-  await mutate((db) => {
-    db.notifications.push(...created);
+  const dedupeKey = input.dedupeKey || undefined;
+  const created = await mutate((db) => {
+    const already = dedupeKey ? new Set(db.notifications.filter((x) => x.dedupeKey === dedupeKey).map((x) => x.userId)) : null;
+    const rows: Notification[] = [];
+    for (const userId of unique) {
+      if (already?.has(userId)) continue;
+      rows.push({
+        id: uid("ntf"),
+        userId,
+        fromUserId: input.fromUserId,
+        type: input.type,
+        subject: input.subject,
+        message: input.message,
+        link: input.link,
+        read: false,
+        dedupeKey,
+        createdAt: now,
+      });
+    }
+    db.notifications.push(...rows);
+    return rows;
   });
-  if (input.email !== false) await emailNotifications(created);
+  if (created.length && input.email !== false) await emailNotifications(created);
 }
 
 /**

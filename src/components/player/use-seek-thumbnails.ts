@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Seek-bar preview frames generated in the browser.
@@ -29,8 +29,8 @@ export interface ThumbnailFrame {
 export type ThumbnailStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export interface SeekThumbnails {
-  /** Attach to the hidden <video> element (rendered only while `active`). */
-  videoRef: RefObject<HTMLVideoElement | null>;
+  /** Callback ref for the hidden <video> element (rendered only while `active`). */
+  attachVideo: (el: HTMLVideoElement | null) => void;
   /** The hidden video should be mounted (becomes true on the first hover). */
   active: boolean;
   status: ThumbnailStatus;
@@ -40,6 +40,8 @@ export interface SeekThumbnails {
   request: (time: number) => void;
   /** crossOrigin attribute for the hidden video. */
   crossOrigin: "anonymous" | undefined;
+  /** src for the hidden video. */
+  videoSrc: string | undefined;
 }
 
 export function bucketOf(time: number): number {
@@ -61,6 +63,8 @@ function isSecurityError(err: unknown): boolean {
 
 export function useSeekThumbnails({ src, enabled }: { src: string | null; enabled: boolean }): SeekThumbnails {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const kickRef = useRef<() => void>(() => undefined);
   const cache = useRef(new Map<number, ThumbnailFrame>());
   const pending = useRef<number | null>(null);
   const inFlight = useRef<number | null>(null);
@@ -83,7 +87,7 @@ export function useSeekThumbnails({ src, enabled }: { src: string | null; enable
       if (throttleTimer.current === null) {
         throttleTimer.current = window.setTimeout(() => {
           throttleTimer.current = null;
-          kick();
+          kickRef.current();
         }, wait);
       }
       return;
@@ -103,11 +107,19 @@ export function useSeekThumbnails({ src, enabled }: { src: string | null; enable
       inFlight.current = null;
     }
   }, []);
+  useEffect(() => {
+    kickRef.current = kick;
+  }, [kick]);
+
+  const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    setVideoEl(el);
+  }, []);
 
   // Wire the hidden video's events.
   useEffect(() => {
     if (!active) return;
-    const video = videoRef.current;
+    const video = videoEl;
     if (!video) return;
 
     const draw = () => {
@@ -180,16 +192,12 @@ export function useSeekThumbnails({ src, enabled }: { src: string | null; enable
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("error", onError);
     };
-  }, [active, kick]);
+  }, [active, videoEl, kick]);
 
-  // Signed URLs are refreshed over time: point the hidden video at the current one when idle.
+  // Signed URLs are refreshed over time: a new src restarts the hidden video, so drop the pending seek.
   useEffect(() => {
-    const video = videoRef.current;
-    if (!active || !video || !src) return;
-    if (video.getAttribute("src") === src) return;
-    if (inFlight.current !== null) inFlight.current = null;
-    video.src = src;
-  }, [active, src]);
+    inFlight.current = null;
+  }, [src]);
 
   useEffect(
     () => () => {
@@ -225,11 +233,12 @@ export function useSeekThumbnails({ src, enabled }: { src: string | null; enable
   );
 
   return {
-    videoRef,
+    attachVideo,
     active: active && usable,
     status: enabled ? status : "idle",
     frame: usable ? frame : null,
     request,
     crossOrigin: isCrossOrigin(src) ? "anonymous" : undefined,
+    videoSrc: src ?? undefined,
   };
 }

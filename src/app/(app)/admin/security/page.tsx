@@ -142,7 +142,12 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Sign-ins (24h)" value={formatNumber(ok24)} icon={<Icon.LogIn className="size-5" />} />
-        <StatCard label="Failed attempts (24h)" value={formatNumber(failed24)} hint={failingIps.size ? `From ${formatNumber(failingIps.size)} IP ${failingIps.size === 1 ? "address" : "addresses"}` : "None"} icon={<Icon.AlertTriangle className="size-5" />} />
+        <StatCard
+          label="Failed attempts (24h)"
+          value={formatNumber(failed24)}
+          hint={failingIps.size ? `From ${formatNumber(failingIps.size)} IP ${failingIps.size === 1 ? "address" : "addresses"}` : "None"}
+          icon={<Icon.AlertTriangle className="size-5" />}
+        />
         <StatCard label="Locked accounts" value={formatNumber(lockedUsers.length)} icon={<Icon.Lock className="size-5" />} />
         <StatCard label="Staff with 2-step" value={`${formatNumber(staffWith2fa)}/${formatNumber(staff.length)}`} icon={<Icon.ShieldCheck className="size-5" />} />
       </div>
@@ -242,123 +247,137 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
       )}
 
       <div className="space-y-4">
-          <LoginEventsFilters values={{ q, outcome, reason, period }} reasons={reasonOptions} userId={selectedUser?.id} />
-          {matchingAccounts.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-ink-muted">Account tools:</span>
-              {matchingAccounts.map((u) => (
-                <Link
-                  key={u.id}
-                  href={`/admin/security${queryString({ ...baseParams, q: undefined, user: u.id })}`}
-                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-1 px-2.5 py-1 text-xs font-medium text-ink hover:bg-surface-2"
+        <LoginEventsFilters values={{ q, outcome, reason, period }} reasons={reasonOptions} userId={selectedUser?.id} />
+        {matchingAccounts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-ink-muted">Account tools:</span>
+            {matchingAccounts.map((u) => (
+              <Link
+                key={u.id}
+                href={`/admin/security${queryString({ ...baseParams, q: undefined, user: u.id })}`}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-1 px-2.5 py-1 text-xs font-medium text-ink hover:bg-surface-2"
+              >
+                <Avatar name={u.name} src={u.avatarUrl} size="xs" />
+                <span className="truncate">{u.name}</span>
+                {isAccountLocked(u, now) && <Icon.Lock className="size-3.5 text-danger" aria-label="Locked" />}
+              </Link>
+            ))}
+          </div>
+        )}
+        <Table>
+          <THead>
+            <tr>
+              <TH>When</TH>
+              <TH>Account</TH>
+              <TH>Outcome</TH>
+              <TH className="hidden md:table-cell">IP address</TH>
+              <TH className="hidden lg:table-cell">Device</TH>
+            </tr>
+          </THead>
+          <TBody>
+            {visible.length === 0 ? (
+              <TableEmpty colSpan={5}>
+                {db.loginEvents.length === 0 ? (
+                  <EmptyState
+                    compact
+                    className="border-0"
+                    icon={<Icon.Shield />}
+                    title="No sign-in activity yet"
+                    description="Every sign-in attempt — successful, failed or blocked — will be listed here with its IP address and device."
+                  />
+                ) : q ? (
+                  `No sign-in attempts match “${q}”.`
+                ) : (
+                  "No sign-in attempts match these filters."
+                )}
+              </TableEmpty>
+            ) : (
+              visible.map((e) => {
+                const user = e.userId ? usersById.get(e.userId) : undefined;
+                const info = describeLoginReason(e.reason, e.success);
+                const device = describeUserAgent(e.userAgent);
+                return (
+                  <TR key={e.id}>
+                    <TD className="whitespace-nowrap text-ink-muted">
+                      <time dateTime={e.createdAt} title={formatDateTime(e.createdAt)}>
+                        {relativeTime(e.createdAt)}
+                      </time>
+                    </TD>
+                    <TD>
+                      {user ? (
+                        <Link href={`/admin/security${queryString({ ...baseParams, user: user.id, page: undefined })}`} className="block min-w-0 hover:underline">
+                          <span className="block truncate font-medium">{user.name}</span>
+                          <span className="block truncate text-xs text-ink-muted">{e.email}</span>
+                        </Link>
+                      ) : (
+                        <span className="block min-w-0">
+                          <span className="block truncate text-ink-muted">{e.email}</span>
+                          <span className="block text-xs text-ink-faint">No account</span>
+                        </span>
+                      )}
+                      <span className="mt-1 block font-mono text-xs text-ink-faint md:hidden">{e.ip ?? "—"}</span>
+                    </TD>
+                    <TD>
+                      <Badge tone={TONE_TO_BADGE[info.tone] ?? "neutral"} dot className="whitespace-normal">
+                        {info.label}
+                      </Badge>
+                    </TD>
+                    <TD className="hidden whitespace-nowrap font-mono text-xs text-ink-muted md:table-cell">
+                      {e.ip ? (
+                        <Link
+                          href={`/admin/security${queryString({ ...baseParams, q: e.ip, page: undefined })}`}
+                          className="hover:text-ink hover:underline"
+                          title="Show attempts from this IP"
+                        >
+                          {e.ip}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </TD>
+                    <TD className="hidden text-ink-muted lg:table-cell">
+                      <span title={e.userAgent}>{device.label}</span>
+                    </TD>
+                  </TR>
+                );
+              })
+            )}
+          </TBody>
+        </Table>
+        <nav className="flex flex-wrap items-center justify-between gap-2 text-sm text-ink-muted" aria-label="Pagination">
+          <span>
+            {filtered.length === 0
+              ? "No results"
+              : `Showing ${formatNumber((page - 1) * PAGE_SIZE + 1)}–${formatNumber((page - 1) * PAGE_SIZE + visible.length)} of ${formatNumber(filtered.length)}`}
+          </span>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              {page > 1 ? (
+                <ButtonLink
+                  href={`/admin/security${queryString({ ...baseParams, page: page - 1 })}`}
+                  variant="outline"
+                  size="sm"
+                  leftIcon={<Icon.ChevronLeft className="size-4" />}
                 >
-                  <Avatar name={u.name} src={u.avatarUrl} size="xs" />
-                  <span className="truncate">{u.name}</span>
-                  {isAccountLocked(u, now) && <Icon.Lock className="size-3.5 text-danger" aria-label="Locked" />}
-                </Link>
-              ))}
+                  Newer
+                </ButtonLink>
+              ) : null}
+              <span className="tabular-nums">
+                Page {page} of {pageCount}
+              </span>
+              {page < pageCount ? (
+                <ButtonLink
+                  href={`/admin/security${queryString({ ...baseParams, page: page + 1 })}`}
+                  variant="outline"
+                  size="sm"
+                  rightIcon={<Icon.ChevronRight className="size-4" />}
+                >
+                  Older
+                </ButtonLink>
+              ) : null}
             </div>
           )}
-          <Table>
-            <THead>
-              <tr>
-                <TH>When</TH>
-                <TH>Account</TH>
-                <TH>Outcome</TH>
-                <TH className="hidden md:table-cell">IP address</TH>
-                <TH className="hidden lg:table-cell">Device</TH>
-              </tr>
-            </THead>
-            <TBody>
-              {visible.length === 0 ? (
-                <TableEmpty colSpan={5}>
-                  {db.loginEvents.length === 0 ? (
-                    <EmptyState
-                      compact
-                      className="border-0"
-                      icon={<Icon.Shield />}
-                      title="No sign-in activity yet"
-                      description="Every sign-in attempt — successful, failed or blocked — will be listed here with its IP address and device."
-                    />
-                  ) : q ? (
-                    `No sign-in attempts match “${q}”.`
-                  ) : (
-                    "No sign-in attempts match these filters."
-                  )}
-                </TableEmpty>
-              ) : (
-                visible.map((e) => {
-                  const user = e.userId ? usersById.get(e.userId) : undefined;
-                  const info = describeLoginReason(e.reason, e.success);
-                  const device = describeUserAgent(e.userAgent);
-                  return (
-                    <TR key={e.id}>
-                      <TD className="whitespace-nowrap text-ink-muted">
-                        <time dateTime={e.createdAt} title={formatDateTime(e.createdAt)}>
-                          {relativeTime(e.createdAt)}
-                        </time>
-                      </TD>
-                      <TD>
-                        {user ? (
-                          <Link href={`/admin/security${queryString({ ...baseParams, user: user.id, page: undefined })}`} className="block min-w-0 hover:underline">
-                            <span className="block truncate font-medium">{user.name}</span>
-                            <span className="block truncate text-xs text-ink-muted">{e.email}</span>
-                          </Link>
-                        ) : (
-                          <span className="block min-w-0">
-                            <span className="block truncate text-ink-muted">{e.email}</span>
-                            <span className="block text-xs text-ink-faint">No account</span>
-                          </span>
-                        )}
-                        <span className="mt-1 block font-mono text-xs text-ink-faint md:hidden">{e.ip ?? "—"}</span>
-                      </TD>
-                      <TD>
-                        <Badge tone={TONE_TO_BADGE[info.tone] ?? "neutral"} dot className="whitespace-normal">
-                          {info.label}
-                        </Badge>
-                      </TD>
-                      <TD className="hidden whitespace-nowrap font-mono text-xs text-ink-muted md:table-cell">
-                        {e.ip ? (
-                          <Link href={`/admin/security${queryString({ ...baseParams, q: e.ip, page: undefined })}`} className="hover:text-ink hover:underline" title="Show attempts from this IP">
-                            {e.ip}
-                          </Link>
-                        ) : (
-                          "—"
-                        )}
-                      </TD>
-                      <TD className="hidden text-ink-muted lg:table-cell">
-                        <span title={e.userAgent}>{device.label}</span>
-                      </TD>
-                    </TR>
-                  );
-                })
-              )}
-            </TBody>
-          </Table>
-          <nav className="flex flex-wrap items-center justify-between gap-2 text-sm text-ink-muted" aria-label="Pagination">
-            <span>
-              {filtered.length === 0
-                ? "No results"
-                : `Showing ${formatNumber((page - 1) * PAGE_SIZE + 1)}–${formatNumber((page - 1) * PAGE_SIZE + visible.length)} of ${formatNumber(filtered.length)}`}
-            </span>
-            {pageCount > 1 && (
-              <div className="flex items-center gap-2">
-                {page > 1 ? (
-                  <ButtonLink href={`/admin/security${queryString({ ...baseParams, page: page - 1 })}`} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4" />}>
-                    Newer
-                  </ButtonLink>
-                ) : null}
-                <span className="tabular-nums">
-                  Page {page} of {pageCount}
-                </span>
-                {page < pageCount ? (
-                  <ButtonLink href={`/admin/security${queryString({ ...baseParams, page: page + 1 })}`} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4" />}>
-                    Older
-                  </ButtonLink>
-                ) : null}
-              </div>
-            )}
-          </nav>
+        </nav>
       </div>
     </div>
   );

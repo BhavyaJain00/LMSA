@@ -103,9 +103,7 @@ export function findRecoveryCodeIndex(hashes: readonly string[] | undefined, inp
 export type SecondFactorMethod = "totp" | "recovery";
 
 export type SecondFactorResult =
-  | { ok: true; method: "totp"; step: number }
-  | { ok: true; method: "recovery"; remaining: number }
-  | { ok: false; reason: "invalid_code" | "not_enabled" | "unreadable_secret" };
+  { ok: true; method: "totp"; step: number } | { ok: true; method: "recovery"; remaining: number } | { ok: false; reason: "invalid_code" | "not_enabled" | "unreadable_secret" };
 
 export interface SecondFactorInput {
   method: SecondFactorMethod;

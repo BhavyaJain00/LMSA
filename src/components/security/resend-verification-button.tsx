@@ -7,7 +7,15 @@ import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 
 /** Sends a fresh verification link (rate-limited on the server). */
-export function ResendVerificationButton({ variant = "outline", size = "sm", label = "Resend confirmation email" }: { variant?: ButtonVariant; size?: ButtonSize; label?: string }) {
+export function ResendVerificationButton({
+  variant = "outline",
+  size = "sm",
+  label = "Resend confirmation email",
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  label?: string;
+}) {
   const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [sent, setSent] = useState(false);

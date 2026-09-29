@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState, type DragEvent } from "react";
 import { cn, formatBytes } from "@/lib/utils";
+import { useMediaSource } from "@/components/player/use-media-source";
 import { Icon } from "./icons";
 
 export interface FileUploadProps {
@@ -123,7 +124,7 @@ export function FileUpload({ name, value, onChange, kind = "auto", accept, label
               // eslint-disable-next-line @next/next/no-img-element
               <img src={value} alt="" className="mx-auto max-h-48 object-contain" />
             ) : (
-              <video src={value} className="mx-auto max-h-48" controls={false} muted playsInline preload="metadata" />
+              <VideoPreview src={value} />
             )}
           </div>
         ) : null}
@@ -168,4 +169,21 @@ export function FileUpload({ name, value, onChange, kind = "auto", accept, label
       {error ? <p className="text-xs text-danger">{error}</p> : hint ? <p className="text-xs text-ink-muted">{hint}</p> : null}
     </div>
   );
+}
+
+/**
+ * Preview of an uploaded video. Protected uploads under /uploads/videos/ need
+ * a signed, expiring URL, so the src is resolved through useMediaSource.
+ */
+function VideoPreview({ src }: { src: string }) {
+  const media = useMediaSource(src);
+  if (!media.url) {
+    return (
+      <div className="flex h-32 items-center justify-center gap-2 text-sm text-white/70">
+        {media.status === "resolving" ? <Icon.Loader className="size-4 animate-spin" /> : <Icon.Video className="size-4" />}
+        <span>{media.status === "resolving" ? "Loading preview…" : (media.message ?? "Preview unavailable")}</span>
+      </div>
+    );
+  }
+  return <video src={media.url} className="mx-auto max-h-48" controls={false} muted playsInline preload="metadata" />;
 }

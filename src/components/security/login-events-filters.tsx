@@ -63,7 +63,12 @@ export function LoginEventsFilters({ values, reasons, userId }: { values: LoginE
           { value: "failure", label: "Failed or blocked" },
         ]}
       />
-      <Select aria-label="Filter by reason" value={values.reason} onChange={(e) => apply({ reason: e.target.value })} options={[{ value: "all", label: "Any reason" }, ...reasons]} />
+      <Select
+        aria-label="Filter by reason"
+        value={values.reason}
+        onChange={(e) => apply({ reason: e.target.value })}
+        options={[{ value: "all", label: "Any reason" }, ...reasons]}
+      />
       <Select
         aria-label="Time period"
         value={values.period}

@@ -16,6 +16,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
 import { hasRole, isEvaluator, isModerator, toPublicUser } from "@/lib/auth/session";
 import { getNextLesson, lessonHref } from "@/lib/data/courses";
+import { sendNotificationEmails } from "@/lib/services/notifications";
 import type {
   AdminBatchRow,
   AnnouncementView,
@@ -1035,11 +1036,11 @@ export async function ensureBatchReminders(userId: string, now: number = Date.no
   const sent = sentReminderKeys(db, userId);
   if (!collectDueReminders(db, userId, now).some((r) => !sent.has(r.key))) return 0;
 
-  return mutate((d) => {
+  const created = await mutate((d) => {
     // Re-check inside the serialized write so concurrent page loads cannot double-send.
     const already = sentReminderKeys(d, userId);
     const stamp = new Date(now).toISOString();
-    let created = 0;
+    const rows: Notification[] = [];
     for (const r of collectDueReminders(d, userId, now)) {
       if (already.has(r.key)) continue;
       already.add(r.key);
@@ -1055,8 +1056,11 @@ export async function ensureBatchReminders(userId: string, now: number = Date.no
         createdAt: stamp,
       };
       d.notifications.push(n);
-      created++;
+      rows.push(n);
     }
-    return created;
+    return rows;
   });
+  // Email copies (Settings → Email and each member's preferences decide); never throws.
+  if (created.length) await sendNotificationEmails(created);
+  return created.length;
 }

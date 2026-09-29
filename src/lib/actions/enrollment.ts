@@ -9,6 +9,7 @@ import { canManageCourse, getCourseBySlug, getEnrollment, getNextLesson, lessonH
 import { getUserCourseCertificate } from "@/lib/data/catalog";
 import { enrollUserInCourse, unenrollUserFromCourse } from "@/lib/services/enrollment";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
+import { verificationError } from "@/lib/auth/verification";
 import { issueCertificate } from "@/lib/services/progress";
 import { setFlash } from "@/lib/flash";
 import { fd } from "@/lib/utils";
@@ -80,6 +81,10 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
     };
   }
 
+  // Members who must confirm their email can't enroll until they do (Settings → Security).
+  const blocked = await verificationError(user);
+  if (blocked) return { ok: false, error: blocked };
+
   // Prerequisite courses must be completed first (course managers and learners who already paid are exempt).
   if (!manager) {
     const gate = await assertPrerequisitesMet(user.id, course.id);
@@ -93,7 +98,8 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
     paymentId = payment.id;
   }
 
-  await enrollUserInCourse(user.id, course.id, { memberType: manager ? "staff" : "student", paymentId });
+  // Paid enrollments already got a receipt; free self-enrollment gets a confirmation email.
+  await enrollUserInCourse(user.id, course.id, { memberType: manager ? "staff" : "student", paymentId, confirmationEmail: !paymentId });
   revalidateCourse(course.slug);
 
   const next = await getNextLesson(course, user);

@@ -235,7 +235,7 @@ export function ehloName(hostname: string | undefined): string {
 }
 
 function validEnvelopeAddress(address: string): boolean {
-  // eslint-disable-next-line no-control-regex
+   
   return address.length > 0 && address.length <= 254 && !/[\s<>\u0000-\u001f\u007f]/.test(address) && address.includes("@");
 }
 
@@ -513,7 +513,7 @@ export class SmtpConnection {
 
   /** Send one command line and return the reply, whatever its code. */
   private async exchange(line: string, phase: SmtpPhase, opts: { timeoutMs?: number; redacted?: string } = {}): Promise<SmtpReply> {
-    // eslint-disable-next-line no-control-regex
+     
     if (/[\r\n\u0000]/.test(line)) throw new SmtpError("Refusing to send a command containing line breaks.", { phase, transient: false, scope: "message" });
     this.write(line, opts.redacted);
     return this.readReply(opts.timeoutMs ?? this.opts.commandTimeoutMs, phase);

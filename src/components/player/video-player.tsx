@@ -639,7 +639,7 @@ export function VideoPlayer({
 
   /* ------------------------------ seek previews ------------------------------ */
   const thumbs = useSeekThumbnails({ src: media.url, enabled: thumbnailsOn && !docked });
-  const requestThumb = thumbs.request;
+  const { request: requestThumb, attachVideo: attachThumbVideo, active: thumbsActive, crossOrigin: thumbCrossOrigin, videoSrc: thumbVideoSrc, status: thumbStatus, frame: thumbFrame } = thumbs;
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const onHoverTime = useCallback(
     (time: number | null) => {
@@ -649,8 +649,8 @@ export function VideoPlayer({
     [requestThumb],
   );
   const preview =
-    thumbnailsOn && !docked && (thumbs.status === "loading" || thumbs.status === "ready") ? (
-      <ThumbnailPreview frame={thumbs.frame} stale={!!thumbs.frame && hoverTime !== null && thumbs.frame.bucket !== bucketOf(hoverTime)} />
+    thumbnailsOn && !docked && (thumbStatus === "loading" || thumbStatus === "ready") ? (
+      <ThumbnailPreview frame={thumbFrame} stale={!!thumbFrame && hoverTime !== null && thumbFrame.bucket !== bucketOf(hoverTime)} />
     ) : undefined;
 
   /* -------------------------------- render -------------------------------- */
@@ -701,13 +701,14 @@ export function VideoPlayer({
       </video>
 
       {/* Hidden second video that renders seek-bar previews. */}
-      {thumbs.active && (
+      {thumbsActive && (
         <video
-          ref={thumbs.videoRef}
+          ref={attachThumbVideo}
+          crossOrigin={thumbCrossOrigin}
+          src={thumbVideoSrc}
           muted
           playsInline
           preload="metadata"
-          crossOrigin={thumbs.crossOrigin}
           aria-hidden="true"
           tabIndex={-1}
           className="pointer-events-none absolute left-0 top-0 -z-10 size-px opacity-0"

@@ -49,7 +49,7 @@ export interface BuiltMessage {
 /* Character helpers                                                   */
 /* ------------------------------------------------------------------ */
 
-// eslint-disable-next-line no-control-regex
+ 
 const NON_ASCII_OR_CONTROL = /[^\x20-\x7e]/;
 
 export function isPrintableAscii(value: string): boolean {
@@ -63,7 +63,7 @@ export function isPrintableAscii(value: string): boolean {
 export function sanitizeHeaderValue(value: string): string {
   return (
     value
-      // eslint-disable-next-line no-control-regex
+       
       .replace(/[\u0000-\u001f\u007f]+/g, " ")
       .replace(/\s+/g, " ")
       .trim()

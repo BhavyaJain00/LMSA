@@ -12,15 +12,7 @@ import { unlockAccount } from "@/lib/auth/lockout";
 import { issueAuthToken, revokeAuthTokens } from "@/lib/auth/tokens";
 import { sendPasswordResetEmail, sendSecurityNotice } from "@/lib/auth/emails";
 import { markEmailVerified, sendEmailVerification, verificationError } from "@/lib/auth/verification";
-import {
-  consumeSecondFactor,
-  generateRecoveryCodes,
-  hashRecoveryCode,
-  newTotpSecret,
-  openTotpSecret,
-  readSecondFactorInput,
-  sealTotpSecret,
-} from "@/lib/auth/two-factor";
+import { consumeSecondFactor, generateRecoveryCodes, hashRecoveryCode, newTotpSecret, openTotpSecret, readSecondFactorInput, sealTotpSecret } from "@/lib/auth/two-factor";
 import { normalizeTotpInput } from "@/lib/auth/totp";
 import { describeUserAgent } from "@/lib/auth/user-agent";
 import { PASSWORD_MIN_LENGTH_CEILING, PASSWORD_MIN_LENGTH_FLOOR } from "@/lib/auth/password-policy";
@@ -199,7 +191,10 @@ export async function disableTwoFactorAction(_prev: ActionResult | null, formDat
 }
 
 /** Replace the recovery codes (needs a current authenticator code). Returns the new codes once. */
-export async function regenerateRecoveryCodesAction(_prev: ActionResult<{ recoveryCodes: string[] }> | null, formData: FormData): Promise<ActionResult<{ recoveryCodes: string[] }>> {
+export async function regenerateRecoveryCodesAction(
+  _prev: ActionResult<{ recoveryCodes: string[] }> | null,
+  formData: FormData,
+): Promise<ActionResult<{ recoveryCodes: string[] }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
   if (!isTwoFactorActive(user)) return { ok: false, error: "Turn on two-step verification first." };

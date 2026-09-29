@@ -33,7 +33,10 @@ export function ForgotPasswordForm({ defaultEmail }: { defaultEmail?: string }) 
           <Button variant="outline" onClick={() => setEditing(true)} leftIcon={<Icon.Refresh className="size-4" />}>
             Send again
           </Button>
-          <Link href={`/login?email=${encodeURIComponent(state.data.email)}`} className="inline-flex h-9.5 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent hover:underline">
+          <Link
+            href={`/login?email=${encodeURIComponent(state.data.email)}`}
+            className="inline-flex h-9.5 items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-accent hover:underline"
+          >
             <Icon.ArrowLeft className="size-4" />
             Back to log in
           </Link>

@@ -7,17 +7,7 @@ import { cn } from "@/lib/utils";
  * Always dark-on-white with a 4-module quiet zone so scanners read it in dark
  * mode too.
  */
-export function QrCode({
-  value,
-  title,
-  errorCorrection = "M",
-  className,
-}: {
-  value: string;
-  title: string;
-  errorCorrection?: QrErrorCorrection;
-  className?: string;
-}) {
+export function QrCode({ value, title, errorCorrection = "M", className }: { value: string; title: string; errorCorrection?: QrErrorCorrection; className?: string }) {
   const qr = encodeQr(value, { errorCorrection });
   const margin = 4;
   const dim = qr.size + margin * 2;

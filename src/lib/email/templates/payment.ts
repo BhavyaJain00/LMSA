@@ -49,7 +49,7 @@ export function paymentReceiptEmail(brand: EmailBrand, data: PaymentReceiptData)
     { type: "details", title: "Payment details", rows: meta },
     { type: "button", label: data.itemLabel === "Certificate" ? "View your certificate" : `Go to your ${data.itemLabel.toLowerCase()}`, url: data.accessUrl },
   ];
-  if (data.invoiceUrl) blocks.push({ type: "muted", text: `Need an invoice for your records? Open the order page: ${data.invoiceUrl}` });
+  if (data.invoiceUrl) blocks.push({ type: "muted", text: `Need an invoice for your records? Open it here: ${data.invoiceUrl}` });
   blocks.push({ type: "muted", text: "Keep this email as your receipt." });
   return renderEmail(brand, subject, {
     preheader: `${data.total} paid for ${data.itemTitle}.`,

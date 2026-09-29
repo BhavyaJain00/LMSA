@@ -33,7 +33,7 @@ export function escapeMultiline(value: string): string {
 
 /** Browsers ignore ASCII whitespace and control characters inside a URL scheme ("java\tscript:"). */
 function compactUrl(url: string): string {
-  // eslint-disable-next-line no-control-regex
+   
   return url.replace(/[\u0000- \u007f-\u009f]/g, "");
 }
 

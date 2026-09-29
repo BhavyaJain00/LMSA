@@ -20,13 +20,17 @@ export async function AccountSecurityBanner({ className }: { className?: string 
 
   if (settings.security.requireEmailVerification && !isEmailVerified(user)) {
     return (
-      <div role="status" className={cn("mb-5 flex flex-col gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between", className)}>
+      <div
+        role="status"
+        className={cn("mb-5 flex flex-col gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between", className)}
+      >
         <div className="flex min-w-0 items-start gap-3">
           <Icon.Mail className="mt-0.5 size-5 shrink-0 text-warning" />
           <div className="min-w-0 text-sm">
             <p className="font-medium text-ink">Confirm your email address</p>
             <p className="text-ink-muted">
-              We sent a link to <span className="font-medium text-ink">{maskEmail(user.email)}</span>. You&apos;ll be able to enroll in courses and make purchases once it&apos;s confirmed.
+              We sent a link to <span className="font-medium text-ink">{maskEmail(user.email)}</span>. You&apos;ll be able to enroll in courses and make purchases once it&apos;s
+              confirmed.
             </p>
           </div>
         </div>
@@ -39,7 +43,10 @@ export async function AccountSecurityBanner({ className }: { className?: string 
 
   if (mustSetUpTwoFactor(user, settings.security)) {
     return (
-      <div role="status" className={cn("mb-5 flex flex-col gap-3 rounded-card border border-accent/30 bg-accent/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between", className)}>
+      <div
+        role="status"
+        className={cn("mb-5 flex flex-col gap-3 rounded-card border border-accent/30 bg-accent/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between", className)}
+      >
         <div className="flex min-w-0 items-start gap-3">
           <Icon.ShieldCheck className="mt-0.5 size-5 shrink-0 text-accent" />
           <div className="min-w-0 text-sm">

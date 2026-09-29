@@ -175,9 +175,7 @@ export function passwordStrength(password: string, minLength = PASSWORD_MIN_LENG
 
   const suggestions: string[] = [];
   const lower = password.toLowerCase();
-  const personal = context
-    .flatMap((c) => c.toLowerCase().split(/[^\p{L}\p{N}]+/u))
-    .filter((w) => w.length >= 3);
+  const personal = context.flatMap((c) => c.toLowerCase().split(/[^\p{L}\p{N}]+/u)).filter((w) => w.length >= 3);
   const hasPersonal = personal.some((w) => lower.includes(w));
   const hasCommon = containsCommonWord(password);
 

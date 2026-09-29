@@ -11,7 +11,19 @@ const TEXT_TONE = ["text-danger", "text-danger", "text-warning", "text-success",
  * Live strength meter + policy checklist for a new password. `context` holds
  * personal words (name, email) that make a password easier to guess.
  */
-export function PasswordStrengthMeter({ password, minLength, context = [], id, className }: { password: string; minLength: number; context?: string[]; id?: string; className?: string }) {
+export function PasswordStrengthMeter({
+  password,
+  minLength,
+  context = [],
+  id,
+  className,
+}: {
+  password: string;
+  minLength: number;
+  context?: string[];
+  id?: string;
+  className?: string;
+}) {
   const strength = passwordStrength(password, minLength, context);
   const requirements = passwordRequirements(password, minLength);
   const filled = password ? Math.max(1, strength.score) : 0;

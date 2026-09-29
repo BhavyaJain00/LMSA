@@ -44,7 +44,12 @@ export function TwoFactorForm({ next, recoveryAvailable }: { next?: string; reco
             <OtpCodeInput id="code" value={code} onChange={setCode} invalid={!!errors.code} autoFocus autoSubmit disabled={pending} label="Authentication code" />
           </Field>
         ) : (
-          <Field label="Recovery code" htmlFor="recoveryCode" error={errors.recoveryCode} hint="Enter one of the codes you saved when you turned on two-step verification. Each code works once.">
+          <Field
+            label="Recovery code"
+            htmlFor="recoveryCode"
+            error={errors.recoveryCode}
+            hint="Enter one of the codes you saved when you turned on two-step verification. Each code works once."
+          >
             <Input
               id="recoveryCode"
               name="recoveryCode"

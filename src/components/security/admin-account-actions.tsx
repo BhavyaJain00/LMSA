@@ -3,13 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/types";
-import {
-  adminMarkEmailVerifiedAction,
-  adminResetTwoFactorAction,
-  adminSendPasswordResetAction,
-  adminSignOutEverywhereAction,
-  unlockAccountAction,
-} from "@/lib/actions/security";
+import { adminMarkEmailVerifiedAction, adminResetTwoFactorAction, adminSendPasswordResetAction, adminSignOutEverywhereAction, unlockAccountAction } from "@/lib/actions/security";
 import { Button, type ButtonVariant } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
@@ -48,7 +42,8 @@ const ACTIONS: Record<ActionKey, ActionSpec> = {
     run: adminResetTwoFactorAction,
     confirm: {
       title: "Reset two-step verification?",
-      description: (name) => `Use this when ${name} lost their authenticator app and recovery codes. Their authenticator and codes stop working, they're signed out everywhere and can set it up again after signing in with their password.`,
+      description: (name) =>
+        `Use this when ${name} lost their authenticator app and recovery codes. Their authenticator and codes stop working, they're signed out everywhere and can set it up again after signing in with their password.`,
       confirmLabel: "Reset",
       destructive: true,
     },

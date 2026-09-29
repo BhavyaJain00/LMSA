@@ -152,7 +152,8 @@ export function useMediaSource(src: string, lessonId?: string): MediaSourceState
   useEffect(() => {
     if (!needsInitialSign) return;
     if (resolved && resolved.forSrc === src) return;
-    void sign(src);
+    const timer = window.setTimeout(() => void sign(src), 0);
+    return () => window.clearTimeout(timer);
   }, [needsInitialSign, resolved, src, sign]);
 
   // Refresh shortly before the current token expires.

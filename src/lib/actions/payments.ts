@@ -35,6 +35,8 @@ import {
   testGatewayConnection,
 } from "@/lib/payments/gateway";
 import { parseDecimalAmount } from "@/lib/payments/amounts";
+import { assertPrerequisitesMet } from "@/lib/services/drip";
+import { verificationError } from "@/lib/auth/verification";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { BILLING_SOURCES, GSTIN_RE, PAN_RE, canonicalIndianState, isKnownCountry } from "@/components/commerce/countries";
 import { setFlash } from "@/lib/flash";
@@ -141,6 +143,10 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   if (access.status === "pending") redirect(orderPath(access.payment.orderId));
   if (access.status === "denied") return { ok: false, error: access.message };
 
+  // Members who must confirm their email can't purchase until they do (Settings → Security).
+  const blocked = await verificationError(user);
+  if (blocked) return { ok: false, error: blocked };
+
   const db = await getDb();
   const settings = db.settings;
   const input = readBilling(formData);
@@ -161,6 +167,12 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   const expected = fd(formData, "expectedTotal");
   if (expected !== "" && Number(expected) !== summary.total) {
     return { ok: false, error: "The price changed while you were checking out. Please review the updated order summary and try again." };
+  }
+
+  if (type === "course") {
+    // Course prerequisites (drip area) must be completed before a course checkout is created.
+    const gate = await assertPrerequisitesMet(user.id, item.id);
+    if (!gate.ok) return { ok: false, error: gate.error };
   }
 
   const gateway = settings.commerce.paymentGateway;

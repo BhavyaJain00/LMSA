@@ -1,12 +1,7 @@
 import "server-only";
 import type { User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
-import {
-  enqueueEmail,
-  getEmailBrand,
-  sendEmailVerificationEmail as queueVerificationEmail,
-  sendPasswordResetEmail as queueResetEmail,
-} from "@/lib/email";
+import { enqueueEmail, getEmailBrand, sendEmailVerificationEmail as queueVerificationEmail, sendPasswordResetEmail as queueResetEmail } from "@/lib/email";
 import { renderEmail, type EmailBlock } from "@/lib/email/templates";
 import { AUTH_TOKEN_TTL_MS } from "./tokens";
 

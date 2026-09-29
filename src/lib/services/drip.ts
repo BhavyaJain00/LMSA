@@ -2,6 +2,7 @@ import "server-only";
 import type { Chapter, Course, Database, Lesson, Notification, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
+import { sendNotificationEmails } from "@/lib/services/notifications";
 import { canManageCourse, flattenOutline, getCourseOutline, getViewerCourseState, lessonHref } from "@/lib/data/courses";
 import {
   DAY_MS,
@@ -223,7 +224,8 @@ function sentDripKeys(db: Database, userId: string): Set<string> {
  * load (the lesson player does, through `getLearnContext`). It is idempotent:
  * every chapter/lesson is announced at most once per learner, keyed by
  * `Notification.dedupeKey = "drip:<id>"`, and it only writes when something is
- * due. Never throws; returns the number of notifications created.
+ * due. New notifications are also emailed when email is enabled. Never
+ * throws; returns the number of notifications created.
  */
 export async function ensureDripNotifications(userId: string, now: number = Date.now()): Promise<number> {
   if (!userId) return 0;
@@ -233,11 +235,11 @@ export async function ensureDripNotifications(userId: string, now: number = Date
     const sent = sentDripKeys(db, userId);
     if (!collectDueDripNotices(db, userId, now).some((n) => !sent.has(n.key))) return 0;
 
-    return await mutate((d) => {
+    const created = await mutate((d) => {
       // Re-check inside the serialized write so concurrent page loads cannot double-send.
       const already = sentDripKeys(d, userId);
       const stamp = new Date(now).toISOString();
-      let created = 0;
+      const rows: Notification[] = [];
       for (const notice of collectDueDripNotices(d, userId, now)) {
         if (already.has(notice.key)) continue;
         already.add(notice.key);
@@ -253,10 +255,13 @@ export async function ensureDripNotifications(userId: string, now: number = Date
           createdAt: stamp,
         };
         d.notifications.push(n);
-        created++;
+        rows.push(n);
       }
-      return created;
+      return rows;
     });
+    // Email copies follow Settings → Email and the learner's preferences (never throws).
+    if (created.length) await sendNotificationEmails(created);
+    return created.length;
   } catch (err) {
     console.error("[drip] could not create unlock notifications", err instanceof Error ? err.message : err);
     return 0;

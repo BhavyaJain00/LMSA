@@ -6,15 +6,19 @@ import { notify, notifyMany } from "./notifications";
 import { evaluateBadges } from "./badges";
 import { logActivity } from "./activity";
 import { computeProgramProgress } from "@/lib/data/programs";
+import { sendBatchConfirmationEmail, sendCourseEnrollmentEmail } from "@/lib/email";
 
 /**
  * Enroll a user in a course (idempotent). Handles the side effects every
  * enrollment path shares: notification to instructors, badge rules, activity.
+ * Self-enrollment paths pass `confirmationEmail: true` to email the learner a
+ * confirmation (paid orders get a receipt instead; admins adding a learner
+ * send an in-app notification that is emailed on its own).
  */
 export async function enrollUserInCourse(
   userId: string,
   courseId: string,
-  opts: { paymentId?: string; batchId?: string; memberType?: MemberType; notifyInstructors?: boolean } = {},
+  opts: { paymentId?: string; batchId?: string; memberType?: MemberType; notifyInstructors?: boolean; confirmationEmail?: boolean } = {},
 ): Promise<Enrollment> {
   const db = await getDb();
   const existing = db.enrollments.find((e) => e.userId === userId && e.courseId === courseId);
@@ -62,6 +66,13 @@ export async function enrollUserInCourse(
     });
   }
   if (enrollment.memberType === "student") await evaluateBadges(userId, "course_enrolled");
+  if (opts.confirmationEmail) {
+    try {
+      await sendCourseEnrollmentEmail(userId, courseId);
+    } catch (error) {
+      console.error("[email] could not queue the enrollment confirmation:", error instanceof Error ? error.message : String(error));
+    }
+  }
   return enrollment;
 }
 
@@ -106,6 +117,12 @@ export async function enrollUserInBatch(userId: string, batchId: string, opts: {
       link: `/admin/batches/${batch.id}`,
       fromUserId: userId,
     });
+  }
+  // The notification above normally carries the confirmation email; this is an idempotent safety net.
+  try {
+    await sendBatchConfirmationEmail(batchId, userId);
+  } catch (error) {
+    console.error("[email] could not queue the batch confirmation:", error instanceof Error ? error.message : String(error));
   }
   await logActivity(userId, "enroll", batchId);
   return { ok: true };

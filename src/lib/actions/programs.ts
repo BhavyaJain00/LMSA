@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ActionResult, Database, Program, User } from "@/lib/types";
+import type { ActionResult, Course, Database, Program, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { canCreateProgram, canManageProgram, computeProgramProgress, programCourseAccess } from "@/lib/data/programs";
-import { getNextLesson, lessonHref } from "@/lib/data/courses";
+import { canManageCourse, getNextLesson, lessonHref } from "@/lib/data/courses";
+import { assertPrerequisitesMet } from "@/lib/services/drip";
+import { verificationError } from "@/lib/auth/verification";
 import { enrollUserInCourse } from "@/lib/services/enrollment";
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
@@ -60,12 +62,29 @@ async function enrollMemberInCourses(program: Program, userId: string, opts: { s
       if (!course) continue;
       const access = programCourseAccess(db, opts.self, course);
       if (!access.ok) continue;
+      // Program membership doesn't waive course prerequisites; the course can be started once they're done.
+      if (!(await prerequisitesAllowStart(db, opts.self, course))) continue;
       await enrollUserInCourse(userId, courseId, { notifyInstructors: false, paymentId: access.paymentId });
     } else {
       await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
     }
   }
   await mutate((d) => refreshMemberProgress(d, program.id));
+}
+
+/**
+ * Course prerequisites still apply inside a program for learners starting a
+ * course themselves (already enrolled learners and course managers are exempt).
+ */
+async function prerequisitesAllowStart(db: Database, user: User, course: Course): Promise<boolean> {
+  return (await prerequisiteError(db, user, course)) === null;
+}
+
+async function prerequisiteError(db: Database, user: User, course: Course): Promise<string | null> {
+  if (db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) return null;
+  if (canManageCourse(user, course)) return null;
+  const gate = await assertPrerequisitesMet(user.id, course.id);
+  return gate.ok ? null : gate.error;
 }
 
 function parseProgramForm(formData: FormData, db: Database, existing: Program | null) {
@@ -279,6 +298,9 @@ export async function enrollInProgramAction(_prev: ActionResult | null, formData
   if (!program.courseIds.length) return { ok: false, error: "This program has no courses yet." };
   const existing = db.programMembers.some((m) => m.programId === program.id && m.userId === user.id);
   if (!existing) {
+    // Members who must confirm their email can't enroll until they do (Settings → Security).
+    const blocked = await verificationError(user);
+    if (blocked) return { ok: false, error: blocked };
     await mutate((d) => {
       if (!d.programMembers.some((m) => m.programId === program.id && m.userId === user.id)) {
         d.programMembers.push({ id: uid("pm"), programId: program.id, userId: user.id, progress: 0, joinedAt: new Date().toISOString() });
@@ -319,7 +341,13 @@ export async function startProgramCourseAction(_prev: ActionResult | null, formD
     if (access.reason === "payment") redirect(`/billing/course/${course.id}`);
     return { ok: false, error: "This course is not available yet." };
   }
-  await enrollUserInCourse(user.id, course.id, { notifyInstructors: true, paymentId: access.paymentId });
+  if (!db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) {
+    const blocked = await verificationError(user);
+    if (blocked) return { ok: false, error: blocked };
+  }
+  const prerequisiteBlock = await prerequisiteError(db, user, course);
+  if (prerequisiteBlock) return { ok: false, error: prerequisiteBlock };
+  await enrollUserInCourse(user.id, course.id, { notifyInstructors: true, paymentId: access.paymentId, confirmationEmail: !access.paymentId });
   await mutate((d) => refreshMemberProgress(d, program.id));
   revalidateProgram(program);
   revalidatePath(`/courses/${course.slug}`);

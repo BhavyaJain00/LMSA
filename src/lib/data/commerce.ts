@@ -4,6 +4,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
 import { notifyMany } from "@/lib/services/notifications";
+import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { formatPrice, shortCode, toDateKey, uid } from "@/lib/utils";
 
 /**
@@ -140,25 +141,6 @@ export type BillingAccess =
   | { status: "denied"; message: string; backHref: string; backLabel: string };
 
 /**
- * Published prerequisite courses (Course.prerequisiteCourseIds) the user has
- * not completed yet. Deleted or unpublished prerequisites are ignored so a
- * course can never become impossible to buy.
- */
-export function missingPrerequisites(db: Database, userId: string, course: Course): Course[] {
-  const ids = course.prerequisiteCourseIds ?? [];
-  if (!ids.length) return [];
-  const missing: Course[] = [];
-  for (const id of ids) {
-    if (id === course.id) continue;
-    const prereq = db.courses.find((c) => c.id === id);
-    if (!prereq || !prereq.published) continue;
-    const done = db.enrollments.some((e) => e.userId === userId && e.courseId === id && !!e.completedAt);
-    if (!done) missing.push(prereq);
-  }
-  return missing;
-}
-
-/**
  * Mirrors Frappe's validate_billing_access + order summary preconditions:
  * item exists and is published, the viewer is not already enrolled, batch
  * seats and start date, certificate not already purchased.
@@ -181,17 +163,16 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     if (course.disableSelfLearning && !hasRole(user, "moderator", "course_creator", "batch_evaluator")) {
       return { status: "denied", message: "This course is only available through a batch. Please contact the Administrator.", ...back };
     }
-    if (!manager) {
-      const missing = missingPrerequisites(db, user.id, course);
-      if (missing.length) {
-        const names = missing.map((c) => `“${c.title}”`).join(", ");
-        return {
-          status: "denied",
-          message: `Complete ${missing.length === 1 ? "the prerequisite course" : "the prerequisite courses"} ${names} before buying this course.`,
-          backHref: `/courses/${missing[0]!.slug}`,
-          backLabel: missing.length === 1 ? "Go to the prerequisite" : "Go to the first prerequisite",
-        };
-      }
+    // Shared prerequisite rule (drip area): paid checkout is blocked until every prerequisite is completed.
+    const gate = await assertPrerequisitesMet(user.id, course.id);
+    if (!gate.ok) {
+      const first = gate.missing[0];
+      return {
+        status: "denied",
+        message: gate.error,
+        backHref: first ? `/courses/${first.slug}` : `/courses/${course.slug}`,
+        backLabel: first ? (gate.missing.length === 1 ? "Go to the prerequisite" : "Go to the first prerequisite") : "Checkout Course",
+      };
     }
     if (pending) return { status: "pending", payment: pending };
     return { status: "ok" };

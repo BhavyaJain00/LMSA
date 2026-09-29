@@ -15,6 +15,7 @@ import { enrollUserInBatch, enrollUserInCourse } from "@/lib/services/enrollment
 import { notifyMany } from "@/lib/services/notifications";
 import { awardDiscussionReplyPoints, revokePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
+import { verificationError } from "@/lib/auth/verification";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, isValidUrl, slugify, truncate, stripMarkdown, uid, uniqueSlug } from "@/lib/utils";
 import { clockToMinutes, isClock, isDateKey, isValidTimeZone } from "@/components/batches/tz";
@@ -361,6 +362,9 @@ export async function enrollInBatchAction(_prev: ActionResult | null, formData: 
   if (!acceptsEnrollment(batch)) {
     return { ok: false, error: getBatchStatus(batch) === "completed" ? "This batch has already ended." : "Enrollment for this batch is closed." };
   }
+  // Members who must confirm their email can't enroll until they do (Settings → Security).
+  const blocked = await verificationError(user);
+  if (blocked) return { ok: false, error: blocked };
   let paymentId: string | undefined;
   if (batch.paidBatch && batch.amount > 0) {
     const payment = db.payments.find((p) => p.userId === user.id && p.itemType === "batch" && p.itemId === batch.id && p.status === "paid");

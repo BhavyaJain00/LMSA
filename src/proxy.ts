@@ -11,10 +11,19 @@ import { siteConfig } from "@/lib/config";
  */
 const PROTECTED_PREFIXES = ["/dashboard", "/admin", "/settings", "/billing", "/notifications", "/persona"];
 
+/**
+ * One-click unsubscribe links from emails (`/settings/notifications?unsubscribe=…&u=…&t=…`)
+ * must work without a session: the page verifies the HMAC signature itself.
+ */
+function isSignedUnsubscribeLink(pathname: string, params: URLSearchParams): boolean {
+  return pathname === "/settings/notifications" && params.has("unsubscribe") && params.has("u") && params.has("t");
+}
+
 export function proxy(request: NextRequest) {
-  const { pathname, search } = request.nextUrl;
+  const { pathname, search, searchParams } = request.nextUrl;
   const needsAuth = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!needsAuth) return NextResponse.next();
+  if (isSignedUnsubscribeLink(pathname, searchParams)) return NextResponse.next();
 
   const hasSession = request.cookies.has(siteConfig.sessionCookie);
   if (hasSession) return NextResponse.next();

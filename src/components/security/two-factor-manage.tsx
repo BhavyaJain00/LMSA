@@ -116,7 +116,16 @@ function DisableDialog({ onClose }: { onClose: () => void }) {
           </Field>
         ) : (
           <Field label="Recovery code" htmlFor="disable-recovery" required error={errors.recoveryCode}>
-            <Input id="disable-recovery" name="recoveryCode" autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder="xxxxx-xxxxx" className="font-mono" invalid={!!errors.recoveryCode} />
+            <Input
+              id="disable-recovery"
+              name="recoveryCode"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="xxxxx-xxxxx"
+              className="font-mono"
+              invalid={!!errors.recoveryCode}
+            />
           </Field>
         )}
         <button
