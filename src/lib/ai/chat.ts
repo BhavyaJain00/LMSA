@@ -2,7 +2,7 @@ import "server-only";
 import type { AiCitation, AiConversation, AiMessage, Course, Database } from "@/lib/types";
 import { mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
-import { countQuestionsToday, quotaStatus, type QuotaStatus } from "./quota";
+import { countQuestionsToday, DailyQuestionLedger, quotaStatus, type QuotaStatus } from "./quota";
 import { conversationTitle, MAX_QUESTION_CHARS } from "./prompt";
 import type { RetrievedExcerpt } from "./course-index";
 import type { QuotaView } from "./types";
@@ -39,11 +39,18 @@ export function parseChatRequest(raw: unknown): { ok: true; value: ChatRequest }
   return { ok: true, value: { courseId, conversationId: optionalId(body.conversationId), lessonId: optionalId(body.lessonId), message } };
 }
 
-/** Today's quota for a learner (course managers are not limited). */
+const g = globalThis as unknown as { __llAiQuestionLedger?: DailyQuestionLedger };
+/** Keeps today's count when a learner deletes conversations (see `DailyQuestionLedger`). */
+const ledger: DailyQuestionLedger = (g.__llAiQuestionLedger ??= new DailyQuestionLedger());
+
+/**
+ * Today's quota for a learner (course managers are not limited). The limit is
+ * per learner across all courses.
+ */
 export function learnerQuota(db: Pick<Database, "aiConversations" | "aiMessages" | "settings">, userId: string, exempt: boolean, now: Date = new Date()): QuotaStatus {
   if (exempt) return quotaStatus(0, 0, now);
   const ids = new Set(db.aiConversations.filter((c) => c.userId === userId).map((c) => c.id));
-  return quotaStatus(countQuestionsToday(db.aiMessages, ids, now), db.settings.ai.dailyMessageLimit, now);
+  return quotaStatus(ledger.used(userId, countQuestionsToday(db.aiMessages, ids, now), now), db.settings.ai.dailyMessageLimit, now);
 }
 
 export function toQuotaView(q: QuotaStatus): QuotaView {
@@ -77,7 +84,7 @@ export interface UserTurn {
  */
 export async function saveUserTurn(input: { userId: string; courseId: string; conversationId: string | null; lessonId: string | null; message: string }): Promise<UserTurn | null> {
   const now = new Date().toISOString();
-  return mutate((db) => {
+  const turn = await mutate((db): UserTurn | null => {
     let conversation = input.conversationId ? db.aiConversations.find((c) => c.id === input.conversationId) : undefined;
     if (input.conversationId && (!conversation || conversation.userId !== input.userId || conversation.courseId !== input.courseId)) return null;
     let createdConversation = false;
@@ -100,18 +107,23 @@ export async function saveUserTurn(input: { userId: string; courseId: string; co
     db.aiMessages.push(userMessage);
     return { conversation: { ...conversation }, userMessage, createdConversation };
   });
+  if (turn) ledger.add(input.userId);
+  return turn;
 }
 
 /** Undo a question that got no answer (and its conversation if it was new and is now empty). */
 export async function rollbackUserTurn(turn: UserTurn): Promise<void> {
-  await mutate((db) => {
+  const removed = await mutate((db) => {
     const index = db.aiMessages.findIndex((m) => m.id === turn.userMessage.id);
     if (index !== -1) db.aiMessages.splice(index, 1);
     if (turn.createdConversation && !db.aiMessages.some((m) => m.conversationId === turn.conversation.id)) {
       const c = db.aiConversations.findIndex((x) => x.id === turn.conversation.id);
       if (c !== -1) db.aiConversations.splice(c, 1);
     }
+    return index !== -1;
   });
+  // A question the learner deleted in the meantime stays counted, like any other deleted question.
+  if (removed) ledger.remove(turn.conversation.userId);
 }
 
 /** Store the tutor's answer. */
@@ -128,9 +140,11 @@ export async function saveAssistantTurn(turn: UserTurn, answer: { content: strin
   if (answer.tokensIn) message.tokensIn = answer.tokensIn;
   if (answer.tokensOut) message.tokensOut = answer.tokensOut;
   await mutate((db) => {
-    db.aiMessages.push(message);
+    // The learner may have deleted the conversation while the answer was streaming.
     const conversation = db.aiConversations.find((c) => c.id === turn.conversation.id);
-    if (conversation) conversation.updatedAt = now;
+    if (!conversation) return;
+    db.aiMessages.push(message);
+    conversation.updatedAt = now;
   });
   return message;
 }

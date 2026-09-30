@@ -107,6 +107,8 @@ export function xmlResponse(xml: string, status = 200): Response {
     headers: {
       "Content-Type": "application/xml; charset=utf-8",
       "Cache-Control": "public, max-age=900, s-maxage=900, stale-while-revalidate=3600",
+      // The sitemap is for crawlers to read, not a page to list in search results.
+      "X-Robots-Tag": "noindex",
     },
   });
 }

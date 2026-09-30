@@ -92,7 +92,7 @@ export interface TopicItem {
   replies: ReplyItem[];
 }
 
-export type SidebarTab = "outline" | "notes" | "discussion";
+export type SidebarTab = "outline" | "notes" | "discussion" | "ai";
 
 export interface CourseProgressInfo {
   completed: number;

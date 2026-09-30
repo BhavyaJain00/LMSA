@@ -54,6 +54,7 @@ import { courseTrail } from "@/lib/seo/breadcrumbs";
 import { getCourseJsonLd } from "@/lib/data/seo";
 import { JsonLd } from "@/components/seo/json-ld";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
+import { CourseArticles } from "@/components/marketing/course-articles";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -307,7 +308,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
           )}
 
           <CourseAnnouncements announcements={announcements} />
-          <CourseInstructors instructors={summary.instructors} stats={instructorStats} />
+          <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />
 
           {settings.features.reviews && (
             <section id="reviews" aria-label="Reviews" className="scroll-mt-20">
@@ -325,8 +326,9 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
         </div>
       </div>
 
-      <div className="mt-16">
+      <div className="mt-16 space-y-16">
         <RelatedCourses courses={related.courses} explicit={related.explicit} />
+        {isCoursePublic(course) && <CourseArticles course={course} />}
       </div>
     </div>
   );

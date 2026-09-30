@@ -324,19 +324,41 @@ export function fraudFlags(input: {
   return flags;
 }
 
+/** One commission as listed to administrators (flattened with its order, buyer and affiliate). */
+export interface CommissionRowView {
+  id: string;
+  status: Commission["status"];
+  /** Negative for a refund correction. */
+  amount: number;
+  currency: string;
+  createdAt: string;
+  paidAt?: string;
+  affiliateId: string;
+  affiliateCode: string;
+  affiliateName: string;
+  orderId: string;
+  itemTitle: string;
+  buyerName: string;
+  buyerEmail: string;
+  orderAmount: number;
+  flags: FraudFlag[];
+}
+
 /* ------------------------------------------------------------------ */
 /* Admin list filters (URL search params)                              */
 /* ------------------------------------------------------------------ */
 
-type SearchParamsLike = Record<string, string | string[] | undefined> | URLSearchParams;
+export type SearchParamsLike = Record<string, string | string[] | undefined> | URLSearchParams;
 
-function param(sp: SearchParamsLike, key: string): string {
+/** First value of a query parameter ("" when missing). */
+export function param(sp: SearchParamsLike, key: string): string {
   if (sp instanceof URLSearchParams) return sp.get(key) ?? "";
   const v = sp[key];
   return (Array.isArray(v) ? v[0] : v) ?? "";
 }
 
-function pageParam(sp: SearchParamsLike): number {
+/** 1-based `page` query parameter. */
+export function pageParam(sp: SearchParamsLike): number {
   const page = Number.parseInt(param(sp, "page"), 10);
   return Number.isFinite(page) && page > 0 ? Math.min(page, 10_000) : 1;
 }
@@ -388,6 +410,13 @@ export function parseCommissionFilter(sp: SearchParamsLike): CommissionFilter {
     to: DAY_KEY.test(to) ? to : "",
     page: pageParam(sp),
   };
+}
+
+/** Ids sent by a bulk action: 1 to `max` well-formed ids without duplicates, or null when the input is not that. */
+export function cleanIdList(input: unknown, max: number): string[] | null {
+  if (!Array.isArray(input) || input.length === 0 || input.length > max) return null;
+  const ids = input.filter((v): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v));
+  return ids.length === input.length ? Array.from(new Set(ids)) : null;
 }
 
 /** Slice of `rows` for a 1-based `page` (clamped to the last page). */

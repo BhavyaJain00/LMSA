@@ -32,6 +32,7 @@ const PAID_FOR: { value: PaymentItemType; label: string }[] = [
   { value: "batch", label: "Batch" },
   { value: "certificate", label: "Certificate" },
   { value: "plan", label: "Membership" },
+  { value: "bundle", label: "Bundle" },
 ];
 
 /** Cents to the decimal string used by number inputs. */
@@ -180,7 +181,7 @@ function NewTransactionDialog({
             />
           </Field>
           <Field
-            label={itemType === "batch" ? "Batch" : itemType === "plan" ? "Membership plan" : "Course"}
+            label={itemType === "batch" ? "Batch" : itemType === "plan" ? "Membership plan" : itemType === "bundle" ? "Bundle" : "Course"}
             htmlFor="tx-item"
             error={errors.itemId}
             hint={errors.itemId ? undefined : "What this payment paid for."}
@@ -191,7 +192,7 @@ function NewTransactionDialog({
               name="itemId"
               value={itemId}
               onChange={(e) => chooseItem(e.target.value)}
-              placeholder={options.length ? "Select an item" : itemType === "certificate" ? "No course sells certificates" : itemType === "plan" ? "No membership plans yet" : "Nothing to select"}
+              placeholder={options.length ? "Select an item" : itemType === "certificate" ? "No course sells certificates" : itemType === "plan" ? "No membership plans yet" : itemType === "bundle" ? "No bundles yet" : "Nothing to select"}
               options={options.map((o) => ({ value: o.id, label: o.title }))}
               invalid={!!errors.itemId}
             />

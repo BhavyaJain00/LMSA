@@ -1,6 +1,6 @@
 import "server-only";
 import { getSettings, mutate } from "@/lib/db/store";
-import { INDEXNOW_ENDPOINT, buildIndexNowPayloads, generateIndexNowKey, isPingableOrigin, isValidIndexNowKey } from "./indexnow";
+import { INDEXNOW_ENDPOINT, type IndexNowResult, buildIndexNowPayloads, generateIndexNowKey, isPingableOrigin, isValidIndexNowKey } from "./indexnow";
 import { absoluteUrl, siteOrigin } from "./site";
 
 /**
@@ -15,16 +15,6 @@ import { absoluteUrl, siteOrigin } from "./site";
 
 const RESUBMIT_AFTER_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 10_000;
-
-export interface IndexNowResult {
-  ok: boolean;
-  submitted: number;
-  status?: number;
-  /** Why nothing was sent. */
-  skipped?: "noindex" | "local" | "nothing-new";
-  error?: string;
-  at: string;
-}
 
 interface IndexNowState {
   recent: Map<string, number>;

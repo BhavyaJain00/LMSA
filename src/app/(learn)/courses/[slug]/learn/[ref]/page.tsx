@@ -19,6 +19,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
+import { getLessonAiPanel } from "@/components/ai/lesson-ai-panel";
 import { CompletedBadge, CompletionPanel, type ViewerMode } from "@/components/learn/completion-panel";
 import { DiscussionPanel } from "@/components/learn/discussion-panel";
 import { LessonBlocks } from "@/components/learn/lesson-blocks";
@@ -58,7 +59,7 @@ export async function generateMetadata(props: PageProps<"/courses/[slug]/learn/[
 }
 
 function parseTab(raw: string | string[] | undefined): SidebarTab | null {
-  return raw === "notes" || raw === "discussion" || raw === "outline" ? raw : null;
+  return raw === "notes" || raw === "discussion" || raw === "outline" || raw === "ai" ? raw : null;
 }
 
 function sidebarProgress(ctx: LearnContext) {
@@ -168,15 +169,23 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
   const notesEnabled = settings.features.notes && ctx.enrolled && !!viewer;
   const discussionsEnabled = settings.features.discussions && (ctx.enrolled || ctx.manager) && !!viewer;
   const discussionsClosed = lessonHasQuiz(lesson);
-  const [notes, topics, mentionables] = await Promise.all([
+  const [notes, topics, mentionables, aiPanel] = await Promise.all([
     notesEnabled ? getLessonNotes((viewer as User).id, lesson.id) : Promise.resolve([]),
     discussionsEnabled && !discussionsClosed ? getLessonTopics(lesson.id, course, viewer?.id ?? null) : Promise.resolve([]),
     discussionsEnabled && !discussionsClosed ? getMentionCandidates(course, viewer as User) : Promise.resolve([]),
+    // The "Ask AI" tab: null unless the tutor is set up, on for this course and the viewer is enrolled or manages it.
+    getLessonAiPanel({ course, lesson, viewer }),
   ]);
 
   const requestedTab = parseTab(sp.tab);
   const initialTab: SidebarTab =
-    requestedTab === "notes" && notesEnabled ? "notes" : requestedTab === "discussion" && discussionsEnabled ? "discussion" : "outline";
+    requestedTab === "notes" && notesEnabled
+      ? "notes"
+      : requestedTab === "discussion" && discussionsEnabled
+        ? "discussion"
+        : requestedTab === "ai" && aiPanel
+          ? "ai"
+          : "outline";
   const initialTopicId = typeof sp.topic === "string" ? sp.topic : null;
 
   // Student view is a query flag: keep it on every lesson link so previewing managers stay in it.
@@ -239,6 +248,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
         ) : undefined
       }
       topicCount={topics.length}
+      aiPanel={aiPanel ?? undefined}
     />
   );
 

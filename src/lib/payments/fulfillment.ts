@@ -7,6 +7,10 @@ import { notify, notifyMany, type NotifyInput } from "@/lib/services/notificatio
 import { formatPrice } from "@/lib/utils";
 import { emit } from "@/lib/events";
 import { grantMembership, revokeMembershipIn } from "@/lib/commerce/membership-store";
+import { membershipFor, membershipOrderFor } from "@/lib/commerce/access";
+import { bundleCourses } from "@/lib/commerce/bundles";
+import { isInstallmentOrder, planKeyOf } from "@/lib/commerce/installments";
+import { cancelScheduleIn, ensureInstallmentSchedule, planRowsIn } from "@/lib/commerce/installment-store";
 import { couponOverflow } from "./coupon-rules";
 import { assignInvoiceNumber, isInvoiceable } from "./invoice";
 
@@ -77,10 +81,20 @@ function transactionsLink(search: string): string {
  * question of the membership's own period, see `src/lib/commerce/access.ts`).
  */
 export function hasOrderAccess(
-  db: Pick<Database, "enrollments" | "batchEnrollments" | "subscriptions">,
-  payment: Pick<Payment, "userId" | "itemType" | "itemId" | "subscriptionId">,
+  db: Pick<Database, "enrollments" | "batchEnrollments" | "subscriptions" | "bundles" | "courses" | "payments">,
+  payment: Pick<Payment, "userId" | "itemType" | "itemId" | "subscriptionId" | "orderId" | "installmentNumber" | "installmentsTotal">,
 ): boolean {
-  if (payment.itemType === "course") return db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId);
+  if (payment.itemType === "course") {
+    if (!db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId)) return false;
+    // The first part of a payment plan also owes the buyer the schedule of the remaining parts.
+    return !(isInstallmentOrder(payment) && payment.installmentNumber === 1) || planRowsIn(db, payment).some((p) => p.installmentNumber! > 1);
+  }
+  if (payment.itemType === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === payment.itemId);
+    // A bundle that was deleted has nothing left to grant.
+    if (!bundle) return true;
+    return bundleCourses(bundle, db.courses).every((c) => db.enrollments.some((e) => e.userId === payment.userId && e.courseId === c.id));
+  }
   if (payment.itemType === "plan") return !!payment.subscriptionId && db.subscriptions.some((s) => s.id === payment.subscriptionId);
   if (payment.itemType === "batch") return db.batchEnrollments.some((e) => e.batchId === payment.itemId && e.userId === payment.userId);
   return db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId && e.purchasedCertificate);
@@ -138,11 +152,12 @@ export async function fulfillPayment(
       }
     }
     // Another paid order for the same item (e.g. a cancelled attempt that was paid in another tab).
-    // Membership orders repeat by design (one per renewal), so they are not compared.
+    // Membership orders repeat by design (one per renewal) and so do the parts of a payment plan, so they are not compared.
     const paidTwice =
       row.amount > 0 &&
       row.itemType !== "plan" &&
-      d.payments.some((p) => p.id !== row.id && p.status === "paid" && p.userId === row.userId && p.itemType === row.itemType && p.itemId === row.itemId);
+      !isInstallmentOrder(row) &&
+      d.payments.some((p) => p.id !== row.id && p.status === "paid" && p.userId === row.userId && p.itemType === row.itemType && p.itemId === row.itemId && !isInstallmentOrder(p));
     // Held until access is granted (released in `runGrant`).
     granting.add(row.id);
     return { kind: "claimed" as const, row: { ...row }, overLimit, paidTwice };
@@ -303,11 +318,33 @@ async function grantAccess(payment: Payment): Promise<{ learnerExists: boolean; 
     const course = db.courses.find((c) => c.id === payment.itemId);
     if (!course) return { learnerExists: true, notice: `The course of order ${payment.orderId} no longer exists, so no enrollment was created.` };
     await enrollUserInCourse(user.id, course.id, { paymentId: payment.id });
-    // A course opened through a membership becomes the learner's own once it is bought.
+    // A course opened through a membership, or left locked by an earlier payment plan, becomes the
+    // learner's own once it is bought (later parts of the same plan keep pointing at its first part).
     await mutate((d) => {
       const row = d.enrollments.find((e) => e.userId === user.id && e.courseId === course.id);
       const source = row?.paymentId ? d.payments.find((p) => p.id === row.paymentId) : undefined;
-      if (row && source?.itemType === "plan") row.paymentId = payment.id;
+      if (!row || !source || source.id === payment.id) return;
+      const otherPlan = isInstallmentOrder(source) && !(isInstallmentOrder(payment) && planKeyOf(source) === planKeyOf(payment));
+      if (source.itemType === "plan" || otherPlan) row.paymentId = payment.id;
+    });
+    // Paying the first part of a payment plan schedules the remaining ones.
+    if (isInstallmentOrder(payment) && payment.installmentNumber === 1) await ensureInstallmentSchedule(payment.id);
+    return { learnerExists: true };
+  }
+
+  if (payment.itemType === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === payment.itemId);
+    if (!bundle) return { learnerExists: true, notice: `The bundle of order ${payment.orderId} no longer exists, so no enrollments were created.` };
+    const courses = bundleCourses(bundle, db.courses);
+    if (!courses.length) return { learnerExists: true, notice: `None of the courses of ${bundle.title} exist any more, so order ${payment.orderId} created no enrollments.` };
+    for (const course of courses) await enrollUserInCourse(user.id, course.id, { paymentId: payment.id });
+    // Courses the buyer had only opened through a membership are theirs for good now.
+    const ids = new Set(courses.map((c) => c.id));
+    await mutate((d) => {
+      for (const row of d.enrollments) {
+        if (row.userId !== user.id || !ids.has(row.courseId) || !row.paymentId || row.paymentId === payment.id) continue;
+        if (d.payments.find((p) => p.id === row.paymentId)?.itemType === "plan") row.paymentId = payment.id;
+      }
     });
     return { learnerExists: true };
   }
@@ -608,17 +645,104 @@ function removeCourseEnrollment(d: Database, userId: string, courseId: string): 
 }
 
 /**
+ * What else gives a learner a course once `refunded` no longer does: a full
+ * purchase of the course or a paid bundle that includes it (the enrollment is
+ * re-pointed to that order), or a seat in a batch that includes it (the
+ * enrollment stays without an order). Null when nothing does.
+ */
+function remainingRightIn(d: Database, userId: string, courseId: string, refunded: Pick<Payment, "id">): { paymentId: string | undefined } | null {
+  const paid = d.payments.filter((p) => p.id !== refunded.id && p.status === "paid" && p.userId === userId);
+  const purchase = paid.find((p) => p.itemType === "course" && p.itemId === courseId && !isInstallmentOrder(p));
+  if (purchase) return { paymentId: purchase.id };
+  const bundle = paid.find((p) => p.itemType === "bundle" && d.bundles.some((b) => b.id === p.itemId && b.courseIds.includes(courseId)));
+  if (bundle) return { paymentId: bundle.id };
+  // Joining a batch does not stamp `batchId` on an enrollment that already existed, so a seat in
+  // any batch that includes the course counts.
+  const viaSeat = d.batchEnrollments.some((s) => s.userId === userId && d.batches.some((b) => b.id === s.batchId && b.courseIds.includes(courseId)));
+  return viaSeat ? { paymentId: undefined } : null;
+}
+
+/**
+ * A refunded part of a payment plan ends the plan: the parts still owed are
+ * closed, and the enrollment goes unless the learner has the course another
+ * way. While other parts of the plan are still paid, the enrollment and its
+ * progress are kept but stay locked (the cancelled plan grants no access)
+ * until those are refunded too or the course is bought again.
+ */
+function revokeInstallmentIn(d: Database, payment: Pick<Payment, "id" | "userId" | "itemId" | "orderId" | "installmentNumber">): void {
+  cancelScheduleIn(d, payment, "a payment of this plan was refunded.");
+  const rows = planRowsIn(d, payment);
+  const enrollment = d.enrollments.find((e) => e.userId === payment.userId && e.courseId === payment.itemId);
+  // Opened by an order outside this plan: not this plan's to remove.
+  if (!enrollment || !rows.some((p) => p.id === enrollment.paymentId)) return;
+  const other = remainingRightIn(d, payment.userId, payment.itemId, payment);
+  if (other) {
+    enrollment.paymentId = other.paymentId;
+    return;
+  }
+  if (rows.some((p) => p.id !== payment.id && p.status === "paid" && p.amount > 0)) return;
+  removeCourseEnrollment(d, payment.userId, payment.itemId);
+}
+
+/**
+ * A refunded bundle order: every course it enrolled the buyer in goes, except
+ * where the buyer has the course another way (a separate purchase, another
+ * paid bundle, a batch seat, a running membership) or was enrolled before
+ * buying the bundle.
+ */
+function revokeBundleIn(d: Database, payment: Pick<Payment, "id" | "userId" | "itemId" | "paidAt">): void {
+  const userId = payment.userId;
+  const again = d.payments.find((p) => p.id !== payment.id && p.status === "paid" && p.userId === userId && p.itemType === "bundle" && p.itemId === payment.itemId);
+  const mine = d.enrollments.filter((e) => e.userId === userId && e.paymentId === payment.id);
+  for (const enrollment of mine) {
+    // The same bundle was paid twice: the other order keeps everything.
+    if (again) {
+      enrollment.paymentId = again.id;
+      continue;
+    }
+    const other = remainingRightIn(d, userId, enrollment.courseId, payment);
+    if (other) {
+      enrollment.paymentId = other.paymentId;
+      continue;
+    }
+    // Already enrolled when the bundle was bought (the order was only attached to the row).
+    if (enrollment.enrolledAt < (payment.paidAt ?? "")) {
+      enrollment.paymentId = undefined;
+      continue;
+    }
+    const membership = membershipFor(d, userId, enrollment.courseId);
+    const membershipOrder = membership ? membershipOrderFor(d, membership.subscription) : null;
+    if (membershipOrder) {
+      enrollment.paymentId = membershipOrder.id;
+      continue;
+    }
+    removeCourseEnrollment(d, userId, enrollment.courseId);
+  }
+}
+
+/**
  * Remove the access a refunded order granted (pure; call inside `mutate`).
  * Access that also comes from elsewhere is kept:
  *  - another paid order for the same item (the learner paid twice): the
  *    enrollment, seat or certificate stays and is re-pointed to that order;
  *  - an enrollment or seat created by a different order;
- *  - course access through a batch the learner still belongs to.
+ *  - course access through a paid bundle or a batch the learner still belongs to.
  */
-export function revokeAccessIn(d: Database, payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "paidAt">): void {
+export function revokeAccessIn(
+  d: Database,
+  payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "paidAt" | "orderId" | "installmentNumber" | "installmentsTotal">,
+): void {
   const userId = payment.userId;
   if (payment.itemType === "plan") {
     revokeMembershipIn(d, payment);
+    return;
+  }
+  if (payment.itemType === "bundle") {
+    revokeBundleIn(d, payment);
+    return;
+  }
+  if (isInstallmentOrder(payment)) {
+    revokeInstallmentIn(d, payment);
     return;
   }
   const paidOrderFor = (itemType: Payment["itemType"], itemId: string) =>
@@ -634,12 +758,10 @@ export function revokeAccessIn(d: Database, payment: Pick<Payment, "id" | "userI
     }
     // Created by another purchase (e.g. a batch order): not this order's to remove.
     if (enrollment.paymentId && enrollment.paymentId !== payment.id) return;
-    // Joining a batch does not stamp `batchId` on an enrollment that already existed, so a seat in
-    // any batch that includes the course counts as well.
-    const viaSeat = d.batchEnrollments.some((s) => s.userId === userId && d.batches.some((b) => b.id === s.batchId && b.courseIds.includes(payment.itemId)));
-    if (enrollment.batchId || viaSeat) {
-      // Access also comes from a batch: keep it, just detach the refunded payment.
-      enrollment.paymentId = undefined;
+    const right = remainingRightIn(d, userId, payment.itemId, payment);
+    if (enrollment.batchId || right) {
+      // Access also comes from a bundle or a batch: keep it, just move it off the refunded payment.
+      enrollment.paymentId = right?.paymentId;
       return;
     }
     removeCourseEnrollment(d, userId, payment.itemId);

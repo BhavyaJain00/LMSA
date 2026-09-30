@@ -11,7 +11,8 @@ import { API_AUTH_FAILURE_LIMIT, API_AUTH_FAILURE_SHARED_LIMIT, apiAuthFailures 
  *
  * Fails closed with the error envelope: missing header → 401 unauthorized,
  * unknown or malformed key → 401 invalid_api_key, revoked key → 401
- * revoked_api_key. Failed attempts are rate limited per client IP (so keys
+ * revoked_api_key; a key whose creator is no longer an enabled admin → 401
+ * invalid_api_key. Failed attempts are rate limited per client IP (so keys
  * can't be guessed at speed); once over the limit even correct keys from
  * that IP wait for `Retry-After`.
  */
@@ -33,7 +34,17 @@ export function authenticateApiKey(db: Database, authorization: string | null, c
     throw new ApiError(401, "unauthorized", "Send your API key in the Authorization header: `Authorization: Bearer ll_live_…`.", null, CHALLENGE);
   }
   const match = matchApiKey(db.apiKeys, token);
-  if (match.status === "valid") return match.key;
+  if (match.status === "valid") {
+    if (isKeyOwnerActive(db, match.key)) return match.key;
+    apiAuthFailures.hit(limit.key, limit.rule, now);
+    throw new ApiError(
+      401,
+      "invalid_api_key",
+      "This API key was created by a member who is no longer an active administrator, so it no longer works. An administrator can create a new key.",
+      null,
+      { "WWW-Authenticate": 'Bearer realm="api", error="invalid_token"' },
+    );
+  }
 
   apiAuthFailures.hit(limit.key, limit.rule, now);
   if (match.status === "revoked") {
@@ -44,6 +55,16 @@ export function authenticateApiKey(db: Database, authorization: string | null, c
   throw new ApiError(401, "invalid_api_key", "The API key is not valid. Check that you copied the whole key.", null, {
     "WWW-Authenticate": 'Bearer realm="api", error="invalid_token"',
   });
+}
+
+/**
+ * Keys act with the authority of the administrator who created them, so a
+ * key stops working when that member is deleted, disabled or loses the
+ * admin role (fail closed; the key starts working again if they regain it).
+ */
+export function isKeyOwnerActive(db: Pick<Database, "users">, key: Pick<ApiKey, "createdById">): boolean {
+  const owner = db.users.find((u) => u.id === key.createdById);
+  return !!owner && owner.enabled && owner.roles.includes("admin");
 }
 
 /** Whether `lastUsedAt` is stale enough to be written again. */

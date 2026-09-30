@@ -37,12 +37,15 @@ export interface LessonSidebarProps {
   noteCount?: number;
   discussionPanel?: ReactNode;
   topicCount?: number;
+  /** "Ask AI" chat (round 3); the tab is shown only when the tutor is available to the viewer. */
+  aiPanel?: ReactNode;
 }
 
 /**
- * Right-hand sidebar of the lesson player: outline, notes and discussion tabs.
- * On desktop it is a sticky column; below 1024px it becomes a bottom sheet
- * opened from the floating "Chapters" button.
+ * Right-hand sidebar of the lesson player: outline, notes, discussion and
+ * "Ask AI" tabs. On desktop it is a sticky column; below 1024px it becomes a
+ * bottom sheet opened from the floating "Chapters" button (or the "Ask AI"
+ * button above it).
  */
 export function LessonSidebar({
   courseTitle,
@@ -55,6 +58,7 @@ export function LessonSidebar({
   noteCount,
   discussionPanel,
   topicCount,
+  aiPanel,
 }: LessonSidebarProps) {
   const rt = useOptionalLessonRuntime();
   const [localTab, setLocalTab] = useState<SidebarTab>("outline");
@@ -74,7 +78,10 @@ export function LessonSidebar({
   ];
   if (notesPanel) tabs.push({ value: "notes", label: "Notes", count: noteCount, icon: <Icon.Note className="size-4" /> });
   if (discussionPanel) tabs.push({ value: "discussion", label: "Discussion", count: topicCount, icon: <Icon.MessageSquare className="size-4" /> });
+  if (aiPanel) tabs.push({ value: "ai", label: "Ask AI", icon: <Icon.Sparkles className="size-4" /> });
   const tab: SidebarTab = tabs.some((t) => t.value === rawTab) ? rawTab : "outline";
+  // Four labels with icons don't fit the narrowest sidebar (320px), so the icons go first.
+  const showTabIcons = tabs.length <= 3;
 
   const sheetMode = !isDesktop;
   const hiddenSheet = sheetMode && !open;
@@ -202,7 +209,7 @@ export function LessonSidebar({
         )}
 
         {tabs.length > 1 && (
-          <div role="tablist" aria-label="Sidebar sections" className="flex shrink-0 gap-1 border-b border-border px-2">
+          <div role="tablist" aria-label="Sidebar sections" className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2">
             {tabs.map((t) => {
               const active = t.value === tab;
               return (
@@ -225,11 +232,12 @@ export function LessonSidebar({
                     document.getElementById(`sidebar-tab-${nextTab.value}`)?.focus();
                   }}
                   className={cn(
-                    "-mb-px inline-flex flex-1 items-center justify-center gap-1.5 border-b-2 px-2 py-2.5 text-sm font-medium transition-colors",
+                    "-mb-px inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 py-2.5 text-sm font-medium transition-colors",
+                    showTabIcons ? "px-2" : "px-1.5",
                     active ? "border-accent text-ink" : "border-transparent text-ink-muted hover:text-ink",
                   )}
                 >
-                  {t.icon}
+                  {showTabIcons && t.icon}
                   {t.label}
                   {t.count !== undefined && t.count > 0 && (
                     <span className={cn("rounded-full px-1.5 text-[11px] tabular-nums", active ? "bg-accent/15 text-accent" : "bg-surface-3 text-ink-muted")}>{t.count}</span>
@@ -259,8 +267,34 @@ export function LessonSidebar({
               {discussionPanel}
             </div>
           )}
+          {aiPanel && (
+            <div id="sidebar-panel-ai" role="tabpanel" aria-labelledby="sidebar-tab-ai" hidden={tab !== "ai"} className="h-full">
+              {aiPanel}
+            </div>
+          )}
         </div>
       </aside>
+
+      {/* Shortcut to the AI tutor on small screens, stacked above the "Chapters" button */}
+      {aiPanel && (
+        <button
+          type="button"
+          onClick={() => {
+            setTab("ai");
+            setOpen(true);
+          }}
+          aria-controls="lesson-sidebar"
+          aria-expanded={open}
+          aria-label="Ask AI"
+          title="Ask AI"
+          className={cn(
+            "fixed bottom-17 right-4 z-30 inline-flex size-11 items-center justify-center rounded-full border border-border-strong bg-surface-1 text-accent shadow-pop transition-colors hover:bg-surface-2 lg:hidden",
+            open && "hidden",
+          )}
+        >
+          <Icon.Sparkles className="size-5" />
+        </button>
+      )}
 
       {/* Floating button that opens the sheet on small screens */}
       <button

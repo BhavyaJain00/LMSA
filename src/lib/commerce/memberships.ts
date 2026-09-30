@@ -1,5 +1,5 @@
 import "server-only";
-import type { MembershipPlan, Payment, Subscription } from "@/lib/types";
+import type { MembershipPlan, Payment } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { razorpayEnv } from "@/lib/server-env";
 import { shortCode, uid } from "@/lib/utils";
@@ -24,6 +24,7 @@ import {
   fetchRazorpayPayment,
   fetchRazorpaySubscription,
   isRazorpayConfigured,
+  isRazorpayPaymentReversed,
   isRazorpayPlanId,
   listRazorpaySubscriptionInvoices,
   type RazorpayPayment,
@@ -448,6 +449,12 @@ export async function settleRazorpayMembershipOrder(
     if (first?.paymentId) charge = await fetchRazorpayPayment(first.paymentId, { timeoutMs: 10_000 });
   }
   if (!charge || charge.status !== "captured") return { state: "processing" };
+  // Money that went back to the payer never settles an order (a partly refunded payment stays "captured").
+  if (isRazorpayPaymentReversed(charge)) {
+    const reason = "The first payment was refunded, so the membership order was not completed.";
+    if (order.status === "pending") await markPaymentFailed(order.id, reason);
+    return { state: "failed", reason };
+  }
   if (!amountMatches(order.amount, order.currency, charge.amount, charge.currency)) {
     return { state: "error", message: "The payment amount did not match this order. Our team has been notified." };
   }
@@ -521,11 +528,4 @@ export async function handleRazorpaySubscriptionEvent(event: string, entity: Raz
     source: "razorpay_webhook",
   });
   return describe(outcome, `renewal ${payment.id}`);
-}
-
-/** Look up the row of a gateway subscription. */
-export async function findGatewaySubscription(gateway: "stripe" | "razorpay", gatewaySubscriptionId: string): Promise<Subscription | null> {
-  const db = await getDb();
-  const row = db.subscriptions.find((s) => s.gateway === gateway && s.gatewaySubscriptionId === gatewaySubscriptionId);
-  return row ? { ...row } : null;
 }

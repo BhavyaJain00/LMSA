@@ -44,6 +44,63 @@ export function quotaStatus(used: number, limit: unknown, now: Date = new Date()
 }
 
 /**
+ * Per-process memory of how many questions each learner asked today.
+ *
+ * The stored messages are the source of truth, but learners may delete their
+ * conversations; without this memory, deleting them would hand the day's
+ * quota back. `used()` returns the higher of the two counts and remembers it.
+ * The memory is bounded and empties itself when the UTC day changes.
+ */
+export class DailyQuestionLedger {
+  private day = "";
+  private readonly counts = new Map<string, number>();
+  private readonly maxKeys: number;
+
+  constructor(maxKeys = 50_000) {
+    this.maxKeys = Math.max(1, maxKeys);
+  }
+
+  private roll(now: Date): void {
+    const day = startOfUtcDay(now).toISOString();
+    if (day !== this.day) {
+      this.day = day;
+      this.counts.clear();
+    }
+  }
+
+  private set(userId: string, count: number): void {
+    this.counts.delete(userId);
+    if (count <= 0) return;
+    while (this.counts.size >= this.maxKeys) {
+      const oldest = this.counts.keys().next();
+      if (oldest.done) break;
+      this.counts.delete(oldest.value);
+    }
+    this.counts.set(userId, count);
+  }
+
+  /** Questions asked today: the stored count or the remembered one, whichever is higher. */
+  used(userId: string, storedCount: number, now: Date = new Date()): number {
+    this.roll(now);
+    const count = Math.max(this.counts.get(userId) ?? 0, Math.max(0, Math.floor(storedCount)));
+    this.set(userId, count);
+    return count;
+  }
+
+  /** A question was stored. */
+  add(userId: string, now: Date = new Date()): void {
+    this.roll(now);
+    this.set(userId, (this.counts.get(userId) ?? 0) + 1);
+  }
+
+  /** A stored question was taken back because it got no answer. */
+  remove(userId: string, now: Date = new Date()): void {
+    this.roll(now);
+    this.set(userId, (this.counts.get(userId) ?? 0) - 1);
+  }
+}
+
+/**
  * Count the questions a learner sent today, given their messages and the ids
  * of their conversations (messages from other people's conversations never count).
  */

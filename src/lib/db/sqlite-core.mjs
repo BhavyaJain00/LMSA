@@ -8,7 +8,8 @@
  *
  * Layout of a database file:
  *  - one table per collection: `(id TEXT PRIMARY KEY, doc TEXT NOT NULL, updated_at TEXT NOT NULL)`,
- *    where `doc` is the JSON document and the rowid keeps insertion order;
+ *    where `doc` is the JSON document and the rowid keeps the array order
+ *    (insertion order, renumbered when the array is reordered);
  *  - `settings`: a single row (`id = 1`) holding the settings JSON;
  *  - `meta`: key/value pairs (`schema_version`, `created_at`, `initialized_at`, …).
  */
@@ -42,6 +43,7 @@ import path from "node:path";
  * @property {string} name
  * @property {{ id: string; json: string }[]} upserts
  * @property {string[]} deletes
+ * @property {string[]} [order]  Every id in array order, when the array was reordered: rows are renumbered to match.
  */
 /**
  * @typedef {object} ChangeSet
@@ -192,15 +194,18 @@ export function sqliteVersion() {
  * Open (and create, unless `readOnly`) a database file with the pragmas the
  * store relies on: WAL journal, NORMAL sync (durable at checkpoints, safe
  * against corruption), and a busy timeout so a second process waits instead
- * of failing immediately.
+ * of failing immediately. Read-only connections (backups, uploaded files)
+ * do not trust the file's schema, so views and triggers stored in it cannot
+ * reach beyond plain SQL.
  *
  * @param {string} file
- * @param {{ readOnly?: boolean }} [options]
+ * @param {{ readOnly?: boolean; busyTimeoutMs?: number }} [options]
  * @returns {SqliteConnection}
  */
 export function openDatabase(file, options = {}) {
   const { DatabaseSync } = loadSqlite();
   const readOnly = options.readOnly === true;
+  const busyTimeout = Math.max(0, Math.round(options.busyTimeoutMs ?? BUSY_TIMEOUT_MS));
   if (readOnly) {
     if (!fs.existsSync(file)) throw new Error(`Database file not found: ${file}`);
   } else {
@@ -208,7 +213,8 @@ export function openDatabase(file, options = {}) {
   }
   const conn = new DatabaseSync(file, { readOnly });
   try {
-    conn.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    conn.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
+    if (readOnly) conn.exec("PRAGMA trusted_schema = OFF");
     if (!readOnly) {
       const mode = conn.prepare("PRAGMA journal_mode = WAL").get()?.journal_mode;
       if (String(mode).toLowerCase() !== "wal") {
@@ -228,6 +234,13 @@ export function isBusyError(/** @type {unknown} */ err) {
   if (!err || typeof err !== "object") return false;
   const code = /** @type {{ errcode?: number }} */ (err).errcode;
   return code === 5 || code === 6 || /database is locked|database table is locked/i.test(String(/** @type {Error} */ (err).message));
+}
+
+/** True for SQLITE_CORRUPT / SQLITE_NOTADB errors (the file is damaged, or is not a database at all). */
+export function isCorruptionError(/** @type {unknown} */ err) {
+  if (!err || typeof err !== "object") return false;
+  const code = /** @type {{ errcode?: number }} */ (err).errcode;
+  return code === 11 || code === 26 || /database disk image is malformed|file is not a database/i.test(String(/** @type {Error} */ (err).message));
 }
 
 /**
@@ -500,9 +513,20 @@ export function applyChanges(conn, changes, now = new Date().toISOString()) {
         const del = cached(conn, `DELETE FROM ${table(change.name)} WHERE id = ?`);
         for (const id of change.deletes) del.run(id);
       }
+      if (change.order?.length) reorderRows(conn, change.name, change.order);
     }
     if (changes.settings !== null) writeSettings(conn, changes.settings, now);
   });
+}
+
+/**
+ * Make `ORDER BY rowid` return the rows in the order of `ids` by moving them,
+ * in that order, to fresh rowids above every existing one.
+ */
+function reorderRows(/** @type {SqliteConnection} */ conn, /** @type {string} */ name, /** @type {string[]} */ ids) {
+  const highest = Number(conn.prepare(`SELECT max(rowid) AS m FROM ${table(name)}`).get()?.m ?? 0);
+  const move = cached(conn, `UPDATE ${table(name)} SET rowid = ? WHERE id = ?`);
+  ids.forEach((id, index) => move.run(highest + 1 + index, id));
 }
 
 function writeSettings(/** @type {SqliteConnection} */ conn, /** @type {string} */ json, /** @type {string} */ now) {
@@ -712,34 +736,31 @@ export function detectFormat(/** @type {string} */ file) {
   }
 }
 
+const NOT_A_BACKUP = "This is not a database backup: expected a .sqlite file made by this app or a JSON export.";
+const UNREADABLE_BACKUP = "The backup is damaged: SQLite cannot read it.";
+
 /**
  * Validate a backup file and summarize it without loading it into the
- * store. SQLite files get an integrity check; JSON files are parsed.
+ * store. SQLite files get an integrity check (skipped with
+ * `integrity: false`, for a snapshot SQLite has just written itself); JSON
+ * files are parsed.
  *
  * @param {string} file
+ * @param {{ integrity?: boolean }} [options]
  * @returns {{ format: BackupFormat; schemaVersion: number | null; counts: Record<string, number>; records: number; hasSettings: boolean }}
  */
-export function inspectBackupFile(file) {
+export function inspectBackupFile(file, options = {}) {
   const format = detectFormat(file);
-  if (!format) throw new Error("This is not a database backup: expected a .sqlite file made by this app or a JSON export.");
+  if (!format) throw new Error(NOT_A_BACKUP);
   if (format === "json") {
     const data = readJsonFile(file);
-    const counts = Object.fromEntries(Object.entries(data.collections).map(([name, docs]) => [name, docs.length]));
-    return { format, schemaVersion: null, counts, records: sum(counts), hasSettings: Boolean(data.settings) };
+    return { format, schemaVersion: null, ...countDocuments(data), hasSettings: Boolean(data.settings) };
   }
-  const conn = openDatabase(file, { readOnly: true });
-  try {
-    const integrity = checkIntegrity(conn);
-    if (!integrity.ok) throw new Error(`The backup is damaged (${integrity.messages.slice(0, 3).join("; ")}).`);
-    if (!tableExists(conn, "meta") || !tableExists(conn, "settings")) throw new Error("This SQLite file was not created by this app (it has no meta/settings tables).");
-    const schemaVersion = Number(getMeta(conn, "schema_version") ?? 0) || 0;
-    if (schemaVersion > SCHEMA_VERSION) throw new Error(`The backup was made by a newer version of the app (schema ${schemaVersion}); update the app first.`);
+  return withBackupConnection(file, options.integrity !== false, (conn, schemaVersion) => {
     const counts = countRows(conn);
     const hasSettings = Boolean(conn.prepare("SELECT 1 AS found FROM settings WHERE id = 1").get());
     return { format, schemaVersion, counts, records: sum(counts), hasSettings };
-  } finally {
-    conn.close();
-  }
+  });
 }
 
 /**
@@ -750,17 +771,47 @@ export function inspectBackupFile(file) {
 export function readBackupData(file) {
   const format = detectFormat(file);
   if (format === "json") return { format, data: readJsonFile(file) };
-  if (format !== "sqlite") throw new Error("This is not a database backup.");
-  const conn = openDatabase(file, { readOnly: true });
+  if (format !== "sqlite") throw new Error(NOT_A_BACKUP);
+  return withBackupConnection(file, true, (conn) => ({ format, data: readAllData(conn) }));
+}
+
+/**
+ * Open a SQLite backup read-only, check that it is one of ours (intact when
+ * `integrity`, made by this app, not from a newer version) and run `fn`.
+ * Anything SQLite cannot read is reported as a damaged backup.
+ *
+ * @template T
+ * @param {string} file
+ * @param {boolean} integrity
+ * @param {(conn: SqliteConnection, schemaVersion: number) => T} fn
+ * @returns {T}
+ */
+function withBackupConnection(file, integrity, fn) {
+  /** @type {SqliteConnection | null} */
+  let conn = null;
   try {
-    const integrity = checkIntegrity(conn);
-    if (!integrity.ok) throw new Error(`The backup is damaged (${integrity.messages.slice(0, 3).join("; ")}).`);
+    conn = openDatabase(file, { readOnly: true });
+    if (integrity) {
+      const result = checkIntegrity(conn);
+      if (!result.ok) throw new Error(`The backup is damaged (${result.messages.slice(0, 3).join("; ")}).`);
+    }
+    if (!tableExists(conn, "meta") || !tableExists(conn, "settings")) throw new Error("This SQLite file was not created by this app (it has no meta/settings tables).");
     const schemaVersion = Number(getMeta(conn, "schema_version") ?? 0) || 0;
     if (schemaVersion > SCHEMA_VERSION) throw new Error(`The backup was made by a newer version of the app (schema ${schemaVersion}); update the app first.`);
-    return { format, data: readAllData(conn) };
+    return fn(conn, schemaVersion);
+  } catch (err) {
+    throw isCorruptionError(err) ? new Error(UNREADABLE_BACKUP) : err;
   } finally {
-    conn.close();
+    conn?.close();
   }
+}
+
+/** Documents per collection, and in total, of `data`. */
+export function countDocuments(/** @type {RawData} */ data) {
+  /** @type {Record<string, number>} */
+  const counts = {};
+  for (const [name, docs] of Object.entries(data.collections)) counts[name] = docs.length;
+  return { counts, records: sum(counts) };
 }
 
 /** Parse a db.json-style file. */
@@ -903,12 +954,18 @@ export function deleteBackupFile(/** @type {string} */ file) {
 }
 
 /**
- * Keep the newest `keep` backups of `kind`; delete the rest.
+ * Keep the newest `keep` backups of `kind`; delete the rest. Names in
+ * `protect` are never deleted and do not count towards `keep`.
+ *
+ * @param {string} dir
+ * @param {BackupKind} kind
+ * @param {number} keep
+ * @param {readonly string[]} [protect]
  * @returns {string[]} names of deleted backups
  */
-export function pruneBackups(/** @type {string} */ dir, /** @type {BackupKind} */ kind, /** @type {number} */ keep) {
+export function pruneBackups(dir, kind, keep, protect = []) {
   const old = listBackupFiles(dir)
-    .filter((entry) => entry.kind === kind)
+    .filter((entry) => entry.kind === kind && !protect.includes(entry.name))
     .slice(Math.max(0, keep));
   for (const entry of old) deleteBackupFile(entry.file);
   return old.map((entry) => entry.name);

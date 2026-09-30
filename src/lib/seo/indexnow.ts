@@ -5,7 +5,9 @@
  *
  * The key file is served at `/indexnow.txt` (see `src/app/indexnow.txt/route.ts`)
  * and every submission names it through `keyLocation`, which the protocol
- * allows for a key file hosted at the site root.
+ * allows for a key file hosted at the site root. Generated keys are also
+ * served at the protocol's default location, `/<key>.txt` (the proxy maps
+ * that path onto the same route).
  */
 
 export const INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow";
@@ -23,6 +25,15 @@ export function generateIndexNowKey(): string {
   const bytes = new Uint8Array(16);
   globalThis.crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The key named by a root-level `/<key>.txt` request, or null. Only the shape
+ * of generated keys (32 hexadecimal characters) is recognised, so ordinary
+ * text files at the site root are never mistaken for a key file.
+ */
+export function indexNowKeyFromPath(pathname: string): string | null {
+  return /^\/([a-f0-9]{32})\.txt$/.exec(pathname)?.[1] ?? null;
 }
 
 /** Hosts where pinging search engines makes no sense (local development, private networks). */
@@ -74,4 +85,24 @@ export function buildIndexNowPayloads(origin: string, key: string, urls: readonl
     payloads.push({ host, key, keyLocation: `${origin}${INDEXNOW_KEY_PATH}`, urlList: unique.slice(i, i + INDEXNOW_MAX_URLS) });
   }
   return payloads;
+}
+
+/** Outcome of a submission (kept in memory by the client, shown in SEO settings). */
+export interface IndexNowResult {
+  ok: boolean;
+  submitted: number;
+  status?: number;
+  /** Why nothing was sent. */
+  skipped?: "noindex" | "local" | "nothing-new";
+  error?: string;
+  at: string;
+}
+
+/** Plain-language summary of a submission for admins. */
+export function describeIndexNowResult(result: Pick<IndexNowResult, "ok" | "submitted" | "skipped" | "error">): { ok: boolean; text: string } {
+  if (result.skipped === "noindex") return { ok: false, text: "Nothing was sent: the site is hidden from search engines." };
+  if (result.skipped === "local") return { ok: false, text: "Nothing was sent: APP_URL is a local address that search engines cannot reach." };
+  if (result.skipped === "nothing-new") return { ok: true, text: "Nothing new to send." };
+  if (!result.ok) return { ok: false, text: result.error || "Search engines did not accept the submission." };
+  return { ok: true, text: result.submitted === 1 ? "1 address sent to search engines" : `${result.submitted.toLocaleString("en-US")} addresses sent to search engines` };
 }

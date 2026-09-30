@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import type { Commission } from "@/lib/types";
-import type { FraudFlag } from "@/lib/growth/affiliates-shared";
+import type { CommissionRowView } from "@/lib/growth/affiliates-shared";
 import { approveCommissionsAction, voidCommissionsAction } from "@/lib/actions/affiliates";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -12,23 +11,6 @@ import { useToast } from "@/components/ui/toast";
 import { money } from "@/components/commerce/order-summary";
 import { CommissionStatusBadge, FraudFlagBadges } from "./affiliate-badges";
 import { cn, formatDate } from "@/lib/utils";
-
-export interface CommissionRowView {
-  id: string;
-  status: Commission["status"];
-  amount: number;
-  currency: string;
-  createdAt: string;
-  affiliateId: string;
-  affiliateCode: string;
-  affiliateName: string;
-  orderId: string;
-  itemTitle: string;
-  buyerName: string;
-  buyerEmail: string;
-  orderAmount: number;
-  flags: FraudFlag[];
-}
 
 type Pending = { kind: "approve" | "void"; ids: string[] } | null;
 
@@ -179,7 +161,9 @@ export function CommissionsTable({ rows, showAffiliate = true, emptyText }: { ro
       <ConfirmDialog
         open={confirm !== null}
         onClose={() => !busy && setConfirm(null)}
-        onConfirm={() => confirm && run(confirm)}
+        onConfirm={() => {
+          if (confirm) run(confirm);
+        }}
         loading={busy}
         destructive={confirm?.kind === "void"}
         title={confirm?.kind === "void" ? `Void ${confirm.ids.length === 1 ? "this commission" : `${confirm?.ids.length} commissions`}?` : `Approve ${confirm?.ids.length === 1 ? "this commission" : `${confirm?.ids.length ?? 0} commissions`}?`}

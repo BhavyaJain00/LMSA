@@ -4,6 +4,7 @@ import type { InstructorStats } from "@/lib/data/catalog";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
 import { Markdown } from "@/lib/markdown";
+import { instructorPath, profilePath } from "@/lib/seo/content-index";
 import { compactCount, plural } from "./format";
 
 function eyebrow(count: number): string {
@@ -12,8 +13,13 @@ function eyebrow(count: number): string {
   return `Taught by a team of ${count}`;
 }
 
-/** Instructor cards: avatar, name, headline, teaching stats and a short bio. */
-export function CourseInstructors({ instructors, stats }: { instructors: PublicUser[]; stats: Map<string, InstructorStats> }) {
+/**
+ * Instructor cards: avatar, name, headline, teaching stats and a short bio.
+ * On a public course the cards link to the instructors' teaching pages
+ * (`/instructors/<username>`, which exist for anyone teaching a public
+ * course); otherwise to their member profiles.
+ */
+export function CourseInstructors({ instructors, stats, teachingProfiles = false }: { instructors: PublicUser[]; stats: Map<string, InstructorStats>; teachingProfiles?: boolean }) {
   if (!instructors.length) return null;
   return (
     <section aria-labelledby="instructors-heading">
@@ -24,7 +30,7 @@ export function CourseInstructors({ instructors, stats }: { instructors: PublicU
       <ul className="mt-5 grid gap-4 md:grid-cols-2">
         {instructors.map((instructor) => {
           const s = stats.get(instructor.id);
-          const profile = `/user/${instructor.username}`;
+          const profile = teachingProfiles ? instructorPath(instructor.username) : profilePath(instructor.username);
           return (
             <li key={instructor.id} className="flex flex-col rounded-card border border-border bg-surface-1 p-5">
               <div className="flex items-start gap-4">

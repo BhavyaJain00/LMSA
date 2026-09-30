@@ -81,6 +81,8 @@ export function TransactionFilters({ values }: { values: TransactionFilterValues
           { value: "course", label: "For Course" },
           { value: "batch", label: "For Batch" },
           { value: "certificate", label: "For Certificate" },
+          { value: "plan", label: "For Membership" },
+          { value: "bundle", label: "For Bundle" },
         ]}
       />
       <Input type="date" aria-label="From date" value={values.from} max={values.to || undefined} onChange={(e) => apply({ from: e.target.value })} />

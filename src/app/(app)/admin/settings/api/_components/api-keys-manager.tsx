@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { createApiKeyAction, deleteApiKeyAction, revokeApiKeyAction, type CreatedApiKey } from "@/lib/actions/api-keys";
 import { API_SCOPE_IDS, READ_ONLY_SCOPES, SCOPE_GROUPS, describeScope } from "@/lib/api/scopes";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
+import { CopyButton } from "@/components/developers/copy-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
@@ -24,32 +25,11 @@ export interface ApiKeyRow {
   lastUsedAt: string | null;
   revokedAt: string | null;
   createdBy: string | null;
+  /** False when the creator is no longer an enabled admin: the key is refused. */
+  ownerActive: boolean;
 }
 
 type StatusFilter = "active" | "revoked" | "all";
-
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const toast = useToast();
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      leftIcon={copied ? <Icon.Check className="size-4" /> : <Icon.Copy className="size-4" />}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        } catch {
-          toast.error("Copying isn't allowed in this browser. Select the text and copy it instead.");
-        }
-      }}
-    >
-      {copied ? "Copied" : label}
-    </Button>
-  );
-}
 
 /** Dialog shown once after a key is created: the only time the full key is visible. */
 function NewKeyDialog({ created, appUrl, onClose }: { created: CreatedApiKey | null; appUrl: string; onClose: () => void }) {
@@ -61,7 +41,7 @@ function NewKeyDialog({ created, appUrl, onClose }: { created: CreatedApiKey | n
       title="Copy your new API key"
       description="This is the only time the full key is shown. Store it in your integration's secret settings; if you lose it, revoke it and create a new one."
       size="lg"
-      footer={<Button onClick={onClose}>I've stored the key</Button>}
+      footer={<Button onClick={onClose}>I&apos;ve stored the key</Button>}
     >
       {created && (
         <div className="space-y-4">
@@ -271,9 +251,13 @@ export function ApiKeysManager({ keys, appUrl }: { keys: ApiKeyRow[]; appUrl: st
                     <Badge tone="danger" size="xs">
                       Revoked
                     </Badge>
-                  ) : (
+                  ) : key.ownerActive ? (
                     <Badge tone="success" size="xs" dot>
                       Active
+                    </Badge>
+                  ) : (
+                    <Badge tone="warning" size="xs" title="The member who created this key is no longer an enabled administrator, so requests with it are refused.">
+                      Not working
                     </Badge>
                   )}
                 </div>
@@ -285,6 +269,9 @@ export function ApiKeysManager({ keys, appUrl }: { keys: ApiKeyRow[]; appUrl: st
                     </Badge>
                   ))}
                 </div>
+                {!key.revokedAt && !key.ownerActive && (
+                  <p className="text-xs text-warning">Its creator is no longer an enabled administrator, so requests with this key are refused. Create a new key and revoke this one.</p>
+                )}
                 <p className="text-xs text-ink-muted">
                   Created {formatDate(key.createdAt)}
                   {key.createdBy ? ` by ${key.createdBy}` : ""} ·{" "}

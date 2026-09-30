@@ -19,7 +19,9 @@ import { canManageCourse, findLessonByNumbers, getCourseBySlug, getCourseOutline
 import { getPublicUsers, listUsers } from "./users";
 import { percent } from "@/lib/utils";
 import { ensureDripNotifications } from "@/lib/services/drip";
+import { enrollmentGrantsAccess } from "@/lib/commerce/access";
 import {
+  computeLessonLocks,
   legacyLockReason,
   nextUnlockTime,
   pickContinueLesson,
@@ -116,13 +118,43 @@ export async function getLearnContext(course: Course, viewer: User | null, optio
   const [raw, db] = await Promise.all([getCourseOutline(course, viewer, now), getDb()]);
   const settings = db.settings;
   const state = getViewerCourseState(db, course, viewer);
-  const { enrollment, manager, enrolled, previewAllowed } = state;
+  const { enrollment, manager, previewAllowed } = state;
+
+  // Commerce (round 3): an enrollment opened through a membership unlocks lessons only while a
+  // membership covering the course is running. Once it lapses the learner sees the course like a
+  // visitor (free previews only); progress is kept and everything reopens when they rejoin or buy.
+  const lapsed = !!enrollment && !manager && !enrollmentGrantsAccess(db, enrollment, now);
+  const enrolled = state.enrolled && !lapsed;
+  let visitorLocks: Map<string, LessonLock | null> | null = null;
+  if (lapsed) {
+    const rows = raw.flatMap((chapter) =>
+      chapter.lessons.map((lesson) => ({
+        id: lesson.id,
+        status: lesson.status,
+        includeInPreview: lesson.includeInPreview,
+        dripDays: lesson.dripDays,
+        availableFrom: lesson.availableFrom,
+        chapter: { dripDays: chapter.dripDays, availableFrom: chapter.availableFrom },
+      })),
+    );
+    const locks = computeLessonLocks(rows, {
+      manager: false,
+      enrolled: false,
+      previewAllowed,
+      enforceOrder: course.enforceLessonCompletion,
+      anchor: null,
+      prerequisitesPending: false,
+      now,
+    });
+    visitorLocks = new Map(rows.map((row, i) => [row.id, locks[i] ?? null]));
+  }
 
   const chapters: LearnChapter[] = raw.map((chapter, ci) => ({
     ...chapter,
     number: ci + 1,
     lessons: chapter.lessons.map((lesson): LearnLesson => {
-      const { lock, ...rest } = lesson;
+      const { lock: ownLock, ...rest } = lesson;
+      const lock = visitorLocks ? (visitorLocks.get(lesson.id) ?? undefined) : ownLock;
       return {
         ...rest,
         locked: !!lock,

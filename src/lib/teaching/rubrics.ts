@@ -1,5 +1,5 @@
 import "server-only";
-import type { Rubric, User } from "@/lib/types";
+import type { AssignmentSubmission, Rubric, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { isModerator, isStaff } from "@/lib/auth/session";
 import { rubricMaxPoints } from "./rubric-shared";
@@ -8,6 +8,18 @@ import { rubricMaxPoints } from "./rubric-shared";
  * Read models for rubrics: the admin list with filters and paging, a single
  * rubric with where it is used, and permission checks.
  */
+
+/**
+ * A submission row plus the grader's unpublished overall comments: while a
+ * rubric is only partly scored, comments are kept here instead of in
+ * `comments`, which the learner can read.
+ */
+export type SubmissionWithDraft = AssignmentSubmission & { draftComments?: string };
+
+/** Overall comments as the grader last left them (draft first, then the published ones). */
+export function graderComments(submission: AssignmentSubmission): string {
+  return (submission as SubmissionWithDraft).draftComments ?? submission.comments ?? "";
+}
 
 /** Staff (creators, evaluators, moderators, admins) create rubrics and grade with them. */
 export function canUseRubrics(user: Pick<User, "roles"> | null | undefined): boolean {

@@ -162,21 +162,7 @@ export async function loadConversationAction(conversationId: string): Promise<Ac
   const db = await getDb();
   const loaded = loadOwnConversation(db, conversationId, user.id);
   if (!loaded) return { ok: false, error: "This conversation no longer exists." };
-  const lesson = loaded.conversation.lessonId ? db.lessons.find((l) => l.id === loaded.conversation.lessonId) : undefined;
-  return {
-    ok: true,
-    data: {
-      conversation: {
-        id: loaded.conversation.id,
-        title: loaded.conversation.title,
-        lessonId: loaded.conversation.lessonId,
-        lessonTitle: lesson?.title,
-        updatedAt: loaded.conversation.updatedAt,
-        messageCount: loaded.messages.length,
-      },
-      messages: loaded.messages,
-    },
-  };
+  return { ok: true, data: { conversation: loaded.summary, messages: loaded.messages } };
 }
 
 export async function deleteConversationAction(conversationId: string): Promise<ActionResult> {

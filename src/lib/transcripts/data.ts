@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db/store";
 import { getLessonAccess, type LessonAccess } from "@/lib/data/lessons";
 import { canPlayLessonMedia } from "@/lib/media/access";
 import { uid } from "@/lib/utils";
+import type { TranscriptView } from "./panel";
 
 /**
  * Transcript storage helpers.
@@ -107,15 +108,6 @@ export function removeBlockTranscript(db: Database, lessonId: string, blockId: s
 /* ------------------------------------------------------------------ */
 /* Learner access                                                       */
 /* ------------------------------------------------------------------ */
-
-/** What a viewer sees of a transcript. */
-export interface TranscriptView {
-  id: string;
-  language: string;
-  source: Transcript["source"];
-  updatedAt: string;
-  cues: TranscriptCue[];
-}
 
 export type TranscriptReadResult =
   | { ok: true; access: LessonAccess; block: VideoBlock; transcript: Transcript | null }

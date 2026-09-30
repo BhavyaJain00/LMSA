@@ -10,6 +10,7 @@ import { StoreEngine, type EngineStats } from "./engine";
 import { JsonDriver } from "./json-driver";
 import { SqliteDriver } from "./sqlite";
 import { rawDataToJson, type RawData } from "./sqlite-core.mjs";
+import { automaticBackupState, automaticBackupsEnabled, nextLocalMidnight } from "./backup-core.mjs";
 import type { DriverKind, StoreDriver } from "./driver";
 
 /**
@@ -28,6 +29,18 @@ import type { DriverKind, StoreDriver } from "./driver";
  *
  * `mutate()` runs callbacks one at a time, so read-check-write sequences in
  * one callback are safe against concurrent requests. See `engine.ts`.
+ *
+ * The first request of each day also starts the automatic backup
+ * (`backup.ts`; `storage/backups`, newest 14 kept).
+ *
+ * With SQLite the database object and its collection arrays are tracking
+ * Proxies (documents are plain objects). They read like the real thing, but
+ * `structuredClone()` cannot copy a Proxy: clone documents, or use
+ * `exportDatabase()` for the whole contents. Change a document through a
+ * reference obtained inside the `mutate()` callback (from `db`, or with
+ * `findById()`/`filter()` called in it): that is what gets written at the
+ * next flush. Edits made any other way are only found by the periodic
+ * comparison a few seconds later, and logged.
  *
  * The engine lives on `globalThis` so Next.js hot reloading and separately
  * bundled server entries share one cache and one connection.
@@ -133,7 +146,7 @@ export const COLLECTIONS: CollectionName[] = [
 /* ------------------------------------------------------------------ */
 
 /** Bump when the engine's behaviour changes so a hot reload replaces the running one. */
-const ENGINE_VERSION = 2;
+const ENGINE_VERSION = 4;
 
 interface EngineHolder {
   engine: StoreEngine;
@@ -242,15 +255,43 @@ function engine(): StoreEngine {
 }
 
 /* ------------------------------------------------------------------ */
+/* Daily backup                                                        */
+/* ------------------------------------------------------------------ */
+
+/** The backup starts this long after the day's first request, so it never competes with a cold start. */
+const DAILY_BACKUP_DELAY_MS = 20_000;
+
+/**
+ * Start the automatic backup on the first request of each local day (and
+ * of each server start: a backup that already exists for today is left
+ * alone). Costs one number comparison per call until the next midnight.
+ */
+function scheduleDailyBackup(): void {
+  const state = automaticBackupState();
+  const now = Date.now();
+  if (now < state.nextCheckAt) return;
+  state.nextCheckAt = nextLocalMidnight(now);
+  // Nothing to back up while `next build` prerenders pages, or for the throwaway databases of test runs.
+  if (!automaticBackupsEnabled() || process.env.NEXT_PHASE === "phase-production-build" || process.env.NODE_ENV === "test") return;
+  const timer = setTimeout(() => {
+    import("./backup")
+      .then((backup) => backup.runScheduledBackup())
+      .catch((err) => console.error("[store] could not start the daily backup:", err));
+  }, DAILY_BACKUP_DELAY_MS);
+  timer.unref?.();
+}
+
+/* ------------------------------------------------------------------ */
 /* Store API                                                           */
 /* ------------------------------------------------------------------ */
 
 /** Get the in-memory database, loading (and seeding or importing) it on first access. */
 export async function getDb(): Promise<Database> {
+  scheduleDailyBackup();
   return engine().getDb();
 }
 
-/** Persist immediately if there are pending changes. */
+/** Persist immediately: afterwards the storage holds exactly what is in memory. */
 export async function flush(): Promise<void> {
   await engine().flush();
 }

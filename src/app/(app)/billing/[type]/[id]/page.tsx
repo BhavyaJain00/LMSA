@@ -1,17 +1,23 @@
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
-import { getSettings } from "@/lib/db/store";
-import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, parseItemType, validateCouponForBuyer } from "@/lib/data/commerce";
+import { getDb } from "@/lib/db/store";
+import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, installmentCheckout, membershipTerms, parseItemType, validateCouponForBuyer } from "@/lib/data/commerce";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
+import { intervalNoun, intervalSuffix } from "@/lib/commerce/plans";
+import { INSTALLMENT_GRACE_DAYS, intervalPhrase, scheduleDates } from "@/lib/commerce/installments";
+import { legalLinks } from "@/lib/legal/links";
+import { agreementDocuments } from "@/lib/legal/agreement";
 import { PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { OrderSummary, money } from "@/components/commerce/order-summary";
 import { CouponForm } from "@/components/commerce/coupon-form";
-import { BillingForm } from "@/components/commerce/billing-form";
+import { BillingForm, type InstallmentCheckoutTerms, type MembershipCheckoutTerms } from "@/components/commerce/billing-form";
+import { PaymentOptionPicker } from "@/components/commerce/payment-option-picker";
 import { NotPermitted } from "@/components/commerce/not-permitted";
 import { FreeEnrollForm } from "@/components/commerce/free-enroll-form";
+import { formatDate } from "@/lib/utils";
 
 export const metadata = { title: "Billing Details" };
 
@@ -23,7 +29,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   if (!item) notFound();
 
   const basePath = `/billing/${type}/${id}`;
-  const header = <PageHeader title="Billing Details" breadcrumbs={<Breadcrumbs items={[{ label: item.name, href: item.href }, { label: "Billing Details" }]} />} />;
+  const header = <PageHeader title="Billing Details" breadcrumbs={<Breadcrumbs items={[{ label: item.plan ? "Membership" : item.name, href: item.href }, { label: "Billing Details" }]} />} />;
 
   const user = await getCurrentUser();
   if (!user) {
@@ -74,8 +80,12 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     );
   }
 
-  const settings = await getSettings();
-  const submittedCode = typeof sp.coupon === "string" ? sp.coupon.trim().toUpperCase() : "";
+  const [db, links] = await Promise.all([getDb(), legalLinks()]);
+  const settings = db.settings;
+  // Memberships that renew are billed at the plan's price every period, so coupons don't apply to them.
+  const terms = item.plan ? membershipTerms(db, user.id, item.plan) : null;
+  const couponsAllowed = !terms?.recurring;
+  const submittedCode = couponsAllowed && typeof sp.coupon === "string" ? sp.coupon.trim().toUpperCase() : "";
   let coupon = null;
   let couponError: string | null = null;
   if (submittedCode) {
@@ -87,6 +97,36 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   const summary = computeOrderSummary(item, coupon, settings);
   const saved = await getSavedBillingDetails(user.id);
 
+  const gateway = settings.commerce.paymentGateway;
+  // Courses sold in installments: the buyer picks "in full" or "in N payments" (`?pay=installments`).
+  const split = installmentCheckout(item, coupon, settings);
+  const inParts = split && sp.pay === "installments" ? split : null;
+  // What this order charges today: one payment of the plan, or the whole summary.
+  const charge = inParts ? inParts.part : { originalAmount: summary.originalAmount, discountAmount: summary.discountAmount, taxAmount: summary.taxAmount, amount: summary.total };
+  const paid = charge.amount > 0 && gateway !== "none";
+  const priceLabel = money(charge.amount, summary.currency);
+  const installments: InstallmentCheckoutTerms | null = inParts ? { count: inParts.plan.count, interval: intervalPhrase(inParts.plan.intervalDays), automatic: gateway === "stripe" } : null;
+  const dueDates = inParts ? scheduleDates(new Date().toISOString(), inParts.plan.count, inParts.plan.intervalDays) : [];
+  const optionHref = (parts: boolean) => {
+    const query = new URLSearchParams();
+    if (summary.coupon) query.set("coupon", summary.coupon.code);
+    if (parts) query.set("pay", "installments");
+    return query.size ? `${basePath}?${query}` : basePath;
+  };
+  const membership: MembershipCheckoutTerms | null =
+    terms && item.plan
+      ? {
+          planName: item.plan.name,
+          recurring: terms.recurring,
+          trialDays: paid ? terms.trialDays : 0,
+          periodLabel: terms.recurring ? `${priceLabel}${intervalSuffix(terms.interval)}` : priceLabel,
+          intervalNoun: intervalNoun(terms.interval),
+          firstChargeOn: paid && terms.trialEndsAt ? formatDate(terms.trialEndsAt) : null,
+          // Stripe and Razorpay charge the saved payment method every period; other gateways send a renewal order.
+          automaticRenewal: terms.recurring && paid && (gateway === "stripe" || gateway === "razorpay"),
+        }
+      : null;
+
   return (
     <>
       {header}
@@ -95,40 +135,129 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
           <OrderSummary
             itemType={item.type}
             title={item.type === "certificate" ? item.name : item.title}
-            subtitle={item.type === "certificate" ? "Certificate of completion" : item.description}
+            subtitle={inParts ? `Payment 1 of ${inParts.plan.count}, due today` : item.type === "certificate" ? "Certificate of completion" : item.description}
             imageUrl={item.imageUrl}
             gradient={item.gradient}
             lines={{
               currency: summary.currency,
-              originalAmount: summary.originalAmount,
-              discountAmount: summary.discountAmount,
-              taxAmount: summary.taxAmount,
+              originalAmount: charge.originalAmount,
+              discountAmount: charge.discountAmount,
+              taxAmount: charge.taxAmount,
               taxLabel: summary.taxLabel,
               taxPercentage: summary.taxPercentage,
-              total: summary.total,
+              total: charge.amount,
               couponCode: summary.coupon?.code,
-              usdEquivalent: summary.usdEquivalent,
+              usdEquivalent: inParts ? null : summary.usdEquivalent,
             }}
+            footer={
+              inParts ? (
+                <ul className="mt-4 space-y-2 border-t border-border pt-4 text-sm text-ink-muted">
+                  <li className="flex items-start gap-2">
+                    <Icon.Calendar className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden="true" />
+                    <span>
+                      <strong className="text-ink">
+                        {inParts.plan.count} payments of {priceLabel}
+                      </strong>{" "}
+                      {intervalPhrase(inParts.plan.intervalDays)}: today, then{" "}
+                      {dueDates
+                        .slice(1)
+                        .map((d) => formatDate(d))
+                        .join(", ")}
+                      .
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Icon.Receipt className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden="true" />
+                    <span>
+                      {money(inParts.total, summary.currency)} in total
+                      {inParts.total > summary.total ? `, ${money(inParts.total - summary.total, summary.currency)} more than paying in full.` : ", the same as paying in full."}
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Icon.Unlock className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden="true" />
+                    <span>
+                      Full access from the first payment. If a payment is more than {INSTALLMENT_GRACE_DAYS} days late, the lessons lock until it is paid; your progress is kept.
+                    </span>
+                  </li>
+                </ul>
+              ) : membership ? (
+                <ul className="mt-4 space-y-2 border-t border-border pt-4 text-sm text-ink-muted">
+                  {membership.trialDays > 0 && (
+                    <li className="flex items-start gap-2">
+                      <Icon.Gift className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+                      <span>
+                        <strong className="text-ink">{membership.trialDays}-day free trial.</strong> Nothing is charged today; the first payment of {priceLabel} is due on{" "}
+                        {membership.firstChargeOn}.
+                      </span>
+                    </li>
+                  )}
+                  <li className="flex items-start gap-2">
+                    <Icon.Refresh className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden="true" />
+                    <span>
+                      {membership.recurring
+                        ? membership.automaticRenewal
+                          ? `Renews automatically at ${membership.periodLabel} until you cancel.`
+                          : `${membership.periodLabel}. We send you a renewal order before each ${membership.intervalNoun} ends.`
+                        : "One payment, lifetime access. It never renews."}
+                    </span>
+                  </li>
+                  {membership.recurring && (
+                    <li className="flex items-start gap-2">
+                      <Icon.XCircle className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden="true" />
+                      <span>Cancel any time from Settings → Membership. You keep access until the period you paid for ends.</span>
+                    </li>
+                  )}
+                </ul>
+              ) : undefined
+            }
           />
-          <CouponForm basePath={basePath} appliedCode={summary.coupon?.code ?? null} error={couponError} submittedCode={submittedCode} />
+          {couponsAllowed && (
+            <CouponForm basePath={basePath} appliedCode={summary.coupon?.code ?? null} error={couponError} submittedCode={submittedCode} keep={inParts ? "pay=installments" : ""} />
+          )}
           <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
             <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
             Please ensure that the billing name you enter is correct, as it will be used on your invoice.
           </p>
         </aside>
         <div className="min-w-0">
+          {split && (
+            <PaymentOptionPicker
+              className="mb-5"
+              options={[
+                {
+                  href: optionHref(false),
+                  active: !inParts,
+                  title: "Pay in full",
+                  price: money(summary.total, summary.currency),
+                  note: "One payment today. The course is yours for good.",
+                  icon: <Icon.CreditCard className="size-5" />,
+                },
+                {
+                  href: optionHref(true),
+                  active: !!inParts,
+                  title: `Pay in ${split.plan.count} installments`,
+                  price: `${split.plan.count} × ${money(split.part.amount, summary.currency)}`,
+                  note: `One payment ${intervalPhrase(split.plan.intervalDays)}, ${money(split.total, summary.currency)} in total${split.plan.surchargePercent > 0 ? ` (includes a ${split.plan.surchargePercent}% plan fee)` : ""}.`,
+                  icon: <Icon.Calendar className="size-5" />,
+                },
+              ]}
+            />
+          )}
           <BillingForm
             itemType={item.type}
             itemId={item.id}
             couponCode={summary.coupon?.code ?? ""}
-            expectedTotal={summary.total}
-            totalLabel={money(summary.total, summary.currency)}
-            gateway={settings.commerce.paymentGateway}
-            gatewayReady={isConfigured(settings.commerce.paymentGateway)}
-            gatewayMode={gatewayMode(settings.commerce.paymentGateway)}
+            expectedTotal={charge.amount}
+            totalLabel={priceLabel}
+            gateway={gateway}
+            gatewayReady={isConfigured(gateway)}
+            gatewayMode={gatewayMode(gateway)}
             applyTax={settings.commerce.applyTax}
             taxLabel={settings.commerce.taxLabel}
             contactEmail={settings.contact.email}
+            legal={agreementDocuments("checkout", links)}
+            membership={membership}
+            installments={installments}
             defaults={{
               billingName: saved?.billingName ?? user.name,
               line1: saved?.address?.line1 ?? "",

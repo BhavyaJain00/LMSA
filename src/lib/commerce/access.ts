@@ -1,31 +1,37 @@
 import "server-only";
 import type { Course, Database, Enrollment, MembershipPlan, Payment, Subscription, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
+import { isInstallmentOrder, planForCourse, planGrantsAccess, planOfPayment, type InstallmentPlan } from "./installments";
 import { planCoversCourse } from "./plans";
 import { isOngoing, subscriptionGrantsAccess } from "./subscriptions";
 
 /**
  * Course access resolution for commerce (round 3 wave B).
  *
- * An enrollment is permanent access, except when it was opened through a
- * membership: those enrollments keep the learner's progress but only unlock
- * lessons while a membership covering the course is running (or while
- * another permanent right exists — a purchase of the course or a seat in a
- * batch that includes it).
+ * An enrollment is permanent access, with two exceptions that keep the
+ * learner's progress but lock the lessons:
+ *  - it was opened through a membership: lessons unlock only while a
+ *    membership covering the course is running;
+ *  - the course is being paid in installments: lessons unlock while the
+ *    payment plan is on track (a part may be overdue by up to 7 days) and
+ *    for good once every part is paid.
+ * Another permanent right always wins: a purchase of the course paid in
+ * full, a paid bundle that includes it, or a seat in a batch that includes it.
  *
- * A membership enrollment is recognised by its `paymentId` pointing at a
- * membership ("plan") order. Everything here is synchronous over a database
- * snapshot so it can run inside `mutate` and in synchronous read models; the
- * async `hasCourseAccess` wrapper is for callers holding only ids.
+ * Both cases are recognised by the enrollment's `paymentId`: a membership
+ * ("plan") order, or a part of a payment plan. Everything here is synchronous
+ * over a database snapshot so it can run inside `mutate` and in synchronous
+ * read models; the async `hasCourseAccess` wrapper is for callers holding
+ * only ids.
  *
  * Staff (course managers) always have access; that check needs the course
  * permission rules and is done by the callers that know the viewer's roles.
  */
 
-type Snapshot = Pick<Database, "courses" | "enrollments" | "payments" | "subscriptions" | "plans" | "batches" | "batchEnrollments">;
+type Snapshot = Pick<Database, "courses" | "enrollments" | "payments" | "subscriptions" | "plans" | "batches" | "batchEnrollments" | "bundles">;
 
-export type CourseAccessVia = "free" | "enrollment" | "purchase" | "batch" | "membership";
-export type CourseAccessBlock = "not_enrolled" | "membership_lapsed";
+export type CourseAccessVia = "free" | "enrollment" | "purchase" | "bundle" | "batch" | "membership" | "installments";
+export type CourseAccessBlock = "not_enrolled" | "membership_lapsed" | "installment_overdue" | "installment_cancelled";
 
 export interface MembershipMatch {
   subscription: Subscription;
@@ -40,6 +46,8 @@ export interface CourseAccess {
   enrollment: Enrollment | null;
   /** A running membership that covers the course, when there is one. */
   membership: MembershipMatch | null;
+  /** The payment plan the enrollment is being paid with, whatever its state (for banners and pay links). */
+  installments: InstallmentPlan | null;
 }
 
 export function isPaidCourse(course: Pick<Course, "paidCourse" | "price">): boolean {
@@ -79,19 +87,37 @@ export function currentSubscription(db: Pick<Snapshot, "subscriptions">, userId:
   return mine.find((s) => isOngoing(s)) ?? mine.find((s) => subscriptionGrantsAccess(s, now)) ?? null;
 }
 
-/** Access to the course that does not depend on a membership (a purchase or a batch seat). */
-function permanentRight(db: Snapshot, userId: string, courseId: string): CourseAccessVia | null {
-  if (db.payments.some((p) => p.userId === userId && p.itemType === "course" && p.itemId === courseId && p.status === "paid")) return "purchase";
+/**
+ * Access to the course that depends on nothing that can lapse: a purchase
+ * paid in full (at once, or every part of a payment plan), a paid bundle
+ * that includes the course, or a batch seat.
+ */
+function permanentRight(db: Snapshot, userId: string, courseId: string, now: number): CourseAccessVia | null {
+  const orders = db.payments.filter((p) => p.userId === userId && p.status === "paid");
+  const forCourse = orders.filter((p) => p.itemType === "course" && p.itemId === courseId);
+  if (forCourse.some((p) => !isInstallmentOrder(p))) return "purchase";
+  if (forCourse.length && planForCourse(db.payments, userId, courseId, now)?.status === "completed") return "purchase";
+  if (orders.some((p) => p.itemType === "bundle" && db.bundles.some((b) => b.id === p.itemId && b.courseIds.includes(courseId)))) return "bundle";
   const inBatch = db.batchEnrollments.some((s) => s.userId === userId && db.batches.some((b) => b.id === s.batchId && b.courseIds.includes(courseId)));
   return inBatch ? "batch" : null;
+}
+
+/** The order an enrollment was opened with. */
+function enrollmentSource(db: Pick<Snapshot, "payments">, enrollment: Pick<Enrollment, "paymentId">): Payment | null {
+  return enrollment.paymentId ? (db.payments.find((p) => p.id === enrollment.paymentId) ?? null) : null;
 }
 
 /** Whether an existing enrollment unlocks its course's lessons at `now`. */
 export function enrollmentGrantsAccess(db: Snapshot, enrollment: Enrollment, now: number = Date.now()): boolean {
   const course = db.courses.find((c) => c.id === enrollment.courseId);
   if (!course || !isPaidCourse(course)) return true;
-  if (!membershipSource(db, enrollment)) return true;
-  return !!membershipFor(db, enrollment.userId, course.id, now) || !!permanentRight(db, enrollment.userId, course.id);
+  const source = enrollmentSource(db, enrollment);
+  if (!source) return true;
+  if (source.itemType !== "plan") {
+    const installments = planOfPayment(db.payments, source, now);
+    if (!installments || planGrantsAccess(installments)) return true;
+  }
+  return !!membershipFor(db, enrollment.userId, course.id, now) || !!permanentRight(db, enrollment.userId, course.id, now);
 }
 
 /**
@@ -102,19 +128,41 @@ export function resolveCourseAccess(db: Snapshot, userId: string, courseId: stri
   const enrollment = db.enrollments.find((e) => e.userId === userId && e.courseId === courseId) ?? null;
   const course = db.courses.find((c) => c.id === courseId);
   const membership = membershipFor(db, userId, courseId, now);
-  if (!course) return { granted: false, blocked: "not_enrolled", enrollment, membership };
+  if (!course) return { granted: false, blocked: "not_enrolled", enrollment, membership, installments: null };
 
   // Not enrolled yet: with a membership (`membership` set) the member can open the course without a checkout.
-  if (!enrollment) return { granted: false, blocked: "not_enrolled", enrollment, membership };
-  if (!isPaidCourse(course)) return { granted: true, via: "free", enrollment, membership };
-  if (!membershipSource(db, enrollment)) {
-    const permanent = permanentRight(db, userId, courseId);
-    return { granted: true, via: permanent ?? "enrollment", enrollment, membership };
+  if (!enrollment) return { granted: false, blocked: "not_enrolled", enrollment, membership, installments: null };
+  if (!isPaidCourse(course)) return { granted: true, via: "free", enrollment, membership, installments: null };
+
+  const source = enrollmentSource(db, enrollment);
+  const viaMembership = source?.itemType === "plan";
+  const installments = source && !viaMembership ? planOfPayment(db.payments, source, now) : null;
+  if (!viaMembership && !installments) {
+    return { granted: true, via: permanentRight(db, userId, courseId, now) ?? "enrollment", enrollment, membership, installments };
   }
-  if (membership) return { granted: true, via: "membership", enrollment, membership };
-  const permanent = permanentRight(db, userId, courseId);
-  if (permanent) return { granted: true, via: permanent, enrollment, membership };
-  return { granted: false, blocked: "membership_lapsed", enrollment, membership: null };
+  if (viaMembership && membership) return { granted: true, via: "membership", enrollment, membership, installments };
+  const permanent = permanentRight(db, userId, courseId, now);
+  if (permanent) return { granted: true, via: permanent, enrollment, membership, installments };
+  if (installments && planGrantsAccess(installments)) return { granted: true, via: "installments", enrollment, membership, installments };
+  // A running membership that covers the course also keeps a course bought in parts open.
+  if (membership) return { granted: true, via: "membership", enrollment, membership, installments };
+  if (installments) {
+    return { granted: false, blocked: installments.status === "paused" ? "installment_overdue" : "installment_cancelled", enrollment, membership: null, installments };
+  }
+  return { granted: false, blocked: "membership_lapsed", enrollment, membership: null, installments };
+}
+
+/**
+ * Which courses of a list the member already has for good (a free or paid
+ * enrollment, a purchase, a bundle, a batch seat). Courses opened through a
+ * membership or still being paid in installments do not count: buying them
+ * again, e.g. in a bundle, makes them permanent.
+ */
+export function ownedCourseIds(db: Snapshot, userId: string, courseIds: readonly string[], now: number = Date.now()): string[] {
+  return courseIds.filter((courseId) => {
+    const access = resolveCourseAccess(db, userId, courseId, now);
+    return access.granted && access.via !== "membership" && access.via !== "installments";
+  });
 }
 
 /**

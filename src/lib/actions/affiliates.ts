@@ -7,7 +7,7 @@ import { mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
 import { notify, notifyMany } from "@/lib/services/notifications";
 import { fd, fdBool, formatPrice, isValidEmail } from "@/lib/utils";
-import { AFFILIATE_STATUSES, clampCookieDays, clampPercent, MAX_COOKIE_DAYS, normalizeCode, PAYOUT_METHODS } from "@/lib/growth/affiliates-shared";
+import { AFFILIATE_STATUSES, clampCookieDays, clampPercent, cleanIdList, MAX_COOKIE_DAYS, normalizeCode, PAYOUT_METHODS } from "@/lib/growth/affiliates-shared";
 import { applyForAffiliate, approveCommissions, recordAffiliatePayout, voidCommissions } from "@/lib/growth/affiliates";
 
 /**
@@ -28,12 +28,6 @@ function revalidateAffiliates(affiliateId?: string) {
 async function requireAdmin(): Promise<User | null> {
   const user = await getCurrentUser();
   return user && isAdmin(user) ? user : null;
-}
-
-function cleanIds(input: unknown): string[] | null {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_BULK) return null;
-  const ids = input.filter((v): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v));
-  return ids.length === input.length ? Array.from(new Set(ids)) : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,7 +171,7 @@ export async function updateAffiliateAction(_prev: ActionResult | null, formData
 export async function approveCommissionsAction(ids: string[]): Promise<ActionResult<{ approved: number }>> {
   const admin = await requireAdmin();
   if (!admin) return { ok: false, error: "Only administrators can approve commissions." };
-  const clean = cleanIds(ids);
+  const clean = cleanIdList(ids, MAX_BULK);
   if (!clean) return { ok: false, error: `Select between 1 and ${MAX_BULK} commissions.` };
   const { approved, affiliateUserIds } = await approveCommissions(clean);
   if (!approved) return { ok: false, error: "None of the selected commissions are waiting for approval." };
@@ -196,7 +190,7 @@ export async function approveCommissionsAction(ids: string[]): Promise<ActionRes
 export async function voidCommissionsAction(ids: string[]): Promise<ActionResult<{ voided: number }>> {
   const admin = await requireAdmin();
   if (!admin) return { ok: false, error: "Only administrators can void commissions." };
-  const clean = cleanIds(ids);
+  const clean = cleanIdList(ids, MAX_BULK);
   if (!clean) return { ok: false, error: `Select between 1 and ${MAX_BULK} commissions.` };
   const { voided, skippedPaid } = await voidCommissions(clean);
   if (!voided) return { ok: false, error: skippedPaid ? "Paid commissions can't be voided." : "The selected commissions are already void." };

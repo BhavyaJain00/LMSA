@@ -51,7 +51,7 @@ export function TrackingSettingsForm({ trackOpens, trackClicks, canEdit }: { tra
       ) : (
         <p className="text-xs text-ink-muted">Only administrators can change these settings.</p>
       )}
-      <p className="text-xs text-ink-muted">Transactional emails (sign-in links, receipts, notifications) are never tracked. Changes apply to emails queued from now on.</p>
+      <p className="text-xs text-ink-muted">Transactional emails (sign-in links, receipts, notifications) are never tracked. Turning a switch on applies to emails queued from now on; turning it off also stops recording for emails already sent.</p>
     </form>
   );
 }

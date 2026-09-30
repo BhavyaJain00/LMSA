@@ -16,6 +16,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { EmailEvent } from "@/lib/types";
 
+declare module "@/lib/types" {
+  interface EmailEvent {
+    /**
+     * Round 3 comms: campaign of the email the event belongs to (copied from
+     * `EmailMessage.trackingId`), so campaign statistics survive the outbox
+     * clean-up that deletes old sent messages.
+     */
+    trackingId?: string;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Signatures                                                          */
 /* ------------------------------------------------------------------ */
@@ -256,6 +267,14 @@ export function normalizeTrackingId(value: string | null | undefined): string | 
   return parseTrackingId(value) ? value! : undefined;
 }
 
+/**
+ * Whether a tracking id belongs to `campaign`: the id itself, or a whole
+ * sequence when `campaign` is "sequence:<id>" (which covers every step).
+ */
+export function belongsToCampaign(trackingId: string | null | undefined, campaign: string): boolean {
+  return !!trackingId && !!campaign && (trackingId === campaign || trackingId.startsWith(`${campaign}:`));
+}
+
 /* ------------------------------------------------------------------ */
 /* Recording rules                                                     */
 /* ------------------------------------------------------------------ */
@@ -279,15 +298,24 @@ export interface TrackingPlan {
   firstClick: boolean;
 }
 
+/** What may be recorded right now (the global tracking switches). */
+export interface TrackingAllowance {
+  opens: boolean;
+  clicks: boolean;
+}
+
 /**
  * Which events to store for a hit, given the email's existing events. A click
  * also proves the email was opened (images are often blocked), so the first
- * click records an open when there is none yet.
+ * click records an open when there is none yet. Nothing is planned for a kind
+ * of event that `allow` switches off — emails sent while tracking was on keep
+ * their pixel and redirects, but stop recording once it is turned off.
  */
 export function planTrackingEvents(
   existing: readonly Pick<EmailEvent, "type" | "url" | "createdAt">[],
   hit: TrackingHit,
   now: number = Date.now(),
+  allow: TrackingAllowance = { opens: true, clicks: true },
 ): TrackingPlan {
   const plan: TrackingPlan = { add: [], firstOpen: false, firstClick: false };
   if (existing.length >= TRACKING_RULES.maxEventsPerEmail) return plan;
@@ -295,15 +323,17 @@ export function planTrackingEvents(
   const latest = (rows: readonly Pick<EmailEvent, "createdAt">[]) => rows.reduce((max, e) => Math.max(max, Date.parse(e.createdAt) || 0), 0);
 
   if (hit.type === "open") {
+    if (!allow.opens) return plan;
     if (opens.length && now - latest(opens) < TRACKING_RULES.reopenGapMs) return plan;
     plan.add.push({ type: "open" });
     plan.firstOpen = opens.length === 0;
     return plan;
   }
 
+  if (!allow.clicks) return plan;
   const clicks = existing.filter((e) => e.type === "click");
   const sameLink = clicks.filter((e) => e.url === hit.url);
-  if (!opens.length) {
+  if (!opens.length && allow.opens) {
     plan.add.push({ type: "open" });
     plan.firstOpen = true;
   }
@@ -312,6 +342,32 @@ export function planTrackingEvents(
     plan.firstClick = clicks.length === 0;
   }
   return plan;
+}
+
+/**
+ * Events worth keeping once outbox rows have been deleted (old sent messages
+ * are cleaned up, accounts get erased): an event stays while its email still
+ * exists, or while the campaign it was recorded for does — by then it is an
+ * anonymous count. Returns the same array when nothing has to go.
+ */
+export function retainedEvents<E extends Pick<EmailEvent, "emailId" | "trackingId">>(
+  events: readonly E[],
+  emailExists: (emailId: string) => boolean,
+  campaignExists: (ref: TrackingRef) => boolean,
+): readonly E[] {
+  const campaigns = new Map<string, boolean>();
+  const alive = (trackingId: string | undefined): boolean => {
+    if (!trackingId) return false;
+    let known = campaigns.get(trackingId);
+    if (known === undefined) {
+      const ref = parseTrackingId(trackingId);
+      known = !!ref && campaignExists(ref);
+      campaigns.set(trackingId, known);
+    }
+    return known;
+  };
+  const kept = events.filter((e) => emailExists(e.emailId) || alive(e.trackingId));
+  return kept.length === events.length ? events : kept;
 }
 
 /* ------------------------------------------------------------------ */

@@ -5,7 +5,7 @@ import { getSettings } from "@/lib/db/store";
 import { siteConfig } from "@/lib/config";
 import { getAffiliateDashboard, getShareTargets } from "@/lib/growth/affiliates";
 import { methodLabel, paginate } from "@/lib/growth/affiliates-shared";
-import { ButtonLink } from "@/components/ui/button";
+import { buttonClasses, ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader, StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
@@ -233,9 +233,17 @@ export default async function AffiliatePage(props: PageProps<"/affiliate">) {
       </div>
 
       <section aria-labelledby="history-heading" className="space-y-4">
-        <h2 id="history-heading" className="sr-only">
-          History
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id="history-heading" className="text-base font-semibold text-ink">
+            Earnings history
+          </h2>
+          {(dashboard.commissions.length > 0 || dashboard.payouts.length > 0) && (
+            <a href="/affiliate/export" className={buttonClasses({ variant: "outline", size: "sm" })} download>
+              <Icon.Download className="size-4" aria-hidden="true" />
+              Download statement
+            </a>
+          )}
+        </div>
         <Tabs
           items={[
             { label: "Commissions", value: "commissions", count: dashboard.commissions.length },

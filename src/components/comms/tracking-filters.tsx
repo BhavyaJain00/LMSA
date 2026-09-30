@@ -15,7 +15,6 @@ const RANGE_OPTIONS = [
   { value: "7", label: "Last 7 days" },
   { value: "30", label: "Last 30 days" },
   { value: "90", label: "Last 90 days" },
-  { value: "365", label: "Last 12 months" },
 ];
 
 /** Period, event type and search for the tracking page. Every change goes back to page 1. */

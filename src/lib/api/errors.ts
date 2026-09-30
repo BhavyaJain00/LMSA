@@ -18,6 +18,7 @@ export type ApiErrorCode =
   | "payload_too_large"
   | "validation_failed"
   | "not_found"
+  | "method_not_allowed"
   | "conflict"
   | "forbidden"
   | "internal_error";

@@ -28,6 +28,33 @@ export interface BillingDefaults {
 
 type Gateway = Settings["commerce"]["paymentGateway"];
 
+/** What the buyer signs up for when the item is a membership plan (computed on the server). */
+export interface MembershipCheckoutTerms {
+  planName: string;
+  /** Billed every month/year (false for lifetime plans). */
+  recurring: boolean;
+  /** Free days before the first charge for this buyer (0 = charged now). */
+  trialDays: number;
+  /** Price per period, e.g. "$19.00/month" (the plain price for lifetime plans). */
+  periodLabel: string;
+  /** "month", "year" or "lifetime". */
+  intervalNoun: string;
+  /** Formatted date of the first charge when there is a trial. */
+  firstChargeOn: string | null;
+  /** The gateway charges every period by itself (Stripe, Razorpay). */
+  automaticRenewal: boolean;
+}
+
+/** Set when the buyer chose to pay a course in installments (computed on the server). */
+export interface InstallmentCheckoutTerms {
+  /** Number of payments. */
+  count: number;
+  /** "every 30 days", "every week". */
+  interval: string;
+  /** Stripe charges the remaining payments by itself; otherwise the buyer pays each one from a reminder. */
+  automatic: boolean;
+}
+
 const GATEWAY_NAME: Record<Gateway, string> = { none: "", manual: "Manual payment", stripe: "Stripe", razorpay: "Razorpay" };
 
 /**
@@ -51,6 +78,8 @@ export function BillingForm({
   defaults,
   contactEmail,
   legal = [],
+  membership = null,
+  installments = null,
 }: {
   itemType: PaymentItemType;
   itemId: string;
@@ -67,6 +96,10 @@ export function BillingForm({
   contactEmail?: string;
   /** Published terms, refund and privacy pages (`agreementDocuments("checkout", await legalLinks())`). */
   legal?: AgreementLink[];
+  /** Set when the item is a membership plan: changes the payment wording and the submit label. */
+  membership?: MembershipCheckoutTerms | null;
+  /** Set when the order is the first payment of a plan: `expectedTotal` and `totalLabel` are one payment. */
+  installments?: InstallmentCheckoutTerms | null;
 }) {
   const [country, setCountry] = useState(defaults.country);
   const launcher = useCheckoutLauncher();
@@ -82,6 +115,43 @@ export function BillingForm({
   const india = country === "India";
   const busy = pending || launcher.busy;
   const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] || "payment");
+  const trial = !!membership && membership.trialDays > 0 && !free;
+  const renews = !!membership?.recurring;
+  const later = installments ? installments.count - 1 : 0;
+  const installmentLine = installments
+    ? `${totalLabel} today, then ${later} more payment${later === 1 ? "" : "s"} of ${totalLabel} ${installments.interval}${
+        installments.automatic ? ", charged to the same card automatically" : ". We remind you before each one is due"
+      }.`
+    : null;
+  // What the gateway collects, in the buyer's words.
+  const chargeLine = trial
+    ? `Nothing is charged today. Your ${membership.trialDays}-day free trial runs until ${membership.firstChargeOn}, then ${membership.periodLabel}.`
+    : renews
+      ? `${totalLabel} now, then ${membership.periodLabel} until you cancel.`
+      : installments?.automatic
+        ? installmentLine
+        : null;
+  const submitLabel = installments && !free
+    ? gateway === "manual"
+      ? `Place order · ${totalLabel} today`
+      : gateway === "stripe"
+        ? `Continue to payment · ${totalLabel} today`
+        : `Pay ${totalLabel} today`
+    : free
+    ? membership
+      ? "Start membership"
+      : "Enroll for Free"
+    : trial
+      ? `Start ${membership.trialDays}-day free trial`
+      : renews
+        ? gateway === "manual"
+          ? `Place order · ${membership.periodLabel}`
+          : `Subscribe · ${membership.periodLabel}`
+        : gateway === "manual"
+          ? `Place order · ${totalLabel}`
+          : gateway === "stripe"
+            ? `Continue to payment · ${totalLabel}`
+            : `Pay ${totalLabel}`;
 
   return (
     <form onSubmit={onSubmit} noValidate aria-labelledby="billing-address-heading">
@@ -89,6 +159,7 @@ export function BillingForm({
       <input type="hidden" name="itemId" value={itemId} />
       <input type="hidden" name="coupon" value={couponCode} />
       <input type="hidden" name="expectedTotal" value={expectedTotal} />
+      {installments && <input type="hidden" name="paymentOption" value="installments" />}
 
       <div className="rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
         <h2 id="billing-address-heading" className="text-lg font-semibold text-ink">
@@ -181,16 +252,28 @@ export function BillingForm({
         {free ? (
           <p className="mt-2 flex items-start gap-2 text-sm text-ink-muted">
             <Icon.Gift className="mt-0.5 size-4 shrink-0 text-success" />
-            {expectedTotal <= 0 ? "Your discount covers the full price — no payment is needed." : "No payment is collected for this order. You'll get access right away."}
+            {membership
+              ? "No payment is collected for this membership. It starts as soon as you confirm."
+              : expectedTotal <= 0
+                ? "Your discount covers the full price — no payment is needed."
+                : "No payment is collected for this order. You'll get access right away."}
           </p>
         ) : gateway === "manual" ? (
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
               <Icon.Receipt className="mt-0.5 size-4 shrink-0 text-accent" />
-              <span>
-                Place your order and we&apos;ll share the payment details on the next page. Your access is activated as soon as an administrator confirms the payment of{" "}
-                <strong className="text-ink">{totalLabel}</strong>.
-              </span>
+              {trial ? (
+                <span>
+                  Your free trial starts as soon as you place the order, and we&apos;ll share the payment details on the next page. Pay{" "}
+                  <strong className="text-ink">{totalLabel}</strong> before {membership.firstChargeOn} to keep your membership running.
+                </span>
+              ) : (
+                <span>
+                  Place your order and we&apos;ll share the payment details on the next page. Your {membership ? "membership starts" : "access is activated"} as soon as an
+                  administrator confirms the {installments ? "first " : ""}payment of <strong className="text-ink">{totalLabel}</strong>.
+                  {installmentLine && <> {installmentLine}</>}
+                </span>
+              )}
             </p>
             {contactEmail && (
               <p className="pl-6 text-xs">
@@ -223,10 +306,17 @@ export function BillingForm({
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
               <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
-              <span>
-                You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{totalLabel}</strong> by card or wallet. Card details never touch our
-                servers.
-              </span>
+              {chargeLine ? (
+                <span>
+                  You&apos;ll continue to Stripe&apos;s secure checkout to {trial ? "save a payment method" : "pay by card or wallet"}.{" "}
+                  <strong className="text-ink">{chargeLine}</strong> Card details never touch our servers.
+                </span>
+              ) : (
+                <span>
+                  You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{totalLabel}</strong> by card or wallet. Card details never touch our
+                  servers.
+                </span>
+              )}
             </p>
             {gatewayMode === "test" && (
               <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
@@ -241,10 +331,18 @@ export function BillingForm({
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
               <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
-              <span>
-                Pay <strong className="text-ink">{totalLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you place
-                the order.
-              </span>
+              {chargeLine && !installments ? (
+                <span>
+                  A secure Razorpay window opens to {trial ? "authorize your payment method" : "pay and authorize future renewals"} — cards or UPI AutoPay.{" "}
+                  <strong className="text-ink">{chargeLine}</strong>
+                </span>
+              ) : (
+                <span>
+                  Pay <strong className="text-ink">{totalLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you
+                  place the order.
+                  {installmentLine && <strong className="text-ink"> {installmentLine}</strong>}
+                </span>
+              )}
             </p>
             {gatewayMode === "test" && (
               <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
@@ -259,7 +357,11 @@ export function BillingForm({
           <div>
             <Checkbox id="consent" name="consent" label="I consent to my personal information being stored for invoicing" aria-invalid={!!errors.consent || undefined} />
             {errors.consent && <p className="mt-1.5 pl-6.5 text-xs text-danger">{errors.consent}</p>}
-            <LegalAgreement documents={legal} lead={free ? "By enrolling you agree to" : "By placing your order you agree to"} className="mt-2 pl-6.5" />
+            <LegalAgreement
+              documents={legal}
+              lead={membership ? "By starting this membership you agree to" : free ? "By enrolling you agree to" : "By placing your order you agree to"}
+              className="mt-2 pl-6.5"
+            />
           </div>
           <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
             <Button
@@ -269,7 +371,7 @@ export function BillingForm({
               className="w-full sm:w-auto"
               leftIcon={free ? undefined : online ? <Icon.Lock className="size-4" /> : <Icon.Receipt className="size-4" />}
             >
-              {free ? "Enroll for Free" : gateway === "manual" ? `Place order · ${totalLabel}` : gateway === "stripe" ? `Continue to payment · ${totalLabel}` : `Pay ${totalLabel}`}
+              {submitLabel}
             </Button>
             {statusLabel && (
               <p className="text-xs text-ink-muted" role="status" aria-live="polite">

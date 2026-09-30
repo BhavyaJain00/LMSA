@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { MAX_QUESTION_CHARS } from "@/lib/ai/prompt";
 import { Icon } from "@/components/ui/icons";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 import { ArrowUpIcon, StopIcon } from "./ai-icons";
 import { AnswerBody, ChatMessage } from "./chat-message";
 import type { useAiChat } from "./use-ai-chat";
@@ -20,6 +20,13 @@ export interface AiChatViewProps {
   className?: string;
   /** Extra controls rendered above the composer (e.g. "Open full page"). */
   footerExtra?: ReactNode;
+}
+
+/** Errors that asking again can't fix. */
+const NO_RETRY: ReadonlySet<string> = new Set(["quota", "forbidden", "not_configured", "unauthorized"]);
+
+function formatWait(seconds: number): string {
+  return seconds < 90 ? `${seconds}s` : `${Math.ceil(seconds / 60)} min`;
 }
 
 function useCountdown(until: number | undefined): number {
@@ -69,6 +76,14 @@ export function AiChatView({ chat, starterQuestions, courseTitle, compact, class
     stickRef.current = true;
     setDraft("");
     void chat.send(question);
+  };
+
+  /** Put a rejected question back in the box so it can be shortened or reworded. */
+  const editFailedQuestion = () => {
+    if (!chat.error) return;
+    setDraft(chat.error.question);
+    chat.dismissError();
+    inputRef.current?.focus();
   };
 
   const empty = chat.messages.length === 0 && !chat.streaming;
@@ -147,10 +162,16 @@ export function AiChatView({ chat, starterQuestions, courseTitle, compact, class
             <div role="alert" className="mb-2.5 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/8 px-3 py-2 text-sm text-ink">
               <Icon.AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" />
               <p className="min-w-0 flex-1">{chat.error.message}</p>
-              {chat.error.code !== "quota" && chat.error.code !== "forbidden" && chat.error.code !== "not_configured" && (
-                <button type="button" onClick={chat.retry} disabled={wait > 0 || busy} className="shrink-0 font-medium text-accent hover:underline disabled:text-ink-faint disabled:no-underline">
-                  {wait > 0 ? `Retry in ${wait}s` : "Try again"}
+              {chat.error.code === "invalid_input" ? (
+                <button type="button" onClick={editFailedQuestion} className="shrink-0 font-medium text-accent hover:underline">
+                  Edit question
                 </button>
+              ) : (
+                !NO_RETRY.has(chat.error.code) && (
+                  <button type="button" onClick={chat.retry} disabled={wait > 0 || busy} className="shrink-0 font-medium text-accent hover:underline disabled:text-ink-faint disabled:no-underline">
+                    {wait > 0 ? `Retry in ${formatWait(wait)}` : "Try again"}
+                  </button>
+                )
               )}
               <button type="button" onClick={chat.dismissError} className="shrink-0 rounded p-0.5 text-ink-faint hover:text-ink" aria-label="Dismiss">
                 <Icon.X className="size-3.5" />
@@ -210,6 +231,13 @@ export function AiChatView({ chat, starterQuestions, courseTitle, compact, class
                 <span className="text-danger">
                   {draft.length.toLocaleString()}/{MAX_QUESTION_CHARS.toLocaleString()}
                 </span>
+              ) : chat.quota && quotaOut ? (
+                <>
+                  Daily limit of {chat.quota.limit} reached · resets{" "}
+                  <time dateTime={chat.quota.resetsAt} suppressHydrationWarning>
+                    {relativeTime(chat.quota.resetsAt)}
+                  </time>
+                </>
               ) : chat.quota && chat.quota.limit > 0 ? (
                 `${chat.quota.remaining ?? chat.quota.limit} of ${chat.quota.limit} questions left today`
               ) : null}

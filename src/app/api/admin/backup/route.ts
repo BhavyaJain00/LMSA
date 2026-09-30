@@ -1,27 +1,40 @@
-import { NextResponse } from "next/server";
-import { getCurrentUser, isAdmin } from "@/lib/auth/session";
-import { exportDatabase } from "@/lib/db/store";
+import { NextResponse, type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
-import { toDateKey } from "@/lib/utils";
+import { isCrossSite } from "@/lib/media/upload-http";
+import { getBackupManager } from "@/lib/db/backup";
+import { authorizeBackupAdmin, backupFileResponse, describeBackupFailure } from "@/lib/db/backup-admin";
+
+export const dynamic = "force-dynamic";
+
+const NO_STORE = { "Cache-Control": "no-store" };
+
+/** 20260930-041522 (UTC), for download file names. */
+function stamp(date: Date = new Date()): string {
+  return date.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+}
 
 /**
- * GET /api/admin/backup — download a JSON snapshot of the whole database.
- * Admin only. The snapshot contains password hashes and payment details.
+ * GET /api/admin/backup?format=json|sqlite — download the live data as it
+ * is right now, without keeping a copy on the server: a JSON export (the
+ * default; the db.json format) or a compacted SQLite file. Both can be
+ * restored from the admin data page or with `npm run db:restore`.
+ *
+ * Admin only. The file contains password hashes, sessions and payment
+ * details.
  */
-export async function GET() {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  if (!isAdmin(user)) return NextResponse.json({ ok: false, error: "Only administrators can download backups." }, { status: 403 });
+export async function GET(req: NextRequest) {
+  if (isCrossSite(req)) return NextResponse.json({ ok: false, error: "Backups can only be downloaded from this site." }, { status: 403, headers: NO_STORE });
+  const access = await authorizeBackupAdmin("download");
+  if (!access.ok) return NextResponse.json({ ok: false, error: access.error }, { status: access.status, headers: NO_STORE });
 
-  const json = await exportDatabase();
-  await audit(user, "backup.download", { type: "settings", id: "data" }, { bytes: json.length });
-  return new NextResponse(json, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Content-Disposition": `attachment; filename="learnloop-backup-${toDateKey()}.json"`,
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
+  const format = req.nextUrl.searchParams.get("format") === "sqlite" ? "sqlite" : "json";
+  try {
+    const manager = await getBackupManager();
+    const { file, sizeBytes } = await manager.exportTo(format);
+    await audit(access.user, "backup.download", { type: "settings", id: "data" }, { source: "live data", format, bytes: sizeBytes });
+    return backupFileResponse(file, { downloadName: `learnloop-backup-${stamp()}.${format}`, format, sizeBytes, removeAfter: true });
+  } catch (err) {
+    const failure = describeBackupFailure(err, "The backup could not be prepared. Please try again.");
+    return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers: NO_STORE });
+  }
 }

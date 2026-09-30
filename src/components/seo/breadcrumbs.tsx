@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { breadcrumbJsonLd, type BreadcrumbItem } from "@/lib/seo/jsonld";
 import { normalizeTrail } from "@/lib/seo/breadcrumbs";
+import { scheduleContentSync } from "@/lib/seo/content-sync";
 import { siteOrigin } from "@/lib/seo/site";
 import { Icon } from "@/components/ui/icons";
 import { JsonLd } from "./json-ld";
@@ -12,8 +13,13 @@ import { JsonLd } from "./json-ld";
  * visitors see). Build trails with the helpers in `@/lib/seo/breadcrumbs`.
  * On narrow screens every crumb but the last is capped so the trail wraps
  * instead of overflowing.
+ *
+ * Server Component. Content pages (course, batch, program, job, article) all
+ * render it, so it also schedules the content sync: a slug changed in an
+ * editor gets its permanent redirect as soon as the page is viewed again.
  */
 export function Breadcrumbs({ items, className, structuredData = true }: { items: BreadcrumbItem[]; className?: string; structuredData?: boolean }) {
+  scheduleContentSync();
   const trail = normalizeTrail(items);
   if (trail.length < 2) return null;
   return (

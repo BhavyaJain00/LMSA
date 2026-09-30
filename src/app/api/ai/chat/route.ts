@@ -2,7 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { SlidingWindowRateLimiter } from "@/lib/auth/rate-limit";
 import { getDb } from "@/lib/db/store";
+import { recordError } from "@/lib/errors/record";
 import { readLimitedText } from "@/lib/media/body";
+import { isCrossSite } from "@/lib/media/upload-http";
 import { aiEnv } from "@/lib/server-env";
 import { courseTutorAccess, unavailableMessage } from "@/lib/ai/access";
 import { AiProviderError, streamClaude } from "@/lib/ai/anthropic";
@@ -17,12 +19,15 @@ import type { AiErrorCode, ChatStreamEvent } from "@/lib/ai/types";
  * AI tutor chat: `POST /api/ai/chat` with JSON
  * `{ courseId, conversationId?, lessonId?, message }`.
  *
- * Checks (in order): signed in, JSON body ≤ 16 KB, valid input, the tutor is
- * enabled for the site and the course and the key is configured, the viewer
- * is enrolled or manages the course, per-user rate limit, one answer at a
- * time per user, the daily message limit. Then it streams the answer as
- * Server-Sent Events (`start`, `citations`, `delta`, then `done` or
- * `error`) and stores the exchange with its token usage.
+ * Checks (in order): signed in, same site, JSON body ≤ 16 KB, valid input,
+ * the tutor is enabled for the site and the course and the key is configured,
+ * the viewer is enrolled or manages the course, per-user rate limits (per
+ * minute and per hour), the daily message limit, one answer at a time per
+ * user and a site-wide cap on answers being written. Then it streams the
+ * answer as Server-Sent Events (`start`, `citations`, `delta`, then `done` or
+ * `error`, with comment lines as keep-alives while the model is thinking) and
+ * stores the exchange with its token usage. A question that gets no answer is
+ * removed again, so it doesn't count against the daily limit.
  *
  * Only this learner's own conversation and course material are sent to the
  * model; locked lessons (drip, order, scheduled) are excluded for learners.
@@ -34,6 +39,12 @@ const MAX_BODY_BYTES = 16 * 1024;
 /** Room for adaptive thinking plus a concise answer. */
 const MAX_OUTPUT_TOKENS = 16_000;
 const RATE_RULE = { limit: 8, windowMs: 60_000 };
+/** Backstop for sites without a daily limit and for course staff, who are exempt from it. */
+const HOURLY_RULE = { limit: 120, windowMs: 60 * 60_000 };
+/** Comment lines sent while no text is flowing, so proxies keep the connection open. */
+const KEEP_ALIVE_MS = 15_000;
+/** Answers streamed at once across the site; more would only run into the API's own rate limits. */
+const MAX_CONCURRENT_ANSWERS = 24;
 
 const g = globalThis as unknown as { __llAiChatLimiter?: SlidingWindowRateLimiter; __llAiChatInFlight?: Set<string> };
 const limiter: SlidingWindowRateLimiter = (g.__llAiChatLimiter ??= new SlidingWindowRateLimiter({ maxKeys: 20_000 }));
@@ -69,6 +80,7 @@ const REFUSAL_TEXT = "I can't help with that request. Try asking about the cours
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return fail(401, "unauthorized", "Sign in to ask the AI tutor.");
+  if (isCrossSite(req)) return fail(403, "forbidden", "Questions can only be sent from this site.");
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return fail(415, "invalid_input", "Send the question as JSON.");
 
   const read = await readLimitedText(req, MAX_BODY_BYTES);
@@ -92,6 +104,12 @@ export async function POST(req: NextRequest) {
     return fail(notConfigured ? 503 : 403, notConfigured ? "not_configured" : "forbidden", unavailableMessage(access.reason));
   }
 
+  const hourly = limiter.check(`ai-chat-hour:${user.id}`, HOURLY_RULE);
+  if (!hourly.ok) {
+    const seconds = Math.max(1, Math.ceil(hourly.retryAfterMs / 1000));
+    const minutes = Math.ceil(seconds / 60);
+    return fail(429, "rate_limited", `You've asked a lot of questions in the last hour. Try again in ${minutes === 1 ? "a minute" : `${minutes} minutes`}.`, seconds);
+  }
   const rate = limiter.hit(`ai-chat:${user.id}`, RATE_RULE);
   if (!rate.ok) {
     const seconds = Math.max(1, Math.ceil(rate.retryAfterMs / 1000));
@@ -99,7 +117,8 @@ export async function POST(req: NextRequest) {
   }
   const quota = learnerQuota(db, user.id, access.manager);
   if (quota.exceeded) {
-    return fail(429, "quota", `You've used all ${quota.limit} AI tutor questions for today. The limit resets at midnight UTC.`, undefined, { resetsAt: quota.resetsAt });
+    const untilReset = Math.max(1, Math.ceil((Date.parse(quota.resetsAt) - Date.now()) / 1000));
+    return fail(429, "quota", `You've used all ${quota.limit} AI tutor questions for today. The limit resets at midnight UTC.`, untilReset, { resetsAt: quota.resetsAt, quota: toQuotaView(quota) });
   }
 
   // The lesson context must belong to the course and be open to the viewer.
@@ -115,8 +134,10 @@ export async function POST(req: NextRequest) {
     lessonId = lessonId ?? existing.lessonId ?? null;
   }
 
-  if (inFlight.has(user.id)) return fail(409, "busy", "The tutor is still answering your previous question.");
+  if (inFlight.has(user.id)) return fail(409, "busy", "The tutor is still answering your previous question.", 3);
+  if (inFlight.size >= MAX_CONCURRENT_ANSWERS) return fail(503, "overloaded", "The AI tutor is helping a lot of learners right now. Please try again in a moment.", 10);
   inFlight.add(user.id);
+  limiter.hit(`ai-chat-hour:${user.id}`, HOURLY_RULE);
 
   let released = false;
   const release = () => {
@@ -175,6 +196,15 @@ export async function POST(req: NextRequest) {
         });
         send({ type: "citations", citations: citationViews(citations, links) });
 
+        const keepAlive = setInterval(() => {
+          if (!open) return;
+          try {
+            controller.enqueue(encoder.encode(": keep-alive\n\n"));
+          } catch {
+            open = false;
+          }
+        }, KEEP_ALIVE_MS);
+
         let text = "";
         let tokensIn = 0;
         let tokensOut = 0;
@@ -207,15 +237,18 @@ export async function POST(req: NextRequest) {
           } else {
             await rollbackUserTurn(turn).catch(() => undefined);
             if (err instanceof AiProviderError) {
-              if (!err.transient && err.kind !== "aborted") console.error(`[ai-tutor] ${err.kind} error from the Anthropic API (${err.status ?? "-"}): ${err.message}`);
-              const described = describeProviderError(err, access.manager);
-              send({ type: "error", ...described });
+              // Setup problems (bad key, billing, unknown model) go to the admin error log, which alerts administrators.
+              if (!err.transient && err.kind !== "aborted" && err.kind !== "too_large") {
+                void recordError({ message: `AI tutor: the Anthropic API rejected the request (${err.kind}${err.status ? `, HTTP ${err.status}` : ""}): ${err.message}`, path: "/api/ai/chat", method: "POST", userId: user.id });
+              }
+              send({ type: "error", ...describeProviderError(err, access.manager) });
             } else {
-              console.error("[ai-tutor] unexpected error while answering", err instanceof Error ? err.message : err);
+              void recordError({ message: `AI tutor: unexpected error while answering: ${err instanceof Error ? err.message : String(err)}`, stack: err instanceof Error ? err.stack : undefined, path: "/api/ai/chat", method: "POST", userId: user.id });
               send({ type: "error", code: "provider_error", message: "The AI tutor couldn't answer this time. Please try again.", retryAfter: 5 });
             }
           }
         } finally {
+          clearInterval(keepAlive);
           req.signal.removeEventListener("abort", onClientGone);
           release();
           if (open) {

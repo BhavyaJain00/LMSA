@@ -9,8 +9,10 @@ import { Icon } from "@/components/ui/icons";
 /**
  * Coupon box on the checkout page. The coupon is carried in the URL
  * (`?coupon=CODE`) so the server recomputes and validates the summary.
+ * `keep` is a query string of other checkout choices to carry along
+ * (e.g. "pay=installments").
  */
-export function CouponForm({ basePath, appliedCode, error, submittedCode }: { basePath: string; appliedCode: string | null; error: string | null; submittedCode: string }) {
+export function CouponForm({ basePath, appliedCode, error, submittedCode, keep = "" }: { basePath: string; appliedCode: string | null; error: string | null; submittedCode: string; keep?: string }) {
   const router = useRouter();
   const [code, setCode] = useState(appliedCode ?? submittedCode);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -23,13 +25,15 @@ export function CouponForm({ basePath, appliedCode, error, submittedCode }: { ba
       return;
     }
     setLocalError(null);
-    startTransition(() => router.replace(`${basePath}?coupon=${encodeURIComponent(value)}`, { scroll: false }));
+    const query = new URLSearchParams(keep);
+    query.set("coupon", value);
+    startTransition(() => router.replace(`${basePath}?${query}`, { scroll: false }));
   };
 
   const remove = () => {
     setCode("");
     setLocalError(null);
-    startTransition(() => router.replace(basePath, { scroll: false }));
+    startTransition(() => router.replace(keep ? `${basePath}?${keep}` : basePath, { scroll: false }));
   };
 
   const shownError = localError ?? (appliedCode ? null : error);

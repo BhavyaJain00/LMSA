@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { apiRoute, dataResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { notFound } from "@/lib/api/errors";
 import { unenrollUserFromCourse } from "@/lib/services/enrollment";
@@ -17,3 +17,10 @@ export const DELETE = apiRoute(endpoints.deleteEnrollment, async (ctx) => {
   revalidatePath("/dashboard");
   return dataResponse({ id, object: "enrollment", deleted: true });
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("DELETE");
+export const GET = unsupported;
+export const POST = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;

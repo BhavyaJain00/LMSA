@@ -20,6 +20,7 @@ import {
   type LegalPageIntent,
 } from "./pages-shared";
 import { clampRetentionDays, RETENTION_MAX_DAYS, RETENTION_MIN_DAYS } from "./retention";
+import { maybePurgeExpiredRecords } from "./retention-run";
 
 /**
  * Admin → Settings → Legal pages: company details, cookie banner, data
@@ -89,6 +90,8 @@ export async function saveLegalSettingsAction(_prev: ActionResult | null, formDa
     dataRetentionDays: retention,
     retentionChanged: before.dataRetentionDays !== retention,
   });
+  // A shorter retention period applies now, not at the next scheduled purge.
+  if (retention < before.dataRetentionDays) await maybePurgeExpiredRecords(new Date(), { force: true });
   revalidateLegal();
   return { ok: true, data: undefined, message: "Legal settings saved" };
 }

@@ -18,6 +18,7 @@ import { Icon } from "@/components/ui/icons";
 import { AssignmentPanel } from "@/components/assessments/assignment-panel";
 import { Breadcrumbs, type Crumb } from "@/components/assessments/breadcrumbs";
 import { lessonQuery, param } from "@/components/assessments/shared";
+import { AssignmentFeedback } from "@/components/teaching/assignment-feedback";
 
 export async function generateMetadata(props: PageProps<"/assignments/[id]">): Promise<Metadata> {
   const { id } = await props.params;
@@ -99,6 +100,9 @@ export default async function AssignmentPage(props: PageProps<"/assignments/[id]
         privileged={privileged}
         manageHref={privileged ? `/admin/assignments/submissions?assignment=${assignment.id}` : null}
       />
+      <div className="mt-6">
+        <AssignmentFeedback assignmentId={assignment.id} userId={user.id} privileged={privileged} />
+      </div>
     </div>
   );
 }

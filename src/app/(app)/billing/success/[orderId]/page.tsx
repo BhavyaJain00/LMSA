@@ -16,7 +16,12 @@ import { OrderSummary, money } from "@/components/commerce/order-summary";
 import { PaymentStatusBadge } from "@/components/commerce/status-badge";
 import { CancelOrderButton } from "@/components/commerce/order-actions";
 import { ResumePaymentButton } from "@/components/commerce/resume-payment-button";
-import { formatDateTime } from "@/lib/utils";
+import { isLifetime, subscriptionGrantsAccess } from "@/lib/commerce/subscriptions";
+import { bundleCourses } from "@/lib/commerce/bundles";
+import { isCancelledPart, isInstallmentOrder } from "@/lib/commerce/installments";
+import { getPlanViewForOrder } from "@/lib/commerce/installment-views";
+import { InstallmentPlanCard } from "@/components/commerce/installment-plan-card";
+import { formatDate, formatDateTime } from "@/lib/utils";
 
 export const metadata = { title: "Order" };
 
@@ -43,11 +48,20 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
   const item = await getBillingItem(payment.itemType, payment.itemId);
   const own = payment.userId === user.id;
   const settings = db.settings;
-  const checkoutHref = `/billing/${payment.itemType}/${payment.itemId}`;
+  // Courses paid in installments: the plan this order is a part of, and whether it is one of the later parts.
+  const plan = await getPlanViewForOrder(payment);
+  const laterPart = isInstallmentOrder(payment) && payment.installmentNumber! > 1;
+  const partLabel = plan ? `Payment ${payment.installmentNumber} of ${plan.total}` : "";
+  const dueInFuture = laterPart && Date.parse(payment.createdAt) > Date.now();
+  const checkoutHref = `/billing/${payment.itemType}/${payment.itemId}${plan ? "?pay=installments" : ""}`;
   const invoiceHref = `/billing/invoice/${encodeURIComponent(payment.orderId)}`;
   const invoiced = hasInvoice(payment);
   const online = isRealGateway(payment.gateway);
   const gatewayName = GATEWAY_NAME[payment.gateway] ?? gatewayLabel(payment.gateway);
+  // Membership orders: the membership this order started or renewed.
+  const membership = payment.itemType === "plan" && payment.subscriptionId ? (db.subscriptions.find((s) => s.id === payment.subscriptionId) ?? null) : null;
+  const membershipPlan = payment.itemType === "plan" ? (db.plans.find((p) => p.id === (payment.planId ?? payment.itemId)) ?? null) : null;
+  const trialRunning = !!membership && membership.status === "trialing" && subscriptionGrantsAccess(membership);
 
   // Next steps for the order.
   const actions: ReactNode[] = [];
@@ -60,13 +74,56 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
     if (payment.itemType === "course" && item?.course) {
       const course = item.course;
       const next = own ? await getNextLesson(course, user) : null;
-      message = <>You now have full access to <strong className="text-ink">{course.title}</strong>. Happy learning!</>;
+      if (plan && plan.status === "completed") {
+        heading = payment.amount > 0 ? "Paid in full" : "Nothing more to pay";
+        message = <>All {plan.total} payments for <strong className="text-ink">{course.title}</strong> are settled. The course is yours for good.</>;
+      } else if (plan && (plan.status === "paused" || plan.status === "cancelled")) {
+        tone = "warning";
+        heading = `${partLabel} received`;
+        message =
+          plan.status === "paused" ? (
+            <>This payment is in, but a later one is overdue, so the lessons of <strong className="text-ink">{course.title}</strong> are locked until it is paid.</>
+          ) : (
+            <>This payment was received before the plan for <strong className="text-ink">{course.title}</strong> was cancelled. The lessons are locked; your progress is saved.</>
+          );
+      } else if (plan) {
+        heading = `${partLabel} received`;
+        message = <>You have full access to <strong className="text-ink">{course.title}</strong> while your payment plan is up to date. Happy learning!</>;
+      } else {
+        message = <>You now have full access to <strong className="text-ink">{course.title}</strong>. Happy learning!</>;
+      }
+      // While the plan is paused or cancelled the lessons are locked: only the course page is offered.
+      if (!plan || (plan.status !== "paused" && plan.status !== "cancelled")) {
+        actions.push(
+          <ButtonLink key="go" href={next ? lessonHref(course.slug, next) : `/courses/${course.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+            Start learning
+          </ButtonLink>,
+        );
+      }
       actions.push(
-        <ButtonLink key="go" href={next ? lessonHref(course.slug, next) : `/courses/${course.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
-          Start learning
-        </ButtonLink>,
         <ButtonLink key="course" href={`/courses/${course.slug}`} variant="outline">
           Go to course
+        </ButtonLink>,
+      );
+    } else if (payment.itemType === "bundle" && item?.bundle) {
+      const included = bundleCourses(item.bundle, db.courses).filter((c) => c.published);
+      message = (
+        <>
+          You now have full access to {included.length === 1 ? "the course" : `all ${included.length} courses`} of <strong className="text-ink">{item.bundle.title}</strong>. They are
+          yours for good.
+        </>
+      );
+      const first = included[0];
+      if (first) {
+        actions.push(
+          <ButtonLink key="go" href={`/courses/${first.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+            Start with {first.title}
+          </ButtonLink>,
+        );
+      }
+      actions.push(
+        <ButtonLink key="bundle" href={item.href} variant="outline">
+          View the bundle
         </ButtonLink>,
       );
     } else if (payment.itemType === "batch" && item?.batch) {
@@ -104,6 +161,45 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
           </ButtonLink>,
         );
       }
+    } else if (payment.itemType === "plan") {
+      const planName = membershipPlan?.name ?? payment.itemTitle;
+      if (membership && subscriptionGrantsAccess(membership)) {
+        heading = trialRunning ? "Your free trial has started" : payment.source === "Renewal" ? "Membership renewed" : payment.amount > 0 ? "Payment successful" : "Your membership is active";
+        message = isLifetime(membershipPlan) ? (
+          <>You have lifetime access through <strong className="text-ink">{planName}</strong>. Open any included course and start learning.</>
+        ) : trialRunning ? (
+          <>
+            Your trial of <strong className="text-ink">{planName}</strong> runs until {formatDate(membership.currentPeriodEnd)}. Every included course is unlocked; cancel before that
+            date and you won&apos;t be charged.
+          </>
+        ) : (
+          <>
+            Your <strong className="text-ink">{planName}</strong> membership is active until {formatDate(membership.currentPeriodEnd)}
+            {membership.cancelAtPeriodEnd ? "." : " and renews then."} Open any included course and start learning.
+          </>
+        );
+        actions.push(
+          <ButtonLink key="courses" href="/courses" rightIcon={<Icon.ArrowRight className="size-4" />}>
+            Browse courses
+          </ButtonLink>,
+        );
+      } else {
+        tone = "neutral";
+        heading = "Membership ended";
+        message = <>This order paid for <strong className="text-ink">{planName}</strong>, which is no longer running. Your progress is saved if you join again.</>;
+        actions.push(
+          <ButtonLink key="plans" href="/pricing">
+            See membership plans
+          </ButtonLink>,
+        );
+      }
+      if (own) {
+        actions.push(
+          <ButtonLink key="manage" href="/settings/subscription" variant="outline" leftIcon={<Icon.Star className="size-4" />}>
+            Manage membership
+          </ButtonLink>,
+        );
+      }
     } else {
       message = <>Thanks for your purchase of {payment.itemTitle}.</>;
     }
@@ -120,6 +216,21 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
         </ButtonLink>,
       );
     }
+  } else if (payment.status === "pending" && laterPart && plan) {
+    // A later part of a payment plan: paid from the plan card below (or charged by Stripe on its date).
+    tone = dueInFuture ? "neutral" : "warning";
+    heading = dueInFuture ? `${partLabel} is scheduled` : `${partLabel} is due`;
+    message = dueInFuture ? (
+      <>
+        <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> for {plan.courseTitle} is due on {formatDate(payment.createdAt)}.{" "}
+        {plan.autoCharge ? "It is charged to your card automatically on that day." : "You can pay it early whenever you like."}
+      </>
+    ) : (
+      <>
+        <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> for {plan.courseTitle} was due on {formatDate(payment.createdAt)}.{" "}
+        {plan.status === "paused" ? "The lessons are locked until it is paid." : "Pay it to keep your access without interruption."}
+      </>
+    );
   } else if (payment.status === "pending" && online) {
     tone = "warning";
     if (processing) {
@@ -145,10 +256,38 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
     message = (
       <>
         Complete your payment of <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> and include your order ID{" "}
-        <span className="font-mono font-semibold text-ink">{payment.orderId}</span> as the reference. You&apos;ll be enrolled automatically and notified as soon as an administrator
-        confirms the payment.
+        <span className="font-mono font-semibold text-ink">{payment.orderId}</span> as the reference.{" "}
+        {payment.itemType === "plan"
+          ? trialRunning && membership
+            ? `Your free trial is already running until ${formatDate(membership.currentPeriodEnd)}; the membership continues once an administrator confirms the payment.`
+            : payment.source === "Renewal"
+              ? "Your membership is extended as soon as an administrator confirms the payment."
+              : "Your membership starts as soon as an administrator confirms the payment."
+          : "You'll be enrolled automatically and notified as soon as an administrator confirms the payment."}
       </>
     );
+    if (payment.itemType === "plan" && own && membership) {
+      actions.push(
+        <ButtonLink key="manage" href="/settings/subscription" variant="outline" leftIcon={<Icon.Star className="size-4" />}>
+          Manage membership
+        </ButtonLink>,
+      );
+    }
+  } else if (payment.status === "failed" && laterPart && plan) {
+    if (isCancelledPart(payment)) {
+      tone = "neutral";
+      heading = `${partLabel} was cancelled`;
+      message = <>The payment plan for {plan.courseTitle} was cancelled, so this payment is no longer due and nothing will be charged for it.</>;
+    } else {
+      tone = "danger";
+      heading = `${partLabel} didn't go through`;
+      message = (
+        <>
+          {payment.failureReason ? <span className="text-ink">{payment.failureReason} </span> : null}
+          Nothing was charged. You can pay it again below, with the same or another payment method.
+        </>
+      );
+    }
   } else if (payment.status === "failed") {
     tone = payment.failureReason ? "danger" : "neutral";
     heading = payment.failureReason ? "Payment failed" : "Order cancelled";
@@ -203,12 +342,13 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
   const toneIcon = {
     success: <Icon.CheckCircle className="size-7" />,
     warning: <Icon.Clock className="size-7" />,
-    neutral: <Icon.XCircle className="size-7" />,
+    neutral: dueInFuture && payment.status === "pending" ? <Icon.Calendar className="size-7" /> : <Icon.XCircle className="size-7" />,
     danger: payment.status === "refunded" ? <Icon.Refresh className="size-7" /> : <Icon.AlertCircle className="size-7" />,
   }[tone];
 
   const address = formatAddressLines(payment.address).join(", ");
-  const showPendingActions = own && payment.status === "pending";
+  // Later parts of a plan are paid from the plan card and cannot be cancelled one by one.
+  const showPendingActions = own && payment.status === "pending" && !laterPart;
 
   return (
     <>
@@ -260,7 +400,13 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
                   <li>
                     Use <span className="font-mono text-ink">{payment.orderId}</span> as the payment reference.
                   </li>
-                  <li>We confirm the payment and enroll you — you&apos;ll get a notification.</li>
+                  <li>
+                    {payment.itemType === "plan"
+                      ? "We confirm the payment and your membership continues — you'll get a notification."
+                      : laterPart
+                        ? "We confirm the payment and your plan continues — you'll get a notification."
+                        : "We confirm the payment and enroll you — you'll get a notification."}
+                  </li>
                 </ol>
                 {(settings.contact.email || settings.contact.url) && (
                   <p className="mt-3 text-ink-muted">
@@ -280,6 +426,8 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
             )}
           </section>
 
+          {plan && <InstallmentPlanCard plan={plan} own={own} currentOrderId={payment.orderId} />}
+
           <section className="rounded-card border border-border bg-surface-1 p-6 shadow-card" aria-labelledby="order-details-heading">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 id="order-details-heading" className="text-base font-semibold text-ink">
@@ -291,7 +439,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
               <DetailItem label="Order ID">
                 <span className="font-mono">{payment.orderId}</span>
               </DetailItem>
-              <DetailItem label="Placed on">{formatDateTime(payment.createdAt)}</DetailItem>
+              <DetailItem label={laterPart ? "Due on" : "Placed on"}>{laterPart ? formatDate(payment.createdAt) : formatDateTime(payment.createdAt)}</DetailItem>
               <DetailItem label="Item">
                 {item ? (
                   <Link href={item.href} className="text-accent hover:underline">

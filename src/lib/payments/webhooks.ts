@@ -4,8 +4,15 @@ import { getDb } from "@/lib/db/store";
 import { fromGatewayAmount } from "./amounts";
 import { isRefundInProgress, markPaymentFailed, recordGatewayRefund, type GatewayRefundOutcome } from "./fulfillment";
 import { reconcileRazorpayPayment, reconcileStripeSession, reportUnmatchedPayment, type SyncState } from "./gateway";
-import { isStripeSessionPaid, parseStripeCharge, parseStripeSession, type StripeEvent } from "./stripe";
-import type { RazorpayEvent, RazorpayPayment } from "./razorpay";
+import { isStripeSessionPaid, parseStripeCharge, parseStripeInvoice, parseStripeSession, parseStripeSubscription, type StripeEvent } from "./stripe";
+import { handleRazorpaySubscriptionEvent, handleStripeInvoicePaid, syncStripeSubscription } from "@/lib/commerce/memberships";
+import {
+  handleStripeInstallmentInvoiceFailed,
+  handleStripeInstallmentInvoicePaid,
+  isInstallmentSubscription,
+  syncStripeInstallmentSubscription,
+} from "@/lib/commerce/installment-gateway";
+import { isRazorpaySubscriptionId, type RazorpayEvent, type RazorpayPayment } from "./razorpay";
 
 /**
  * Webhook event handlers. Signature verification happens in the route
@@ -103,6 +110,39 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
       return { handled: true, message: refundMessage(payment, outcome, "Stripe") };
     }
 
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted": {
+      // Payloads can be stale or arrive out of order: the subscription is read back from Stripe.
+      const sub = parseStripeSubscription(event.object);
+      if (!sub.id) return { handled: false, message: "subscription event without id" };
+      if (isInstallmentSubscription(sub.metadata)) {
+        const db = await getDb();
+        const res = await syncStripeInstallmentSubscription(sub.id, db.settings.commerce.paymentGateway);
+        return { handled: res.handled, message: res.message, retry: res.retry };
+      }
+      const res = await syncStripeSubscription(sub.id);
+      if (!res.subscription) return { handled: false, message: `no membership for ${sub.id}` };
+      return { handled: true, message: `membership ${res.subscription.id}: ${res.subscription.status}${res.created ? " (created)" : ""}` };
+    }
+
+    case "invoice.paid": {
+      // Invoices of a course payment plan settle its parts; every other subscription invoice is a membership.
+      const invoice = parseStripeInvoice(event.object);
+      return (await handleStripeInstallmentInvoicePaid(invoice)) ?? handleStripeInvoicePaid(invoice);
+    }
+
+    case "invoice.payment_failed": {
+      // The subscription turns past_due; the member is told when its status changes.
+      const invoice = parseStripeInvoice(event.object);
+      if (!invoice.subscriptionId) return { handled: false, message: `invoice ${invoice.id} is not for a subscription` };
+      const installment = await handleStripeInstallmentInvoiceFailed(invoice);
+      if (installment) return installment;
+      const res = await syncStripeSubscription(invoice.subscriptionId);
+      if (!res.subscription) return { handled: false, message: `no membership for ${invoice.subscriptionId}` };
+      return { handled: true, message: `membership ${res.subscription.id}: payment failed (${res.subscription.status})` };
+    }
+
     default:
       return { handled: false, message: `ignored ${event.type}` };
   }
@@ -125,6 +165,10 @@ export async function handleRazorpayEvent(event: RazorpayEvent): Promise<Webhook
     case "order.paid": {
       if (!event.payment) return { handled: false, message: `${event.event} without payment entity` };
       const payment = await paymentForRazorpay(event.payment, event.order?.id);
+      // Membership charges pay a subscription invoice; the `subscription.*` events record them.
+      if ((!payment && event.payment.invoiceId) || (payment && isRazorpaySubscriptionId(payment.gatewayOrderId))) {
+        return { handled: false, message: `${event.payment.id} belongs to a membership subscription` };
+      }
       if (!payment) {
         // Money was taken for a checkout whose order is gone (deleted while the Razorpay window was open).
         if (event.payment.status === "captured" || event.event === "order.paid") {
@@ -170,6 +214,20 @@ export async function handleRazorpayEvent(event: RazorpayEvent): Promise<Webhook
         full: rp?.refundStatus === "full" || rp?.status === "refunded",
       });
       return { handled: true, message: refundMessage(payment, outcome, "Razorpay") };
+    }
+
+    case "subscription.authenticated":
+    case "subscription.activated":
+    case "subscription.charged":
+    case "subscription.pending":
+    case "subscription.halted":
+    case "subscription.cancelled":
+    case "subscription.completed":
+    case "subscription.paused":
+    case "subscription.resumed":
+    case "subscription.updated": {
+      if (!event.subscription?.id) return { handled: false, message: `${event.event} without subscription entity` };
+      return handleRazorpaySubscriptionEvent(event.event, event.subscription, event.payment);
     }
 
     default:

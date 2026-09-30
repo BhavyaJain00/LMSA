@@ -9,7 +9,10 @@ import "server-only";
  * import line below, e.g. `import "@/lib/commerce/handlers";`.
  */
 
+import "@/lib/commerce/handlers";
 import "@/lib/growth/handlers";
 import "@/lib/teaching/handlers";
+import "@/lib/comms/handlers";
+import "@/lib/webhooks/handlers";
 
 export {};

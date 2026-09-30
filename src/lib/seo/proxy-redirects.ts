@@ -34,10 +34,7 @@ export function slugRedirectFor(pathname: string, now: number = Date.now()): str
   return resolveRedirect(state.index, pathname);
 }
 
-/** Paths the proxy never redirects (framework assets, APIs, metadata files). */
+/** Paths the proxy never looks up (the home page, framework assets, APIs). */
 export function isRedirectCandidate(pathname: string): boolean {
-  if (pathname === "/" || pathname.startsWith("/_next") || pathname.startsWith("/api/")) return false;
-  const segments = pathname.split("/").filter(Boolean);
-  // Every tracked page lives two or more segments deep (/courses/<slug>, /blog/<slug>, …).
-  return segments.length >= 2;
+  return pathname !== "/" && !pathname.startsWith("/_next") && !pathname.startsWith("/api/");
 }

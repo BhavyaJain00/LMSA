@@ -5,6 +5,7 @@ import { insert } from "@/lib/db/store";
 import { clientIpFromHeaders, UNKNOWN_IP } from "@/lib/auth/request-info";
 import { uid } from "@/lib/utils";
 import { toCsv } from "@/components/admin/settings/member-import-csv";
+import { maybePurgeExpiredRecords } from "@/lib/legal/retention-run";
 
 /**
  * Admin audit log.
@@ -16,6 +17,10 @@ import { toCsv } from "@/components/admin/settings/member-import-csv";
  *
  * Keep `meta` small and free of secrets and personal data beyond ids — it is
  * shown verbatim to administrators and exported as CSV.
+ *
+ * Every new entry also gives the retention purge a chance to run (it limits
+ * itself to once every few hours), so the log stays within
+ * `settings.legal.dataRetentionDays` even if nobody opens the audit page.
  */
 
 const MAX_ACTION_LENGTH = 100;
@@ -100,6 +105,8 @@ export async function audit(
   try {
     const event = buildAuditEvent(actor, action, target, meta, await currentIp());
     await insert("auditEvents", event);
+    // Not awaited: the purge records its own `retention.purge` event through this function.
+    void maybePurgeExpiredRecords();
   } catch (err) {
     console.error("[audit] failed to record event", action, err instanceof Error ? err.message : err);
   }
@@ -112,6 +119,8 @@ export async function audit(
 /** Human labels for the actions recorded across the app (unknown actions are humanized). */
 const ACTION_LABELS: Record<string, string> = {
   "settings.update": "Settings changed",
+  "settings.ai": "AI tutor settings changed",
+  "settings.api": "Public API switched on or off",
   "user.create": "Member created",
   "user.import": "Members imported",
   "user.update": "Member profile edited",
@@ -155,13 +164,75 @@ const ACTION_LABELS: Record<string, string> = {
   "error.delete": "Error deleted",
   "retention.purge": "Old records purged",
   "audit.export": "Audit log exported",
+  "api_key.create": "API key created",
+  "api_key.revoke": "API key revoked",
+  "api_key.delete": "API key deleted",
+  "api.user.create": "Member created through the API",
+  "api.user.update": "Member edited through the API",
+  "api.course.create": "Course created through the API",
+  "api.course.update": "Course edited through the API",
+  "api.enrollment.create": "Enrollment created through the API",
+  "api.enrollment.delete": "Enrollment removed through the API",
+  "api.batch_member.add": "Batch member added through the API",
+  "plan.create": "Membership plan created",
+  "plan.update": "Membership plan edited",
+  "plan.activate": "Membership plan activated",
+  "plan.retire": "Membership plan retired",
+  "plan.delete": "Membership plan deleted",
+  "membership.grant": "Membership granted",
+  "membership.extend": "Membership extended",
+  "membership.cancel": "Membership cancelled",
+  "membership.resume": "Membership resumed",
+  "affiliate.apply": "Affiliate application received",
+  "affiliate.status": "Affiliate status changed",
+  "affiliate.update": "Affiliate edited",
+  "affiliate.payout": "Affiliate payout recorded",
+  "affiliate.payout_email": "Affiliate payout email changed",
+  "affiliate.commissions_approve": "Commissions approved",
+  "affiliate.commissions_void": "Commissions voided",
+  "affiliate.export": "Affiliate report exported",
+  "ai.message.report": "AI answer reported",
+  "ai.review.approve": "AI answer approved",
+  "ai.review.correct": "AI answer corrected",
+  "ai.review.reopen": "AI answer review reopened",
+  "ai.export": "AI review queue exported",
+  "seo.indexnow_key": "IndexNow key changed",
+  "seo.indexnow_submit": "URLs submitted to IndexNow",
+  "seo.redirect_add": "Redirect added",
+  "seo.redirect_delete": "Redirect deleted",
+  "seo.redirect_export": "Redirects exported",
+  "category.landing_update": "Category landing page edited",
+  "storage.test": "Storage connection tested",
+  "storage.migrate": "Files moved to another storage",
+  "media.transcode_start": "Video conversion started",
+  "media.transcode_retry": "Video conversion retried",
+  "media.transcode_cancel": "Video conversion cancelled",
+  "transcript.save": "Transcript saved",
+  "transcript.delete": "Transcript deleted",
+  "transcript.generate": "Transcript generation requested",
+  "rubric.create": "Rubric created",
+  "rubric.update": "Rubric edited",
+  "rubric.duplicate": "Rubric duplicated",
+  "rubric.delete": "Rubric deleted",
+  "peer_review.override": "Peer review overridden",
+  "peer_review.reassign": "Peer review reassigned",
+  "peer_review.add": "Peer review added",
+  "peer_review.remove": "Peer review removed",
+  "peer_review.allocate": "Peer reviews allocated",
+  "peer_review.remind": "Peer reviewers reminded",
+  "peer_review.export": "Peer reviews exported",
+  "broadcast.tracking_export": "Email tracking exported",
+  "broadcast.audience_export": "Broadcast audience exported",
 };
 
+/** "peer_review.add" → "Peer review add" (labels for actions and targets without a dedicated one). */
+function humanize(value: string, fallback: string): string {
+  const text = value.replace(/[._]+/g, " ").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : fallback;
+}
+
 export function describeAuditAction(action: string): string {
-  const known = ACTION_LABELS[action];
-  if (known) return known;
-  const text = action.replace(/[._]+/g, " ").trim();
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Unknown action";
+  return ACTION_LABELS[action] ?? humanize(action, "Unknown action");
 }
 
 /** "course.publish" → "course" (used to group the action filter). */
@@ -287,14 +358,57 @@ const TARGET_LABELS: Record<string, string> = {
   ai_message: "AI tutor answer",
   transcode_job: "Video conversion",
   error: "Error",
+  api_key: "API key",
+  plan: "Membership plan",
+  subscription: "Membership",
+  enrollment: "Enrollment",
+  assignment: "Assignment",
+  rubric: "Rubric",
+  peer_review: "Peer review",
+  redirect: "Redirect",
+  category: "Category",
+  export: "Export",
 };
+
+/** Names of the action groups ("course.*") in the action filter. */
+const GROUP_LABELS: Record<string, string> = {
+  user: "Members",
+  account: "Account deletion",
+  privacy: "Personal data",
+  settings: "Settings",
+  course: "Courses",
+  payment: "Payments",
+  certificate: "Certificates",
+  legal: "Legal pages",
+  backup: "Backups",
+  data: "Demo data",
+  audit: "Audit log",
+  retention: "Retention",
+  error: "Error log",
+  api: "Public API",
+  api_key: "API keys",
+  plan: "Membership plans",
+  membership: "Memberships",
+  affiliate: "Affiliates",
+  ai: "AI tutor",
+  seo: "SEO",
+  category: "Categories",
+  storage: "Storage",
+  media: "Video conversion",
+  transcript: "Transcripts",
+  rubric: "Rubrics",
+  peer_review: "Peer review",
+  broadcast: "Broadcasts",
+};
+
+/** Human label for an action group ("peer_review" → "Peer review"). */
+export function describeAuditGroup(group: string): string {
+  return GROUP_LABELS[group] ?? humanize(group, "Other");
+}
 
 /** Human label for a target type ("legal_page" → "Legal page"). */
 export function describeAuditTarget(type: string): string {
-  const known = TARGET_LABELS[type];
-  if (known) return known;
-  const text = type.replace(/[._]+/g, " ").trim();
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Other";
+  return TARGET_LABELS[type] ?? humanize(type, "Other");
 }
 
 export interface AuditFacet {
@@ -337,7 +451,7 @@ export function auditFacets(events: readonly AuditEvent[]): AuditFacets {
     groups: [...groups.entries()]
       .map(([group, list]) => ({
         value: `${group}.*`,
-        label: describeAuditTarget(group),
+        label: describeAuditGroup(group),
         count: list.reduce((n, a) => n + a.count, 0),
         actions: list.sort(byLabel),
       }))
@@ -367,6 +481,8 @@ const SETTINGS_PATHS: Record<string, string> = {
   payments: "/admin/settings/payments",
   legal: "/admin/settings/legal",
   data: "/admin/settings/data",
+  api: "/admin/settings/api",
+  growth: "/admin/settings/plans",
   "growth.affiliates": "/admin/affiliates",
 };
 
@@ -377,9 +493,10 @@ function metaString(event: AuditEvent, key: string): string | null {
 
 /**
  * Admin page for an event's target, or null when there is none (the target
- * was deleted by this very event, or its type has no page).
+ * was deleted by this very event, or its type has no page). `orderIdOf`
+ * resolves a payment's order id for events that did not record it.
  */
-export function auditTargetHref(event: AuditEvent): string | null {
+export function auditTargetHref(event: AuditEvent, orderIdOf?: (paymentId: string) => string | undefined): string | null {
   const { targetType: type, targetId: id } = event;
   if (!type || !id) return null;
   const removed = /\.(delete|revoke)$/.test(event.action);
@@ -392,7 +509,7 @@ export function auditTargetHref(event: AuditEvent): string | null {
     case "batch":
       return `/admin/batches/${enc(id)}`;
     case "payment": {
-      const orderId = metaString(event, "orderId");
+      const orderId = metaString(event, "orderId") ?? orderIdOf?.(id);
       return removed || !orderId ? null : `/admin/settings/transactions?search=${enc(orderId)}`;
     }
     case "certificate": {
@@ -413,6 +530,19 @@ export function auditTargetHref(event: AuditEvent): string | null {
       return "/admin/settings/storage";
     case "error":
       return removed ? null : `/admin/errors/${enc(id)}`;
+    case "rubric":
+      return removed ? null : `/admin/rubrics/${enc(id)}`;
+    case "assignment":
+      return `/admin/assignments/${enc(id)}`;
+    case "plan":
+    case "subscription":
+      return "/admin/settings/plans";
+    case "api_key":
+      return "/admin/settings/api";
+    case "redirect":
+      return "/admin/settings/seo/redirects";
+    case "category":
+      return "/admin/settings/categories";
     default:
       return null;
   }

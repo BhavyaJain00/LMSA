@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import type { SlugRedirect } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
@@ -15,12 +16,13 @@ import { type ContentIndex, type RedirectRule, addRedirect, diffContentIndex, pr
  * courses, batches, programs, jobs, blog posts and categories with the last
  * snapshot (`storage/seo/content-index.json`):
  *  - a changed slug stores a `SlugRedirect` (old → new, chains collapsed)
- *    and rewrites `storage/seo/redirects.json`, which the proxy serves as 308s;
+ *    and rewrites `storage/seo/redirects.json`, which the proxy serves as 301s;
  *  - new, updated or removed public pages are submitted to IndexNow.
  *
  * It is cheap (one pass over in-memory rows), single-flight, throttled, and
- * runs after responses (the root layout schedules it with `after()`), plus
- * explicitly after blog and sales-page saves.
+ * runs after responses: `scheduleContentSync()` is called by the site-wide
+ * SEO component and by the breadcrumbs of every content page, and the SEO
+ * actions (blog, redirects, "check now") call `syncContentIndex()` directly.
  */
 
 const THROTTLE_MS = 2000;
@@ -119,6 +121,18 @@ export async function syncContentIndex(opts: { force?: boolean } = {}): Promise<
       state.lastRun = Date.now();
     });
   return state.running;
+}
+
+/**
+ * Run the sync once the current response has been sent (Server Components,
+ * Server Actions and Route Handlers). Never delays or fails the response.
+ */
+export function scheduleContentSync(): void {
+  try {
+    after(() => syncContentIndex());
+  } catch {
+    // Outside a request (scripts, tests without the Next runtime): nothing to schedule.
+  }
 }
 
 /** Rewrite `redirects.json` from the database (after an admin edits redirects by hand). */

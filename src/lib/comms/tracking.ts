@@ -5,11 +5,14 @@ import { getAppSecret } from "@/lib/server-env";
 import { siteConfig } from "@/lib/config";
 import { getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
+import { SlidingWindowRateLimiter } from "@/lib/auth/rate-limit";
 import {
   applyTracking,
+  belongsToCampaign,
   parsePixelParam,
   parseTrackingId,
   planTrackingEvents,
+  retainedEvents,
   summarizeEvents,
   verifyClickSignature,
   verifyOpenSignature,
@@ -54,21 +57,42 @@ export function verifyClickParams(emailId: string | null | undefined, url: strin
 }
 
 /**
+ * Hits processed per email and minute. Stored events are capped per email
+ * anyway; this keeps a single leaked link from being replayed into constant
+ * database work. It is keyed by email (not IP) because image proxies such as
+ * Gmail's fetch pixels for many recipients from a few addresses.
+ */
+const HITS_PER_EMAIL = { limit: 20, windowMs: 60_000 };
+const g = globalThis as unknown as { __llEmailTrackingLimiter?: SlidingWindowRateLimiter };
+const hitLimiter: SlidingWindowRateLimiter = (g.__llEmailTrackingLimiter ??= new SlidingWindowRateLimiter({ maxKeys: 50_000 }));
+
+/**
  * Store the events for one open or click (deduplicated, see
- * `planTrackingEvents`) and update the broadcast counters. Returns the plan
- * that was applied, or null when the email no longer exists.
+ * `planTrackingEvents`) and update the broadcast counters. The global
+ * switches are checked again here, so turning tracking off also stops
+ * recording for emails that were sent with a pixel or redirects. Returns the
+ * plan that was applied, or null when the email no longer exists or is being
+ * hit too often.
  */
 export async function recordEmailHit(emailId: string, hit: TrackingHit, now: number = Date.now()): Promise<TrackingPlan | null> {
-  return mutate((db) => {
-    const email = db.emails.find((e) => e.id === emailId);
-    if (!email) return null;
+  if (!hitLimiter.hit(`email-tracking:${emailId}`, HITS_PER_EMAIL, now).ok) return null;
+  const planFor = (db: Database): TrackingPlan | null => {
+    if (!db.emails.some((e) => e.id === emailId)) return null;
     const existing = db.emailEvents.filter((e) => e.emailId === emailId);
-    const plan = planTrackingEvents(existing, hit, now);
-    if (!plan.add.length) return plan;
+    return planTrackingEvents(existing, hit, now, { opens: db.settings.email.trackOpens, clicks: db.settings.email.trackClicks });
+  };
+  // Most hits are repeats (image proxies, re-opens) that store nothing: answer those without taking the write lock.
+  const preview = planFor(await getDb());
+  if (!preview?.add.length) return preview;
+  return mutate((db) => {
+    const plan = planFor(db);
+    if (!plan?.add.length) return plan;
+    const email = db.emails.find((e) => e.id === emailId)!;
     const createdAt = new Date(now).toISOString();
     for (const add of plan.add) {
       const event: EmailEvent = { id: uid("eev"), emailId, type: add.type, createdAt };
       if (add.url) event.url = add.url;
+      if (email.trackingId) event.trackingId = email.trackingId;
       db.emailEvents.push(event);
     }
     const ref = parseTrackingId(email.trackingId);
@@ -84,10 +108,70 @@ export async function recordEmailHit(emailId: string, hit: TrackingHit, now: num
 }
 
 /* ------------------------------------------------------------------ */
+/* Clean-up                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Delete events that nothing refers to any more: their outbox message is
+ * gone (old sent messages are cleaned up, single messages and erased
+ * accounts are deleted) and so is their campaign. Events of a broadcast or
+ * sequence that still exists are kept as its statistics. Returns how many
+ * were removed.
+ */
+export async function pruneEmailEvents(): Promise<number> {
+  const select = (db: Database) => {
+    const emailIds = new Set(db.emails.map((e) => e.id));
+    const broadcastIds = new Set(db.broadcasts.map((b) => b.id));
+    const sequenceIds = new Set(db.emailSequences.map((s) => s.id));
+    return retainedEvents(
+      db.emailEvents,
+      (id) => emailIds.has(id),
+      (ref) => (ref.kind === "broadcast" ? broadcastIds.has(ref.broadcastId) : sequenceIds.has(ref.sequenceId)),
+    );
+  };
+  const db = await getDb();
+  if (select(db) === db.emailEvents) return 0;
+  return mutate((live) => {
+    const kept = select(live);
+    const removed = live.emailEvents.length - kept.length;
+    if (removed) live.emailEvents = [...kept];
+    return removed;
+  });
+}
+
+/** Clean-ups run at most this often (triggered lazily by the tracking page and the comms cron). */
+const PRUNE_INTERVAL_MS = 6 * 60 * 60_000;
+const pruneState = ((globalThis as unknown as { __llEmailEventPrune?: { lastRunAt: number } }).__llEmailEventPrune ??= { lastRunAt: 0 });
+
+/** `pruneEmailEvents` when the last run is older than six hours. Never throws. */
+export async function maybePruneEmailEvents(now: number = Date.now()): Promise<number> {
+  if (now - pruneState.lastRunAt < PRUNE_INTERVAL_MS) return 0;
+  pruneState.lastRunAt = now;
+  try {
+    return await pruneEmailEvents();
+  } catch (error) {
+    console.error("[email tracking] clean-up failed:", error instanceof Error ? error.message : String(error));
+    return 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Reports                                                             */
 /* ------------------------------------------------------------------ */
 
-export const TRACKING_RANGES = [7, 30, 90, 365] as const;
+/**
+ * Opens and clicks of one campaign — `broadcastTrackingId(id)`, a single
+ * sequence step (`sequenceTrackingId(id, stepId)`) or a whole sequence
+ * (`"sequence:<id>"`). Reads the events themselves, so the numbers stay
+ * complete after the campaign's outbox messages were cleaned up.
+ */
+export async function getCampaignEventSummary(campaign: string): Promise<EventSummary> {
+  const db = await getDb();
+  return summarizeEvents(db.emailEvents.filter((e) => belongsToCampaign(e.trackingId, campaign)));
+}
+
+/** Periods offered by the tracking page; sent messages are kept in the outbox for 90 days. */
+export const TRACKING_RANGES = [7, 30, 90] as const;
 export type TrackingRange = (typeof TRACKING_RANGES)[number];
 
 export function parseTrackingRange(value: unknown): TrackingRange {

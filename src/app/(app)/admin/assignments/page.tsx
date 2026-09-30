@@ -35,6 +35,12 @@ export default async function AdminAssignmentsPage(props: PageProps<"/admin/assi
         description={pending > 0 ? `${pending} submission${pending === 1 ? "" : "s"} waiting to be graded.` : "Create assignments, embed them in lessons and grade learner submissions."}
         actions={
           <>
+            <ButtonLink href="/admin/rubrics" variant="outline" leftIcon={<Icon.ListChecks className="size-4" />}>
+              Rubrics
+            </ButtonLink>
+            <ButtonLink href="/peer-reviews/manage" variant="outline" leftIcon={<Icon.Users className="size-4" />}>
+              Peer reviews
+            </ButtonLink>
             <ButtonLink href="/admin/assignments/submissions" variant="outline" leftIcon={<Icon.ClipboardList className="size-4" />}>
               Submissions
             </ButtonLink>

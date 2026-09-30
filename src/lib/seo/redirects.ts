@@ -93,11 +93,12 @@ function matchOnce(index: ReadonlyMap<string, string>, pathname: string): string
   const key = redirectKey(pathname);
   const exact = index.get(key);
   if (exact) return exact;
-  // Parent paths: /a/b/c → /a/b → /a (the root never redirects).
+  // Parent paths: /a/b/c/d → /a/b/c → /a/b. Sub-pages follow a moved item (two or more
+  // segments deep); a one-segment rule only ever matches exactly, never a whole section.
   const original = pathname.split(/[?#]/, 1)[0]!.replace(/\/+$/, "");
   const originalSegments = original.split("/");
   const keySegments = key.split("/");
-  for (let n = keySegments.length - 1; n >= 2; n--) {
+  for (let n = keySegments.length - 1; n >= 3; n--) {
     const parent = keySegments.slice(0, n).join("/");
     const target = index.get(parent);
     if (target) {
@@ -144,4 +145,133 @@ export function diffContentIndex(prev: ContentIndex, next: ContentIndex): Conten
     if (!(key in next) && before.public) changed.add(before.path);
   }
   return { moved, changed: [...changed] };
+}
+
+/* ------------------------------------------------------------------ */
+/* Redirects added by hand (Admin → Settings → SEO → Redirects)        */
+/* ------------------------------------------------------------------ */
+
+export const REDIRECT_PATH_MAX = 300;
+
+/** Areas whose addresses can never be redirected away (account, admin, sign-in, APIs, stored files). */
+const PROTECTED_PREFIXES = [
+  "/admin",
+  "/api",
+  "/_next",
+  "/dashboard",
+  "/settings",
+  "/billing",
+  "/notifications",
+  "/uploads",
+  "/videos",
+  "/images",
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/two-factor",
+  "/verify-email",
+];
+
+/** Section index pages: the pages below them can be redirected, the index itself cannot. */
+const SECTION_ROOTS = [
+  "/courses",
+  "/courses/category",
+  "/courses/tag",
+  "/batches",
+  "/programs",
+  "/jobs",
+  "/blog",
+  "/blog/category",
+  "/blog/tag",
+  "/instructors",
+  "/certificates",
+  "/certified-members",
+  "/community",
+  "/leaderboard",
+  "/statistics",
+  "/pricing",
+  "/free",
+  "/sitemap",
+  "/sitemap.xml",
+  "/robots.txt",
+  "/rss.xml",
+];
+
+export type ManualRedirectResult = { ok: true; from: string; to: string } | { ok: false; errors: { fromPath?: string; toPath?: string } };
+
+/** A site path from what an admin typed or pasted: a path, or a full URL of this site. Null when it points elsewhere. */
+function toSitePath(raw: string, origin: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  let path = value;
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      if (url.origin !== origin) return null;
+      path = url.pathname;
+    } catch {
+      return null;
+    }
+  } else if (!value.startsWith("/") || value.startsWith("//")) {
+    return null;
+  }
+  const bare = path.split(/[?#]/, 1)[0] ?? "";
+  const collapsed = bare.replace(/\/{2,}/g, "/");
+  return collapsed.length > 1 ? collapsed.replace(/\/+$/, "") : collapsed;
+}
+
+/**
+ * Validate a redirect typed by an admin. Both ends must be paths on this
+ * site, and the old address may not be a live page, a section index or part
+ * of the account, admin and sign-in areas.
+ */
+export function validateManualRedirect(rawFrom: string, rawTo: string, opts: { origin: string; livePaths: Iterable<string> }): ManualRedirectResult {
+  const errors: { fromPath?: string; toPath?: string } = {};
+  const fromPath = toSitePath(rawFrom, opts.origin);
+  const toPath = toSitePath(rawTo, opts.origin);
+  const from = fromPath ? redirectKey(fromPath) : "";
+
+  if (!rawFrom.trim()) errors.fromPath = "Enter the old address, for example /courses/old-name.";
+  else if (!fromPath) errors.fromPath = "Enter a path on this site that starts with “/”.";
+  else if (from === "/") errors.fromPath = "The home page cannot be redirected.";
+  else if (from.length > REDIRECT_PATH_MAX) errors.fromPath = `Keep the address under ${REDIRECT_PATH_MAX} characters.`;
+  else if (PROTECTED_PREFIXES.some((p) => from === p || from.startsWith(`${p}/`))) errors.fromPath = "Addresses in the account, admin and file areas cannot be redirected.";
+  else if (SECTION_ROOTS.includes(from)) errors.fromPath = "This is a main page of the site. Redirect one of the pages below it instead.";
+  else {
+    for (const live of opts.livePaths) {
+      if (redirectKey(live) === from) {
+        errors.fromPath = "A page lives at this address. Change its URL first; the redirect is then created for you.";
+        break;
+      }
+    }
+  }
+
+  if (!rawTo.trim()) errors.toPath = "Enter the address visitors should land on.";
+  else if (!toPath) errors.toPath = "Enter a path on this site that starts with “/”.";
+  else if (toPath.length > REDIRECT_PATH_MAX) errors.toPath = `Keep the address under ${REDIRECT_PATH_MAX} characters.`;
+  else if (fromPath && redirectKey(toPath) === from) errors.toPath = "The new address is the same as the old one.";
+  else if (fromPath && redirectKey(toPath).startsWith(`${from}/`)) errors.toPath = "The new address is inside the old one, which would redirect forever.";
+
+  if (errors.fromPath || errors.toPath || !toPath) return { ok: false, errors };
+  return { ok: true, from, to: toPath };
+}
+
+/** What a redirect's destination is right now. */
+export type RedirectTargetStatus = "live" | "hidden" | "missing" | "page";
+
+/** Two-segment paths that always belong to a tracked item (so a missing entry means the item is gone). */
+const ITEM_PATH = /^\/(?:courses|batches|programs|jobs|blog)\/(?!category$|tag$)[^/]+$|^\/courses\/category\/[^/]+$/;
+
+/**
+ * "live": a published page; "hidden": a draft or otherwise private item;
+ * "missing": the item was deleted (visitors get a 404 after the redirect);
+ * "page": any other page of the site.
+ */
+export function redirectTargetStatus(toPath: string, index: ContentIndex): RedirectTargetStatus {
+  const key = redirectKey(toPath);
+  for (const entry of Object.values(index)) {
+    if (redirectKey(entry.path) === key) return entry.public ? "live" : "hidden";
+  }
+  return ITEM_PATH.test(key) ? "missing" : "page";
 }

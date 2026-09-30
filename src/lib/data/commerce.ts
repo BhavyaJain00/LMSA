@@ -1,5 +1,5 @@
 import "server-only";
-import type { Batch, Coupon, Course, Database, MembershipPlan, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
+import type { Batch, Bundle, Coupon, Course, CourseInstallmentPlan, Database, MembershipPlan, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
@@ -8,9 +8,11 @@ import { sendPaymentReminderEmail } from "@/lib/email";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { formatPrice, shortCode, toDateKey, uid } from "@/lib/utils";
 import { getRequestInfo } from "@/lib/auth/request-info";
-import { currentSubscription, resolveCourseAccess } from "@/lib/commerce/access";
+import { currentSubscription, ownedCourseIds, resolveCourseAccess } from "@/lib/commerce/access";
+import { bundleCourses, isBundleOnSale } from "@/lib/commerce/bundles";
+import { installmentPlanPrice, isInstallmentOrder, offeredInstallmentPlan, splitOrder, type OrderAmounts } from "@/lib/commerce/installments";
 import { intervalNoun, isRecurringInterval, planAccessLabel } from "@/lib/commerce/plans";
-import { isOngoing, trialEligible } from "@/lib/commerce/subscriptions";
+import { isOngoing, trialEligible, trialEnd } from "@/lib/commerce/subscriptions";
 import {
   couponAppliesTo,
   couponAttemptsBlocked,
@@ -66,20 +68,30 @@ export function gatewayLabel(gateway: string): string {
  * Status wording for one order: failed orders with a gateway reason read as
  * "Payment failed", otherwise "Cancelled"; partial refunds are called out.
  */
-export function paymentStatusLabel(p: Pick<Payment, "status" | "failureReason" | "refundedAmount" | "amount">): string {
+export function paymentStatusLabel(p: Pick<Payment, "status" | "failureReason" | "refundedAmount" | "amount"> & Partial<Pick<Payment, "itemType" | "installmentNumber" | "installmentsTotal" | "createdAt">>): string {
+  if (isScheduledPart(p)) return "Scheduled";
   if (p.status === "failed") return p.failureReason ? "Payment failed" : "Cancelled";
   if (p.status === "refunded") return p.refundedAmount !== undefined && p.refundedAmount > 0 && p.refundedAmount < p.amount ? "Partially refunded" : "Refunded";
   if (p.status === "pending") return "Awaiting payment";
   return p.refundedAmount ? "Paid · partially refunded" : "Paid";
 }
 
+/**
+ * A part of a payment plan that is not due yet: a pending order whose
+ * `createdAt` (its due date) lies in the future.
+ */
+export function isScheduledPart(p: Pick<Payment, "status"> & Partial<Pick<Payment, "itemType" | "installmentNumber" | "installmentsTotal" | "createdAt">>, now: number = Date.now()): boolean {
+  if (p.status !== "pending" || !p.itemType || !p.createdAt || (p.installmentNumber ?? 0) < 2) return false;
+  return isInstallmentOrder({ itemType: p.itemType, installmentNumber: p.installmentNumber, installmentsTotal: p.installmentsTotal }) && Date.parse(p.createdAt) > now;
+}
+
 export function parseItemType(raw: string | undefined | null): PaymentItemType | null {
-  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" ? raw : null;
+  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" || raw === "bundle" ? raw : null;
 }
 
 export interface BillingItem {
   type: PaymentItemType;
-  /** Course id (course & certificate purchases), batch id or membership plan id. */
+  /** Course id (course & certificate purchases), batch id, membership plan id or bundle id. */
   id: string;
   /** Title stored on the payment. */
   title: string;
@@ -97,6 +109,8 @@ export interface BillingItem {
   batch: Batch | null;
   /** Membership plan (itemType "plan"). */
   plan?: MembershipPlan | null;
+  /** Course bundle (itemType "bundle"). */
+  bundle?: Bundle | null;
 }
 
 function itemFromCourse(course: Course, type: "course" | "certificate"): BillingItem {
@@ -151,6 +165,25 @@ export function itemFromPlan(plan: MembershipPlan): BillingItem {
   };
 }
 
+export function itemFromBundle(bundle: Bundle, courses: readonly Pick<Course, "id" | "title" | "imageUrl" | "cardGradient">[]): BillingItem {
+  const included = bundleCourses(bundle, courses);
+  return {
+    type: "bundle",
+    id: bundle.id,
+    title: bundle.title,
+    name: bundle.title,
+    description: included.length ? `${included.length} course${included.length === 1 ? "" : "s"}: ${included.map((c) => c.title).join(", ")}` : "Course bundle",
+    imageUrl: bundle.imageUrl ?? included.find((c) => c.imageUrl)?.imageUrl,
+    gradient: included[0]?.cardGradient ?? "teal",
+    amount: bundle.price,
+    currency: bundle.currency || "USD",
+    href: `/bundles/${bundle.slug}`,
+    course: null,
+    batch: null,
+    bundle,
+  };
+}
+
 /** Resolve the thing being bought. Accepts an id or a slug. */
 export async function getBillingItem(type: PaymentItemType, idOrSlug: string): Promise<BillingItem | null> {
   const db = await getDb();
@@ -162,7 +195,11 @@ export async function getBillingItem(type: PaymentItemType, idOrSlug: string): P
     const plan = db.plans.find((p) => p.id === idOrSlug || p.slug === idOrSlug);
     return plan ? itemFromPlan(plan) : null;
   }
-  // Other round 3 wave B item types (bundles, gifts, seats) are resolved by their own checkout flows.
+  if (type === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === idOrSlug || b.slug === idOrSlug);
+    return bundle ? itemFromBundle(bundle, db.courses) : null;
+  }
+  // Other round 3 wave B item types (gifts, seats) are resolved by their own checkout flows.
   if (type !== "course" && type !== "certificate") return null;
   const course = db.courses.find((c) => c.id === idOrSlug || c.slug === idOrSlug);
   return course ? itemFromCourse(course, type) : null;
@@ -197,10 +234,13 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     const back = { backHref: `/courses/${course.slug}`, backLabel: "Checkout Course" };
     if (!db.settings.features.courses) return { status: "denied", message: "Courses are currently disabled on this platform.", ...back };
     if (!course.published && !manager) return { status: "denied", message: "This course is not available for purchase.", ...back };
-    // Enrolled learners own the course, unless the enrollment came from a membership that lapsed.
-    if (resolveCourseAccess(db, user.id, course.id).granted) {
-      return { status: "owned", redirectTo: `/courses/${course.slug}` };
-    }
+    // Enrolled learners own the course, unless the enrollment came from a membership that lapsed
+    // or from a payment plan that is paused or was cancelled.
+    const courseAccess = resolveCourseAccess(db, user.id, course.id);
+    if (courseAccess.granted) return { status: "owned", redirectTo: `/courses/${course.slug}` };
+    // A paused payment plan is resumed by paying the part that is overdue, not by a new checkout.
+    const owed = courseAccess.blocked === "installment_overdue" ? courseAccess.installments?.next?.payment : null;
+    if (owed) return { status: "pending", payment: owed };
     if (course.upcoming && !manager) return { status: "denied", message: "This course is not open for enrollment yet.", ...back };
     if (!course.paidCourse || course.price <= 0) return { status: "free", redirectTo: `/courses/${course.slug}` };
     if (course.disableSelfLearning && !hasRole(user, "moderator", "course_creator", "batch_evaluator")) {
@@ -252,6 +292,18 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     return { status: "ok" };
   }
 
+  if (item.type === "bundle" && item.bundle) {
+    const bundle = item.bundle;
+    if (!db.settings.growth.bundlesEnabled || !db.settings.features.courses) {
+      return { status: "denied", message: "Bundles are not available at the moment.", backHref: "/courses", backLabel: "Browse courses" };
+    }
+    if (!isBundleOnSale(bundle, db.courses)) return { status: "denied", message: "This bundle is not available for purchase.", backHref: "/bundles", backLabel: "See all bundles" };
+    const included = bundleCourses(bundle, db.courses).map((c) => c.id);
+    if (ownedCourseIds(db, user.id, included).length === included.length) return { status: "owned", redirectTo: `/bundles/${bundle.slug}` };
+    if (pending) return { status: "pending", payment: pending };
+    return { status: "ok" };
+  }
+
   if (item.type === "plan" && item.plan) {
     const plan = item.plan;
     const back = { backHref: "/pricing", backLabel: "See membership plans" };
@@ -276,6 +328,8 @@ export interface MembershipTerms {
   /** Billed every month/year; false for lifetime plans. */
   recurring: boolean;
   interval: MembershipPlan["interval"];
+  /** When a trial that starts now ends and the first charge is due (null without a trial). */
+  trialEndsAt: string | null;
 }
 
 /**
@@ -285,7 +339,37 @@ export interface MembershipTerms {
 export function membershipTerms(db: Pick<Database, "subscriptions">, userId: string, plan: MembershipPlan): MembershipTerms {
   const recurring = isRecurringInterval(plan.interval);
   const trialDays = recurring && plan.trialDays > 0 && trialEligible(db.subscriptions.filter((s) => s.userId === userId)) ? plan.trialDays : 0;
-  return { trialDays, recurring, interval: plan.interval };
+  return { trialDays, recurring, interval: plan.interval, trialEndsAt: trialDays > 0 ? trialEnd(new Date().toISOString(), trialDays) : null };
+}
+
+/* ------------------------------------------------------------------ */
+/* Installment checkout                                                */
+/* ------------------------------------------------------------------ */
+
+export interface InstallmentCheckout {
+  plan: CourseInstallmentPlan;
+  /** The whole plan as one order: the course price plus the plan's surcharge, the coupon and tax. */
+  full: OrderSummary;
+  /** What each of the `plan.count` payments charges. */
+  part: OrderAmounts;
+  /** All payments together. */
+  total: number;
+}
+
+/**
+ * The "pay in parts" option of a course checkout, or null when the course is
+ * not sold in installments (or a coupon makes it free). The plan is priced
+ * as one order first, so a coupon and the tax apply to it exactly once, and
+ * is then split into equal payments.
+ */
+export function installmentCheckout(item: BillingItem, coupon: Coupon | null, settings: Settings): InstallmentCheckout | null {
+  if (item.type !== "course" || !item.course) return null;
+  const plan = offeredInstallmentPlan(item.course, { enabled: settings.growth.installmentsEnabled, gateway: settings.commerce.paymentGateway });
+  if (!plan) return null;
+  const full = computeOrderSummary({ ...item, amount: installmentPlanPrice(item.amount, plan) }, coupon, settings);
+  const part = splitOrder({ originalAmount: full.originalAmount, discountAmount: full.discountAmount, taxAmount: full.taxAmount, amount: full.total }, plan.count, full.currency);
+  if (part.amount <= 0) return null;
+  return { plan, full, part, total: part.amount * plan.count };
 }
 
 /* ------------------------------------------------------------------ */
@@ -528,8 +612,18 @@ function evaluateReminder(db: Database, payment: Payment, now: number): Reminder
   if (!user) return { ok: false, reason: "no_user", message: "The learner account no longer exists or is disabled." };
 
   if (payment.itemType === "course") {
+    // The later parts of a payment plan are reminded on their own schedule (due soon, overdue, paused).
+    if (isInstallmentOrder(payment) && payment.installmentNumber! > 1) {
+      return { ok: false, reason: "has_access", message: "Installments are reminded automatically around their due date." };
+    }
     if (db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId)) {
       return { ok: false, reason: "has_access", message: "The learner is already enrolled in this course." };
+    }
+  } else if (payment.itemType === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === payment.itemId);
+    const included = bundle ? bundleCourses(bundle, db.courses).map((c) => c.id) : [];
+    if (included.length && ownedCourseIds(db, payment.userId, included, now).length === included.length) {
+      return { ok: false, reason: "has_access", message: "The learner already has every course of this bundle." };
     }
   } else if (payment.itemType === "batch") {
     if (db.batchEnrollments.some((e) => e.userId === payment.userId && e.batchId === payment.itemId)) {
@@ -629,6 +723,8 @@ export async function sendPaymentReminder(payment: Payment): Promise<ReminderChe
 function remindableCandidates(db: Database, now: number, minAgeMs = 0): Payment[] {
   return db.payments.filter((p) => {
     if (p.status !== "pending") return false;
+    // Scheduled parts of a payment plan are not abandoned checkouts.
+    if (isInstallmentOrder(p) && p.installmentNumber! > 1) return false;
     const created = new Date(p.createdAt).getTime();
     return created >= now - REMINDER_WINDOW_MS && created <= now - minAgeMs;
   });
@@ -737,6 +833,7 @@ export async function getTransactions(filter: TransactionFilter): Promise<Transa
   const users = new Map(db.users.map((u) => [u.id, u]));
   const courses = new Map(db.courses.map((c) => [c.id, c]));
   const batches = new Map(db.batches.map((b) => [b.id, b]));
+  const bundles = new Map(db.bundles.map((b) => [b.id, b]));
   const q = filter.search?.toLowerCase();
 
   return db.payments
@@ -756,12 +853,16 @@ export async function getTransactions(filter: TransactionFilter): Promise<Transa
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((p) => {
       const u = users.get(p.userId);
-      return { ...p, userName: u?.name ?? "Deleted user", userEmail: u?.email ?? "", username: u?.username ?? null, itemHref: itemHrefFor(p, courses, batches) };
+      return { ...p, userName: u?.name ?? "Deleted user", userEmail: u?.email ?? "", username: u?.username ?? null, itemHref: itemHrefFor(p, courses, batches, bundles) };
     });
 }
 
-function itemHrefFor(p: Pick<Payment, "itemType" | "itemId">, courses: Map<string, Course>, batches: Map<string, Batch>): string | null {
+function itemHrefFor(p: Pick<Payment, "itemType" | "itemId">, courses: Map<string, Course>, batches: Map<string, Batch>, bundles: Map<string, Bundle>): string | null {
   if (p.itemType === "plan") return "/pricing";
+  if (p.itemType === "bundle") {
+    const bundle = bundles.get(p.itemId);
+    return bundle ? `/bundles/${bundle.slug}` : null;
+  }
   if (p.itemType === "batch") {
     const b = batches.get(p.itemId);
     return b ? `/batches/${b.slug}` : null;
@@ -785,17 +886,20 @@ export async function getOrderHistory(userId: string): Promise<OrderHistoryRow[]
   const db = await getDb();
   const courses = new Map(db.courses.map((c) => [c.id, c]));
   const batches = new Map(db.batches.map((b) => [b.id, b]));
+  const bundles = new Map(db.bundles.map((b) => [b.id, b]));
   return db.payments
     .filter((p) => p.userId === userId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((p) => {
-      const course = p.itemType === "batch" ? undefined : courses.get(p.itemId);
+      const course = p.itemType === "course" || p.itemType === "certificate" ? courses.get(p.itemId) : undefined;
       const batch = p.itemType === "batch" ? batches.get(p.itemId) : undefined;
+      const bundle = p.itemType === "bundle" ? bundles.get(p.itemId) : undefined;
+      const bundleItem = bundle ? itemFromBundle(bundle, db.courses) : undefined;
       return {
         ...p,
-        itemHref: itemHrefFor(p, courses, batches),
-        imageUrl: course?.imageUrl ?? batch?.imageUrl,
-        gradient: course?.cardGradient ?? (batch ? "violet" : undefined),
+        itemHref: itemHrefFor(p, courses, batches, bundles),
+        imageUrl: course?.imageUrl ?? batch?.imageUrl ?? bundleItem?.imageUrl,
+        gradient: course?.cardGradient ?? bundleItem?.gradient ?? (batch ? "violet" : undefined),
       };
     });
 }
@@ -987,7 +1091,7 @@ export interface RecordableItem {
   currency: string;
 }
 
-/** Everything an admin can record a payment against: courses, batches, paid certificates and membership plans. */
+/** Everything an admin can record a payment against: courses, batches, paid certificates, membership plans and bundles. */
 export async function getRecordableItems(): Promise<RecordableItem[]> {
   const db = await getDb();
   const byTitle = (a: { title: string }, b: { title: string }) => a.title.localeCompare(b.title);
@@ -1000,5 +1104,8 @@ export async function getRecordableItems(): Promise<RecordableItem[]> {
   const plans = db.plans
     .map((p) => ({ type: "plan" as const, id: p.id, title: `${p.name}${p.active ? "" : " (retired)"}`, price: p.price, currency: p.currency || "USD" }))
     .sort(byTitle);
-  return [...courses, ...batches, ...certificates, ...plans];
+  const bundles = db.bundles
+    .map((b) => ({ type: "bundle" as const, id: b.id, title: `${b.title}${b.published ? "" : " (unpublished)"}`, price: b.price, currency: b.currency || "USD" }))
+    .sort(byTitle);
+  return [...courses, ...batches, ...certificates, ...plans, ...bundles];
 }

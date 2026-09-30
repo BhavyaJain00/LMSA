@@ -7,6 +7,10 @@ import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/assessments/breadcrumbs";
 import { AssignmentForm } from "@/components/assessments/assignment-form";
+import { getDb } from "@/lib/db/store";
+import { getRubricOptions } from "@/lib/teaching/rubrics";
+import { allocationMode, normalizePeerConfig, type PeerConfig } from "@/lib/teaching/peer-shared";
+import { AssignmentReviewSettings } from "@/components/teaching/assignment-review-settings";
 
 export async function generateMetadata(props: PageProps<"/admin/assignments/[id]">): Promise<Metadata> {
   const { id } = await props.params;
@@ -21,11 +25,14 @@ export default async function EditAssignmentPage(props: PageProps<"/admin/assign
   const assignment = await getAssignment(id);
   if (!assignment) notFound();
 
-  const [courseOptions, usage, submissions] = await Promise.all([
+  const [courseOptions, usage, submissions, rubricOptions, db] = await Promise.all([
     getCourseOptions(user, assignment.courseId),
     getAssessmentUsage("assignment", assignment.id),
     listAssignmentSubmissions({ assignmentId: assignment.id }),
+    getRubricOptions(),
+    getDb(),
   ]);
+  const peerReviews = db.peerReviews.filter((r) => r.assignmentId === assignment.id);
   const counts = {
     total: submissions.length,
     pending: submissions.filter((s) => s.status === "not_graded").length,
@@ -41,22 +48,33 @@ export default async function EditAssignmentPage(props: PageProps<"/admin/assign
         description={assignment.title}
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <AssignmentForm
-          assignment={{
-            id: assignment.id,
-            title: assignment.title,
-            type: assignment.type,
-            courseId: assignment.courseId,
-            question: assignment.question,
-            enableScheduling: assignment.enableScheduling,
-            scheduleStart: assignment.scheduleStart,
-            scheduleEnd: assignment.scheduleEnd,
-            showAnswer: assignment.showAnswer,
-            answer: assignment.answer,
-            gradeAssignment: assignment.gradeAssignment,
-          }}
-          courseOptions={courseOptions}
-        />
+        <div className="min-w-0 space-y-6">
+          <AssignmentForm
+            assignment={{
+              id: assignment.id,
+              title: assignment.title,
+              type: assignment.type,
+              courseId: assignment.courseId,
+              question: assignment.question,
+              enableScheduling: assignment.enableScheduling,
+              scheduleStart: assignment.scheduleStart,
+              scheduleEnd: assignment.scheduleEnd,
+              showAnswer: assignment.showAnswer,
+              answer: assignment.answer,
+              gradeAssignment: assignment.gradeAssignment,
+            }}
+            courseOptions={courseOptions}
+          />
+          <AssignmentReviewSettings
+            assignmentId={assignment.id}
+            rubricOptions={rubricOptions}
+            rubricId={assignment.rubricId ?? null}
+            peer={normalizePeerConfig(assignment.peerReview as PeerConfig | undefined)}
+            deadline={allocationMode(assignment) === "deadline" ? (assignment.scheduleEnd ?? null) : null}
+            gradeAssignment={assignment.gradeAssignment}
+            stats={{ assigned: peerReviews.length, completed: peerReviews.filter((r) => r.status === "submitted").length }}
+          />
+        </div>
         <aside className="space-y-4">
           <Card>
             <CardHeader title="Submissions" />

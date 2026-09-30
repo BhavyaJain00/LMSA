@@ -1,7 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
-import { resumeCheckoutAction } from "@/lib/actions/payments";
+import { payInstallmentAction, resumeCheckoutAction } from "@/lib/actions/payments";
 import { Button, type ButtonSize, type ButtonVariant } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -12,7 +12,9 @@ const GATEWAY_NAME: Record<string, string> = { stripe: "Stripe", razorpay: "Razo
 /**
  * "Complete payment" / "Try again" for a pending order. The server reopens
  * the gateway checkout (reusing an open Stripe session or Razorpay order) or
- * reports that the payment already went through.
+ * reports that the payment already went through. With `installment`, the
+ * order is a part of a payment plan ("Pay installment"): the server also
+ * reopens a failed attempt and moves the part to the active gateway.
  */
 export function ResumePaymentButton({
   orderId,
@@ -22,6 +24,7 @@ export function ResumePaymentButton({
   size = "md",
   className,
   showStatus = true,
+  installment = false,
 }: {
   orderId: string;
   gateway: string;
@@ -30,6 +33,7 @@ export function ResumePaymentButton({
   size?: ButtonSize;
   className?: string;
   showStatus?: boolean;
+  installment?: boolean;
 }) {
   const toast = useToast();
   const launcher = useCheckoutLauncher();
@@ -40,7 +44,7 @@ export function ResumePaymentButton({
 
   const resume = () => {
     startTransition(async () => {
-      const res = await resumeCheckoutAction(orderId);
+      const res = installment ? await payInstallmentAction(orderId) : await resumeCheckoutAction(orderId);
       if (!res.ok) {
         toast.error("Payment could not continue", res.error);
         return;

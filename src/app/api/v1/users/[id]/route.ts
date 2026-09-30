@@ -1,4 +1,4 @@
-import { apiRoute, dataResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { findUser } from "@/lib/api/lookups";
 import { serializeUser } from "@/lib/api/serializers";
@@ -17,3 +17,9 @@ export const PATCH = apiRoute(endpoints.updateUser, async (ctx) => {
   }
   return dataResponse(serializeUser(user, { baseUrl: ctx.baseUrl }));
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET", "PATCH");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const DELETE = unsupported;

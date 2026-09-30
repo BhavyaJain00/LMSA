@@ -7,7 +7,7 @@ import { audit } from "@/lib/audit";
 import { clientIpFromHeaders } from "@/lib/auth/request-info";
 import { recordError } from "@/lib/errors/record";
 import { uid } from "@/lib/utils";
-import type { EndpointDef } from "./endpoints";
+import type { EndpointDef, HttpMethod } from "./endpoints";
 import { ApiError, validationError } from "./errors";
 import { authenticateApiKey, shouldTouchKey, touchApiKey } from "./auth";
 import { linkHeader, normalizeListQuery, type Page } from "./pagination";
@@ -37,6 +37,7 @@ type BodyOf<D extends EndpointDef> = D["body"] extends NonNullable<EndpointDef["
 
 export interface ApiContext<D extends EndpointDef> {
   request: NextRequest;
+  /** The request URL on the site's public origin. */
   url: URL;
   requestId: string;
   key: ApiKey;
@@ -75,6 +76,40 @@ export function listResponse<T, R>(page: Page<T>, url: URL, map: (item: T) => R)
 
 export function errorResponse(error: ApiError): Response {
   return NextResponse.json(error.toBody(), { status: error.status, headers: error.headers });
+}
+
+/**
+ * Handler for the HTTP methods a path does not support: 405 with the error
+ * envelope and an `Allow` header (instead of the framework's empty 405).
+ * `export const PUT = methodNotAllowed("GET", "POST")`.
+ */
+export function methodNotAllowed(...allowed: HttpMethod[]) {
+  const allow = [...allowed, ...(allowed.includes("GET") ? ["HEAD"] : []), "OPTIONS"].join(", ");
+  return function route(request: Request): Response {
+    const { pathname } = new URL(request.url);
+    const error = new ApiError(
+      405,
+      "method_not_allowed",
+      `${request.method} is not supported on ${pathname.slice(0, 200)}. Use ${allowed.join(" or ")}.`,
+      { allowed: [...allowed] },
+      { Allow: allow },
+    );
+    return finish(errorResponse(error), {});
+  };
+}
+
+/**
+ * The request URL on the site's public origin. Behind a reverse proxy
+ * `request.url` can carry an internal host, which must not end up in the
+ * pagination `Link` header.
+ */
+function publicUrl(request: NextRequest): URL {
+  const url = new URL(request.url);
+  try {
+    return new URL(`${siteConfig.appUrl}${url.pathname}${url.search}`);
+  } catch {
+    return url;
+  }
 }
 
 function finish(response: Response, headers: Record<string, string>): Response {
@@ -133,7 +168,7 @@ export function apiRoute<const D extends EndpointDef>(def: D, handler: (ctx: Api
   return async function route(request: NextRequest, context: RouteContextLike): Promise<Response> {
     const requestId = uid("req");
     const headers: Record<string, string> = { "X-Request-Id": requestId };
-    const url = new URL(request.url);
+    const url = publicUrl(request);
     try {
       const db = await getDb();
       if (!db.settings.api.enabled) {

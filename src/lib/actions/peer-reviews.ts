@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { ActionResult, Database, PeerReview, RubricScore, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
-import { getCurrentUser, isStaff } from "@/lib/auth/session";
+import { getCurrentUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { notify } from "@/lib/services/notifications";
 import { fd, fdBool, formatDate, toDateKey, uid } from "@/lib/utils";
@@ -14,12 +14,22 @@ import {
   PEER_LIMITS,
   activePeerConfig,
   normalizePeerConfig,
-  pendingRequiredReviews,
+  peerReviewRequirements,
   reviewDueAt,
+  withExcludedPair,
   type PeerConfig,
+  type PeerPair,
   type PeerReviewRecord,
 } from "@/lib/teaching/peer-shared";
-import { asRecord, notifyNewReviews, planForAssignment, syncPeerAssignments } from "@/lib/teaching/peer-review";
+import {
+  asRecord,
+  completeLessonsAfterPeerReview,
+  notifyNewReviews,
+  participatingSubmissions,
+  planForAssignment,
+  submissionLesson,
+  syncPeerAssignments,
+} from "@/lib/teaching/peer-review";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -101,15 +111,26 @@ async function requireStaff(): Promise<{ user: User } | { error: string }> {
 function availableReviewers(db: Database, submissionId: string): Set<string> {
   const submission = db.assignmentSubmissions.find((s) => s.id === submissionId);
   if (!submission) return new Set();
-  const users = new Map(db.users.map((u) => [u.id, u]));
   const busy = new Set(db.peerReviews.filter((r) => r.submissionId === submissionId).map((r) => r.reviewerId));
-  const out = new Set<string>();
-  for (const s of db.assignmentSubmissions) {
-    if (s.assignmentId !== submission.assignmentId || s.userId === submission.userId || busy.has(s.userId)) continue;
-    const u = users.get(s.userId);
-    if (u && u.enabled && !isStaff(u)) out.add(u.id);
-  }
-  return out;
+  return new Set(
+    participatingSubmissions(db, submission.assignmentId)
+      .map((s) => s.userId)
+      .filter((id) => id !== submission.userId && !busy.has(id)),
+  );
+}
+
+/**
+ * Remember (inside a `mutate`) that an instructor took this reviewer off this
+ * submission, so automatic allocation never pairs them again. Returns the
+ * assignment's updated peer settings, or null when peer review is off.
+ */
+function excludePair(db: Database, assignmentId: string, pair: PeerPair): PeerConfig | null {
+  const assignment = db.assignments.find((a) => a.id === assignmentId);
+  const config = assignment ? activePeerConfig(assignment) : null;
+  if (!assignment || !config) return null;
+  const next: PeerConfig = { ...config, excluded: withExcludedPair(config.excluded, pair) };
+  assignment.peerReview = next;
+  return next;
 }
 
 /* ------------------------------------------------------------------ */
@@ -159,6 +180,7 @@ export async function saveAssignmentReviewSettingsAction(
     dueDays: enabled ? dueDays : previous.dueDays,
     anonymous: enabled ? fdBool(formData, "anonymous") : previous.anonymous,
     requiredForCompletion: enabled ? fdBool(formData, "requiredForCompletion") : previous.requiredForCompletion,
+    excluded: previous.excluded,
   });
   await mutate((d) => {
     const row = d.assignments.find((a) => a.id === assignmentId);
@@ -169,6 +191,9 @@ export async function saveAssignmentReviewSettingsAction(
   });
 
   const assigned = peer.enabled ? await syncPeerAssignments({ assignmentIds: [assignmentId] }) : 0;
+  // Reviews no longer count toward completion: let everyone who was waiting on them through.
+  const wasRequired = previous.enabled && !!previous.requiredForCompletion;
+  if (wasRequired && !(peer.enabled && peer.requiredForCompletion)) await completeLessonsAfterPeerReview({ assignmentIds: [assignmentId], released: true });
   await audit(
     user,
     "assignment.review_settings",
@@ -227,11 +252,12 @@ export async function submitPeerReviewAction(
 
   if (first) {
     await notifyAuthorOfFeedback(db, saved);
-    // Reviews that gate lesson completion: finish the embedding lessons once the last one is in.
-    const fresh = await getDb();
-    if (config.requiredForCompletion && pendingRequiredReviews(fresh, user.id, [assignment.id]) === 0) {
-      const lessons = fresh.lessons.filter((l) => l.blocks.some((b) => b.type === "assignment" && b.assignmentId === assignment.id));
-      for (const lesson of lessons) await completeLessonFromAssessment(user, lesson);
+    // Reviews that gate lesson completion: finish the lesson the reviewer submitted from once their last one is in.
+    if (config.requiredForCompletion) {
+      const fresh = await getDb();
+      const own = fresh.assignmentSubmissions.find((s) => s.assignmentId === assignment.id && s.userId === user.id);
+      const lesson = own ? submissionLesson(fresh, own) : undefined;
+      if (lesson && peerReviewRequirements(fresh, user, [assignment.id], Date.now()).length === 0) await completeLessonFromAssessment(user, lesson);
     }
   }
   revalidatePeer(assignment.id, submission.id, review.id);
@@ -272,7 +298,11 @@ export async function overridePeerReviewAction(
     return { ...row };
   });
   if (!saved) return { ok: false, error: "This review no longer exists." };
-  if (first) await notifyAuthorOfFeedback(db, saved);
+  if (first) {
+    await notifyAuthorOfFeedback(db, saved);
+    // Written in the reviewer's place: they may have nothing left to write.
+    await completeLessonsAfterPeerReview({ assignmentIds: [review.assignmentId] });
+  }
   await audit(user, "peer_review.override", { type: "peer_review", id: reviewId }, { assignmentId: review.assignmentId, submissionId: review.submissionId });
   revalidatePeer(review.assignmentId, review.submissionId, reviewId);
   return { ok: true, data: { status: "submitted" }, message: "Review updated" };
@@ -306,12 +336,15 @@ export async function reassignPeerReviewAction(input: { reviewId: string; review
     const previous = row.reviewerId;
     row.reviewerId = next;
     row.assignedAt = new Date().toISOString();
+    excludePair(d, row.assignmentId, { submissionId: row.submissionId, reviewerId: previous });
     return { ok: true, review: { ...row }, previous } as const;
   });
   if (!outcome.ok) return { ok: false, error: outcome.error };
 
   await notifyNewReviews([{ id: outcome.review.id, reviewerId: outcome.review.reviewerId, assignmentId: outcome.review.assignmentId, assignedAt: outcome.review.assignedAt }]);
   await audit(user, "peer_review.reassign", { type: "peer_review", id: reviewId }, { from: outcome.previous, to: outcome.review.reviewerId });
+  // The previous reviewer may have nothing left to write.
+  await completeLessonsAfterPeerReview({ assignmentIds: [outcome.review.assignmentId] });
   revalidatePeer(outcome.review.assignmentId, outcome.review.submissionId, reviewId);
   const db = await getDb();
   const name = db.users.find((u) => u.id === outcome.review.reviewerId)?.name ?? "another learner";
@@ -356,7 +389,8 @@ export async function addPeerReviewerAction(input: { submissionId: string; revie
 
 /**
  * Remove a review (e.g. an unhelpful or inappropriate one). A replacement
- * reviewer — never the removed one — is assigned when someone is available.
+ * reviewer is assigned when someone is available; the removed reviewer is
+ * never paired with this submission again.
  */
 export async function removePeerReviewAction(reviewId: string): Promise<ActionResult<{ replaced: boolean }>> {
   const auth = await requireStaff();
@@ -370,13 +404,9 @@ export async function removePeerReviewAction(reviewId: string): Promise<ActionRe
     if (!row) return null;
     d.peerReviews = d.peerReviews.filter((r) => r.id !== id);
     const assignment = d.assignments.find((a) => a.id === row.assignmentId);
-    const config = assignment ? activePeerConfig(assignment) : null;
-    const plan =
-      assignment && config
-        ? planForAssignment(d, assignment, config, now, { exclude: [{ submissionId: row.submissionId, reviewerId: row.reviewerId }] }).filter(
-            (p) => p.submissionId === row.submissionId,
-          )
-        : [];
+    const config = excludePair(d, row.assignmentId, { submissionId: row.submissionId, reviewerId: row.reviewerId });
+    // Replace it straight away when a classmate is free; the rest of the plan is left to the next regular allocation.
+    const plan = assignment && config ? planForAssignment(d, assignment, config, now).filter((p) => p.submissionId === row.submissionId) : [];
     const created = plan.slice(0, 1).map((p) => {
       const review: PeerReview = { id: uid("prv"), submissionId: p.submissionId, reviewerId: p.reviewerId, assignmentId: row.assignmentId, comment: "", status: "assigned", assignedAt: new Date(now).toISOString() };
       d.peerReviews.push(review);
@@ -387,6 +417,7 @@ export async function removePeerReviewAction(reviewId: string): Promise<ActionRe
   if (!outcome) return { ok: false, error: "This review no longer exists." };
   await notifyNewReviews(outcome.created.map((r) => ({ id: r.id, reviewerId: r.reviewerId, assignmentId: r.assignmentId, assignedAt: r.assignedAt })));
   await audit(user, "peer_review.remove", { type: "peer_review", id }, { submissionId: outcome.removed.submissionId, reviewerId: outcome.removed.reviewerId, status: outcome.removed.status });
+  if (outcome.removed.status === "assigned") await completeLessonsAfterPeerReview({ assignmentIds: [outcome.removed.assignmentId] });
   revalidatePeer(outcome.removed.assignmentId, outcome.removed.submissionId, id);
   const replaced = outcome.created.length > 0;
   return { ok: true, data: { replaced }, message: replaced ? "Review removed and a new reviewer was assigned" : "Review removed. No other classmate was available to replace it." };

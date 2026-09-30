@@ -189,7 +189,7 @@ function checkFormat(format: StringFormat, value: string): string | null {
     case "slug":
       return SLUG_RE.test(value) ? null : "Use lowercase letters, numbers and single hyphens only.";
     case "username":
-      return USERNAME_RE.test(value) ? null : "Use 3–40 lowercase letters, numbers, dashes or underscores.";
+      return value.length >= 3 && value.length <= 40 && USERNAME_RE.test(value) ? null : "Use 3–40 lowercase letters, numbers, dashes or underscores.";
   }
 }
 
@@ -301,7 +301,8 @@ function run(schema: Schema, input: unknown, path: string, details: ValidationDe
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(record)) {
         if (FORBIDDEN_KEYS.has(key) || !Object.hasOwn(schema.properties, key)) {
-          if (!schema.allowUnknown) details[child(path, key)] = "Unknown field.";
+          // defineProperty: a key such as "__proto__" must become a plain entry, never a prototype change.
+          if (!schema.allowUnknown) Object.defineProperty(details, child(path, key), { value: "Unknown field.", enumerable: true, writable: true, configurable: true });
         }
       }
       let present = 0;

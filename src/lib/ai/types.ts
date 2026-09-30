@@ -34,8 +34,10 @@ export interface ChatMessageView {
 export interface ConversationSummary {
   id: string;
   title: string;
+  /** The lesson the conversation was started from, while it still exists. */
   lessonId?: string;
   lessonTitle?: string;
+  lessonHref?: string;
   updatedAt: string;
   messageCount: number;
 }
@@ -56,8 +58,7 @@ export type AiErrorCode =
   | "rate_limited"
   | "busy"
   | "overloaded"
-  | "provider_error"
-  | "refused";
+  | "provider_error";
 
 /** Events of the `/api/ai/chat` SSE stream. */
 export type ChatStreamEvent =

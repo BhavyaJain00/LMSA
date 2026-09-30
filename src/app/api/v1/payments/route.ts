@@ -1,4 +1,4 @@
-import { apiRoute, listResponse } from "@/lib/api/handler";
+import { apiRoute, listResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { listPage } from "@/lib/api/pagination";
 import { paymentStamps, serializePayment } from "@/lib/api/serializers";
@@ -14,3 +14,10 @@ export const GET = apiRoute(endpoints.listPayments, async ({ db, query, url }) =
   );
   return listResponse(listPage(rows, paymentStamps, query), url, serializePayment);
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

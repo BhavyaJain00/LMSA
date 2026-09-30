@@ -3,7 +3,7 @@ import type { Affiliate, AffiliateReferral, AnalyticsEvent, Commission, Database
 import type { DomainEventMap } from "@/lib/events";
 import { getDb, mutate } from "@/lib/db/store";
 import { notify, notifyMany } from "@/lib/services/notifications";
-import { toCsv } from "@/components/admin/settings/member-import-csv";
+import { csvCell } from "@/components/admin/settings/member-import-csv";
 import { formatPrice, toDateKey, uid } from "@/lib/utils";
 import {
   CLICK_DEDUPE_MS,
@@ -21,6 +21,7 @@ import {
   type AffiliateFilter,
   type CommissionFilter,
   type CommissionIneligibility,
+  type CommissionRowView,
   type CurrencyTotals,
   type FraudFlag,
   type ShareTargetGroup,
@@ -569,7 +570,8 @@ export interface AffiliateOverview {
   flaggedUnpaid: number;
 }
 
-function sumByCurrency(rows: readonly { currency: string; amount: number }[]): { currency: string; amount: number }[] {
+/** Totals per currency, sorted by currency code (zero totals dropped). */
+export function sumByCurrency(rows: readonly { currency: string; amount: number }[]): { currency: string; amount: number }[] {
   const by = new Map<string, number>();
   for (const r of rows) by.set(r.currency, (by.get(r.currency) ?? 0) + r.amount);
   return [...by.entries()].filter(([, amount]) => amount !== 0).map(([currency, amount]) => ({ currency, amount })).sort((a, b) => a.currency.localeCompare(b.currency));
@@ -631,21 +633,8 @@ export async function getAdminAffiliate(id: string, now: Date = new Date()): Pro
   return { affiliate: { ...affiliate }, user: userView(db.users.find((u) => u.id === affiliate.userId)), stats: statsFor(index, id, now.getTime()), flagged };
 }
 
-export interface AdminCommissionRow {
-  commission: Commission;
-  affiliateCode: string;
-  affiliateName: string;
-  orderId: string;
-  itemTitle: string;
-  buyerName: string;
-  buyerEmail: string;
-  orderAmount: number;
-  orderStatus: Payment["status"] | "missing";
-  flags: FraudFlag[];
-}
-
 /** Commissions matching the filter, newest first. */
-export async function listCommissions(filter: Omit<CommissionFilter, "page">): Promise<AdminCommissionRow[]> {
+export async function listCommissions(filter: Omit<CommissionFilter, "page">): Promise<CommissionRowView[]> {
   const db = await getDb();
   const affiliates = new Map(db.affiliates.map((a) => [a.id, a]));
   const users = new Map(db.users.map((u) => [u.id, u]));
@@ -662,12 +651,18 @@ export async function listCommissions(filter: Omit<CommissionFilter, "page">): P
   const flags = flagCommissions(db, candidates);
   return candidates
     .filter((c) => !filter.flagged || flags.has(c.id))
-    .map((c): AdminCommissionRow => {
+    .map((c): CommissionRowView => {
       const a = affiliates.get(c.affiliateId);
       const p = payments.get(c.paymentId);
       const buyer = p ? users.get(p.userId) : undefined;
       return {
-        commission: { ...c },
+        id: c.id,
+        status: c.status,
+        amount: c.amount,
+        currency: c.currency,
+        createdAt: c.createdAt,
+        paidAt: c.paidAt,
+        affiliateId: c.affiliateId,
         affiliateCode: a?.code ?? "—",
         affiliateName: (a && users.get(a.userId)?.name) ?? "Former affiliate",
         orderId: p?.orderId ?? "—",
@@ -675,12 +670,11 @@ export async function listCommissions(filter: Omit<CommissionFilter, "page">): P
         buyerName: buyer?.name ?? p?.billingName ?? "—",
         buyerEmail: buyer?.email ?? "",
         orderAmount: p?.amount ?? 0,
-        orderStatus: p?.status ?? "missing",
         flags: flags.get(c.id) ?? [],
       };
     })
     .filter((r) => !q || [r.affiliateCode, r.affiliateName, r.orderId, r.itemTitle, r.buyerName, r.buyerEmail].some((v) => v.toLowerCase().includes(q)))
-    .sort((a, b) => b.commission.createdAt.localeCompare(a.commission.createdAt) || b.commission.id.localeCompare(a.commission.id));
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 }
 
 export interface AdminPayoutRow {
@@ -707,11 +701,22 @@ export async function listAffiliatePayouts(affiliateId?: string): Promise<AdminP
 /* CSV                                                                 */
 /* ------------------------------------------------------------------ */
 
-const decimal = (amount: number) => (amount / 100).toFixed(2);
+/** A CSV cell: text (quoted and formula-neutralized by `csvCell`) or a number written as-is. */
+type Cell = string | { readonly num: string };
+
+/**
+ * Money cell in major units. Kept numeric so a negative refund adjustment
+ * stays a number in spreadsheets instead of being escaped like a formula.
+ */
+const decimal = (amount: number): Cell => ({ num: (amount / 100).toFixed(2) });
+
+function toCsv(rows: readonly Cell[][]): string {
+  return rows.map((row) => row.map((cell) => (typeof cell === "string" ? csvCell(cell) : cell.num)).join(",")).join("\r\n");
+}
 
 export function affiliatesToCsv(rows: readonly AdminAffiliateRow[]): string {
   const header = ["Code", "Name", "Email", "Payout email", "Status", "Commission %", "Clicks", "Sign-ups", "Sales", "Conversion %", "Currency", "Pending", "Approved (payable)", "Paid", "Flagged", "Joined"];
-  const lines: string[][] = [header];
+  const lines: Cell[][] = [header];
   for (const r of rows) {
     const totals = r.stats.totals.length ? r.stats.totals : [{ currency: "", pending: 0, approved: 0, paid: 0, voided: 0 }];
     for (const t of totals) {
@@ -738,14 +743,14 @@ export function affiliatesToCsv(rows: readonly AdminAffiliateRow[]): string {
   return toCsv(lines);
 }
 
-export function commissionsToCsv(rows: readonly AdminCommissionRow[]): string {
+export function commissionsToCsv(rows: readonly CommissionRowView[]): string {
   const header = ["Commission ID", "Date", "Status", "Affiliate code", "Affiliate", "Order ID", "Item", "Buyer", "Buyer email", "Order amount", "Commission", "Currency", "Paid at", "Flags"];
   return toCsv([
     header,
     ...rows.map((r) => [
-      r.commission.id,
-      r.commission.createdAt.slice(0, 10),
-      r.commission.status,
+      r.id,
+      r.createdAt.slice(0, 10),
+      r.status,
       r.affiliateCode,
       r.affiliateName,
       r.orderId,
@@ -753,9 +758,9 @@ export function commissionsToCsv(rows: readonly AdminCommissionRow[]): string {
       r.buyerName,
       r.buyerEmail,
       decimal(r.orderAmount),
-      decimal(r.commission.amount),
-      r.commission.currency,
-      r.commission.paidAt?.slice(0, 10) ?? "",
+      decimal(r.amount),
+      r.currency,
+      r.paidAt?.slice(0, 10) ?? "",
       r.flags.join(" "),
     ]),
   ]);
@@ -766,6 +771,26 @@ export function payoutsToCsv(rows: readonly AdminPayoutRow[]): string {
   return toCsv([
     header,
     ...rows.map((r) => [r.payout.id, r.payout.createdAt.slice(0, 10), r.affiliateCode, r.affiliateName, r.payoutEmail ?? "", decimal(r.payout.amount), r.payout.currency, methodLabel(r.payout.method), r.payout.reference ?? ""]),
+  ]);
+}
+
+/** An affiliate's own statement: commissions (newest first), then payouts. */
+export function statementToCsv(dashboard: Pick<AffiliateDashboard, "commissions" | "payouts">): string {
+  const header = ["Type", "Date", "Description", "Status", "Amount", "Currency", "Paid at", "Method", "Reference"];
+  return toCsv([
+    header,
+    ...dashboard.commissions.map((c) => [
+      c.adjustment ? "Refund adjustment" : "Commission",
+      c.createdAt.slice(0, 10),
+      c.itemTitle,
+      c.status,
+      decimal(c.amount),
+      c.currency,
+      c.paidAt?.slice(0, 10) ?? "",
+      "",
+      "",
+    ]),
+    ...dashboard.payouts.map((p) => ["Payout", p.createdAt.slice(0, 10), "Payout sent", "paid", decimal(p.amount), p.currency, p.createdAt.slice(0, 10), methodLabel(p.method), p.reference ?? ""]),
   ]);
 }
 
@@ -789,4 +814,12 @@ export async function getShareTargets(): Promise<ShareTargetGroup[]> {
   if (courses.length) groups.push({ label: "Courses", items: courses.map((c) => ({ label: c.title, path: `/courses/${c.slug}` })) });
   if (bundles.length) groups.push({ label: "Bundles", items: bundles.map((b) => ({ label: b.title, path: `/bundles/${b.slug}` })) });
   return groups;
+}
+
+/** An affiliate's most recent referral clicks (landing page and whether they led to a sale). */
+export async function listReferralClicks(affiliateId: string, limit = 20): Promise<{ total: number; rows: AffiliateReferral[] }> {
+  const db = await getDb();
+  const all = db.affiliateReferrals.filter((r) => r.affiliateId === affiliateId);
+  const rows = [...all].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
+  return { total: all.length, rows: rows.map((r) => ({ ...r })) };
 }

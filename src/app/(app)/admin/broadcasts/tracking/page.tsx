@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { after } from "next/server";
 import { isAdmin, requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
-import { getTrackingOverview, listTrackingEvents, parseTrackingEventFilters, type TrackingEventFilters } from "@/lib/comms/tracking";
+import { getTrackingOverview, listTrackingEvents, maybePruneEmailEvents, parseTrackingEventFilters, type TrackingEventFilters } from "@/lib/comms/tracking";
 import { ratePercent } from "@/lib/comms/tracking-core";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import { formatDateTime, formatNumber, relativeTime } from "@/lib/utils";
 
 export const metadata = { title: "Email tracking" };
 
-const RANGE_LABEL: Record<number, string> = { 7: "last 7 days", 30: "last 30 days", 90: "last 90 days", 365: "last 12 months" };
+const RANGE_LABEL: Record<number, string> = { 7: "last 7 days", 30: "last 30 days", 90: "last 90 days" };
 
 function query(filters: TrackingEventFilters, patch: Partial<TrackingEventFilters> = {}): string {
   const next = { ...filters, ...patch };
@@ -49,6 +50,8 @@ export default async function EmailTrackingPage(props: PageProps<"/admin/broadca
   const rangeLabel = RANGE_LABEL[filters.range] ?? `last ${filters.range} days`;
   const trackingOff = !settings.email.trackOpens && !settings.email.trackClicks;
   const filtered = filters.type !== "all" || !!filters.q;
+  // Drop events left behind by deleted emails and campaigns (at most every few hours, after the page is sent).
+  after(() => maybePruneEmailEvents());
 
   return (
     <div className="animate-fade-in">
@@ -75,7 +78,7 @@ export default async function EmailTrackingPage(props: PageProps<"/admin/broadca
       {trackingOff && (
         <div role="status" className="mb-5 flex gap-3 rounded-card border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
           <Icon.AlertTriangle className="mt-0.5 size-5 shrink-0" />
-          <p className="min-w-0">Open and click tracking are both off, so new emails won&apos;t record anything. Earlier results stay available below.</p>
+          <p className="min-w-0">Open and click tracking are both off, so nothing new is recorded. Earlier results stay available below.</p>
         </div>
       )}
 

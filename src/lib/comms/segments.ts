@@ -157,6 +157,39 @@ export function acceptsMarketing(user: Pick<User, "emailPreferences">): boolean 
   return user.emailPreferences?.announcements !== false;
 }
 
+/** Why somebody who matches a segment still can't be emailed. */
+export type DeliveryBlock = Exclude<keyof SegmentExclusions, "duplicate">;
+
+/**
+ * The rule that keeps a member out of marketing email, or null when they can
+ * receive it. Shared by segments, the broadcast sender (re-checked right
+ * before each batch) and the sequence runner.
+ */
+export function memberBlock(user: Pick<SegmentUser, "email" | "enabled" | "emailPreferences" | "emailVerifiedAt" | "emailVerificationRequired">): DeliveryBlock | null {
+  if (!user.enabled) return "disabled";
+  if (!isValidEmail(user.email.trim().toLowerCase())) return "invalid";
+  if (user.emailVerificationRequired && !user.emailVerifiedAt) return "unconfirmed";
+  if (!acceptsMarketing(user)) return "unsubscribed";
+  return null;
+}
+
+/** Like `memberBlock`, for a lead: consent, double opt-in and no unsubscribe. */
+export function leadBlock(lead: Pick<Lead, "email" | "consent" | "confirmedAt" | "unsubscribedAt">): DeliveryBlock | null {
+  if (lead.unsubscribedAt) return "unsubscribed";
+  if (!isValidEmail(lead.email.trim().toLowerCase())) return "invalid";
+  if (!lead.consent || !lead.confirmedAt) return "unconfirmed";
+  return null;
+}
+
+export function memberRecipient(user: Pick<SegmentUser, "id" | "name" | "email">): SegmentRecipient {
+  return { kind: "member", id: user.id, email: user.email.trim().toLowerCase(), name: user.name, firstName: firstNameOf(user.name) };
+}
+
+export function leadRecipient(lead: Pick<Lead, "id" | "name" | "email">): SegmentRecipient {
+  const name = lead.name?.trim() ?? "";
+  return { kind: "lead", id: lead.id, email: lead.email.trim().toLowerCase(), name, firstName: firstNameOf(name) };
+}
+
 function evaluateMembers(source: SegmentSource, filter: SegmentFilter, now: number, result: SegmentResult, seen: Set<string>) {
   const want = filter.courseIds?.length ? new Set(filter.courseIds) : null;
   const avoid = filter.notEnrolledCourseIds?.length ? new Set(filter.notEnrolledCourseIds) : null;
@@ -180,15 +213,13 @@ function evaluateMembers(source: SegmentSource, filter: SegmentFilter, now: numb
     if (paid && paid.has(user.id) !== filter.purchased) continue;
     if (lastActive && (lastActive.get(user.id) ?? 0) > inactiveBefore) continue;
 
-    const email = user.email.trim().toLowerCase();
-    if (!user.enabled) result.excluded.disabled++;
-    else if (!isValidEmail(email)) result.excluded.invalid++;
-    else if (user.emailVerificationRequired && !user.emailVerifiedAt) result.excluded.unconfirmed++;
-    else if (!acceptsMarketing(user)) result.excluded.unsubscribed++;
-    else if (seen.has(email)) result.excluded.duplicate++;
+    const block = memberBlock(user);
+    const recipient = memberRecipient(user);
+    if (block) result.excluded[block]++;
+    else if (seen.has(recipient.email)) result.excluded.duplicate++;
     else {
-      seen.add(email);
-      result.recipients.push({ kind: "member", id: user.id, email, name: user.name, firstName: firstNameOf(user.name) });
+      seen.add(recipient.email);
+      result.recipients.push(recipient);
     }
   }
 }
@@ -201,14 +232,12 @@ function evaluateLeads(source: SegmentSource, filter: SegmentFilter, result: Seg
     // People who created an account are members now; they're reached through member segments.
     if (memberEmails.has(email)) continue;
     if (interested && (!lead.courseId || !interested.has(lead.courseId))) continue;
-    if (lead.unsubscribedAt) result.excluded.unsubscribed++;
-    else if (!isValidEmail(email)) result.excluded.invalid++;
-    else if (!lead.consent || !lead.confirmedAt) result.excluded.unconfirmed++;
+    const block = leadBlock(lead);
+    if (block) result.excluded[block]++;
     else if (seen.has(email)) result.excluded.duplicate++;
     else {
       seen.add(email);
-      const name = lead.name?.trim() ?? "";
-      result.recipients.push({ kind: "lead", id: lead.id, email, name, firstName: firstNameOf(name) });
+      result.recipients.push(leadRecipient(lead));
     }
   }
 }

@@ -1,6 +1,5 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Role, SegmentFilter } from "@/lib/types";
 import { previewSegmentAction } from "@/lib/actions/broadcasts";
@@ -74,9 +73,6 @@ export function SegmentBuilder({
   className?: string;
 }) {
   const id = useId();
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [filter, setFilter] = useState<SegmentFilter>(() => normalizeSegmentFilter(defaultValue ?? {}));
   const [customDays, setCustomDays] = useState(() => {
     const days = defaultValue?.inactiveDays;
@@ -110,11 +106,11 @@ export function SegmentBuilder({
     const key = requestKey;
     const timer = setTimeout(async () => {
       if (syncUrl) {
-        const params = new URLSearchParams(searchParams.toString());
-        if (isEmptySegment(filter)) params.delete("segment");
-        else params.set("segment", encodeSegmentParam(filter));
-        const qs = params.toString();
-        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+        // Native history update (supported by the App Router): no server round trip per change.
+        const url = new URL(window.location.href);
+        if (isEmptySegment(filter)) url.searchParams.delete("segment");
+        else url.searchParams.set("segment", encodeSegmentParam(filter));
+        window.history.replaceState(window.history.state, "", url);
       }
       try {
         const result = await previewSegmentAction(filter);
@@ -126,7 +122,7 @@ export function SegmentBuilder({
       }
     }, PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
-    // searchParams/router/pathname only matter when the filter changes.
+    // `requestKey` covers `filter` (and retries); `syncUrl` is fixed for the component's life.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestKey]);
 
@@ -340,11 +336,15 @@ export function SegmentBuilder({
         <div className="mt-4">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Sample</h3>
           {!data ? (
-            <div className="mt-2 space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-9 w-full" />
-              ))}
-            </div>
+            error ? (
+              <p className="mt-2 text-sm text-ink-muted">The sample appears once the audience is counted.</p>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-9 w-full" />
+                ))}
+              </div>
+            )
           ) : data.sample.length === 0 ? (
             <p className="mt-2 text-sm text-ink-muted">Nobody matches these conditions yet. Loosen a condition to reach more people.</p>
           ) : (

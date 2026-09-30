@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { apiRoute, dataResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { conflict } from "@/lib/api/errors";
 import { findBatch, resolveMember } from "@/lib/api/lookups";
@@ -24,3 +24,10 @@ export const POST = apiRoute(endpoints.addBatchMember, async (ctx) => {
   revalidatePath(`/batches/${batch.slug}`, "layout");
   return dataResponse(serializeBatchMember(member), 201);
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("POST");
+export const GET = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

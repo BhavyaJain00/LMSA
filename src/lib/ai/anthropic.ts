@@ -24,6 +24,10 @@ export const ANTHROPIC_VERSION = "2023-06-01";
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 /** Whole-request ceiling, including the streamed answer. */
 const REQUEST_TIMEOUT_MS = 120_000;
+/** Pause before the single automatic retry of a transient failure. */
+const RETRY_PAUSE_MS = 800;
+/** Longest Retry-After (seconds) that is waited out inside the request instead of being reported. */
+const MAX_INLINE_RETRY_SECONDS = 5;
 
 export type ProviderErrorKind =
   | "auth"
@@ -161,19 +165,30 @@ async function send(req: ClaudeRequest, signal: AbortSignal): Promise<Response> 
     } catch (err) {
       if (signal.aborted) throw abortError(signal, err);
       if (transientRetries-- > 0) {
-        await sleep(800, signal);
+        try {
+          await sleep(RETRY_PAUSE_MS, signal);
+        } catch (aborted) {
+          throw abortError(signal, aborted);
+        }
         continue;
       }
       throw new AiProviderError("network", "Could not reach the AI service.", undefined, 10);
     }
     if (res.ok) return res;
-    const error = classifyProviderError(res.status, await res.text().catch(() => ""), res.headers.get("retry-after"));
+    const retryAfterHeader = res.headers.get("retry-after");
+    const error = classifyProviderError(res.status, await res.text().catch(() => ""), retryAfterHeader);
     if (fallbacks && rejectsFallbackOptIn(error)) {
       fallbacks = false;
       continue;
     }
-    if ((error.kind === "overloaded" || error.kind === "server") && transientRetries-- > 0 && (error.retryAfter ?? 0) <= 5) {
-      await sleep(Math.max(800, (error.retryAfter ?? 1) * 1000), signal);
+    // Overload and 5xx: try once more straight away, unless the API asks for a longer wait than a learner should sit through.
+    const wait = parseRetryAfter(retryAfterHeader) ?? 1;
+    if ((error.kind === "overloaded" || error.kind === "server") && wait <= MAX_INLINE_RETRY_SECONDS && transientRetries-- > 0) {
+      try {
+        await sleep(Math.max(RETRY_PAUSE_MS, wait * 1000), signal);
+      } catch (err) {
+        throw abortError(signal, err);
+      }
       continue;
     }
     throw error;
@@ -256,8 +271,9 @@ export async function* streamClaude(req: Omit<ClaudeRequest, "stream">, signal?:
       } else {
         parser.push(decoder.decode(chunk.value, { stream: true }));
       }
-      if (failure) throw failure;
+      // Text that arrived before an error in the same network chunk is still delivered first.
       while (pending.length) yield pending.shift()!;
+      if (failure) throw failure;
       if (chunk.done) return;
     }
   } finally {

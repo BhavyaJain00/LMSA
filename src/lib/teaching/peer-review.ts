@@ -1,10 +1,11 @@
 import "server-only";
-import type { Assignment, AssignmentSubmission, AssignmentType, Database, Rubric, RubricScore, User } from "@/lib/types";
+import type { Assignment, AssignmentStatus, AssignmentSubmission, AssignmentType, Database, Lesson, Rubric, RubricScore, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
-import { isStaff } from "@/lib/auth/session";
 import { notify } from "@/lib/services/notifications";
+import { getCompletionRequirements, setLessonStatus } from "@/lib/services/progress";
 import { formatDate, pluralize, uid } from "@/lib/utils";
 import { toCsv } from "@/components/admin/settings/member-import-csv";
+import { lessonQuery } from "@/components/assessments/shared";
 import {
   ANONYMOUS_AUTHOR_LABEL,
   ROLLING_OVERFLOW_AFTER_MS,
@@ -13,10 +14,12 @@ import {
   allocationOpen,
   anonymousReviewerLabel,
   isOverdue,
+  peerCompletionBlock,
   planPeerAssignments,
   reminderKey,
   reminderStage,
   reviewDueAt,
+  takesPartInPeerReview,
   type AllocationMode,
   type PeerConfig,
   type PeerPair,
@@ -30,10 +33,10 @@ import { averageScores, rubricMaxPoints, scorePercent, totalOfScores, type Score
  * learners (reviews to give, feedback received) and instructors (every
  * review, overrides, CSV).
  *
- * Allocation is lazy — no scheduler is required. It runs when a learner
- * completes a lesson that embeds a peer-reviewed assignment (event handler),
- * when the assignment or peer review pages render, and from a throttled
- * sweep that also sends due/overdue reminders.
+ * Everything is lazy — no scheduler is required. Reviews are handed out when
+ * the assignment re-renders after a submission and when the grading or peer
+ * review pages render; a throttled sweep started in the background by those
+ * pages covers passed deadlines, due/overdue reminders and lesson completion.
  */
 
 const NOTIFICATION_TYPE = "assignment_graded" as const;
@@ -44,12 +47,12 @@ export function asRecord(review: Database["peerReviews"][number]): PeerReviewRec
 }
 
 /** Submissions that take part in peer review: authored by enabled, non-staff members. */
-function participatingSubmissions(db: Database, assignmentId: string): AssignmentSubmission[] {
+export function participatingSubmissions(db: Database, assignmentId: string): AssignmentSubmission[] {
   const users = new Map(db.users.map((u) => [u.id, u]));
   return db.assignmentSubmissions.filter((s) => {
     if (s.assignmentId !== assignmentId) return false;
     const author = users.get(s.userId);
-    return !!author && author.enabled && !isStaff(author);
+    return !!author && takesPartInPeerReview(author);
   });
 }
 
@@ -77,8 +80,8 @@ function insertPairs(db: Database, assignmentId: string, pairs: PeerPair[], nowI
   });
 }
 
-/** Plan the top-up for one assignment against the current database. */
-export function planForAssignment(db: Database, assignment: Assignment, config: PeerConfig, now: number, extra: { exclude?: PeerPair[] } = {}): PeerPair[] {
+/** Plan the top-up for one assignment against the current database (honouring the instructor's exclusions). */
+export function planForAssignment(db: Database, assignment: Assignment, config: PeerConfig, now: number): PeerPair[] {
   const subs = participatingSubmissions(db, assignment.id);
   if (subs.length < 2) return [];
   const existing = db.peerReviews.filter((r) => r.assignmentId === assignment.id).map((r) => ({ submissionId: r.submissionId, reviewerId: r.reviewerId }));
@@ -90,7 +93,7 @@ export function planForAssignment(db: Database, assignment: Assignment, config: 
     reviewsPerSubmission: config.reviewsPerSubmission,
     seed: assignment.id,
     overflow,
-    exclude: extra.exclude,
+    exclude: config.excluded,
   });
 }
 
@@ -118,32 +121,46 @@ export async function notifyNewReviews(created: CreatedReview[]): Promise<void> 
   }
 }
 
+/** What a sync would change: whether orphaned reviews exist, and the new reviews to hand out per assignment. */
+function planSync(db: Database, opts: { only: Set<string> | null; force?: boolean; now: number }): { orphans: boolean; plans: { assignmentId: string; pairs: PeerPair[] }[] } {
+  const assignmentIds = new Set(db.assignments.map((a) => a.id));
+  const submissionIds = new Set(db.assignmentSubmissions.map((s) => s.id));
+  const orphans = db.peerReviews.some((r) => !assignmentIds.has(r.assignmentId) || !submissionIds.has(r.submissionId));
+  const plans: { assignmentId: string; pairs: PeerPair[] }[] = [];
+  for (const assignment of db.assignments) {
+    if (opts.only && !opts.only.has(assignment.id)) continue;
+    const config = activePeerConfig(assignment);
+    if (!config) continue;
+    if (!opts.force && !allocationOpen(assignment, opts.now)) continue;
+    const pairs = planForAssignment(db, assignment, config, opts.now);
+    if (pairs.length) plans.push({ assignmentId: assignment.id, pairs });
+  }
+  return { orphans, plans };
+}
+
 /**
  * Allocate reviews for peer-reviewed assignments whose due point has passed
  * (or all of `assignmentIds` when `force`), and drop reviews whose
  * assignment or submission no longer exists. Returns the number created.
+ * Cheap when there is nothing to do: the database is only written when a
+ * read-only pass finds work.
  */
 export async function syncPeerAssignments(opts: { assignmentIds?: string[]; force?: boolean; now?: number } = {}): Promise<number> {
   const now = opts.now ?? Date.now();
-  const only = opts.assignmentIds ? new Set(opts.assignmentIds) : null;
+  const scope = { only: opts.assignmentIds ? new Set(opts.assignmentIds) : null, force: opts.force, now };
+  const preview = planSync(await getDb(), scope);
+  if (!preview.orphans && !preview.plans.length) return 0;
+
   const nowIso = new Date(now).toISOString();
   const created = await mutate((db) => {
-    // Orphans: the assignment or the reviewed submission was deleted.
-    const assignmentIds = new Set(db.assignments.map((a) => a.id));
-    const submissionIds = new Set(db.assignmentSubmissions.map((s) => s.id));
-    if (db.peerReviews.some((r) => !assignmentIds.has(r.assignmentId) || !submissionIds.has(r.submissionId))) {
+    // Planned again inside the write lock, so two concurrent syncs never hand out the same review twice.
+    const work = planSync(db, scope);
+    if (work.orphans) {
+      const assignmentIds = new Set(db.assignments.map((a) => a.id));
+      const submissionIds = new Set(db.assignmentSubmissions.map((s) => s.id));
       db.peerReviews = db.peerReviews.filter((r) => assignmentIds.has(r.assignmentId) && submissionIds.has(r.submissionId));
     }
-    const out: CreatedReview[] = [];
-    for (const assignment of db.assignments) {
-      if (only && !only.has(assignment.id)) continue;
-      const config = activePeerConfig(assignment);
-      if (!config) continue;
-      if (!opts.force && !allocationOpen(assignment, now)) continue;
-      const plan = planForAssignment(db, assignment, config, now);
-      if (plan.length) out.push(...insertPairs(db, assignment.id, plan, nowIso));
-    }
-    return out;
+    return work.plans.flatMap((p) => insertPairs(db, p.assignmentId, p.pairs, nowIso));
   });
   await notifyNewReviews(created);
   return created.length;
@@ -177,6 +194,48 @@ export async function sendPeerReviewReminders(now: number = Date.now()): Promise
   return count;
 }
 
+/** The lesson a learner submitted an assignment from (the one peer review may hold back), while it still embeds it. */
+export function submissionLesson(db: Database, submission: Pick<AssignmentSubmission, "assignmentId" | "lessonId">): Lesson | undefined {
+  if (!submission.lessonId) return undefined;
+  return db.lessons.find((l) => l.id === submission.lessonId && l.blocks.some((b) => b.type === "assignment" && b.assignmentId === submission.assignmentId));
+}
+
+/**
+ * Complete the lessons of learners whose peer review requirement was met
+ * without them doing anything: their open reviews were removed or reassigned,
+ * or no classmate turned up to be reviewed. (Submitting the last review
+ * completes the lesson directly.) Only assignments that count reviews toward
+ * completion are looked at, unless `released` names assignments whose
+ * requirement was just switched off: everyone who was waiting there is let
+ * through. Returns the number of lessons completed.
+ */
+export async function completeLessonsAfterPeerReview(opts: { assignmentIds?: string[]; released?: boolean; now?: number } = {}): Promise<number> {
+  const now = opts.now ?? Date.now();
+  const only = opts.assignmentIds ? new Set(opts.assignmentIds) : null;
+  const db = await getDb();
+  const users = new Map(db.users.map((u) => [u.id, u]));
+  let completed = 0;
+  for (const assignment of db.assignments) {
+    if (only && !only.has(assignment.id)) continue;
+    const released = !!opts.released && !!only;
+    if (!released && !activePeerConfig(assignment)?.requiredForCompletion) continue;
+    for (const submission of participatingSubmissions(db, assignment.id)) {
+      const lesson = submissionLesson(db, submission);
+      const user = users.get(submission.userId);
+      if (!lesson || !user) continue;
+      if (db.progress.some((p) => p.userId === user.id && p.lessonId === lesson.id && p.status === "complete")) continue;
+      if (!db.enrollments.some((e) => e.userId === user.id && e.courseId === lesson.courseId)) continue;
+      const reviews = db.peerReviews.filter((r) => r.assignmentId === assignment.id && r.reviewerId === user.id);
+      if (!released && peerCompletionBlock(assignment, { submittedAt: submission.submittedAt, reviews }, now)) continue;
+      const requirements = await getCompletionRequirements(user, lesson, Number.MAX_SAFE_INTEGER);
+      if (!requirements.allMet) continue;
+      await setLessonStatus(user, lesson, "complete");
+      completed++;
+    }
+  }
+  return completed;
+}
+
 interface SweepState {
   at: number;
   running: Promise<void> | null;
@@ -185,8 +244,8 @@ const sweepGlobal = globalThis as unknown as { __llPeerSweep?: SweepState };
 const sweep: SweepState = (sweepGlobal.__llPeerSweep ??= { at: 0, running: null });
 
 /**
- * Allocate due reviews and send reminders across every assignment, at most
- * once a minute per server process. Never throws.
+ * Allocate due reviews, send reminders and settle lesson completion across
+ * every assignment, at most once a minute per server process. Never throws.
  */
 export async function runPeerReviewSweep(opts: { force?: boolean } = {}): Promise<void> {
   if (sweep.running) return sweep.running;
@@ -197,6 +256,7 @@ export async function runPeerReviewSweep(opts: { force?: boolean } = {}): Promis
     try {
       await syncPeerAssignments({ now });
       await sendPeerReviewReminders(now);
+      await completeLessonsAfterPeerReview({ now });
     } catch (error) {
       console.error("[peer-review] sweep failed:", error instanceof Error ? error.message : String(error));
     } finally {
@@ -370,6 +430,48 @@ export async function getPeerFeedback(userId: string, assignmentId: string, rubr
   };
 }
 
+export interface ReceivedFeedbackRow {
+  assignmentId: string;
+  assignmentTitle: string;
+  courseTitle: string | null;
+  /** The assignment page, where the reviews can be read. */
+  href: string;
+  /** Classmates assigned to review the learner's submission. */
+  expected: number;
+  received: number;
+  /** Average rubric result of the received reviews, when they were scored. */
+  averagePercent: number | null;
+  lastReceivedAt: string | null;
+}
+
+/** The learner's own submissions on peer-reviewed assignments and the feedback each has received so far. */
+export async function listReceivedFeedback(userId: string): Promise<ReceivedFeedbackRow[]> {
+  const db = await getDb();
+  const courses = new Map(db.courses.map((c) => [c.id, c.title]));
+  const rows: ReceivedFeedbackRow[] = [];
+  for (const submission of db.assignmentSubmissions) {
+    if (submission.userId !== userId) continue;
+    const assignment = db.assignments.find((a) => a.id === submission.assignmentId);
+    if (!assignment || !activePeerConfig(assignment)) continue;
+    const reviews = db.peerReviews.filter((r) => r.submissionId === submission.id);
+    const done = reviews.filter((r) => r.status === "submitted");
+    const rubric = assignment.rubricId ? db.rubrics.find((r) => r.id === assignment.rubricId) : undefined;
+    const scored = done.filter((r) => r.scores?.length);
+    const courseId = submission.courseId ?? assignment.courseId;
+    rows.push({
+      assignmentId: assignment.id,
+      assignmentTitle: assignment.title,
+      courseTitle: courseId ? (courses.get(courseId) ?? null) : null,
+      href: `/assignments/${assignment.id}${lessonQuery(submission.lessonId, submission.courseId)}`,
+      expected: reviews.length,
+      received: done.length,
+      averagePercent: rubric && scored.length ? averageScores(rubric, scored.map((r) => r.scores)).percent : null,
+      lastReceivedAt: done.map((r) => r.submittedAt ?? r.assignedAt).sort().at(-1) ?? null,
+    });
+  }
+  return rows.sort((a, b) => (b.lastReceivedAt ?? "").localeCompare(a.lastReceivedAt ?? "") || a.assignmentTitle.localeCompare(b.assignmentTitle));
+}
+
 /* ------------------------------------------------------------------ */
 /* Staff: reviews of a submission                                      */
 /* ------------------------------------------------------------------ */
@@ -524,21 +626,36 @@ export async function listPeerReviewAssignments(filter: { search?: string; state
 }
 
 export type ReviewStatusFilter = "" | "assigned" | "submitted" | "overdue" | "overridden";
+export type CoverageFilter = "" | "unreviewed" | "waiting" | "owing" | "done";
+
+/** One learner's submission: the reviews it received and the reviews its author owes. */
+export interface SubmissionCoverageRow {
+  submissionId: string;
+  author: PersonLite;
+  submittedAt: string;
+  grade: AssignmentStatus;
+  received: { assigned: number; submitted: number };
+  given: { assigned: number; submitted: number; overdue: number };
+  /** Learners already reviewing this submission. */
+  reviewerIds: string[];
+}
 
 export interface PeerAssignmentOverview {
   assignment: Pick<Assignment, "id" | "title" | "courseId" | "scheduleEnd">;
+  courseTitle: string | null;
   config: PeerConfig;
   mode: AllocationMode;
   open: boolean;
   rubric: Rubric | null;
   rows: StaffReviewRow[];
+  coverage: SubmissionCoverageRow[];
   stats: { submissions: number; assigned: number; completed: number; overdue: number; unreviewed: number };
   reviewerOptions: ReviewerOption[];
 }
 
 export async function getPeerAssignmentOverview(
   assignmentId: string,
-  filter: { status?: ReviewStatusFilter; search?: string } = {},
+  filter: { status?: ReviewStatusFilter; coverage?: CoverageFilter; search?: string } = {},
   now: number = Date.now(),
 ): Promise<PeerAssignmentOverview | null> {
   const db = await getDb();
@@ -561,13 +678,38 @@ export async function getPeerAssignmentOverview(
     })
     .sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.author.name.localeCompare(b.author.name) || a.assignedAt.localeCompare(b.assignedAt));
   const reviewed = new Set(all.map((r) => r.submissionId));
+  const coverage = subs
+    .map((s): SubmissionCoverageRow => {
+      const received = all.filter((r) => r.submissionId === s.id);
+      const given = all.filter((r) => r.reviewer.id === s.userId);
+      return {
+        submissionId: s.id,
+        author: person(users.get(s.userId), s.userId),
+        submittedAt: s.submittedAt,
+        grade: s.status,
+        received: { assigned: received.length, submitted: received.filter((r) => r.status === "submitted").length },
+        given: { assigned: given.length, submitted: given.filter((r) => r.status === "submitted").length, overdue: given.filter((r) => r.overdue).length },
+        reviewerIds: received.map((r) => r.reviewer.id),
+      };
+    })
+    .filter((c) => {
+      if (filter.coverage === "unreviewed" && c.received.assigned > 0) return false;
+      if (filter.coverage === "waiting" && (c.received.assigned === 0 || c.received.submitted === c.received.assigned)) return false;
+      if (filter.coverage === "owing" && c.given.submitted === c.given.assigned) return false;
+      if (filter.coverage === "done" && (c.received.assigned === 0 || c.received.submitted < c.received.assigned || c.given.submitted < c.given.assigned)) return false;
+      if (search && ![c.author.name, c.author.email].some((v) => v.toLowerCase().includes(search))) return false;
+      return true;
+    })
+    .sort((a, b) => b.given.overdue - a.given.overdue || a.author.name.localeCompare(b.author.name) || a.submissionId.localeCompare(b.submissionId));
   return {
     assignment: { id: assignment.id, title: assignment.title, courseId: assignment.courseId, scheduleEnd: assignment.scheduleEnd },
+    courseTitle: assignment.courseId ? (db.courses.find((c) => c.id === assignment.courseId)?.title ?? null) : null,
     config,
     mode: allocationMode(assignment),
     open: allocationOpen(assignment, now),
     rubric: assignment.rubricId ? (db.rubrics.find((r) => r.id === assignment.rubricId) ?? null) : null,
     rows,
+    coverage,
     stats: {
       submissions: subs.length,
       assigned: all.length,

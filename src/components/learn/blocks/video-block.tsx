@@ -1,13 +1,17 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { VideoChapterMarker, VideoQuizMarker, VideoSource } from "@/lib/types";
 import { cn, formatTime } from "@/lib/utils";
+import { languageLabel } from "@/lib/transcripts/editor-shared";
+import { parseTimeParam } from "@/lib/transcripts/panel";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { LessonVideo } from "../lesson-video";
 import { useLearnPrefs } from "../learn-provider";
 import { useLessonRuntime } from "../lesson-runtime";
+import { TranscriptPanel, useLessonTranscript } from "../transcript-panel";
 
 /** Site-wide player options for the viewer (from Settings → Video). */
 export interface VideoBlockPlayerOptions {
@@ -44,6 +48,8 @@ export interface VideoBlockProps {
   lastVideo?: boolean;
   /** Round 3: HLS master playlist (pre-signed when protected) for adaptive streaming; `src` stays the fallback. */
   hlsUrl?: string;
+  /** Round 3: the block's `transcriptId`, when the server passes it: the transcript panel then holds its place while loading. */
+  transcriptId?: string;
 }
 
 interface ActiveQuiz {
@@ -57,7 +63,12 @@ const COUNTDOWN = 7;
 /** Keys the player uses as shortcuts; they must not reach it while a quiz is open. */
 const PLAYER_KEYS = new Set([" ", "k", "j", "l", "m", "f", "c", "p", "t", "?", ",", ".", "<", ">", "home", "end", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
 
-/** A lesson video with resume, notes seeking, in-video quizzes and a chapter list. */
+/**
+ * A lesson video with resume, notes seeking, in-video quizzes, a chapter
+ * list and an interactive transcript (which also feeds the player's captions
+ * when the video has no caption file). `?t=<time>` in the lesson URL starts
+ * the lesson's first video there; `&block=<id>` names another video.
+ */
 export function VideoBlock({
   blockId,
   src,
@@ -77,18 +88,57 @@ export function VideoBlock({
   player,
   lastVideo = true,
   hlsUrl,
+  transcriptId,
 }: VideoBlockProps) {
   const rt = useLessonRuntime();
   const { theater, toggleTheater } = useLearnPrefs();
-  const [initial] = useState(() => ({ startAt, initialMaxPosition }));
+  const searchParams = useSearchParams();
+
+  // A timestamp link (transcript search, AI tutor citations): `?t=` for the first video, `&block=` for another one.
+  const linkBlock = searchParams.get("block");
+  const linkTime = (linkBlock ? linkBlock === blockId : primary) ? parseTimeParam(searchParams.get("t")) : null;
+  // A link must not get around "prevent skipping".
+  const linkedTime = linkTime !== null && (!preventSkipping || linkTime <= (initialMaxPosition ?? 0) + 1) ? linkTime : null;
+  const linkKey = linkedTime === null ? "" : `${linkBlock ?? ""}@${linkedTime}`;
+
+  const [initial] = useState(() => ({ startAt: linkedTime ?? startAt, initialMaxPosition }));
   const [seek, setSeek] = useState<{ time: number; key: number; play?: boolean } | undefined>(undefined);
   const [active, setActive] = useState<ActiveQuiz | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
+
+  // The first link is the start position; a later one (navigating within the same lesson) seeks.
+  const [appliedLink, setAppliedLink] = useState(linkKey);
+  if (linkKey !== appliedLink) {
+    setAppliedLink(linkKey);
+    if (linkedTime !== null) setSeek((s) => ({ time: linkedTime, key: (s?.key ?? 0) + 1, play: false }));
+  }
+  useEffect(() => {
+    if (!linkKey) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    playerRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+  }, [linkKey]);
 
   const seekTo = useCallback((time: number, play = true) => {
     setSeek((s) => ({ time, key: (s?.key ?? 0) + 1, play }));
-    wrapperRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    playerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
+
+  /* ----------------------------- transcript ----------------------------- */
+  const transcript = useLessonTranscript(rt.lessonId, blockId, { captions: !captionsUrl });
+  const loadedTranscript = transcript.state.status === "ready" ? transcript.state : null;
+  // Captions come from the transcript when the video has no caption file of its own.
+  const transcriptCaptions = captionsUrl ? null : (loadedTranscript?.captionsUrl ?? null);
+  const transcriptLanguage = loadedTranscript?.transcript?.language;
+  const getVideo = useCallback(() => wrapperRef.current?.querySelector<HTMLVideoElement>("video[data-ll-main-video]") ?? null, []);
+  const quizOpen = !!active;
+  // The transcript sits right under the video (which docks as a mini-player when scrolled away): seek without moving the page.
+  const seekFromTranscript = useCallback(
+    (time: number) => {
+      if (!quizOpen) setSeek((s) => ({ time, key: (s?.key ?? 0) + 1, play: true }));
+    },
+    [quizOpen],
+  );
 
   const { registerPrimaryVideo } = rt;
   useEffect(() => {
@@ -101,10 +151,10 @@ export function VideoBlock({
     // Markers clicked on the seek bar do not pause playback by themselves.
     wrapperRef.current?.querySelector<HTMLVideoElement>("video[data-ll-main-video]")?.pause();
     // A docked mini-player returns to its place: bring the quiz into view.
-    const rect = wrapperRef.current?.getBoundingClientRect();
+    const rect = playerRef.current?.getBoundingClientRect();
     if (rect && (rect.bottom < 0 || rect.top > window.innerHeight)) {
       const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      wrapperRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+      playerRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
     }
     const marker = quizMarkers?.find((m) => m.quizId === quizId);
     setActive({ quizId, resume, time: marker?.time ?? 0 });
@@ -142,50 +192,54 @@ export function VideoBlock({
         </div>
       )}
 
-      <LessonVideo
-        lessonId={rt.lessonId}
-        blockId={blockId}
-        src={src}
-        sources={sources}
-        hlsUrl={hlsUrl}
-        posterUrl={posterUrl}
-        captionsUrl={captionsUrl}
-        title={title}
-        chapters={chapters}
-        quizMarkers={quizMarkers}
-        startAt={initial.startAt}
-        initialMaxPosition={initial.initialMaxPosition}
-        preventSkipping={preventSkipping}
-        track={rt.tracking}
-        onCompleted={rt.onVideoWatched}
-        onEnded={rt.onVideoEnded}
-        onQuizMarker={onQuizMarker}
-        onNext={rt.canGoNext ? () => void rt.goNext() : undefined}
-        nextLabel={rt.next?.locked ? "Complete and continue" : "Next lesson"}
-        nextTitle={rt.next?.title}
-        autoplayNext={!!player?.autoplayNext && lastVideo && !active}
-        watermark={player?.watermark ?? null}
-        seekThumbnails={player?.seekThumbnails ?? false}
-        signedUrlTtlSeconds={player?.signedUrlTtlSeconds ?? null}
-        miniPlayer
-        theater={theater}
-        onToggleTheater={toggleTheater}
-        seekRequest={seek}
-        onTimeChange={primary ? rt.time.set : undefined}
-        className={active ? "min-h-[min(36rem,85vh)]" : undefined}
-        overlay={
-          active ? (
-            <QuizOverlay
-              key={`${active.quizId}@${active.time}`}
-              active={active}
-              title={quizTitles[active.quizId] ?? "Quiz"}
-              passed={passedQuizIds.includes(active.quizId)}
-              node={quizNodes[active.quizId]}
-              onContinue={continueVideo}
-            />
-          ) : undefined
-        }
-      />
+      <div ref={playerRef}>
+        <LessonVideo
+          lessonId={rt.lessonId}
+          blockId={blockId}
+          src={src}
+          sources={sources}
+          hlsUrl={hlsUrl}
+          posterUrl={posterUrl}
+          captionsUrl={captionsUrl || transcriptCaptions || undefined}
+          captionsLabel={transcriptCaptions && transcriptLanguage ? languageLabel(transcriptLanguage) : undefined}
+          captionsLang={transcriptCaptions ? transcriptLanguage : undefined}
+          title={title}
+          chapters={chapters}
+          quizMarkers={quizMarkers}
+          startAt={initial.startAt}
+          initialMaxPosition={initial.initialMaxPosition}
+          preventSkipping={preventSkipping}
+          track={rt.tracking}
+          onCompleted={rt.onVideoWatched}
+          onEnded={rt.onVideoEnded}
+          onQuizMarker={onQuizMarker}
+          onNext={rt.canGoNext ? () => void rt.goNext() : undefined}
+          nextLabel={rt.next?.locked ? "Complete and continue" : "Next lesson"}
+          nextTitle={rt.next?.title}
+          autoplayNext={!!player?.autoplayNext && lastVideo && !active}
+          watermark={player?.watermark ?? null}
+          seekThumbnails={player?.seekThumbnails ?? false}
+          signedUrlTtlSeconds={player?.signedUrlTtlSeconds ?? null}
+          miniPlayer
+          theater={theater}
+          onToggleTheater={toggleTheater}
+          seekRequest={seek}
+          onTimeChange={primary ? rt.time.set : undefined}
+          className={active ? "min-h-[min(36rem,85vh)]" : undefined}
+          overlay={
+            active ? (
+              <QuizOverlay
+                key={`${active.quizId}@${active.time}`}
+                active={active}
+                title={quizTitles[active.quizId] ?? "Quiz"}
+                passed={passedQuizIds.includes(active.quizId)}
+                node={quizNodes[active.quizId]}
+                onContinue={continueVideo}
+              />
+            ) : undefined
+          }
+        />
+      </div>
 
       {chapters && chapters.length > 1 && (
         <details className="group mt-3 rounded-lg border border-border bg-surface-1">
@@ -212,6 +266,16 @@ export function VideoBlock({
           </ol>
         </details>
       )}
+
+      <TranscriptPanel
+        lessonId={rt.lessonId}
+        blockId={blockId}
+        state={transcript.state}
+        onReload={transcript.reload}
+        expected={!!transcriptId}
+        getVideo={getVideo}
+        onSeek={seekFromTranscript}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { apiRoute, listResponse } from "@/lib/api/handler";
+import { apiRoute, listResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { matchesText, userMap } from "@/lib/api/lookups";
 import { listPage } from "@/lib/api/pagination";
@@ -22,3 +22,10 @@ export const GET = apiRoute(endpoints.listBatches, async ({ db, query, url, base
     serializeBatch(batch, { seatsTaken: seats.get(batch.id) ?? 0, status: getBatchStatus(batch, now) }, users, { baseUrl }),
   );
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

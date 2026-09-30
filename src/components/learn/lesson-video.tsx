@@ -58,6 +58,9 @@ export interface LessonVideoProps {
   /* ----- round 3 ----- */
   /** HLS master playlist (pre-signed when protected): adaptive streaming, with `src` as the progressive fallback. */
   hlsUrl?: string;
+  /** Menu label and language (BCP 47) of the caption track, e.g. when it is built from the transcript. */
+  captionsLabel?: string;
+  captionsLang?: string;
 }
 
 /**
@@ -98,6 +101,8 @@ export function LessonVideo({
   miniPlayer,
   signedUrlTtlSeconds,
   hlsUrl,
+  captionsLabel,
+  captionsLang,
 }: LessonVideoProps) {
   const [completed, setCompleted] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -160,6 +165,8 @@ export function LessonVideo({
         mediaContext={mediaContext}
         poster={posterUrl}
         captionsUrl={captionsUrl}
+        captionsLabel={captionsLabel}
+        captionsLang={captionsLang}
         title={title}
         chapters={chapters}
         markers={markers}

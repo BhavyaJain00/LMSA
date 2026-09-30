@@ -1,5 +1,5 @@
 import type { Database, Lesson, LessonProgress } from "@/lib/types";
-import { apiRoute, listResponse } from "@/lib/api/handler";
+import { apiRoute, listResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { notFound } from "@/lib/api/errors";
 import { listPage } from "@/lib/api/pagination";
@@ -46,3 +46,10 @@ export const GET = apiRoute(endpoints.listProgress, async ({ db, query, url }) =
 
   return listResponse(page, url, (e) => serializeProgress(e, lessonsFor(e.courseId), rowsByEnrollment.get(`${e.userId}:${e.courseId}`) ?? []));
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

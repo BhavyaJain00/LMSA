@@ -17,7 +17,7 @@ import { REF_CLICK_HEADER, REF_COOKIE, REF_COOKIE_MAX_AGE, REF_PARAM, formatRefC
  * the page rendered for this very request already sees them, and the
  * request that carried `?ref=` gets the `x-ll-referral` header (the landing
  * path) so the click is recorded exactly once. A client-sent copy of that
- * header is always dropped.
+ * header is always dropped, and prefetch requests never capture a referral.
  */
 
 interface CookieWrite {
@@ -53,7 +53,9 @@ function withCookies(header: string | null, writes: readonly CookieWrite[]): str
 
 export function trackVisitor(request: NextRequest): VisitorTracking {
   const writes: CookieWrite[] = [];
-  const refCode = normalizeCode(request.nextUrl.searchParams.get(REF_PARAM));
+  // Router and browser prefetches are not visits: they never count as a referral click.
+  const prefetch = request.headers.has("next-router-prefetch") || /prefetch/i.test(request.headers.get("purpose") ?? request.headers.get("sec-purpose") ?? "");
+  const refCode = prefetch ? null : normalizeCode(request.nextUrl.searchParams.get(REF_PARAM));
   const anon = request.cookies.get(ANON_COOKIE)?.value;
   if (!isValidAnonId(anon)) writes.push({ name: ANON_COOKIE, value: randomVisitorId(), maxAge: CONSENT_MAX_AGE });
   if (refCode) writes.push({ name: REF_COOKIE, value: formatRefCookie(refCode, Date.now()), maxAge: REF_COOKIE_MAX_AGE });

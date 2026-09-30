@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ActionResult, Payment, Settings, User } from "@/lib/types";
+import type { ActionResult, Database, Payment, Settings, User } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
@@ -14,6 +14,8 @@ import {
   getBillingItem,
   getPaymentByOrderId,
   insertPendingOrder,
+  installmentCheckout,
+  membershipTerms,
   notifyAdminsOfPendingOrder,
   parseItemType,
   sendPaymentReminder,
@@ -57,6 +59,21 @@ import { BILLING_SOURCES, GSTIN_RE, PAN_RE, canonicalIndianState, isKnownCountry
 import { setFlash } from "@/lib/flash";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, formatPrice, uid } from "@/lib/utils";
+import { currentSubscription, ownedCourseIds } from "@/lib/commerce/access";
+import { bundleCourses } from "@/lib/commerce/bundles";
+import { installmentItemTitle, isInstallmentOrder, validateInstallmentInput } from "@/lib/commerce/installments";
+import {
+  cancelInstallmentPlan,
+  payInstallment,
+  remindInstallment,
+  setCourseInstallments,
+  waiveInstallments,
+  type ServiceResult as InstallmentResult,
+} from "@/lib/commerce/installment-service";
+import { confirmRazorpayMembership } from "@/lib/commerce/memberships";
+import { startManualTrial } from "@/lib/commerce/membership-store";
+import { isRecurringInterval } from "@/lib/commerce/plans";
+import { isGatewayManaged, isOngoing } from "@/lib/commerce/subscriptions";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
@@ -130,9 +147,11 @@ function revalidateOrder(orderId: string) {
 }
 
 /**
- * Place an order for a course, batch or certificate. The amount is computed
- * here from the item price, the coupon and the tax settings — never taken
- * from the browser.
+ * Place an order for a course, batch, certificate, membership plan or bundle.
+ * The amount is computed here from the item price, the coupon and the tax
+ * settings — never taken from the browser. A course sold in installments can
+ * be ordered with `paymentOption=installments`: the order is then the first
+ * of the plan's equal payments, and the rest are scheduled once it is paid.
  *
  * Gateways:
  *  - total 0 or gateway "none" → recorded as paid immediately and fulfilled.
@@ -171,6 +190,10 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   }
 
   const couponCode = fd(formData, "coupon");
+  if (couponCode && item.plan && isRecurringInterval(item.plan.interval)) {
+    const error = "Coupons can't be used for memberships that renew.";
+    return { ok: false, error, fieldErrors: { coupon: error } };
+  }
   let coupon = null;
   if (couponCode) {
     // Rate limited per buyer and IP: codes cannot be guessed by submitting checkouts either.
@@ -179,9 +202,17 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     coupon = check.coupon;
   }
 
-  const summary = computeOrderSummary(item, coupon, settings);
+  // Paying in parts: the plan is priced as one order (surcharge, coupon, tax) and split into equal payments.
+  const wantsInstallments = fd(formData, "paymentOption") === "installments";
+  const split = wantsInstallments ? installmentCheckout(item, coupon, settings) : null;
+  if (wantsInstallments && !split) {
+    return { ok: false, error: "This course can no longer be paid in installments. Reload the page to see the current payment options." };
+  }
+  const summary = split ? split.full : computeOrderSummary(item, coupon, settings);
+  // What this order charges: the first payment of a plan, or the whole summary.
+  const charge = split ? split.part : { originalAmount: summary.originalAmount, discountAmount: summary.discountAmount, taxAmount: summary.taxAmount, amount: summary.total };
   const expected = fd(formData, "expectedTotal");
-  if (expected !== "" && Number(expected) !== summary.total) {
+  if (expected !== "" && Number(expected) !== charge.amount) {
     return { ok: false, error: "The price changed while you were checking out. Please review the updated order summary and try again." };
   }
 
@@ -192,7 +223,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   }
 
   const gateway = settings.commerce.paymentGateway;
-  const settleNow = summary.total <= 0 || gateway === "none";
+  const settleNow = charge.amount <= 0 || gateway === "none";
   if (!settleNow && isRealGateway(gateway) && !isConfigured(gateway)) {
     return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
   }
@@ -203,11 +234,14 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     userId: user.id,
     itemType: type,
     itemId: item.id,
-    itemTitle: item.title,
-    originalAmount: summary.originalAmount,
-    discountAmount: summary.discountAmount,
-    taxAmount: summary.taxAmount,
-    amount: summary.total,
+    itemTitle: split ? installmentItemTitle(item.title, 1, split.plan.count) : item.title,
+    ...(item.plan ? { planId: item.plan.id } : {}),
+    ...(item.bundle ? { bundleId: item.bundle.id } : {}),
+    ...(split ? { installmentNumber: 1, installmentsTotal: split.plan.count } : {}),
+    originalAmount: charge.originalAmount,
+    discountAmount: charge.discountAmount,
+    taxAmount: charge.taxAmount,
+    amount: charge.amount,
     currency: summary.currency,
     couponId: coupon?.id,
     couponCode: coupon?.code,
@@ -223,7 +257,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     gstin: settings.commerce.applyTax ? input.gstin || undefined : undefined,
     pan: settings.commerce.applyTax ? input.pan || undefined : undefined,
     source: input.source,
-    gateway: summary.total <= 0 ? "free" : gateway,
+    gateway: charge.amount <= 0 ? "free" : gateway,
     status: "pending",
     createdAt: new Date().toISOString(),
   });
@@ -239,14 +273,25 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     if (!res.ok) return { ok: false, error: res.error };
     revalidatePath("/", "layout");
     await finishFulfilledCheckout(res.data, item.course?.slug);
-    await setFlash(summary.total <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.", "success");
+    await setFlash(charge.amount <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.", "success");
     redirect(orderPath(payment.orderId));
   }
 
   if (gateway === "manual") {
     await notifyAdminsOfPendingOrder(payment, user.name);
+    // A membership with a free trial starts right away; the confirmed payment then extends it from the trial's end.
+    const trialDays = item.plan ? membershipTerms(db, user.id, item.plan).trialDays : 0;
+    const trial = trialDays > 0 ? await startManualTrial(payment.id, trialDays) : null;
     revalidateOrder(payment.orderId);
-    await setFlash("Order placed. We'll confirm your payment shortly.", "success");
+    if (trial) revalidatePath("/", "layout");
+    await setFlash(
+      trial
+        ? `Your ${trialDays}-day free trial has started. We'll confirm your payment before it ends.`
+        : split
+          ? `Order placed. Your plan of ${split.plan.count} payments starts when we confirm the first one.`
+          : "Order placed. We'll confirm your payment shortly.",
+      "success",
+    );
     redirect(orderPath(payment.orderId));
   }
 
@@ -341,12 +386,51 @@ export async function confirmRazorpayPaymentAction(input: {
   return { ok: false, error: state.message };
 }
 
+/**
+ * Razorpay Checkout's success handler for a membership: verifies the
+ * subscription signature (HMAC-SHA256 of `payment_id|subscription_id`) on the
+ * server, then reads the subscription back before settling the order.
+ */
+export async function confirmRazorpayMembershipAction(input: {
+  orderId: string;
+  razorpaySubscriptionId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}): Promise<ActionResult<{ redirectTo: string }>> {
+  const orderId = typeof input?.orderId === "string" ? input.orderId.trim() : "";
+  const subscriptionId = typeof input?.razorpaySubscriptionId === "string" ? input.razorpaySubscriptionId.trim() : "";
+  const paymentId = typeof input?.razorpayPaymentId === "string" ? input.razorpayPaymentId.trim() : "";
+  const signature = typeof input?.razorpaySignature === "string" ? input.razorpaySignature.trim() : "";
+  if (!orderId || orderId.length > 64 || !/^sub_[A-Za-z0-9]+$/.test(subscriptionId) || !/^pay_[A-Za-z0-9]+$/.test(paymentId) || !/^[0-9a-f]{64}$/i.test(signature)) {
+    return { ok: false, error: "The payment response was incomplete. If you were charged, contact support with your order ID." };
+  }
+  const found = await ownPayment(orderId);
+  if ("error" in found) return { ok: false, error: found.error };
+  const { payment } = found;
+  if (payment.itemType !== "plan") return { ok: false, error: "This order is not a membership." };
+
+  const state = await confirmRazorpayMembership(payment, { subscriptionId, paymentId, signature });
+  revalidateOrder(payment.orderId);
+  if (state.state === "paid") {
+    revalidatePath("/", "layout");
+    return { ok: true, data: { redirectTo: orderPath(payment.orderId) }, message: "Your membership is active. Enjoy learning!" };
+  }
+  if (state.state === "processing" || state.state === "pending") {
+    return { ok: true, data: { redirectTo: orderPath(payment.orderId) }, message: "We're confirming your membership." };
+  }
+  if (state.state === "failed") return { ok: false, error: state.reason ?? "The membership could not be started." };
+  return { ok: false, error: state.message };
+}
+
 /** Let a learner cancel their own order while it is still awaiting payment. */
 export async function cancelOrderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const found = await ownPayment(fd(formData, "orderId"));
   if ("error" in found) return { ok: false, error: found.error };
   const { payment } = found;
   if (payment.status !== "pending") return { ok: false, error: "Only orders awaiting payment can be cancelled." };
+  if (isInstallmentOrder(payment) && payment.installmentNumber! > 1) {
+    return { ok: false, error: "This payment belongs to your payment plan and can't be cancelled on its own. Contact us if you'd like to stop the plan." };
+  }
 
   if (isRealGateway(payment.gateway)) {
     const closed = await closeGatewayCheckout(payment);
@@ -363,6 +447,24 @@ export async function cancelOrderAction(_prev: ActionResult | null, formData: Fo
   await markPaymentFailed(payment.id);
   revalidateOrder(payment.orderId);
   return { ok: true, data: undefined, message: "Your order has been cancelled." };
+}
+
+/**
+ * "Pay installment" on the order page of a part of the learner's payment
+ * plan (the link in every reminder leads there): opens the gateway checkout
+ * for that part, Stripe's invoice page when an automatic charge failed, or
+ * the payment instructions when payments are confirmed by hand.
+ */
+export async function payInstallmentAction(orderId: string): Promise<ActionResult<CheckoutNext>> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Please log in again to continue." };
+  if (typeof orderId !== "string" || !orderId || orderId.length > 64) return { ok: false, error: "Order not found." };
+  const res = await payInstallment(user, orderId);
+  revalidateOrder(orderId);
+  if (!res.ok) return { ok: false, error: res.error };
+  // The payment may have been found settled at the gateway, which reopens the course.
+  revalidatePath("/", "layout");
+  return { ok: true, data: res.next, message: res.message };
 }
 
 /* ------------------------------------------------------------------ */
@@ -628,6 +730,19 @@ export async function sendPaymentRemindersAction(): Promise<ActionResult<{ sent:
   return { ok: true, data: result, message };
 }
 
+/**
+ * The membership a hand-recorded membership payment extends: the member's
+ * current membership when it is not billed by a gateway (a gateway
+ * subscription renews itself), otherwise none, and a new one is started.
+ */
+function planSubscriptionFor(db: Pick<Database, "subscriptions">, userId: string, planId: string): string | undefined {
+  const current = currentSubscription(db, userId);
+  if (!current || isGatewayManaged(current)) return undefined;
+  // Ended memberships of another plan are not revived by a payment for this one.
+  if (!isOngoing(current) && current.planId !== planId) return undefined;
+  return current.id;
+}
+
 function parseMoney(raw: string): number | null {
   if (raw === "") return 0;
   const n = Number(raw);
@@ -665,8 +780,15 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
   if (!itemType) errors.itemType = "Paid For is required";
 
   let itemTitle = "";
-  if (itemType && !itemId) errors.itemId = itemType === "batch" ? "Batch is required" : itemType === "plan" ? "Membership plan is required" : "Course is required";
-  else if (itemType === "plan") {
+  if (itemType && !itemId) {
+    errors.itemId = itemType === "batch" ? "Batch is required" : itemType === "plan" ? "Membership plan is required" : itemType === "bundle" ? "Bundle is required" : "Course is required";
+  } else if (itemType === "bundle") {
+    // A received bundle payment enrolls the member in every course of the bundle.
+    const bundle = db.bundles.find((b) => b.id === itemId);
+    if (!bundle) errors.itemId = "This bundle no longer exists.";
+    else if (!bundleCourses(bundle, db.courses).length) errors.itemId = "None of this bundle's courses exist any more.";
+    else itemTitle = bundle.title;
+  } else if (itemType === "plan") {
     // A received membership payment starts the member's membership or extends it by one billing period.
     const plan = db.plans.find((p) => p.id === itemId);
     if (!plan) errors.itemId = "This membership plan no longer exists.";
@@ -708,6 +830,13 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
     if (itemType === "batch" && db.batchEnrollments.some((e) => e.userId === member.id && e.batchId === itemId)) {
       return { ok: false, error: `${member.name} is already enrolled in this batch.`, fieldErrors: { itemId: "Already enrolled." } };
     }
+    if (itemType === "bundle") {
+      const bundle = db.bundles.find((b) => b.id === itemId);
+      const included = bundle ? bundleCourses(bundle, db.courses).map((c) => c.id) : [];
+      if (included.length && ownedCourseIds(db, member.id, included).length === included.length) {
+        return { ok: false, error: `${member.name} already has every course of this bundle.`, fieldErrors: { itemId: "Already owned by this member." } };
+      }
+    }
     if (itemType === "certificate" && db.enrollments.some((e) => e.userId === member.id && e.courseId === itemId && e.purchasedCertificate)) {
       return { ok: false, error: `${member.name} already purchased this certificate.`, fieldErrors: { itemId: "Already purchased." } };
     }
@@ -722,6 +851,7 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
     itemId,
     itemTitle,
     ...(itemType === "plan" ? { planId: itemId, subscriptionId: planSubscriptionFor(db, member.id, itemId) } : {}),
+    ...(itemType === "bundle" ? { bundleId: itemId } : {}),
     originalAmount: original,
     discountAmount: discount,
     taxAmount: tax,
@@ -792,6 +922,93 @@ export async function updatePaymentDetailsAction(_prev: ActionResult | null, for
   revalidateCommerce(payment.orderId);
   revalidatePath(`/billing/invoice/${payment.orderId}`);
   return { ok: true, data: undefined, message: `Transaction updated successfully (${payment.orderId}, ${formatPrice(payment.amount, payment.currency)}).` };
+}
+
+/* ------------------------------------------------------------------ */
+/* Admin: payment plans (installments)                                 */
+/* ------------------------------------------------------------------ */
+
+function revalidateInstallments(): void {
+  revalidatePath("/admin/settings/plans");
+  revalidatePath("/admin/settings/transactions");
+  revalidatePath("/billing/history");
+  // Course access and the "or N payments" offer depend on payment plans.
+  revalidatePath("/", "layout");
+}
+
+function installmentResult(res: InstallmentResult): ActionResult {
+  return res.ok ? { ok: true, data: undefined, message: res.message } : { ok: false, error: res.error };
+}
+
+export type InstallmentPlanOp = "cancel" | "waive" | "remind";
+
+/**
+ * Act on a learner's payment plan (`planKey` is the order id of its first
+ * payment): cancel what is left, waive it, or send a reminder for the next
+ * payment.
+ */
+export async function installmentPlanAction(planKey: string, op: InstallmentPlanOp): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can manage payment plans." };
+  if (typeof planKey !== "string" || !planKey || planKey.length > 64) return { ok: false, error: "Payment plan not found." };
+  const res =
+    op === "cancel" ? await cancelInstallmentPlan(planKey, actor) : op === "waive" ? await waiveInstallments(planKey, actor) : op === "remind" ? await remindInstallment(planKey, actor) : null;
+  if (!res) return { ok: false, error: "Unknown action." };
+  revalidateInstallments();
+  return installmentResult(res);
+}
+
+const MAX_BULK_REMINDERS = 100;
+
+/** Remind the learners of several plans about their next payment (one reminder per plan and day). */
+export async function remindInstallmentPlansAction(planKeys: string[]): Promise<ActionResult<{ sent: number; skipped: number }>> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can manage payment plans." };
+  const keys = Array.isArray(planKeys) ? [...new Set(planKeys.filter((k): k is string => typeof k === "string" && !!k && k.length <= 64))] : [];
+  if (!keys.length) return { ok: false, error: "Select at least one payment plan." };
+  if (keys.length > MAX_BULK_REMINDERS) return { ok: false, error: `Remind at most ${MAX_BULK_REMINDERS} plans at a time.` };
+  let sent = 0;
+  for (const key of keys) if ((await remindInstallment(key, actor)).ok) sent++;
+  const skipped = keys.length - sent;
+  revalidateInstallments();
+  if (!sent) return { ok: false, error: "No reminders were sent: these plans have nothing due, or were already reminded today." };
+  return { ok: true, data: { sent, skipped }, message: `Sent ${sent} reminder${sent === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped)` : ""}.` };
+}
+
+/** Offer a course in installments, change its terms, or stop offering it. Running plans keep their schedule. */
+export async function saveCourseInstallmentsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can change how courses are paid." };
+  const courseId = fd(formData, "courseId");
+  if (!courseId) return { ok: false, error: "Course not found." };
+  if (!fdBool(formData, "offered")) {
+    const res = await setCourseInstallments(courseId, null, actor);
+    revalidateInstallments();
+    return installmentResult(res);
+  }
+  const parsed = validateInstallmentInput({ count: fd(formData, "count"), intervalDays: fd(formData, "intervalDays"), surchargePercent: fd(formData, "surchargePercent") });
+  if (!parsed.ok) return { ok: false, error: Object.values(parsed.errors)[0] ?? "Please fix the errors below.", fieldErrors: parsed.errors };
+  const res = await setCourseInstallments(courseId, parsed.plan, actor);
+  revalidateInstallments();
+  return installmentResult(res);
+}
+
+/** Turn "pay in installments" on or off for the whole platform. Running plans continue either way. */
+export async function setInstallmentsEnabledAction(enabled: boolean): Promise<ActionResult> {
+  const actor = await requireAdminActor();
+  if (!actor) return { ok: false, error: "Only administrators can change payment settings." };
+  const on = enabled === true;
+  await mutate((d) => {
+    d.settings.growth.installmentsEnabled = on;
+    d.settings.updatedAt = new Date().toISOString();
+  });
+  await audit(actor, "settings.update", { type: "settings", id: "growth" }, { installmentsEnabled: on });
+  revalidateInstallments();
+  return {
+    ok: true,
+    data: undefined,
+    message: on ? "Courses with a payment plan now offer installments at checkout." : "Installments are no longer offered at checkout. Running plans continue.",
+  };
 }
 
 /* ------------------------------------------------------------------ */

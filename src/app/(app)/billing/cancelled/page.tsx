@@ -89,7 +89,7 @@ export default async function PaymentCancelledPage(props: PageProps<"/billing/ca
             {payment && payment.status !== "pending" && item && <ButtonLink href={checkoutHref}>Start a new checkout</ButtonLink>}
             {item && (
               <ButtonLink href={item.href} variant="outline">
-                Back to {payment?.itemType === "batch" ? "batch" : "course"}
+                Back to {payment?.itemType === "batch" ? "batch" : payment?.itemType === "plan" ? "membership plans" : "course"}
               </ButtonLink>
             )}
             {!payment && (

@@ -3,14 +3,16 @@ import type { Database, Payment, Settings } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { siteConfig } from "@/lib/config";
 import { maskSecret, razorpayEnv, stripeEnv } from "@/lib/server-env";
-import { formatPrice, toDateKey } from "@/lib/utils";
+import { formatDate, formatPrice, toDateKey } from "@/lib/utils";
 import { notifyMany, type NotifyInput } from "@/lib/services/notifications";
 import { amountMatches, fromGatewayAmount, toGatewayAmount } from "./amounts";
 import { GatewayError } from "./http";
 import { verifyRazorpayPaymentSignature } from "./signatures";
 import { couponProblem } from "./coupon-rules";
 import {
+  cancelStripeSubscriptionNow,
   createStripeCheckoutSession,
+  createStripeInstallmentSession,
   createStripeRefund,
   expireStripeCheckoutSession,
   isActiveStripeRefund,
@@ -69,6 +71,9 @@ import {
   startMembershipCheckout,
   syncRazorpayMembershipOrder,
 } from "@/lib/commerce/memberships";
+import { bundleCourses } from "@/lib/commerce/bundles";
+import { autoChargeSubscriptionId, isInstallmentOrder, isValidInstallmentPlan } from "@/lib/commerce/installments";
+import { adoptStripeInstallmentSubscription, syncStripeInstallmentSubscription } from "@/lib/commerce/installment-gateway";
 
 /**
  * Gateway abstraction used by checkout, the return/webhook handlers and the
@@ -141,6 +146,14 @@ function itemDetails(db: Database, payment: Payment): { description?: string; im
     const batch = db.batches.find((b) => b.id === payment.itemId);
     return { description: batch?.description, imageUrl: batch?.imageUrl };
   }
+  if (payment.itemType === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === payment.itemId);
+    const courses = bundle ? bundleCourses(bundle, db.courses) : [];
+    return {
+      description: courses.length ? `Bundle of ${courses.length} courses: ${courses.map((c) => c.title).join(", ")}` : undefined,
+      imageUrl: bundle?.imageUrl ?? courses.find((c) => c.imageUrl)?.imageUrl,
+    };
+  }
   const course = db.courses.find((c) => c.id === payment.itemId);
   return {
     description: payment.itemType === "certificate" ? `Certificate of completion for ${course?.title ?? payment.itemTitle}` : course?.shortIntroduction,
@@ -212,6 +225,31 @@ export async function createCheckout(payment: Payment, urls: { successUrl: strin
   if (payment.gateway === "stripe") {
     const user = db.users.find((u) => u.id === payment.userId);
     const details = itemDetails(db, payment);
+    // First part of a course paid in installments: a subscription that charges the remaining parts by itself.
+    const terms = isInstallmentOrder(payment) && payment.installmentNumber === 1 ? db.courses.find((c) => c.id === payment.itemId)?.installments : undefined;
+    if (isValidInstallmentPlan(terms)) {
+      const session = await createStripeInstallmentSession({
+        paymentId: payment.id,
+        orderId: payment.orderId,
+        userId: payment.userId,
+        courseId: payment.itemId,
+        title: payment.itemTitle.replace(/ · payment \d+ of \d+$/, ""),
+        description: details.description,
+        imageUrl: publicImageUrl(details.imageUrl),
+        unitAmount: amount,
+        currency: payment.currency,
+        intervalDays: terms.intervalDays,
+        count: payment.installmentsTotal!,
+        customerEmail: user?.email,
+        successUrl: urls.successUrl,
+        cancelUrl: urls.cancelUrl,
+      });
+      if (!(await saveCheckoutAttempt(payment.id, "stripe", session.id, session.url ?? undefined))) {
+        await expireStripeCheckoutSession(session.id).catch(() => undefined);
+        throw new GatewayError("Stripe", "This order can no longer be paid.");
+      }
+      return { kind: "redirect", url: session.url! };
+    }
     const session = await createStripeCheckoutSession({
       paymentId: payment.id,
       orderId: payment.orderId,
@@ -253,6 +291,25 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
   if (!isConfigured(payment.gateway)) return { ok: false, error: `${name} payments are no longer available. Cancel this order and check out again.` };
 
   try {
+    // An installment that a Stripe subscription charges by itself: pay its open invoice, never a second checkout.
+    const planSubscription = isInstallmentOrder(payment) ? autoChargeSubscriptionId(payment) : null;
+    if (planSubscription) {
+      const synced = await syncStripeInstallmentSubscription(planSubscription, (await getDb()).settings.commerce.paymentGateway);
+      const current = (await getFreshPayment(payment.id)) ?? payment;
+      if (current.status === "paid") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your payment went through." };
+      const invoice = synced.live.latestInvoice;
+      if (autoChargeSubscriptionId(current)) {
+        if (invoice && invoice.status === "open" && invoice.hostedInvoiceUrl) return { ok: true, next: { kind: "redirect", url: invoice.hostedInvoiceUrl } };
+        if (Date.parse(current.createdAt) > Date.now()) {
+          return { ok: false, error: `This payment is charged to your card automatically on ${formatDate(current.createdAt)}. There is nothing to do until then.` };
+        }
+        return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Stripe is collecting this payment. It can take a few minutes." };
+      }
+      // The subscription ended: the part is paid like any other order from now on.
+      if (!isRealGateway(current.gateway)) return { ok: true, next: { kind: "redirect", url: orderPage } };
+      return { ok: true, next: await createCheckout(current, checkoutUrls(current)) };
+    }
+
     if (payment.gateway === "stripe") {
       if (isStripeSessionId(payment.gatewayOrderId)) {
         let session = await retrieveStripeCheckoutSession(payment.gatewayOrderId);
@@ -425,7 +482,9 @@ async function closeReversed(payment: Payment, gateway: RealGateway, reason: str
 export async function reconcileStripeSession(payment: Payment, session: StripeCheckoutSession, source: FulfillmentSource): Promise<SyncState> {
   const belongs = session.metadata.paymentId === payment.id || session.clientReferenceId === payment.id;
   if (!belongs) return { state: "error", message: "This checkout session does not belong to the order." };
-  if (session.mode === "subscription") return reconcileStripeMembershipSession(payment, session, source);
+  if (session.mode === "subscription") {
+    return isInstallmentOrder(payment) ? reconcileStripeInstallmentSession(payment, session, source) : reconcileStripeMembershipSession(payment, session, source);
+  }
 
   if (isStripeSessionPaid(session)) {
     if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
@@ -616,18 +675,55 @@ async function reconcileStripeMembershipSession(payment: Payment, session: Strip
     await settleTrialOrder(payment.id);
     return paidState(await fulfillPayment(payment.id, undefined, { gatewayOrderId: session.id, source }));
   }
+  return settleFirstSubscriptionCharge(payment, session, live.latestInvoice?.paymentIntentId, source, "The membership was not started.");
+}
+
+/**
+ * Settle the order of a subscription-mode Checkout Session from its first
+ * charge: the amount must match the order and the PaymentIntent must still
+ * hold the money. `notStarted` completes the reason when it was reversed.
+ */
+async function settleFirstSubscriptionCharge(
+  payment: Payment,
+  session: StripeCheckoutSession,
+  pi: string | undefined,
+  source: FulfillmentSource,
+  notStarted: string,
+): Promise<SyncState> {
   if (session.paymentStatus !== "paid") return { state: "processing" };
   if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
     return reportAmountMismatch(payment, `${session.amountTotal ?? "?"} ${(session.currency ?? "?").toUpperCase()} (smallest unit)`);
   }
-  const pi = live.latestInvoice?.paymentIntentId;
   if (isSettling(await currentRow(payment))) {
     if (!isStripePaymentIntentId(pi)) return { state: "processing" };
     const settlement = stripeSettlement(await retrieveStripePaymentIntent(pi, { timeoutMs: 15_000 }));
-    if (settlement.kind === "reversed") return closeReversed(payment, "stripe", `${settlement.reason} The membership was not started.`, pi);
+    if (settlement.kind === "reversed") return closeReversed(payment, "stripe", `${settlement.reason} ${notStarted}`, pi);
     if (settlement.kind === "incomplete") return { state: "processing" };
   }
   return paidState(await fulfillPayment(payment.id, pi, { gatewayOrderId: session.id, source }));
+}
+
+/**
+ * A completed Checkout Session for a course paid in installments: its first
+ * charge settles part 1, which schedules the remaining parts; they are then
+ * tied to the subscription, which charges them on its billing dates and ends
+ * after the last one. A first charge that was refunded or disputed closes the
+ * order and stops the subscription.
+ */
+async function reconcileStripeInstallmentSession(payment: Payment, session: StripeCheckoutSession, source: FulfillmentSource): Promise<SyncState> {
+  if (session.status === "expired") {
+    const reason = "The checkout session expired before the first payment was made.";
+    await markPaymentFailed(payment.id, reason, { gatewayOrderId: session.id });
+    return { state: "failed", reason };
+  }
+  if (session.status !== "complete") return { state: "pending" };
+  if (!session.subscriptionId) return { state: "processing" };
+
+  const live = await retrieveStripeSubscription(session.subscriptionId, { timeoutMs: 15_000 });
+  const state = await settleFirstSubscriptionCharge(payment, session, live.latestInvoice?.paymentIntentId, source, "The payment plan was not started.");
+  if (state.state === "paid") await adoptStripeInstallmentSubscription(payment.id, live);
+  else if (state.state === "failed") await cancelStripeSubscriptionNow(live.id).catch(() => undefined);
+  return state;
 }
 
 /** Whether Razorpay Checkout's `razorpay_signature` is genuine for this order/payment pair. */

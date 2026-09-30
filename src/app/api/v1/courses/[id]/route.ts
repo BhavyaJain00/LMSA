@@ -1,4 +1,4 @@
-import { apiRoute, dataResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { afterCourseWrite, applyCourseChanges, buildCourseChanges } from "@/lib/api/courses";
 import { courseLookups, findCourse } from "@/lib/api/lookups";
@@ -27,3 +27,9 @@ export const PATCH = apiRoute(endpoints.updateCourse, async (ctx) => {
   const fresh = await getDb();
   return dataResponse(serializeCourseDetail(after, fresh.chapters, fresh.lessons, courseLookups(fresh, ctx.baseUrl), ctx.can("courses:write")));
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET", "PATCH");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const DELETE = unsupported;

@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { preload } from "react-dom";
 import type { CourseSummary } from "@/lib/types";
+import { categoryPath, tagPath } from "@/lib/seo/content-index";
+import { tagSlug } from "@/lib/seo/text";
 import { VideoPlayer } from "@/components/player";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
@@ -18,47 +21,18 @@ function Dot() {
 }
 
 /**
- * Course page hero: breadcrumbs, status badges, title, short introduction,
- * meta row (category, rating, students, duration, instructors), tags and
- * the promo video (custom player) or cover artwork.
+ * Course page hero: status badges, title, short introduction, meta row
+ * (category, rating, students, duration, instructors), tags and the promo
+ * video (custom player) or cover artwork. The breadcrumb trail is rendered by
+ * the page (`<Breadcrumbs>`), and the category and tags link to their landing
+ * pages. The cover (or the video poster) is the page's largest image, so it
+ * is fetched with high priority.
  */
 export function CourseHero({ course, manager, className }: { course: CourseSummary; manager: boolean; className?: string }) {
   const updated = course.updatedAt ? formatDate(course.updatedAt, { month: "long", year: "numeric", day: undefined }) : "";
+  if (course.videoUrl && course.imageUrl) preload(course.imageUrl, { as: "image", fetchPriority: "high" });
   return (
     <section aria-labelledby="course-title" className={cn("space-y-5", className)}>
-      <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm text-ink-muted">
-        <ol className="flex min-w-0 items-center gap-1.5">
-          <li>
-            <Link href="/courses" className="hover:text-ink hover:underline">
-              Courses
-            </Link>
-          </li>
-          {course.category && (
-            <>
-              <li aria-hidden="true">
-                <Icon.ChevronRight className="size-3.5 text-ink-faint" />
-              </li>
-              <li className="hidden sm:block">
-                <Link href={`/courses?category=${course.category.slug}`} className="hover:text-ink hover:underline">
-                  {course.category.name}
-                </Link>
-              </li>
-              <li aria-hidden="true" className="hidden sm:block">
-                <Icon.ChevronRight className="size-3.5 text-ink-faint" />
-              </li>
-            </>
-          )}
-          {!course.category && (
-            <li aria-hidden="true">
-              <Icon.ChevronRight className="size-3.5 text-ink-faint" />
-            </li>
-          )}
-          <li className="min-w-0 truncate font-medium text-ink" aria-current="page">
-            {course.title}
-          </li>
-        </ol>
-      </nav>
-
       <div className="flex flex-wrap items-center gap-2">
         {manager && course.published && <StatusBadge status="published" />}
         {!course.published && (
@@ -98,7 +72,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-sm text-ink-muted">
         {course.category && (
           <>
-            <Link href={`/courses?category=${course.category.slug}`} className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
+            <Link href={categoryPath(course.category.slug)} className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
               <Icon.Tag className="size-4" aria-hidden="true" />
               {course.category.name}
             </Link>
@@ -151,7 +125,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
           {course.tags.map((tag) => (
             <li key={tag}>
               <Link
-                href={`/courses?search=${encodeURIComponent(tag)}`}
+                href={tagSlug(tag) ? tagPath(tagSlug(tag)) : `/courses?search=${encodeURIComponent(tag)}`}
                 className="inline-flex items-center rounded-full bg-surface-2 px-3 py-1 text-sm font-medium text-ink-muted transition-colors hover:bg-surface-3 hover:text-ink"
               >
                 {tag}
@@ -165,7 +139,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
         {course.videoUrl ? (
           <VideoPlayer src={course.videoUrl} poster={course.imageUrl} title={`${course.title} — course preview`} className="rounded-none" />
         ) : (
-          <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} className="aspect-video w-full" />
+          <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
         )}
       </div>
     </section>

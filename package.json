@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test \"tests/**/*.test.ts\"",
-    "test:watch": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test --watch \"tests/**/*.test.ts\""
+    "test:watch": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test --watch \"tests/**/*.test.ts\"",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:restore": "node scripts/db-restore.mjs",
+    "db:export": "node scripts/db-export-json.mjs"
   },
   "dependencies": {
     "next": "16.3.6",

@@ -9,7 +9,10 @@ import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/tab
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { pluralize, slugify } from "@/lib/utils";
+import { pluralize } from "@/lib/utils";
+import { suggestSlug } from "@/lib/seo/text";
+import { CategoryLandingDialog } from "@/components/seo/admin/category-landing-dialog";
+import { SlugSuggestion } from "@/components/seo/slug-suggestion";
 import { useFormAction } from "./use-form-action";
 
 export interface CategoryRowData {
@@ -18,11 +21,16 @@ export interface CategoryRowData {
   slug: string;
   courseCount: number;
   batchCount: number;
+  /** Landing page text (`/courses/category/<slug>`). */
+  intro: string;
+  seoTitle: string;
+  seoDescription: string;
 }
 
-export function CategoriesManager({ categories }: { categories: CategoryRowData[] }) {
+export function CategoriesManager({ categories, siteUrl, brandName }: { categories: CategoryRowData[]; siteUrl: string; brandName: string }) {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  const [landing, setLanding] = useState<CategoryRowData | null>(null);
   const [toDelete, setToDelete] = useState<CategoryRowData | null>(null);
   const [deleting, startDelete] = useTransition();
   const toast = useToast();
@@ -73,7 +81,7 @@ export function CategoriesManager({ categories }: { categories: CategoryRowData[
                 <TH>Category</TH>
                 <TH className="hidden sm:table-cell">Slug</TH>
                 <TH className="hidden md:table-cell">Used by</TH>
-                <TH className="w-24 text-right">
+                <TH className="w-32 text-right">
                   <span className="sr-only">Actions</span>
                 </TH>
               </tr>
@@ -90,6 +98,7 @@ export function CategoriesManager({ categories }: { categories: CategoryRowData[
                       <TD>
                         <p className="font-medium">{c.name}</p>
                         <p className="font-mono text-xs text-ink-muted sm:hidden">/{c.slug}</p>
+                        {!c.intro && c.courseCount > 0 && <p className="mt-0.5 text-xs text-ink-faint">No landing page introduction yet</p>}
                       </TD>
                       <TD className="hidden font-mono text-xs text-ink-muted sm:table-cell">{c.slug}</TD>
                       <TD className="hidden text-ink-muted md:table-cell">
@@ -103,6 +112,9 @@ export function CategoriesManager({ categories }: { categories: CategoryRowData[
                       </TD>
                       <TD className="text-right">
                         <div className="flex justify-end gap-1">
+                          <IconButton label={`Edit the ${c.name} landing page`} size="icon-sm" onClick={() => setLanding(c)}>
+                            <Icon.Globe className="size-4" />
+                          </IconButton>
                           <IconButton label={`Edit ${c.name}`} size="icon-sm" onClick={() => setEditing(c.id)}>
                             <Icon.Edit className="size-4" />
                           </IconButton>
@@ -130,6 +142,8 @@ export function CategoriesManager({ categories }: { categories: CategoryRowData[
         description="This will unlink this category from all courses and batches using it, and then delete it. This cannot be undone."
         confirmLabel="Delete"
       />
+
+      {landing && <CategoryLandingDialog key={landing.id} category={landing} siteUrl={siteUrl} brandName={brandName} onClose={() => setLanding(null)} />}
     </div>
   );
 }
@@ -163,7 +177,7 @@ function NewCategoryForm() {
             maxLength={60}
             onChange={(e) => {
               setName(e.target.value);
-              if (!slugTouched) setSlug(slugify(e.target.value));
+              if (!slugTouched) setSlug(e.target.value.trim() ? suggestSlug(e.target.value) : "");
             }}
             invalid={!!errors.name}
             required
@@ -187,7 +201,7 @@ function NewCategoryForm() {
             leftAddon={<span className="text-xs">/</span>}
             invalid={!!errors.slug}
           />
-          {errors.slug ? <p className="mt-1 text-xs text-danger">{errors.slug}</p> : <p className="mt-1 text-xs text-ink-muted">Used in catalog filter URLs.</p>}
+          {errors.slug ? <p className="mt-1 text-xs text-danger">{errors.slug}</p> : <p className="mt-1 text-xs text-ink-muted">Address of the category page: /courses/category/{slug || "…"}</p>}
         </div>
         <Button type="submit" loading={pending} leftIcon={<Icon.Plus className="size-4" />} disabled={!name.trim()}>
           Create
@@ -198,6 +212,8 @@ function NewCategoryForm() {
 }
 
 function EditCategoryRow({ category, onDone }: { category: CategoryRowData; onDone: () => void }) {
+  const [name, setName] = useState(category.name);
+  const [slug, setSlug] = useState(category.slug);
   const { onSubmit, pending, errors, dirty, markDirty } = useFormAction(updateCategoryAction, { onSuccess: onDone });
   return (
     <tr className="bg-accent/5">
@@ -208,15 +224,25 @@ function EditCategoryRow({ category, onDone }: { category: CategoryRowData; onDo
             <label htmlFor={`name-${category.id}`} className="mb-1 block text-xs font-medium text-ink-muted">
               Name
             </label>
-            <Input id={`name-${category.id}`} name="name" defaultValue={category.name} maxLength={60} invalid={!!errors.name} autoFocus />
+            <Input id={`name-${category.id}`} name="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} invalid={!!errors.name} autoFocus />
             {errors.name && <p className="mt-1 text-xs text-danger">{errors.name}</p>}
           </div>
           <div>
             <label htmlFor={`slug-${category.id}`} className="mb-1 block text-xs font-medium text-ink-muted">
               Slug
             </label>
-            <Input id={`slug-${category.id}`} name="slug" defaultValue={category.slug} className="font-mono" invalid={!!errors.slug} />
+            <Input id={`slug-${category.id}`} name="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className="font-mono" invalid={!!errors.slug} />
             {errors.slug && <p className="mt-1 text-xs text-danger">{errors.slug}</p>}
+            <SlugSuggestion
+              title={name}
+              slug={slug}
+              basePath="/courses/category/"
+              originalSlug={category.slug}
+              onApply={(next) => {
+                setSlug(next);
+                markDirty();
+              }}
+            />
           </div>
           <div className="flex gap-2 sm:pt-5">
             <Button type="submit" size="sm" loading={pending} disabled={!dirty}>

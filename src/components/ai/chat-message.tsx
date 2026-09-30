@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useState, useTransition, type MouseEvent } from "react";
 import type { ChatMessageView, CitationView } from "@/lib/ai/types";
 import { linkCitations } from "@/lib/ai/citations";
 import { citedNumbers } from "@/lib/ai/prompt";
@@ -151,7 +152,7 @@ function AnswerActions({ message, onChange }: AnswerActionsProps) {
         }
       >
         <fieldset className="space-y-2">
-          <legend className="mb-2 text-sm font-medium text-ink">What's wrong with it?</legend>
+          <legend className="mb-2 text-sm font-medium text-ink">What&apos;s wrong with it?</legend>
           {REPORT_OPTIONS.map((o) => (
             <RadioCard key={o.value} name="report-reason" value={o.value} checked={reason === o.value} onChange={setReason} title={o.label} />
           ))}
@@ -185,7 +186,7 @@ export function ChatMessage({ message, compact, onChange }: ChatMessageProps) {
         <AnswerBody content={message.content} citations={message.citations} />
         {message.unknown && (
           <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-            The course material doesn't seem to cover this yet. Your question helps the instructors find gaps; you can also ask in the lesson discussion.
+            The course material doesn&apos;t seem to cover this yet. Your question helps the instructors find gaps; you can also ask in the lesson discussion.
           </p>
         )}
         <CitationChips citations={cited} compact={compact} />
@@ -198,12 +199,21 @@ export function ChatMessage({ message, compact, onChange }: ChatMessageProps) {
 
 /** Markdown answer with [n] markers linked to their lessons. */
 export function AnswerBody({ content, citations, streaming }: { content: string; citations: CitationView[]; streaming?: boolean }) {
+  const router = useRouter();
   const linked = linkCitations(
     content,
     citations.map((c) => ({ n: c.n, href: c.href, title: c.detail ? `${c.title} · ${c.detail}` : c.title })),
   );
+  /** Source links inside the answer open without a full page load, so the chat keeps its place. */
+  const openInApp = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !(e.target instanceof Element)) return;
+    const href = e.target.closest("a")?.getAttribute("href");
+    if (!href || !href.startsWith("/") || href.startsWith("//")) return;
+    e.preventDefault();
+    router.push(href);
+  };
   return (
-    <div className="text-sm text-ink [&_.prose-ll]:text-sm [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+    <div onClick={openInApp} className="text-sm text-ink [&_.prose-ll]:text-sm [&_pre]:max-w-full [&_pre]:overflow-x-auto">
       <Markdown content={linked} />
       {streaming && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-accent align-text-bottom" aria-hidden="true" />}
     </div>

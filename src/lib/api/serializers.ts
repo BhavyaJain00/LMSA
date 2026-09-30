@@ -17,7 +17,12 @@ import type {
   ProgressStatus,
   Role,
   User,
+  WebhookDelivery,
+  WebhookEndpoint,
 } from "@/lib/types";
+import { exampleEventData, type WebhookEventDoc, type WebhookFieldDoc } from "@/lib/webhooks/events";
+import { TEST_EVENT_ID_PREFIX, parseWebhookPayload } from "@/lib/webhooks/payload";
+import { webhookEndpointStatus, type WebhookDisabledReason, type WebhookEndpointStatus } from "@/lib/webhooks/types";
 import { latest, type Timestamps } from "./pagination";
 
 /**
@@ -624,5 +629,148 @@ export function serializeBatchMember(member: BatchEnrollment): ApiBatchMember {
     source: member.source ?? null,
     paymentId: member.paymentId ?? null,
     enrolledAt: member.enrolledAt,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Webhooks                                                            */
+/* ------------------------------------------------------------------ */
+
+export interface ApiWebhookEndpoint {
+  id: string;
+  url: string;
+  description: string | null;
+  /** Subscribed event names. */
+  events: string[];
+  active: boolean;
+  /** "failing" while the latest attempts failed and are being retried. */
+  status: WebhookEndpointStatus;
+  /** Failed attempts in a row (0 after a success). */
+  failureCount: number;
+  lastError: string | null;
+  lastDeliveryAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  /** Set when the system switched the endpoint off (repeated failures, 410 Gone). */
+  disabledAt: string | null;
+  disabledReason: WebhookDisabledReason | null;
+  secretRotatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiWebhookEndpointWithSecret extends ApiWebhookEndpoint {
+  /** Signing secret (`whsec_…`): returned only when the endpoint is created or its secret is rolled. */
+  secret: string;
+}
+
+/** A webhook endpoint without its signing secret. */
+export function serializeWebhookEndpoint(endpoint: WebhookEndpoint): ApiWebhookEndpoint {
+  return {
+    id: endpoint.id,
+    url: endpoint.url,
+    description: endpoint.description ?? null,
+    events: [...endpoint.events],
+    active: endpoint.active,
+    status: webhookEndpointStatus(endpoint),
+    failureCount: endpoint.failureCount,
+    lastError: endpoint.lastError ?? null,
+    lastDeliveryAt: endpoint.lastDeliveryAt ?? null,
+    lastSuccessAt: endpoint.lastSuccessAt ?? null,
+    lastFailureAt: endpoint.lastFailureAt ?? null,
+    disabledAt: endpoint.disabledAt ?? null,
+    disabledReason: endpoint.disabledReason ?? null,
+    secretRotatedAt: endpoint.secretRotatedAt ?? null,
+    createdAt: endpoint.createdAt,
+    updatedAt: endpoint.updatedAt ?? endpoint.createdAt,
+  };
+}
+
+export function webhookEndpointStamps(endpoint: WebhookEndpoint): Timestamps {
+  return { createdAt: endpoint.createdAt, updatedAt: latest(endpoint.createdAt, endpoint.updatedAt) };
+}
+
+export interface ApiWebhookDelivery {
+  id: string;
+  endpointId: string;
+  /** Event name, e.g. "payment.paid". */
+  event: string;
+  /** `id` of the payload: the same for every retry and resend of one event. */
+  eventId: string;
+  status: WebhookDelivery["status"];
+  attempts: number;
+  /** Sent with "Send test event". */
+  test: boolean;
+  /** The delivery this one repeats, for resends. */
+  resentFromId: string | null;
+  /** HTTP status the receiver answered with (null when no response arrived). */
+  responseStatus: number | null;
+  /** Start of the response body. */
+  responseBody: string | null;
+  /** Why the latest attempt failed. */
+  error: string | null;
+  /** Duration of the latest attempt in milliseconds. */
+  durationMs: number | null;
+  createdAt: string;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  /** When the next retry is due (pending deliveries only). */
+  nextAttemptAt: string | null;
+  /** The JSON body that was sent. */
+  payload: Record<string, unknown> | null;
+}
+
+export function serializeWebhookDelivery(delivery: WebhookDelivery): ApiWebhookDelivery {
+  const payload = parseWebhookPayload(delivery.payload);
+  return {
+    id: delivery.id,
+    endpointId: delivery.endpointId,
+    event: delivery.event,
+    eventId: delivery.eventId ?? payload?.id ?? delivery.id,
+    status: delivery.status,
+    attempts: delivery.attempts,
+    test: !!delivery.test,
+    resentFromId: delivery.resentFromId ?? null,
+    responseStatus: delivery.responseStatus ?? null,
+    responseBody: delivery.responseBody ?? null,
+    error: delivery.lastError ?? null,
+    durationMs: delivery.durationMs ?? null,
+    createdAt: delivery.createdAt,
+    lastAttemptAt: delivery.lastAttemptAt ?? null,
+    deliveredAt: delivery.deliveredAt ?? null,
+    nextAttemptAt: delivery.status === "pending" ? (delivery.nextAttemptAt ?? null) : null,
+    payload: payload ? { ...payload } : null,
+  };
+}
+
+export function webhookDeliveryStamps(delivery: WebhookDelivery): Timestamps {
+  return { createdAt: delivery.createdAt, updatedAt: latest(delivery.createdAt, delivery.lastAttemptAt, delivery.deliveredAt) };
+}
+
+export interface ApiWebhookEvent {
+  /** Event name to subscribe to. */
+  name: string;
+  label: string;
+  description: string;
+  /** Fields of the payload's `data` object. */
+  fields: { name: string; type: WebhookFieldDoc["type"]; description: string; optional: boolean; nullable: boolean; enum: string[] | null }[];
+  /** The payload "Send test event" delivers for this event. */
+  example: { id: string; type: string; createdAt: string; data: Record<string, unknown> };
+}
+
+export function serializeWebhookEvent(event: WebhookEventDoc, ctx: SerializeContext): ApiWebhookEvent {
+  return {
+    name: event.name,
+    label: event.label,
+    description: event.description,
+    fields: event.fields.map((field) => ({
+      name: field.name,
+      type: field.type,
+      description: field.description,
+      optional: !!field.optional,
+      nullable: !!field.nullable,
+      enum: field.enum ? [...field.enum] : null,
+    })),
+    example: { id: `${TEST_EVENT_ID_PREFIX}4k8d2m`, type: event.name, createdAt: "2026-01-15T09:30:00.000Z", data: exampleEventData(event.name, ctx.baseUrl) },
   };
 }

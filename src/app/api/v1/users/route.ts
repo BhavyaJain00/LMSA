@@ -1,4 +1,4 @@
-import { apiRoute, dataResponse, listResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, listResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { matchesText } from "@/lib/api/lookups";
 import { listPage } from "@/lib/api/pagination";
@@ -23,3 +23,9 @@ export const POST = apiRoute(endpoints.createUser, async (ctx) => {
   await ctx.audit("api.user.create", { type: "user", id: user.id }, { email: user.email, roles: user.roles.join(", "), passwordLinkSent });
   return dataResponse(serializeUser(user, { baseUrl: ctx.baseUrl }), 201);
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET", "POST");
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

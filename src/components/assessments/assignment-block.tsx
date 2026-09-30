@@ -3,6 +3,7 @@ import { getLessonHref } from "@/lib/data/courses";
 import { canManageAssessments, getAssignment, getOwnAssignmentSubmission, toAssignmentView, toSubmissionView } from "@/lib/data/assessments";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
+import { AssignmentFeedback } from "@/components/teaching/assignment-feedback";
 import { AssignmentPanel } from "./assignment-panel";
 import { lessonQuery } from "./shared";
 
@@ -28,18 +29,21 @@ export async function AssignmentBlock({ assignmentId, lessonId, courseId }: { as
   const pageHref = `/assignments/${assignment.id}${lessonQuery(lessonId, effectiveCourseId)}`;
 
   return (
-    <AssignmentPanel
-      variant="inline"
-      assignment={toAssignmentView(assignment, { includeAnswer: !!own })}
-      submission={own ? await toSubmissionView(own) : null}
-      viewerName={user?.name ?? null}
-      loginHref={`/login?next=${encodeURIComponent(lessonHref ?? pageHref)}`}
-      lessonId={lessonId}
-      courseId={effectiveCourseId}
-      initialNow={new Date().getTime()}
-      privileged={privileged}
-      manageHref={privileged ? `/admin/assignments/submissions?assignment=${assignment.id}` : null}
-      pageHref={pageHref}
-    />
+    <div className="space-y-4">
+      <AssignmentPanel
+        variant="inline"
+        assignment={toAssignmentView(assignment, { includeAnswer: !!own })}
+        submission={own ? await toSubmissionView(own) : null}
+        viewerName={user?.name ?? null}
+        loginHref={`/login?next=${encodeURIComponent(lessonHref ?? pageHref)}`}
+        lessonId={lessonId}
+        courseId={effectiveCourseId}
+        initialNow={new Date().getTime()}
+        privileged={privileged}
+        manageHref={privileged ? `/admin/assignments/submissions?assignment=${assignment.id}` : null}
+        pageHref={pageHref}
+      />
+      <AssignmentFeedback assignmentId={assignment.id} userId={user?.id ?? null} privileged={privileged} />
+    </div>
   );
 }

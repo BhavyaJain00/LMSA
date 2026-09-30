@@ -20,6 +20,9 @@ const DELETED_EMAIL_DOMAIN = "deleted.invalid";
 /** Not a valid scrypt hash: no password ever matches it. */
 export const DELETED_PASSWORD_HASH = "!deleted";
 
+/** Audit `meta` keys that identify a person (removed from events about an erased account). */
+const AUDIT_IDENTITY_KEYS = ["email", "username", "name"] as const;
+
 export function deletedEmailFor(userId: string): string {
   return `deleted-${userId.replace(/[^a-z0-9_-]/gi, "").toLowerCase()}@${DELETED_EMAIL_DOMAIN}`;
 }
@@ -86,7 +89,9 @@ export function eraseAccountInDb(db: Database, userId: string, opts: { now: Date
   db.notes = drop("notes", db.notes, (n) => n.userId === userId);
   db.notifications = drop("notifications", db.notifications, (n) => n.userId === userId);
   db.loginEvents = drop("loginEvents", db.loginEvents, (e) => e.userId === userId || sameEmail(e.email));
-  db.emails = drop("emails", db.emails, (e) => e.userId === userId || sameEmail(e.to));
+  const emailIds = new Set(db.emails.filter((e) => e.userId === userId || sameEmail(e.to)).map((e) => e.id));
+  db.emails = drop("emails", db.emails, (e) => emailIds.has(e.id));
+  db.emailEvents = drop("emailEvents", db.emailEvents, (e) => emailIds.has(e.emailId));
   db.leads = drop("leads", db.leads, (l) => sameEmail(l.email));
   db.jobApplications = drop("jobApplications", db.jobApplications, (a) => a.userId === userId);
   db.uploadSessions = drop("uploadSessions", db.uploadSessions, (u) => u.userId === userId && u.status === "uploading");
@@ -96,6 +101,9 @@ export function eraseAccountInDb(db: Database, userId: string, opts: { now: Date
   db.aiMessages = drop("aiMessages", db.aiMessages, (m) => aiConversationIds.has(m.conversationId));
   db.aiConversations = drop("aiConversations", db.aiConversations, (c) => c.userId === userId);
   db.evaluatorSlots = drop("evaluatorSlots", db.evaluatorSlots, (s) => s.evaluatorId === userId);
+  // Logs of finished webhook deliveries whose payload carried the address (pending ones still have to be sent).
+  const quotedEmail = JSON.stringify(email);
+  db.webhookDeliveries = drop("webhookDeliveries", db.webhookDeliveries, (d) => d.status !== "pending" && d.payload.toLowerCase().includes(quotedEmail));
 
   // 3. Records kept for others or for the books, without personal data.
   for (const p of db.payments) {
@@ -133,8 +141,8 @@ export function eraseAccountInDb(db: Database, userId: string, opts: { now: Date
     touched("orgSeats");
   }
   for (const g of db.gifts) {
-    if (!sameEmail(g.recipientEmail) || g.redeemedAt) continue;
-    // An unredeemed gift addressed to this person keeps its code; only the address goes.
+    if (!sameEmail(g.recipientEmail)) continue;
+    // A gift addressed to this person keeps its code and its order; only the address and name go.
     g.recipientEmail = replacement.email;
     delete g.recipientName;
     touched("gifts");
@@ -167,6 +175,24 @@ export function eraseAccountInDb(db: Database, userId: string, opts: { now: Date
     s.cancelAtPeriodEnd = true;
     s.updatedAt = opts.now.toISOString();
     touched("subscriptions");
+  }
+  for (const key of db.apiKeys) {
+    if (key.createdById !== userId || key.revokedAt) continue;
+    key.revokedAt = opts.now.toISOString();
+    touched("apiKeys");
+  }
+  // The audit log keeps what happened, not who the person was: their IP
+  // address goes, and so do identifying details other events recorded about them.
+  for (const e of db.auditEvents) {
+    const own = e.actorId === userId && !!e.ip;
+    const about = e.targetType === "user" && e.targetId === userId && !!e.meta && AUDIT_IDENTITY_KEYS.some((k) => k in e.meta!);
+    if (!own && !about) continue;
+    if (own) delete e.ip;
+    if (about) {
+      for (const k of AUDIT_IDENTITY_KEYS) delete e.meta![k];
+      if (!Object.keys(e.meta!).length) delete e.meta;
+    }
+    touched("auditEvents");
   }
 
   return summary;

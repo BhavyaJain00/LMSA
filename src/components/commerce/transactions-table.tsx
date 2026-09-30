@@ -257,7 +257,7 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
               )}
               {tx.itemHref && (
                 <ButtonLink href={tx.itemHref} variant="ghost" size="sm" leftIcon={<Icon.ExternalLink className="size-4" />}>
-                  {tx.itemType === "batch" ? "Open the Batch" : "Open the Course"}
+                  {tx.itemType === "batch" ? "Open the Batch" : tx.itemType === "bundle" ? "Open the Bundle" : tx.itemType === "plan" ? "Open the pricing page" : "Open the Course"}
                 </ButtonLink>
               )}
             </div>

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Course } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -8,8 +9,16 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
-import { cn, formatDuration, formatPrice } from "@/lib/utils";
+import { cn, formatDate, formatDuration, formatPrice } from "@/lib/utils";
 import { UnlockLabel } from "@/components/learn/unlock-time";
+import { resolveCourseAccess } from "@/lib/commerce/access";
+import { cheapestPlanFor } from "@/lib/commerce/membership-views";
+import { intervalSuffix } from "@/lib/commerce/plans";
+import { MembershipCourseButton } from "@/components/commerce/membership-course-button";
+import { bestBundleFor, type CourseBundleOffer } from "@/lib/commerce/bundle-views";
+import { installmentOffer, offeredInstallmentPlan } from "@/lib/commerce/installments";
+import { toPlanView, type InstallmentPlanView } from "@/lib/commerce/installment-views";
+import { InstallmentNotice, orderPath } from "@/components/commerce/installment-plan-card";
 import { ClaimCertificateButton, EnrollButton, LeaveCourseButton } from "./enroll-actions";
 import { enrolledTier, plural } from "./format";
 import { isPaidCourse, PriceTag } from "./price-tag";
@@ -116,6 +125,61 @@ interface CardExtras {
   loggedIn: boolean;
   prerequisites: PrerequisiteStatus;
   drip: DripOverview | null;
+  /** The viewer's running membership includes this course (they can start it without a checkout). */
+  memberPlanName: string | null;
+  /** The viewer opened this course through a membership that has ended: lessons are locked, progress is kept. */
+  membershipLapsed: boolean;
+  /** Cheapest membership plan on sale that includes this course. */
+  planOffer: { name: string; priceLabel: string } | null;
+  /** "or N payments of X": the course can be paid in installments. */
+  installmentOffer: { count: number; partLabel: string } | null;
+  /** The payment plan the viewer's access depends on (the course is being paid in installments). */
+  paymentPlan: InstallmentPlanView | null;
+  /** That plan is paused or was cancelled: lessons are locked, progress is kept. */
+  planLocked: boolean;
+  /** A bundle on sale that includes this course. */
+  bundleOffer: CourseBundleOffer | null;
+}
+
+/** "or 3 payments of $17.00" under the buy button of a course sold in installments. */
+function InstallmentOfferLine({ courseId, offer }: { courseId: string; offer: CardExtras["installmentOffer"] }) {
+  if (!offer) return null;
+  return (
+    <p className="text-center text-xs text-ink-muted">
+      or{" "}
+      <Link href={`/billing/course/${courseId}?pay=installments`} className="font-medium text-accent hover:underline">
+        {offer.count} payments of {offer.partLabel}
+      </Link>
+    </p>
+  );
+}
+
+/** "Also in a bundle" line under the buy button of a paid course. */
+function BundleOfferLine({ offer }: { offer: CardExtras["bundleOffer"] }) {
+  if (!offer) return null;
+  return (
+    <p className="text-center text-xs text-ink-muted">
+      Also in{" "}
+      <Link href={`/bundles/${offer.slug}`} className="font-medium text-accent hover:underline">
+        {offer.title}
+      </Link>
+      : {offer.courseCount} courses for {formatPrice(offer.price, offer.currency)}
+      {offer.savingsPercent > 0 && ` (save ${offer.savingsPercent}%)`}
+    </p>
+  );
+}
+
+/** "Or join a membership" line under the buy button of a paid course. */
+function MembershipOffer({ offer }: { offer: CardExtras["planOffer"] }) {
+  if (!offer) return null;
+  return (
+    <p className="text-center text-xs text-ink-muted">
+      Or get it with {offer.name} for{" "}
+      <Link href="/pricing" className="font-medium text-accent hover:underline">
+        {offer.priceLabel}
+      </Link>
+    </p>
+  );
 }
 
 /** "Next scheduled lesson" line for enrolled learners. */
@@ -186,6 +250,55 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
     );
   }
 
+  if (enrollment && extras.membershipLapsed) {
+    const canBuy = isPaidCourse(course) && !course.disableSelfLearning;
+    return (
+      <div className="space-y-3">
+        <p role="status" className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
+          <Icon.Lock className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            Your membership has ended, so the lessons are locked again. Your progress ({enrollment.completedLessons} of {enrollment.totalLessons}{" "}
+            {plural(enrollment.totalLessons, "lesson")}) is saved.
+          </span>
+        </p>
+        {extras.planOffer && (
+          <ButtonLink href="/pricing" size="lg" className="w-full" leftIcon={<Icon.Star className="size-4" />}>
+            Rejoin the membership
+          </ButtonLink>
+        )}
+        {canBuy && (
+          <ButtonLink
+            href={`/billing/course/${course.id}`}
+            size={extras.planOffer ? "md" : "lg"}
+            variant={extras.planOffer ? "outline" : "primary"}
+            className="w-full"
+            leftIcon={<Icon.CreditCard className="size-4" />}
+          >
+            Buy this course · {formatPrice(course.price, course.currency)}
+          </ButtonLink>
+        )}
+      </div>
+    );
+  }
+
+  if (enrollment && extras.planLocked && extras.paymentPlan) {
+    // A cancelled plan cannot be resumed: the course can be bought again (the progress is kept).
+    const canBuy = extras.paymentPlan.status === "cancelled" && isPaidCourse(course) && !course.disableSelfLearning;
+    return (
+      <div className="space-y-3">
+        <InstallmentNotice plan={extras.paymentPlan} compact />
+        <p className="text-xs text-ink-muted">
+          Your progress ({enrollment.completedLessons} of {enrollment.totalLessons} {plural(enrollment.totalLessons, "lesson")}) is saved.
+        </p>
+        {canBuy && (
+          <ButtonLink href={`/billing/course/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
+            Buy this course · {formatPrice(course.price, course.currency)}
+          </ButtonLink>
+        )}
+      </div>
+    );
+  }
+
   if (enrollment) {
     const started = enrollment.completedLessons > 0 || enrollment.progress > 0;
     const label = enrollment.completed ? "Review course" : started ? "Continue learning" : "Start learning";
@@ -223,6 +336,15 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
           </Button>
         )}
         {nextLesson && !enrollment.completed && <NextUnlockNote drip={extras.drip} />}
+        {extras.paymentPlan && <InstallmentNotice plan={extras.paymentPlan} compact />}
+        {extras.paymentPlan?.status === "on_track" && extras.paymentPlan.next?.dueAt && (
+          <p className="text-center text-xs text-ink-muted">
+            Payment plan: {extras.paymentPlan.paidCount} of {extras.paymentPlan.total} paid ·{" "}
+            <Link href={orderPath(extras.paymentPlan.key)} className="font-medium text-accent hover:underline">
+              next payment {formatDate(extras.paymentPlan.next.dueAt)}
+            </Link>
+          </p>
+        )}
       </div>
     );
   }
@@ -265,10 +387,16 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
 
   if (isPaidCourse(course)) {
     if (alreadyPaid) return <EnrollButton slug={course.slug} label="Start course" icon={<Icon.Play className="size-4" />} />;
+    if (extras.memberPlanName) return <MembershipCourseButton slug={course.slug} planName={extras.memberPlanName} />;
     return (
-      <ButtonLink href={`/billing/course/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
-        Buy this course
-      </ButtonLink>
+      <div className="space-y-2">
+        <ButtonLink href={`/billing/course/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
+          Buy this course
+        </ButtonLink>
+        <InstallmentOfferLine courseId={course.id} offer={extras.installmentOffer} />
+        <MembershipOffer offer={extras.planOffer} />
+        <BundleOfferLine offer={extras.bundleOffer} />
+      </div>
     );
   }
 
@@ -296,7 +424,29 @@ export async function EnrollCard(props: EnrollCardProps) {
     fullCourse ? getPrerequisiteStatus(fullCourse, viewer) : Promise.resolve<PrerequisiteStatus>({ items: [], missing: [], blocking: false }),
     fullCourse && enrollment && !manager ? getDripOverview(fullCourse, viewer) : Promise.resolve(null),
   ]);
-  const extras: CardExtras = { loggedIn: !!viewer, prerequisites, drip };
+  // Commerce (round 3): membership access. A running membership that includes the course replaces
+  // the checkout; an enrollment opened through a membership that ended is shown as paused.
+  const access = viewer && !manager ? resolveCourseAccess(db, viewer.id, course.id) : null;
+  const offerPlan = !manager && isPaidCourse(course) && !access?.membership ? await cheapestPlanFor(course.id) : null;
+  // Commerce (round 3): installments and bundles. A course being paid in parts shows its plan (overdue,
+  // paused or cancelled plans with the pay action); a course on sale shows "or N payments" and its bundle.
+  const buying = !manager && !enrollment && isPaidCourse(course) && !course.upcoming && !course.disableSelfLearning;
+  const terms = buying && fullCourse ? offeredInstallmentPlan(fullCourse, { enabled: db.settings.growth.installmentsEnabled, gateway: db.settings.commerce.paymentGateway }) : null;
+  const split = terms ? installmentOffer(course.price, course.currency || "USD", terms) : null;
+  const planLocked = !!enrollment && (access?.blocked === "installment_overdue" || access?.blocked === "installment_cancelled");
+  const livePlan = !!enrollment && !!access?.installments && (planLocked || access.via === "installments") ? access.installments : null;
+  const extras: CardExtras = {
+    installmentOffer: split ? { count: split.count, partLabel: formatPrice(split.partAmount, course.currency) } : null,
+    paymentPlan: livePlan ? toPlanView(livePlan, fullCourse, db.settings.commerce.paymentGateway) : null,
+    planLocked,
+    bundleOffer: buying ? await bestBundleFor(course.id) : null,
+    loggedIn: !!viewer,
+    prerequisites,
+    drip,
+    memberPlanName: access?.membership && !enrollment ? access.membership.plan.name : null,
+    membershipLapsed: !!enrollment && access?.blocked === "membership_lapsed",
+    planOffer: offerPlan ? { name: offerPlan.name, priceLabel: `${formatPrice(offerPlan.price, offerPlan.currency)}${intervalSuffix(offerPlan.interval)}` } : null,
+  };
   const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
 
   return (
@@ -317,8 +467,8 @@ export async function EnrollCard(props: EnrollCardProps) {
         )}
         {enrollment && !manager && (
           <div className="flex items-center gap-2">
-            <Badge tone={enrollment.completed ? "success" : "accent"} dot>
-              {enrollment.completed ? "Completed" : "Enrolled"}
+            <Badge tone={extras.membershipLapsed || extras.planLocked ? "warning" : enrollment.completed ? "success" : "accent"} dot>
+              {extras.membershipLapsed || extras.planLocked ? "Access paused" : enrollment.completed ? "Completed" : "Enrolled"}
             </Badge>
             {enrollment.viaBatch && <span className="text-xs text-ink-muted">via a batch</span>}
           </div>

@@ -7,7 +7,8 @@ import { SEO_SETTINGS_LIMITS } from "@/lib/seo/settings";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Input, Switch, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
-import { cn, truncate } from "@/lib/utils";
+import { CharCounter } from "@/components/seo/char-counter";
+import { SnippetPreview } from "@/components/seo/snippet-preview";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
@@ -28,18 +29,6 @@ export interface SeoValues {
   googleVerification: string;
   bingVerification: string;
   noindexSite: boolean;
-}
-
-/** Character counter coloured by the 120–160 range search engines show in full. */
-function DescriptionCounter({ length }: { length: number }) {
-  const tone = length === 0 ? "text-ink-faint" : length > DESCRIPTION_MAX ? "text-warning" : length < DESCRIPTION_MIN ? "text-ink-muted" : "text-success";
-  const hint = length === 0 ? "" : length > DESCRIPTION_MAX ? " · may be cut off" : length < DESCRIPTION_MIN ? " · room for more" : " · good length";
-  return (
-    <p className={cn("mt-1 text-right text-xs", tone)} aria-live="polite">
-      {length}/{DESCRIPTION_MAX}
-      {hint}
-    </p>
-  );
 }
 
 export function SeoForm({ initial }: { initial: SeoValues }) {
@@ -105,7 +94,7 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
             invalid={!!errors.metaDescription}
             placeholder="Hands-on online courses with video lessons, quizzes, live cohorts and certificates."
           />
-          <DescriptionCounter length={description.trim().length} />
+          <CharCounter length={description.trim().length} min={DESCRIPTION_MIN} max={DESCRIPTION_MAX} />
         </SettingsRow>
         <SettingsRow label="Keywords" description="Comma separated. Few search engines still read them; they also feed the site's default keywords." htmlFor="metaKeywords" error={errors.metaKeywords} stacked>
           <Textarea id="metaKeywords" name="metaKeywords" rows={2} defaultValue={initial.metaKeywords} invalid={!!errors.metaKeywords} placeholder="online courses, web development, certificates" />
@@ -133,11 +122,7 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
 
       <SettingsSection title="Search result preview" description="An approximation of how the home page may appear on Google.">
         <div className="px-4 py-4 sm:px-5">
-          <div className="max-w-xl rounded-xl border border-border bg-surface p-4">
-            <p className="truncate text-xs text-ink-muted">{initial.siteUrl}</p>
-            <p className="mt-0.5 truncate text-lg text-info">{homeTitle}</p>
-            <p className="mt-1 text-sm text-ink-muted">{description.trim() ? truncate(description.trim(), DESCRIPTION_MAX) : "Add a meta description to control this snippet."}</p>
-          </div>
+          <SnippetPreview url={initial.siteUrl} title={homeTitle} description={description} />
         </div>
       </SettingsSection>
 

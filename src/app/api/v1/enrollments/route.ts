@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { apiRoute, dataResponse, listResponse } from "@/lib/api/handler";
+import { apiRoute, dataResponse, listResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { findCourse, resolveMember } from "@/lib/api/lookups";
 import { listPage } from "@/lib/api/pagination";
@@ -40,3 +40,9 @@ export const POST = apiRoute(endpoints.createEnrollment, async (ctx) => {
   revalidatePath(`/courses/${course.slug}`, "layout");
   return dataResponse(serializeEnrollment(enrollment), 201);
 });
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET", "POST");
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

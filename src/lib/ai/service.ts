@@ -71,8 +71,9 @@ export function toConversationSummary(conversation: AiConversation, messageCount
   return {
     id: conversation.id,
     title: conversation.title,
-    lessonId: conversation.lessonId,
+    lessonId: lesson ? conversation.lessonId : undefined,
     lessonTitle: lesson?.title,
+    lessonHref: lesson?.href,
     updatedAt: conversation.updatedAt,
     messageCount,
   };
@@ -92,13 +93,18 @@ export function listConversations(db: Database, userId: string, course: Course, 
 }
 
 /** A conversation owned by `userId` with its messages as view models (null when not theirs). */
-export function loadOwnConversation(db: Database, conversationId: string, userId: string): { conversation: AiConversation; course: Course; messages: ChatMessageView[] } | null {
+export function loadOwnConversation(
+  db: Database,
+  conversationId: string,
+  userId: string,
+): { conversation: AiConversation; summary: ConversationSummary; course: Course; messages: ChatMessageView[] } | null {
   const conversation = db.aiConversations.find((c) => c.id === conversationId && c.userId === userId);
   if (!conversation) return null;
   const course = db.courses.find((c) => c.id === conversation.courseId);
   if (!course) return null;
   const links = lessonLinks(db, course);
-  return { conversation, course, messages: conversationMessages(db, conversation.id).map((m) => toMessageView(m, links)) };
+  const messages = conversationMessages(db, conversation.id).map((m) => toMessageView(m, links));
+  return { conversation, summary: toConversationSummary(conversation, messages.length, links), course, messages };
 }
 
 /* ------------------------------------------------------------------ */

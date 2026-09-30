@@ -14,6 +14,11 @@ import { GradingForm } from "@/components/assessments/grading-form";
 import { SubmissionAnswer } from "@/components/assessments/submission-answer";
 import { LocalDateTime } from "@/components/assessments/client-time";
 import { ASSIGNMENT_TYPE_LABELS } from "@/components/assessments/shared";
+import { getRubric, graderComments } from "@/lib/teaching/rubrics";
+import { getSubmissionPeerPanel, syncPeerAssignments } from "@/lib/teaching/peer-review";
+import { activePeerConfig } from "@/lib/teaching/peer-shared";
+import { RubricGradingForm } from "@/components/teaching/rubric-grading-form";
+import { SubmissionPeerReviews } from "@/components/teaching/submission-peer-reviews";
 
 export const metadata: Metadata = { title: "Grade submission" };
 
@@ -28,6 +33,9 @@ export default async function GradeSubmissionPage(props: PageProps<"/admin/assig
   const title = assignment?.title ?? submission.assignmentTitle;
   const queue = await listAssignmentSubmissions({ status: "not_graded" });
   const next = queue.filter((s) => s.id !== submission.id).sort((a, b) => a.submittedAt.localeCompare(b.submittedAt))[0];
+  const rubric = await getRubric(assignment?.rubricId);
+  if (assignment && activePeerConfig(assignment)) await syncPeerAssignments({ assignmentIds: [assignment.id] });
+  const peerPanel = await getSubmissionPeerPanel(submission.id);
 
   return (
     <div className="animate-fade-in">
@@ -156,14 +164,29 @@ export default async function GradeSubmissionPage(props: PageProps<"/admin/assig
                 This is your own submission. Grading it will not set you as the evaluator.
               </p>
             )}
-            <GradingForm
-              submissionId={submission.id}
-              status={submission.status}
-              comments={submission.comments ?? ""}
-              canDelete={isModerator(user)}
-              nextHref={next ? `/admin/assignments/submissions/${next.id}` : null}
-            />
+            {rubric ? (
+              <RubricGradingForm
+                submissionId={submission.id}
+                rubric={rubric}
+                scores={submission.rubricScores}
+                comments={graderComments(submission)}
+                status={submission.status}
+                graded={assignment?.gradeAssignment ?? true}
+                peerAverage={peerPanel?.average ?? null}
+                canDelete={isModerator(user)}
+                nextHref={next ? `/admin/assignments/submissions/${next.id}` : null}
+              />
+            ) : (
+              <GradingForm
+                submissionId={submission.id}
+                status={submission.status}
+                comments={submission.comments ?? ""}
+                canDelete={isModerator(user)}
+                nextHref={next ? `/admin/assignments/submissions/${next.id}` : null}
+              />
+            )}
           </Card>
+          {peerPanel && assignment && <SubmissionPeerReviews panel={peerPanel} submissionId={submission.id} assignmentId={assignment.id} />}
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import type { ActionResult, DataRequest, User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
 import { getDb, mutate } from "@/lib/db/store";
@@ -13,12 +14,13 @@ import { formatWait, isTwoFactorActive } from "@/lib/auth/account-status";
 import { consumeSecondFactor } from "@/lib/auth/two-factor";
 import { authRateLimiter, perIpLimit, RATE_LIMITS, SlidingWindowRateLimiter } from "@/lib/auth/rate-limit";
 import { getRequestInfo } from "@/lib/auth/request-info";
-import { audit } from "@/lib/audit";
+import { buildAuditEvent } from "@/lib/audit";
 import { setFlash } from "@/lib/flash";
 import { notifyMany } from "@/lib/services/notifications";
 import { recordConsent } from "@/lib/legal/consent";
 import { ANON_COOKIE, CONSENT_MAX_AGE, isValidAnonId, normalizeConsentInput } from "@/lib/legal/consent-shared";
 import { billedSubscriptions, eraseAccountInDb, isDeletedAccount, isLastAdmin, type ErasureSummary } from "@/lib/legal/erase";
+import { sendErasureConfirmation, type ErasureRecipient } from "@/lib/legal/erasure-email";
 import { fd, uid } from "@/lib/utils";
 
 /**
@@ -94,19 +96,36 @@ async function erasureBlocker(userId: string, self: boolean): Promise<string | n
 }
 
 /**
- * Anonymize an account in one transaction and record the completed request.
- * Returns null when the account no longer exists or became un-erasable.
+ * Anonymize an account and record the completed request and its audit event,
+ * all in one transaction (an erasure can never go unrecorded). Returns null
+ * when the account no longer exists or became un-erasable.
+ *
+ * `admin` is the administrator acting on the member's behalf. When members
+ * delete their own account the event carries no IP address: it would be the
+ * one piece of personal data left behind by the erasure.
  */
-async function eraseAccount(userId: string): Promise<ErasureSummary | null> {
+async function eraseAccount(userId: string, admin?: { id: string }): Promise<{ removed: number; anonymized: number } | null> {
   const now = new Date();
+  const ip = admin ? (await getRequestInfo()).ip : undefined;
   return mutate((db) => {
     if (isLastAdmin(db, userId) || billedSubscriptions(db, userId).length) return null;
     const summary = eraseAccountInDb(db, userId, { now, username: newDeletedUsername() });
     if (!summary) return null;
+    const counts = totals(summary);
     const request: DataRequest = { id: uid("dreq"), userId, type: "delete", status: "completed", createdAt: now.toISOString(), completedAt: now.toISOString() };
     db.dataRequests.push(request);
-    return summary;
+    db.auditEvents.push(
+      buildAuditEvent(admin ?? { id: userId }, admin ? "account.erase" : "account.delete", { type: "user", id: userId }, { ...counts, byOwner: !admin, requestId: request.id }, ip, now),
+    );
+    return counts;
   });
+}
+
+/** Confirm the erasure to the address the account had, once the response has been sent. */
+async function confirmByEmail(recipient: ErasureRecipient, byAdmin: boolean): Promise<void> {
+  const { legal, contact } = (await getDb()).settings;
+  const contactEmail = legal.contactEmail || contact.email || undefined;
+  after(() => sendErasureConfirmation(recipient, { byAdmin, contactEmail }));
 }
 
 async function tellAdmins(subject: string, message: string, exceptId?: string): Promise<void> {
@@ -148,12 +167,12 @@ export async function deleteAccountAction(_prev: ActionResult | null, formData: 
     if (!second.ok) return { ok: false, error: "That verification code didn't work.", fieldErrors: { code: "Invalid code." } };
   }
 
-  const summary = await eraseAccount(user.id);
-  if (!summary) return { ok: false, error: "Your account could not be deleted right now. Please reload the page and try again." };
+  const erased = await eraseAccount(user.id);
+  if (!erased) return { ok: false, error: "Your account could not be deleted right now. Please reload the page and try again." };
 
-  const { removed, anonymized } = totals(summary);
-  await audit({ id: user.id }, "account.delete", { type: "user", id: user.id }, { removed, anonymized, byOwner: true });
+  const { removed, anonymized } = erased;
   await tellAdmins("A member deleted their account", `Their personal data was removed (${removed} records deleted, ${anonymized} anonymized). Orders keep their amounts and invoice numbers.`, user.id);
+  await confirmByEmail({ email: user.email, name: user.name }, false);
   await destroySession();
   revalidatePath("/", "layout");
   await setFlash("Your account has been deleted. Thank you for learning with us.", "info");
@@ -190,10 +209,11 @@ export async function adminEraseAccountAction(_prev: ActionResult | null, formDa
   const blocker = await erasureBlocker(userId, false);
   if (blocker) return { ok: false, error: blocker };
 
-  const summary = await eraseAccount(userId);
-  if (!summary) return { ok: false, error: "The account could not be erased right now. Please try again." };
-  const { removed, anonymized } = totals(summary);
-  await audit(admin, "account.erase", { type: "user", id: userId }, { removed, anonymized, byOwner: false });
+  const erased = await eraseAccount(userId, admin);
+  if (!erased) return { ok: false, error: "The account could not be erased right now. Please try again." };
+  const { removed, anonymized } = erased;
+  await tellAdmins("An administrator erased a member's account", `${admin.name} erased an account on the member's behalf (${removed} records deleted, ${anonymized} anonymized).`, admin.id);
+  await confirmByEmail({ email: target.email, name: target.name }, true);
   revalidatePath("/admin/audit");
   revalidatePath("/admin/members");
   return { ok: true, data: undefined, message: `The account was erased: ${removed} records deleted and ${anonymized} anonymized.` };

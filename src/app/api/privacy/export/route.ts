@@ -5,6 +5,7 @@ import { authRateLimiter } from "@/lib/auth/rate-limit";
 import { siteConfig } from "@/lib/config";
 import { getDb, getSettings, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
+import { notify } from "@/lib/services/notifications";
 import { personalDataSections, serializePersonalData } from "@/lib/legal/export";
 import { isDeletedAccount } from "@/lib/legal/erase";
 import { uid } from "@/lib/utils";
@@ -16,7 +17,8 @@ import { uid } from "@/lib/utils";
  * from the audit log with `userId`, for requests received by email). Replies
  * with a JSON attachment streamed record by record; problems redirect back
  * to the page with `?export=<reason>` so the browser never lands on a bare
- * error. Every export is recorded as a completed `DataRequest` and audited.
+ * error. Every export is recorded as a completed `DataRequest`, audited and
+ * announced to the member it concerns.
  */
 
 export const dynamic = "force-dynamic";
@@ -41,7 +43,10 @@ function isSameOrigin(req: NextRequest): boolean {
 function back(req: NextRequest, path: string, reason: string): NextResponse {
   const url = new URL(path, req.nextUrl.origin);
   url.searchParams.set("export", reason);
-  return NextResponse.redirect(url, { status: 303, headers: { "Cache-Control": "no-store" } });
+  // 303: the browser follows the redirect with GET after the form's POST.
+  const res = NextResponse.redirect(url, 303);
+  res.headers.set("Cache-Control", "no-store");
+  return res;
 }
 
 function fileName(username: string, now: Date): string {
@@ -77,7 +82,7 @@ function streamOf(chunks: Generator<string>): ReadableStream<Uint8Array> {
 
 export async function POST(req: NextRequest) {
   const viewer = await getCurrentUser();
-  if (!viewer) return NextResponse.redirect(new URL("/login?next=/settings/privacy", req.nextUrl.origin), { status: 303 });
+  if (!viewer) return NextResponse.redirect(new URL("/login?next=/settings/privacy", req.nextUrl.origin), 303);
   if (!isSameOrigin(req)) return NextResponse.json({ ok: false, error: "Cross-site requests are not accepted." }, { status: 403 });
 
   let requestedId = "";
@@ -110,7 +115,24 @@ export async function POST(req: NextRequest) {
   await mutate((d) => {
     d.dataRequests.push(request);
   });
-  await audit(viewer, "privacy.export", { type: "user", id: subjectId }, { records, sections: sections.length, byAdmin: forOther });
+  await audit(viewer, "privacy.export", { type: "user", id: subjectId }, { records, sections: sections.length, byAdmin: forOther, requestId: request.id });
+  // Tell the member: a download they did not start is the sign of a stolen session.
+  await notify(
+    subjectId,
+    forOther
+      ? {
+          type: "system",
+          subject: "An administrator downloaded a copy of your data",
+          message: "This is done when you ask for your data by email or letter. If you didn't ask for it, contact us.",
+          link: "/settings/privacy",
+        }
+      : {
+          type: "system",
+          subject: "A copy of your data was downloaded",
+          message: "If this wasn't you, change your password and sign out of your other devices.",
+          link: "/settings/security",
+        },
+  ).catch((err: unknown) => console.error("[privacy] could not notify about a data export", err instanceof Error ? err.message : err));
 
   const body = streamOf(serializePersonalData(sections, { exportedAt: now.toISOString(), siteName: settings.brand.name, siteUrl: siteConfig.appUrl }));
   return new Response(body, {

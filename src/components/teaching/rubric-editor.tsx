@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 import type { ActionResult, RubricCriterion } from "@/lib/types";
-import { cn, uid } from "@/lib/utils";
+import { uid } from "@/lib/utils";
 import { saveRubricAction } from "@/lib/actions/rubrics";
 import { Button, IconButton } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -41,31 +41,33 @@ export interface RubricEditorValues {
   criteria: Omit<RubricCriterion, "id">[] | RubricCriterion[];
 }
 
+/** Key for a row added in the browser. Rows of the first render use position-based keys so server and client markup match. */
 const key = () => uid("k");
 
 function toDraft(criteria: RubricEditorValues["criteria"]): DraftCriterion[] {
-  return criteria.map((c) => ({
-    key: key(),
+  return criteria.map((c, ci) => ({
+    key: `init-${ci}`,
     id: "id" in c ? c.id : "",
     title: c.title,
     description: c.description ?? "",
-    levels: c.levels.map((l) => ({ key: key(), label: l.label, points: String(l.points), description: l.description ?? "" })),
+    levels: c.levels.map((l, li) => ({ key: `init-${ci}-${li}`, label: l.label, points: String(l.points), description: l.description ?? "" })),
   }));
 }
 
-function blankCriterion(template?: DraftCriterion): DraftCriterion {
+function blankCriterion(template?: DraftCriterion, rowKey: string = key()): DraftCriterion {
+  const levels = template
+    ? template.levels.map((l) => ({ label: l.label, points: l.points }))
+    : [
+        { label: "Needs work", points: "1" },
+        { label: "Good", points: "2" },
+        { label: "Excellent", points: "3" },
+      ];
   return {
-    key: key(),
+    key: rowKey,
     id: "",
     title: "",
     description: "",
-    levels: template
-      ? template.levels.map((l) => ({ ...l, key: key(), description: "" }))
-      : [
-          { key: key(), label: "Needs work", points: "1", description: "" },
-          { key: key(), label: "Good", points: "2", description: "" },
-          { key: key(), label: "Excellent", points: "3", description: "" },
-        ],
+    levels: levels.map((l, li) => ({ ...l, key: `${rowKey}-${li}`, description: "" })),
   };
 }
 
@@ -92,7 +94,7 @@ export function RubricEditor({ initial, canEdit, gradedCount = 0 }: { initial: R
   const { toast } = useToast();
   const [title, setTitle] = useState(initial.title);
   const [passPercent, setPassPercent] = useState(String(initial.passPercent));
-  const [criteria, setCriteria] = useState<DraftCriterion[]>(() => (initial.criteria.length ? toDraft(initial.criteria) : [blankCriterion()]));
+  const [criteria, setCriteria] = useState<DraftCriterion[]>(() => (initial.criteria.length ? toDraft(initial.criteria) : [blankCriterion(undefined, "init-0")]));
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [openDescriptions, setOpenDescriptions] = useState<Set<string>>(() => new Set());
@@ -482,11 +484,7 @@ export function RubricEditor({ initial, canEdit, gradedCount = 0 }: { initial: R
         </Button>
       )}
 
-      <div
-        className={cn(
-          "sticky bottom-0 z-10 -mx-4 flex flex-col-reverse gap-2 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:flex-row sm:items-center sm:justify-between sm:rounded-xl sm:border",
-        )}
-      >
+      <div className="sticky bottom-0 z-10 -mx-4 flex flex-col-reverse gap-2 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:flex-row sm:items-center sm:justify-between sm:rounded-xl sm:border">
         <p className="text-sm text-ink-muted">
           Max <span className="font-semibold text-ink">{formatPoints(totalMax)} pts</span> · pass at{" "}
           <span className="font-semibold text-ink">{formatPoints(pointsToPass(totalMax, pass))} pts</span>

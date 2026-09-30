@@ -20,6 +20,7 @@ export function CourseCover({
   children,
   variant = "card",
   alt,
+  priority,
 }: {
   title: string;
   imageUrl?: string | null;
@@ -30,13 +31,25 @@ export function CourseCover({
   variant?: "card" | "hero";
   /** Alt text for the image; empty when the title is already visible nearby. */
   alt?: string;
+  /**
+   * Covers are lazy-loaded by default. Above the fold, "eager" loads the image
+   * with the page and "high" also marks it as the page's largest image (LCP).
+   */
+  priority?: "high" | "eager";
 }) {
   const monogram = initials(title.replace(/[^\p{L}\p{N}\s]/gu, " "));
   return (
     <div className={cn("relative isolate overflow-hidden bg-surface-3", className)}>
       {imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={imageUrl} alt={alt ?? ""} loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
+        <img
+          src={imageUrl}
+          alt={alt ?? ""}
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority === "high" ? "high" : undefined}
+          decoding="async"
+          className="absolute inset-0 size-full object-cover"
+        />
       ) : (
         <div className={cn("absolute inset-0 bg-linear-to-br", gradientFor(gradient))} aria-hidden="true">
           <div className="absolute inset-0 bg-linear-to-tr from-black/45 via-black/10 to-transparent" />

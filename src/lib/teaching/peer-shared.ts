@@ -1,4 +1,4 @@
-import type { Assignment, PeerReview, PeerReviewSettings } from "@/lib/types";
+import type { Assignment, PeerReview, PeerReviewSettings, User } from "@/lib/types";
 import { seededShuffle } from "@/lib/utils";
 
 /**
@@ -7,13 +7,22 @@ import { seededShuffle } from "@/lib/utils";
  * Pure functions only (no store access) so they can be unit tested.
  */
 
+export interface PeerPair {
+  submissionId: string;
+  reviewerId: string;
+}
+
 /**
- * Peer review settings of an assignment. `requiredForCompletion` is stored
- * alongside the typed `PeerReviewSettings` fields (off by default): when on,
- * a learner's lesson counts as complete only once their assigned reviews are in.
+ * Peer review settings of an assignment. Two fields are stored alongside the
+ * typed `PeerReviewSettings` ones:
+ * - `requiredForCompletion` (off by default): a learner's lesson counts as
+ *   complete only once their assigned reviews are in.
+ * - `excluded`: reviewer/submission pairs an instructor took apart (removed
+ *   or reassigned), which automatic allocation must never recreate.
  */
 export interface PeerConfig extends PeerReviewSettings {
   requiredForCompletion?: boolean;
+  excluded?: PeerPair[];
 }
 
 /** A peer review row plus the instructor-override markers stored with it. */
@@ -30,6 +39,8 @@ export const PEER_LIMITS = {
   dueDaysMax: 30,
   commentMin: 20,
   commentMax: 5000,
+  /** Remembered instructor exclusions per assignment (oldest are dropped first). */
+  excludedMax: 500,
 } as const;
 
 export const DEFAULT_PEER_CONFIG: PeerConfig = {
@@ -53,7 +64,8 @@ export const OVERDUE_REMINDER_WINDOW_MS = 14 * DAY_MS;
 export const ROLLING_OVERFLOW_AFTER_MS = 2 * DAY_MS;
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  const n = typeof value === "number" ? value : Number(value);
+  // null, "" and other non-numbers fall back to the default instead of becoming 0.
+  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
 }
@@ -61,19 +73,39 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 /** Stored settings merged over the defaults and clamped to the limits. */
 export function normalizePeerConfig(raw: Partial<PeerConfig> | null | undefined): PeerConfig {
   const r = raw ?? {};
+  const excluded = (Array.isArray(r.excluded) ? r.excluded : [])
+    .filter((p): p is PeerPair => !!p && typeof p.submissionId === "string" && typeof p.reviewerId === "string")
+    .map((p) => ({ submissionId: p.submissionId, reviewerId: p.reviewerId }))
+    .slice(-PEER_LIMITS.excludedMax);
   return {
     enabled: r.enabled === true,
     reviewsPerSubmission: clampInt(r.reviewsPerSubmission, PEER_LIMITS.reviewsMin, PEER_LIMITS.reviewsMax, DEFAULT_PEER_CONFIG.reviewsPerSubmission),
     dueDays: clampInt(r.dueDays, PEER_LIMITS.dueDaysMin, PEER_LIMITS.dueDaysMax, DEFAULT_PEER_CONFIG.dueDays),
     anonymous: r.anonymous !== false,
     requiredForCompletion: r.requiredForCompletion === true,
+    ...(excluded.length ? { excluded } : {}),
   };
+}
+
+/** `excluded` with one more pair (no duplicates, capped). */
+export function withExcludedPair(excluded: readonly PeerPair[] | undefined, pair: PeerPair): PeerPair[] {
+  const rest = (excluded ?? []).filter((p) => p.submissionId !== pair.submissionId || p.reviewerId !== pair.reviewerId);
+  return [...rest, { submissionId: pair.submissionId, reviewerId: pair.reviewerId }].slice(-PEER_LIMITS.excludedMax);
 }
 
 /** Peer settings of an assignment, or null when peer review is off. */
 export function activePeerConfig(assignment: Pick<Assignment, "peerReview">): PeerConfig | null {
   const config = normalizePeerConfig(assignment.peerReview as PeerConfig | undefined);
   return config.enabled ? config : null;
+}
+
+/**
+ * Who takes part in peer review: enabled accounts without a staff role.
+ * Staff grade and moderate reviews instead of exchanging them, so their own
+ * (test) submissions are neither reviewed nor given reviews to write.
+ */
+export function takesPartInPeerReview(user: Pick<User, "roles"> & { enabled?: boolean }): boolean {
+  return user.enabled !== false && user.roles.every((role) => role === "student");
 }
 
 /**
@@ -105,11 +137,6 @@ export interface PeerSubmission {
   submittedAt: string;
 }
 
-export interface PeerPair {
-  submissionId: string;
-  reviewerId: string;
-}
-
 export interface PeerPlanInput {
   submissions: readonly PeerSubmission[];
   /** Reviews that already exist (any status). */
@@ -120,7 +147,11 @@ export interface PeerPlanInput {
   seed: string;
   /** Submissions that may be given to reviewers who already have a full load. */
   overflow?: ReadonlySet<string>;
-  /** Pairs that must not be created (e.g. a reviewer an instructor just removed). */
+  /**
+   * Pairs that must not be created: reviews an instructor removed or
+   * reassigned. Their reviewers are not given make-up reviews either (they
+   * still take submissions that need a reviewer).
+   */
   exclude?: readonly PeerPair[];
   /**
    * Who may review. Defaults to the authors of `submissions`; pass a subset
@@ -144,9 +175,14 @@ export function effectiveReviewCount(submitters: number, reviewsPerSubmission: n
  *   circle, so every submission gets exactly k reviews, every reviewer does
  *   exactly k, and nobody reviews their own work.
  * - Later calls top up incrementally (new submissions in rolling mode, a
- *   removed reviewer): repeatedly take the submission with the fewest
- *   reviews and give it to the eligible reviewer with the lightest load,
- *   never exceeding k per reviewer unless the submission is in `overflow`.
+ *   removed reviewer), in two passes:
+ *   1. repeatedly take the submission with the fewest reviews (below k) and
+ *      give it to the eligible reviewer with the lightest load, never
+ *      exceeding k per reviewer unless the submission is in `overflow`;
+ *   2. every submitter still below k reviews to write gets the submissions
+ *      with the fewest reviews so far, so a learner who submits after
+ *      everyone else is covered still has their k reviews to do (those
+ *      submissions simply receive one more).
  *
  * k = min(reviewsPerSubmission, submitters - 1), so a cohort of one gets no
  * reviews and a cohort of two review each other once.
@@ -214,6 +250,33 @@ export function planPeerAssignments(input: PeerPlanInput): PeerPair[] {
     load.set(best, load.get(best)! + 1);
     out.push({ submissionId: target.id, reviewerId: best });
   }
+
+  // Pass 2: submitters who still have fewer than k reviews to write.
+  const benched = new Set((input.exclude ?? []).map((p) => p.reviewerId));
+  const idle = new Set<string>();
+  for (;;) {
+    let reviewer: PeerSubmission | null = null;
+    for (const r of pool) {
+      if (idle.has(r.authorId) || benched.has(r.authorId) || load.get(r.authorId)! >= k) continue;
+      if (reviewer === null || load.get(r.authorId)! < load.get(reviewer.authorId)!) reviewer = r;
+    }
+    if (reviewer === null) break;
+    const reviewerId = reviewer.authorId;
+    const candidates = submissions.filter((s) => {
+      if (s.authorId === reviewerId) return false;
+      const key = pairKey(s.id, reviewerId);
+      return !taken.has(key) && !excluded.has(key);
+    });
+    if (!candidates.length) {
+      idle.add(reviewerId);
+      continue;
+    }
+    const target = candidates.sort(order)[0]!;
+    taken.add(pairKey(target.id, reviewerId));
+    received.set(target.id, received.get(target.id)! + 1);
+    load.set(reviewerId, load.get(reviewerId)! + 1);
+    out.push({ submissionId: target.id, reviewerId });
+  }
   return out;
 }
 
@@ -254,18 +317,72 @@ export function anonymousReviewerLabel(index: number): string {
 
 export const ANONYMOUS_AUTHOR_LABEL = "Anonymous classmate";
 
+/* ------------------------------------------------------------------ */
+/* Lesson completion                                                   */
+/* ------------------------------------------------------------------ */
+
+export type PeerCompletionBlock =
+  /** The learner still has reviews to write. */
+  | { reason: "reviews_open"; pending: number }
+  /** The learner submitted, but their reviews have not been handed out yet. */
+  | { reason: "awaiting_reviews" };
+
 /**
- * Open reviews that still block a learner's lesson completion: the reviews
- * assigned to `userId` on assignments whose peer settings require them.
+ * Why peer review still holds back a learner's lesson completion for one
+ * assignment, or null when it does not (setting off, nothing submitted,
+ * every assigned review written, or nobody turned up to be reviewed).
+ *
+ * After submitting, a learner waits for their reviews to be handed out: until
+ * the submission deadline in deadline mode, and for at most
+ * `ROLLING_OVERFLOW_AFTER_MS` in rolling mode, so a learner without
+ * classmates is never stuck.
  */
-export function pendingRequiredReviews(
-  data: { assignments: readonly Pick<Assignment, "id" | "peerReview">[]; peerReviews: readonly Pick<PeerReview, "assignmentId" | "reviewerId" | "status">[] },
-  userId: string,
+export function peerCompletionBlock(
+  assignment: Pick<Assignment, "peerReview" | "enableScheduling" | "scheduleEnd">,
+  mine: { submittedAt: string | null; reviews: readonly Pick<PeerReview, "status">[] },
+  now: number,
+): PeerCompletionBlock | null {
+  if (!activePeerConfig(assignment)?.requiredForCompletion || !mine.submittedAt) return null;
+  const pending = mine.reviews.filter((r) => r.status === "assigned").length;
+  if (pending > 0) return { reason: "reviews_open", pending };
+  if (mine.reviews.length > 0) return null;
+  if (!allocationOpen(assignment, now)) return { reason: "awaiting_reviews" };
+  if (allocationMode(assignment) === "deadline") return null;
+  const submitted = new Date(mine.submittedAt).getTime();
+  return !Number.isNaN(submitted) && now - submitted < ROLLING_OVERFLOW_AFTER_MS ? { reason: "awaiting_reviews" } : null;
+}
+
+export function peerCompletionMessage(block: PeerCompletionBlock): string {
+  return block.reason === "reviews_open"
+    ? `Submit your ${block.pending === 1 ? "peer review" : `${block.pending} peer reviews`}`
+    : "Wait for your peer reviews to be handed out";
+}
+
+/**
+ * Completion requirements a learner still has to meet because of peer review,
+ * for the assignments a lesson embeds (empty when nothing is missing). Meant
+ * for `getCompletionRequirements`: push the result onto `missing`. Members
+ * who do not take part in peer review (staff) are never held back.
+ */
+export function peerReviewRequirements(
+  data: {
+    assignments: readonly Pick<Assignment, "id" | "peerReview" | "enableScheduling" | "scheduleEnd">[];
+    assignmentSubmissions: readonly { assignmentId: string; userId: string; submittedAt: string }[];
+    peerReviews: readonly Pick<PeerReview, "assignmentId" | "reviewerId" | "status">[];
+  },
+  user: Pick<User, "id" | "roles">,
   assignmentIds: readonly string[],
-): number {
-  const required = new Set(
-    data.assignments.filter((a) => assignmentIds.includes(a.id) && activePeerConfig(a)?.requiredForCompletion).map((a) => a.id),
-  );
-  if (!required.size) return 0;
-  return data.peerReviews.filter((r) => r.reviewerId === userId && r.status === "assigned" && required.has(r.assignmentId)).length;
+  now: number,
+): string[] {
+  if (!takesPartInPeerReview(user)) return [];
+  const userId = user.id;
+  const missing: string[] = [];
+  for (const assignment of data.assignments) {
+    if (!assignmentIds.includes(assignment.id) || !activePeerConfig(assignment)?.requiredForCompletion) continue;
+    const submission = data.assignmentSubmissions.find((s) => s.assignmentId === assignment.id && s.userId === userId);
+    const reviews = data.peerReviews.filter((r) => r.assignmentId === assignment.id && r.reviewerId === userId);
+    const block = peerCompletionBlock(assignment, { submittedAt: submission?.submittedAt ?? null, reviews }, now);
+    if (block) missing.push(peerCompletionMessage(block));
+  }
+  return missing;
 }

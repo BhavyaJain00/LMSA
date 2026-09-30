@@ -154,6 +154,12 @@ export function AssignmentForm({
             label="Grade Assignment"
             description="Evaluators mark submissions Pass or Fail and leave comments. Turn off for ungraded practice (status Not applicable)."
           />
+          {!editing && (
+            <p className="flex items-start gap-2 text-xs text-ink-muted">
+              <Icon.Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              Once the assignment is created, open it again to grade with a rubric or turn on peer review.
+            </p>
+          )}
           <div className="space-y-4 border-t border-border pt-5">
             <Switch
               name="enableScheduling"

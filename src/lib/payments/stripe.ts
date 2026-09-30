@@ -431,6 +431,98 @@ export async function createStripeSubscriptionSession(input: CreateStripeSubscri
   return session;
 }
 
+/* ------------------------------------------------------------------ */
+/* Payment plans (a course paid in installments)                       */
+/* ------------------------------------------------------------------ */
+
+/** `metadata.kind` of the subscriptions that collect the parts of a course payment plan. */
+export const STRIPE_INSTALLMENTS_KIND = "installments";
+
+export interface CreateStripeInstallmentSessionInput {
+  paymentId: string;
+  orderId: string;
+  userId: string;
+  courseId: string;
+  title: string;
+  description?: string;
+  imageUrl?: string;
+  /** One payment, in the currency's smallest unit (already converted). */
+  unitAmount: number;
+  currency: string;
+  /** Days between two payments. */
+  intervalDays: number;
+  /** Number of payments. */
+  count: number;
+  customerEmail?: string;
+  successUrl: string;
+  cancelUrl: string;
+}
+
+/**
+ * Hosted Checkout for a course paid in parts: a subscription that charges
+ * the same amount every `intervalDays` days. It is given an end date once the
+ * first payment went through (`setStripeCancelAt`), so exactly `count`
+ * payments are collected. The subscription and its invoices carry our order
+ * ids and `kind: "installments"` in `metadata`.
+ */
+export async function createStripeInstallmentSession(input: CreateStripeInstallmentSessionInput): Promise<StripeCheckoutSession> {
+  if (!Number.isInteger(input.unitAmount) || input.unitAmount <= 0) throw new GatewayError("Stripe", "The payment amount must be greater than zero.");
+  if (!Number.isInteger(input.intervalDays) || input.intervalDays < 1 || input.intervalDays > 1095) throw new GatewayError("Stripe", "Stripe bills at most every 1095 days.");
+  if (!Number.isInteger(input.count) || input.count < 2) throw new GatewayError("Stripe", "A payment plan needs at least two payments.");
+  const name = `${input.title.replace(/\s+/g, " ").trim().slice(0, 220) || `Order ${input.orderId}`} (${input.count} payments)`;
+  const productData: Record<string, unknown> = { name };
+  const description = input.description?.replace(/\s+/g, " ").trim();
+  if (description) productData.description = description.slice(0, 500);
+  if (input.imageUrl && /^https:\/\/[^\s"'<>]+$/.test(input.imageUrl)) productData.images = [input.imageUrl];
+  const email = input.customerEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.customerEmail) ? input.customerEmail : undefined;
+  const metadata = {
+    paymentId: input.paymentId,
+    orderId: input.orderId,
+    userId: input.userId,
+    courseId: input.courseId,
+    kind: STRIPE_INSTALLMENTS_KIND,
+    installments: String(input.count),
+  };
+  const every = input.intervalDays === 1 ? "day" : `${input.intervalDays} days`;
+  const json = await stripeRequest("POST", "/checkout/sessions", {
+    mode: "subscription",
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+    client_reference_id: input.paymentId,
+    customer_email: email,
+    locale: "auto",
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: input.currency.toLowerCase(),
+          unit_amount: input.unitAmount,
+          recurring: { interval: "day", interval_count: input.intervalDays },
+          product_data: productData,
+        },
+      },
+    ],
+    metadata,
+    subscription_data: { description: `Payment plan · order ${input.orderId}`, metadata },
+    custom_text: {
+      submit: { message: `This is payment 1 of ${input.count}. The same amount is charged every ${every}, and the plan ends by itself after payment ${input.count}.` },
+    },
+  });
+  const session = parseStripeSession(json);
+  if (!session.id || !session.url) throw new GatewayError("Stripe", "Stripe did not return a checkout URL.");
+  return session;
+}
+
+/**
+ * Make a subscription end by itself at `cancelAt` (Unix seconds). Nothing is
+ * prorated or credited for the period that is cut short.
+ */
+export async function setStripeCancelAt(subscriptionId: string, cancelAt: number): Promise<StripeSubscription> {
+  if (!isStripeSubscriptionId(subscriptionId)) throw new GatewayError("Stripe", "Invalid subscription id.", 400);
+  if (!Number.isInteger(cancelAt) || cancelAt <= 0) throw new GatewayError("Stripe", "Invalid end date.", 400);
+  return parseStripeSubscription(await stripeRequest("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}`, { cancel_at: cancelAt, proration_behavior: "none" }));
+}
+
 export interface StripeSubscription {
   id: string;
   /** "trialing" | "active" | "past_due" | "canceled" | "unpaid" | "incomplete" | "incomplete_expired" | "paused" */
@@ -438,6 +530,10 @@ export interface StripeSubscription {
   /** Unix seconds. */
   currentPeriodStart: number | undefined;
   currentPeriodEnd: number | undefined;
+  /** Unix seconds the subscription started billing (its first period began). */
+  startDate: number | undefined;
+  /** Unix seconds at which the subscription is set to end by itself. */
+  cancelAt: number | undefined;
   trialEnd: number | undefined;
   cancelAtPeriodEnd: boolean;
   /** Unix seconds when the subscription ended (canceled or expired). */
@@ -464,6 +560,8 @@ export function parseStripeSubscription(raw: Record<string, unknown>): StripeSub
     status: str(raw.status) ?? "",
     currentPeriodStart: num(raw.current_period_start) ?? num(first.current_period_start),
     currentPeriodEnd: num(raw.current_period_end) ?? num(first.current_period_end),
+    startDate: num(raw.start_date) ?? num(raw.billing_cycle_anchor),
+    cancelAt: num(raw.cancel_at),
     trialEnd: num(raw.trial_end),
     cancelAtPeriodEnd: raw.cancel_at_period_end === true,
     endedAt: num(raw.ended_at),
@@ -600,6 +698,8 @@ export interface StripeInvoice {
   periodStart: number | undefined;
   periodEnd: number | undefined;
   metadata: Record<string, string>;
+  /** Metadata of the subscription the invoice bills (a snapshot taken when the invoice was created). */
+  subscriptionMetadata: Record<string, string>;
 }
 
 export function parseStripeInvoice(raw: Record<string, unknown>): StripeInvoice {
@@ -621,6 +721,7 @@ export function parseStripeInvoice(raw: Record<string, unknown>): StripeInvoice 
     periodStart: num(period.start),
     periodEnd: num(period.end),
     metadata: stringMap(raw.metadata),
+    subscriptionMetadata: stringMap(obj(raw.subscription_details).metadata),
   };
 }
 

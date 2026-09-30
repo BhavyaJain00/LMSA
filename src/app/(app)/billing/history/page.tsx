@@ -10,6 +10,10 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { ItemThumb, money } from "@/components/commerce/order-summary";
 import { PaymentStatusBadge } from "@/components/commerce/status-badge";
 import { ResumePaymentButton } from "@/components/commerce/resume-payment-button";
+import { InstallmentPlanCard } from "@/components/commerce/installment-plan-card";
+import { isInstallmentOrder } from "@/lib/commerce/installments";
+import { runInstallmentMaintenance } from "@/lib/commerce/installment-service";
+import { getMyInstallmentPlans } from "@/lib/commerce/installment-views";
 import { formatDate } from "@/lib/utils";
 
 export const metadata = { title: "Orders & invoices" };
@@ -23,7 +27,14 @@ export default async function OrderHistoryPage(props: PageProps<"/billing/histor
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : PAGE_SIZE;
 
   await backfillInvoiceNumbers();
-  const orders = await getOrderHistory(user.id);
+  // No scheduler needed: reminders of this learner's payment plans that are due go out when they open their orders.
+  await runInstallmentMaintenance({ userId: user.id }).catch((error) => {
+    console.error("[installments] maintenance failed:", error instanceof Error ? error.message : String(error));
+  });
+  const [history, plans] = await Promise.all([getOrderHistory(user.id), getMyInstallmentPlans(user.id)]);
+  // Payments of a plan that are not made yet live in the plan's schedule above the list, not among the orders.
+  const orders = history.filter((o) => !(isInstallmentOrder(o) && o.installmentNumber! > 1 && o.status !== "paid" && o.status !== "refunded"));
+  const openPlans = plans.filter((p) => p.status === "on_track" || p.status === "overdue" || p.status === "paused");
   const shown = orders.slice(0, limit);
 
   const spent = new Map<string, number>();
@@ -51,11 +62,18 @@ export default async function OrderHistoryPage(props: PageProps<"/billing/histor
         <EmptyState
           icon={<Icon.Receipt />}
           title="No orders yet"
-          description="Courses, batches and certificates you buy appear here together with their invoices."
+          description="Courses, bundles, memberships and certificates you buy appear here together with their invoices."
           action={<ButtonLink href="/courses">Explore courses</ButtonLink>}
         />
       ) : (
         <div className="space-y-4 pb-10">
+          {openPlans.length > 0 && (
+            <section aria-label="Your payment plans" className="space-y-4">
+              {openPlans.map((plan) => (
+                <InstallmentPlanCard key={plan.key} plan={plan} own showCourse />
+              ))}
+            </section>
+          )}
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-muted">
             <span>
               <strong className="font-semibold text-ink">{orders.length}</strong> {orders.length === 1 ? "order" : "orders"}

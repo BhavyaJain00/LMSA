@@ -34,12 +34,6 @@ export const SUBSCRIPTION_STATUS_LABELS: Record<SubscriptionStatus, string> = {
   expired: "Expired",
 };
 
-export const SUBSCRIPTION_STATUSES: readonly SubscriptionStatus[] = ["trialing", "active", "past_due", "cancelled", "expired"];
-
-export function isSubscriptionStatus(value: unknown): value is SubscriptionStatus {
-  return typeof value === "string" && (SUBSCRIPTION_STATUSES as readonly string[]).includes(value);
-}
-
 /**
  * Recurring Stripe/Razorpay subscriptions whose status and periods the
  * gateway reports. A membership paid once through a gateway (a lifetime plan,

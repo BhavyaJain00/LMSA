@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   });
 
   // Leading BOM so spreadsheet apps detect UTF-8.
-  const csv = "﻿" + toCsv(segmentCsvRows(recipients));
+  const csv = "\uFEFF" + toCsv(segmentCsvRows(recipients));
   return new NextResponse(csv, {
     status: 200,
     headers: {

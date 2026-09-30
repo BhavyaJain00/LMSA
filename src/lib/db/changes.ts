@@ -12,13 +12,24 @@ import type { ChangeSet, CollectionChanges } from "./sqlite-core.mjs";
  *  - `candidates`: only the listed documents are compared (documents returned
  *    by `find`/`filter`, pushed, or assigned to an index). Cost is
  *    proportional to what the mutation touched: the hot path.
- *  - `identity`: the array's membership changed (splice, removal, whole-array
- *    replacement). Every id is looked up; only documents that are new, sit
- *    at an id under a different object, or are candidates get serialized;
- *    ids no longer present are deleted.
+ *  - `identity`: the array's membership or order changed (splice, removal,
+ *    sort, whole-array replacement). Every id is looked up; only documents
+ *    that are new, sit at an id under a different object, or are candidates
+ *    get serialized; ids no longer present are deleted.
  *  - `full`: every document is serialized and compared. Used by the
- *    background sweep, before backups and on shutdown, and after code
- *    iterated a collection with a callback that may have edited documents.
+ *    background sweep, by `flush()`, before backups and on shutdown, and
+ *    after code iterated a collection in a way that may have edited any
+ *    document.
+ *
+ * Candidates are trusted to be members of the collection. When two different
+ * candidate objects carry the same id (a stale copy next to its replacement)
+ * that cannot be decided without looking, so the collection is scanned as in
+ * `identity` mode and the object actually in the array wins.
+ *
+ * Array order is part of a collection's state. The tracker's maps keep ids
+ * in stored order (the order rows come back in), new documents are stored
+ * after the existing ones, and a scan that finds the array in any other
+ * order asks the driver to renumber the rows (`order`).
  *
  * `diff()` never changes the tracker; `commit()` adopts a diff once it is
  * safely stored, so a failed write is simply found again by the next diff.
@@ -41,6 +52,8 @@ interface Entry {
 interface CollectionUpdate {
   set: [string, Entry][];
   deletes: string[];
+  /** Every id in the new stored order, when the rows were renumbered. */
+  order?: string[];
 }
 
 export interface PendingChanges {
@@ -90,13 +103,14 @@ export class ChangeTracker {
       duplicates: new Map(),
       compared: 0,
     };
-    const merged = mergeRequests(requests);
-    for (const request of merged.values()) {
+    for (const request of mergeRequests(requests).values()) {
       const value = collections[request.name];
       const docs: readonly unknown[] = Array.isArray(value) ? value : [];
       const stored = this.entries.get(request.name) ?? new Map<string, Entry>();
       const change: CollectionChanges = { name: request.name, upserts: [], deletes: [] };
       const update: CollectionUpdate = { set: [], deletes: [] };
+      let invalid = 0;
+      let duplicates = 0;
       const consider = (id: string, doc: object) => {
         const json = JSON.stringify(doc);
         const print = fingerprint(json);
@@ -110,18 +124,15 @@ export class ChangeTracker {
         update.set.push([id, { ref: doc, print }]);
       };
 
-      if (request.mode === "candidates") {
-        const seen = new Set<string>();
-        for (const doc of request.candidates) {
-          const id = idOf(doc);
-          if (id === null || seen.has(id)) continue;
-          seen.add(id);
-          consider(id, doc as object);
-        }
+      const listed = request.mode === "candidates" ? candidatesById(request.candidates) : null;
+      if (listed) {
+        invalid = listed.invalid;
+        for (const [id, doc] of listed.byId) consider(id, doc);
       } else {
         const present = new Set<string>();
-        let invalid = 0;
-        let duplicates = 0;
+        /** Ids in array order. */
+        const sequence: string[] = [];
+        const full = request.mode === "full";
         for (const doc of docs) {
           const id = idOf(doc);
           if (id === null) {
@@ -133,19 +144,27 @@ export class ChangeTracker {
             continue;
           }
           present.add(id);
+          sequence.push(id);
           const entry = stored.get(id);
-          if (request.mode === "full" || !entry || entry.ref !== doc || request.candidates.has(doc)) consider(id, doc as object);
+          if (full || !entry || entry.ref !== doc || request.candidates.has(doc)) consider(id, doc as object);
         }
+        // Stored rows that remain must lead the array in their stored order; new documents follow (they are appended).
+        let position = 0;
+        let ordered = true;
         for (const id of stored.keys()) {
-          if (present.has(id)) continue;
-          change.deletes.push(id);
-          update.deletes.push(id);
+          if (!present.has(id)) {
+            change.deletes.push(id);
+            update.deletes.push(id);
+          } else if (sequence[position++] !== id) {
+            ordered = false;
+          }
         }
-        if (invalid) pending.invalid.set(request.name, invalid);
-        if (duplicates) pending.duplicates.set(request.name, duplicates);
+        if (!ordered) change.order = update.order = sequence;
       }
-      if (change.upserts.length || change.deletes.length) pending.changeSet.collections.push(change);
-      if (update.set.length || update.deletes.length) pending.updates.set(request.name, update);
+      if (invalid) pending.invalid.set(request.name, invalid);
+      if (duplicates) pending.duplicates.set(request.name, duplicates);
+      if (change.upserts.length || change.deletes.length || change.order) pending.changeSet.collections.push(change);
+      if (update.set.length || update.deletes.length || update.order) pending.updates.set(request.name, update);
     }
     const settingsJson = settings === undefined ? null : JSON.stringify(settings);
     if (settingsJson !== null && settingsJson !== this.settingsJson) {
@@ -162,6 +181,14 @@ export class ChangeTracker {
       if (!map) this.entries.set(name, (map = new Map()));
       for (const [id, entry] of update.set) map.set(id, entry);
       for (const id of update.deletes) map.delete(id);
+      if (update.order) {
+        const reordered = new Map<string, Entry>();
+        for (const id of update.order) {
+          const entry = map.get(id);
+          if (entry) reordered.set(id, entry);
+        }
+        this.entries.set(name, reordered);
+      }
     }
     if (pending.settingsJson !== null) this.settingsJson = pending.settingsJson;
   }
@@ -170,6 +197,26 @@ export class ChangeTracker {
   size(name: string): number {
     return this.entries.get(name)?.size ?? 0;
   }
+}
+
+/**
+ * Candidates keyed by id, or null when two different objects claim the same
+ * id (the caller then scans the collection to see which one is in it).
+ */
+function candidatesById(candidates: Iterable<unknown>): { byId: Map<string, object>; invalid: number } | null {
+  const byId = new Map<string, object>();
+  let invalid = 0;
+  for (const doc of candidates) {
+    const id = idOf(doc);
+    if (id === null) {
+      invalid++;
+      continue;
+    }
+    const other = byId.get(id);
+    if (other === undefined) byId.set(id, doc as object);
+    else if (other !== doc) return null;
+  }
+  return { byId, invalid };
 }
 
 interface MergedRequest {
@@ -201,9 +248,9 @@ export function isEmptyChangeSet(changes: ChangeSet): boolean {
   return changes.collections.length === 0 && changes.settings === null;
 }
 
-/** Number of documents a change set writes or deletes. */
+/** Number of rows a change set writes, deletes or renumbers. */
 export function changeSetSize(changes: ChangeSet): number {
-  return changes.collections.reduce((n, c) => n + c.upserts.length + c.deletes.length, 0) + (changes.settings === null ? 0 : 1);
+  return changes.collections.reduce((n, c) => n + c.upserts.length + c.deletes.length + (c.order?.length ?? 0), 0) + (changes.settings === null ? 0 : 1);
 }
 
 export function idOf(doc: unknown): string | null {

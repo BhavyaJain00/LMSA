@@ -1,0 +1,18 @@
+import { ButtonLink } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icons";
+import { EmptyState } from "@/components/ui/skeleton";
+
+export default function SequenceNotFound() {
+  return (
+    <EmptyState
+      icon={<Icon.Zap />}
+      title="Sequence not found"
+      description="It may have been deleted by another member of the team."
+      action={
+        <ButtonLink href="/admin/sequences" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          Back to sequences
+        </ButtonLink>
+      }
+    />
+  );
+}

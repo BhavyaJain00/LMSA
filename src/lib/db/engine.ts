@@ -16,26 +16,32 @@ import type { OpenOrigin, StoreDriver } from "./driver";
  * per flush, and the cost of finding it is proportional to what the
  * mutation touched rather than to the size of the database:
  *
- *  1. Inside a `mutate()` callback (and anything it awaits, via
- *     AsyncLocalStorage) `db.<collection>` is a thin Proxy over the real
- *     array. Documents themselves are never wrapped, so identity checks,
- *     spreads and serialization behave exactly as before.
- *       - `find`, `filter`, `at` and index reads record the documents they
- *         return as candidates; `push`/`unshift`/index writes record the new
- *         documents. Only candidates are serialized and compared at flush.
- *       - `splice`, `pop`, `shift`, shrinking `length`, replacing a document
- *         with one of another id, or assigning a whole new array switch the
- *         collection to an identity diff (ids compared, removed ids deleted).
- *       - Callbacks that may edit every element (`forEach`, `map`, `reduce`,
- *         iteration, `slice`, …) switch it to a full comparison.
+ *  1. `db.<collection>` is a thin Proxy over the real array (always the same
+ *     one for an array, so identity checks and caches keyed on the array
+ *     keep working). Array methods run on the real array at native speed;
+ *     documents themselves are never wrapped, so spreads, comparisons and
+ *     serialization behave exactly as before.
+ *       - Writes are always recorded: `push` and index assignment record
+ *         the new documents; `splice`, `pop`, `shift`, `unshift`, `sort`,
+ *         `reverse`, shrinking `length`, replacing a document with one of
+ *         another id, or assigning a whole new array switch the collection
+ *         to an identity diff (ids and their order compared, removed ids
+ *         deleted).
+ *       - Reads are recorded only inside a `mutate()` callback (and anything
+ *         it awaits, via AsyncLocalStorage): `find`, `filter`, `at`,
+ *         `findIndex` and index reads record the documents they return as
+ *         candidates, which are serialized and compared at flush. Calls that
+ *         hand out every element (`forEach`, `map`, `reduce`, iteration,
+ *         `slice`, …) switch the collection to a full comparison. Pure
+ *         tests (`some`, `every`, `includes`, `indexOf`) record nothing.
  *  2. A background sweep compares, a slice at a time, every collection that
- *     was read since the previous sweep, so documents edited outside
- *     `mutate()` (an object kept from an earlier `findById`, say) are still
- *     stored — and logged, because such edits should go through `mutate()`.
- *     Its interval grows with its cost so it never takes more than about 5%
- *     of the CPU.
- *  3. On process exit and before backups everything outstanding is written
- *     synchronously.
+ *     was read since the previous sweep, so documents edited where the
+ *     engine cannot see it (an object kept from an earlier `findById` and
+ *     changed later, say) are still stored — and logged, because such edits
+ *     should be made on a document obtained inside `mutate()`. Its interval
+ *     grows with its cost so it never takes more than about 5% of the CPU.
+ *  3. `flush()`, backups, process exit and `close()` compare everything, so
+ *     afterwards the storage equals memory whatever the code did.
  *
  * Another process writing to the same SQLite file (the `db:restore` script,
  * for instance) is noticed through `PRAGMA data_version`; the cache is then
@@ -77,7 +83,7 @@ export interface EngineStats {
   lastFlushMs: number | null;
   lastSweepAt: string | null;
   lastSweepMs: number | null;
-  /** Documents saved by the sweep that were changed outside mutate(). */
+  /** Documents saved by the sweep that were changed where the engine could not see it. */
   untrackedWrites: number;
   externalReloads: number;
   pending: boolean;
@@ -86,14 +92,24 @@ export interface EngineStats {
 
 const DEFAULTS = { flushDelayMs: 150, sweepDelayMs: 5000, sweepSliceMs: 8, externalCheckMs: 1000 };
 const MAX_RETRY_MS = 30_000;
-const UNTRACKED_WARNING_INTERVAL_MS = 10 * 60 * 1000;
+const WARNING_INTERVAL_MS = 10 * 60 * 1000;
 /** The sweep waits at least this multiple of its own duration before running again (≈5% CPU). */
 const SWEEP_COST_FACTOR = 20;
 const SWEEP_CHUNK = 256;
 const INDEX_KEY = /^(?:0|[1-9]\d{0,9})$/;
 
+/** Array methods that return a member: the result is recorded as a candidate. */
+const RETURNS_MEMBER = ["find", "findLast", "at"] as const;
+/** Array methods that return the position of a member: that member is recorded as a candidate. */
+const RETURNS_INDEX = ["findIndex", "findLastIndex"] as const;
+/** Array methods that only answer a question: nothing is recorded. */
+const READ_ONLY = ["some", "every", "includes", "indexOf", "lastIndexOf", "join", "keys"] as const;
+/** Array methods that hand out every member (callbacks, copies, iterators): any of them may be edited. */
+const EXPOSES_ALL = ["forEach", "map", "flatMap", "reduce", "reduceRight", "slice", "concat", "values", "entries", "toSorted", "toReversed", "toSpliced", "with", "flat"] as const;
+
 type Loose = Record<string, unknown>;
 type AnyFn = (...args: unknown[]) => unknown;
+type WriteReason = "flush" | "sweep" | "exit" | "close" | "reload";
 
 interface PendingCollection {
   mode: DiffMode;
@@ -105,7 +121,7 @@ interface MutationScope {
   active: boolean;
 }
 
-/** Progress of a sweep through one collection. */
+/** Progress of a sweep through the collections read since the previous one. */
 interface SweepCursor {
   names: string[];
   collection: number;
@@ -117,15 +133,19 @@ export class StoreEngine {
   private readonly options: EngineOptions & typeof DEFAULTS;
   private collections: string[];
   private known: Set<string>;
+  /** The cache. One object for the engine's lifetime: reloads swap its contents, so a `db` kept by a caller stays current. */
   private db: Database | null = null;
+  /** What callers get: `db` itself, or (incremental drivers) the tracking Proxy over it. */
   private view: Database | null = null;
   private loading: Promise<Database> | null = null;
   private chain: Promise<void> = Promise.resolve();
   private queued = 0;
   private readonly tracker: ChangeTracker | null;
   private readonly scope = new AsyncLocalStorage<MutationScope>();
+  /** A mutate() callback is running (they run one at a time). */
+  private mutating = false;
   private pending = new Map<string, PendingCollection>();
-  /** Collections read or written since the last completed sweep. */
+  /** Collections read or written since the last sweep started. */
   private accessed = new Set<string>();
   private readonly proxies = new WeakMap<object, { name: string; proxy: unknown[] }>();
   private readonly unwrapped = new WeakMap<object, unknown[]>();
@@ -137,9 +157,11 @@ export class StoreEngine {
   private sweeping = false;
   private nextSweepDelay: number;
   private lastExternalCheck = 0;
+  /** Another process changed the storage and the cache has not been reloaded yet. */
+  private reloadNeeded = false;
   private closed = false;
   private exitHandler: (() => void) | null = null;
-  private readonly untrackedWarnedAt = new Map<string, number>();
+  private readonly warnedAt = new Map<string, number>();
   private readonly stats: EngineStats;
 
   constructor(options: EngineOptions) {
@@ -187,19 +209,27 @@ export class StoreEngine {
       await this.getDb();
       this.checkExternal(true);
       const marker: MutationScope = { active: true };
+      this.mutating = true;
       try {
         return await this.scope.run(marker, () => fn(this.view!));
       } finally {
         marker.active = false;
+        this.mutating = false;
         this.schedulePersist();
       }
     });
   }
 
-  /** Write pending changes now. */
+  /**
+   * Write every difference between memory and storage now. Unlike the
+   * coalesced write after a mutation this compares all documents, so it also
+   * stores edits the engine could not see. A failed write is logged and
+   * retried; it does not reject.
+   */
   async flush(): Promise<void> {
-    if (!this.db || !this.dirty) return;
-    await this.enqueue(() => this.persistPending());
+    if (!this.db || this.closed) return;
+    if (!this.tracker && !this.dirty) return;
+    await this.enqueue(() => this.persistEverything());
   }
 
   /**
@@ -209,7 +239,9 @@ export class StoreEngine {
   async exclusive<T>(fn: (ctx: ExclusiveContext) => T | Promise<T>): Promise<T> {
     await this.getDb();
     return this.enqueue(async () => {
-      await this.persistEverything();
+      if (!(await this.persistEverything())) {
+        throw new Error(this.stats.lastError?.message ?? "Pending changes could not be written to the database.");
+      }
       return fn({
         driver: this.driver,
         data: () => this.raw(this.db!),
@@ -254,9 +286,9 @@ export class StoreEngine {
   }
 
   /** Write everything outstanding and release the storage. */
-  close(): void {
+  close(reason: "exit" | "close" = "close"): void {
     if (this.closed) return;
-    this.writeOutstandingSync("close");
+    if (this.db && this.tracker) this.writeEverything(reason);
     this.closed = true;
     for (const timer of [this.flushTimer, this.retryTimer, this.sweepTimer]) if (timer) clearTimeout(timer);
     this.flushTimer = this.retryTimer = this.sweepTimer = null;
@@ -276,17 +308,26 @@ export class StoreEngine {
     this.stats.openedAt = new Date().toISOString();
     this.stats.origin = origin;
     if (this.driver.incremental && !this.exitHandler) {
-      this.exitHandler = () => this.writeOutstandingSync("exit");
+      // Last chance on shutdown: write what is outstanding and leave a complete database file.
+      this.exitHandler = () => this.close("exit");
       process.on("exit", this.exitHandler);
     }
     this.options.onOpen?.(origin);
     return this.view!;
   }
 
-  /** Adopt `db` as the cache; `stored` (built from the same objects) is what the storage holds. */
-  private install(db: Database, stored: RawData): void {
-    this.db = db;
-    this.view = this.tracker ? this.createView(db) : db;
+  /** Make `next` the cache contents; `stored` (built from the same objects) is what the storage holds. */
+  private install(next: Database, stored: RawData): void {
+    if (this.db) {
+      // Swap the contents in place so the object handed out by getDb() stays valid.
+      const target = this.db as unknown as Loose;
+      const source = next as unknown as Loose;
+      for (const key of Object.keys(target)) if (!Object.hasOwn(source, key)) delete target[key];
+      Object.assign(target, source);
+    } else {
+      this.db = next;
+      this.view = this.tracker ? this.createView(next) : next;
+    }
     this.tracker?.reset(stored.collections, stored.settings);
     this.pending.clear();
     this.accessed.clear();
@@ -304,11 +345,12 @@ export class StoreEngine {
   }
 
   /* ------------------------------------------------------------------ */
-  /* Change tracking (SQLite driver)                                     */
+  /* Change tracking (incremental drivers)                               */
   /* ------------------------------------------------------------------ */
 
+  /** True for code running inside a mutate() callback (not for other requests reading meanwhile). */
   private inMutation(): boolean {
-    return this.scope.getStore()?.active === true;
+    return this.mutating && this.scope.getStore()?.active === true;
   }
 
   /** A change made through a tracked path; outside mutate() it needs its own flush. */
@@ -331,17 +373,24 @@ export class StoreEngine {
     if (mode === "full" || entry.mode === "candidates") entry.mode = mode;
   }
 
+  /** Remember that a collection was handed out, for the next sweep. */
+  private touch(name: string): void {
+    if (this.accessed.has(name)) return;
+    this.accessed.add(name);
+    this.scheduleSweep();
+  }
+
   private createView(db: Database): Database {
     return new Proxy(db, {
       get: (target, key) => {
         const value = Reflect.get(target, key);
         if (typeof key !== "string" || !this.known.has(key)) return value;
-        this.accessed.add(key);
-        return Array.isArray(value) && this.inMutation() ? this.collectionProxy(key, value) : value;
+        this.touch(key);
+        return Array.isArray(value) ? this.collectionProxy(key, value) : value;
       },
       set: (target, key, value) => {
         if (typeof key === "string" && this.known.has(key)) {
-          this.accessed.add(key);
+          this.touch(key);
           this.escalate(key, "identity");
           Reflect.set(target, key, (value && this.unwrapped.get(value as object)) ?? value);
           this.changed();
@@ -364,122 +413,137 @@ export class StoreEngine {
   private collectionProxy(name: string, raw: unknown[]): unknown[] {
     const cached = this.proxies.get(raw);
     if (cached && cached.name === name) return cached.proxy;
-    const note = (doc: unknown) => this.note(name, doc);
-    const noteAll = (docs: readonly unknown[]) => {
-      for (const doc of docs) note(doc);
+
+    // Reads matter only inside a mutation; writes are recorded wherever they happen.
+    const read = (doc: unknown) => {
+      if (this.inMutation()) this.note(name, doc);
     };
-    const identity = () => this.escalate(name, "identity");
-    const full = () => this.escalate(name, "full");
+    const added = (docs: readonly unknown[]) => {
+      for (const doc of docs) this.note(name, doc);
+    };
+    /** Which documents are in the array, or their order, is about to change. */
+    const membership = () => this.escalate(name, "identity");
     const changed = () => this.changed();
     const call = (method: string, args: unknown[]) => (raw as unknown as Record<string, AnyFn>)[method]!.apply(raw, args);
 
-    // Run on the real array at native speed; record only what the call exposes or changes.
-    const methods: Record<string | symbol, AnyFn> = {
-      find: (...args) => {
-        const found = call("find", args);
-        note(found);
+    // Every method runs on the real array at native speed; only what the call returns or changes is recorded.
+    const methods = new Map<string | symbol, AnyFn>();
+    for (const method of RETURNS_MEMBER) {
+      methods.set(method, (...args) => {
+        const found = call(method, args);
+        read(found);
         return found;
-      },
-      findLast: (...args) => {
-        const found = call("findLast", args);
-        note(found);
-        return found;
-      },
-      at: (...args) => {
-        const found = call("at", args);
-        note(found);
-        return found;
-      },
-      filter: (...args) => {
-        const found = call("filter", args) as unknown[];
-        noteAll(found);
-        return found;
-      },
-      push: (...items) => {
-        noteAll(items);
-        const length = raw.push(...items);
-        changed();
-        return length;
-      },
-      unshift: (...items) => {
-        noteAll(items);
-        const length = raw.unshift(...items);
-        changed();
-        return length;
-      },
-      splice: (...args) => {
-        identity();
-        noteAll(args.slice(2));
-        const removed = call("splice", args);
-        changed();
-        return removed;
-      },
-      pop: () => {
-        identity();
-        const removed = raw.pop();
-        changed();
-        return removed;
-      },
-      shift: () => {
-        identity();
-        const removed = raw.shift();
-        changed();
-        return removed;
-      },
-      // Reordering is not persisted (documents are stored in insertion order), so it records nothing.
-      sort: (...args) => {
-        call("sort", args);
-        return proxy;
-      },
-      reverse: () => {
-        raw.reverse();
-        return proxy;
-      },
-      fill: (...args) => {
-        identity();
-        note(args[0]);
-        call("fill", args);
-        changed();
-        return proxy;
-      },
-      copyWithin: (...args) => {
-        identity();
-        call("copyWithin", args);
-        changed();
-        return proxy;
-      },
-    };
-    // Callbacks and copies that expose every element: any of them may be edited.
-    for (const method of ["forEach", "map", "flatMap", "reduce", "reduceRight", "slice", "concat", "values", "entries", "toSorted", "toReversed", "toSpliced", "with", "flat"]) {
-      methods[method] = (...args) => {
-        full();
-        return call(method, args);
-      };
+      });
     }
-    methods[Symbol.iterator] = () => {
-      full();
+    for (const method of RETURNS_INDEX) {
+      methods.set(method, (...args) => {
+        const index = call(method, args) as number;
+        if (index !== -1) read(raw[index]);
+        return index;
+      });
+    }
+    for (const method of READ_ONLY) methods.set(method, (...args) => call(method, args));
+    for (const method of EXPOSES_ALL) {
+      methods.set(method, (...args) => {
+        if (this.inMutation()) this.escalate(name, "full");
+        return call(method, args);
+      });
+    }
+    methods.set(Symbol.iterator, () => {
+      if (this.inMutation()) this.escalate(name, "full");
       return raw[Symbol.iterator]();
-    };
+    });
+    methods.set("filter", (...args) => {
+      const found = call("filter", args) as unknown[];
+      if (this.inMutation()) added(found);
+      return found;
+    });
+    methods.set("push", (...items) => {
+      added(items);
+      const length = raw.push(...items);
+      changed();
+      return length;
+    });
+    methods.set("unshift", (...items) => {
+      membership();
+      added(items);
+      const length = raw.unshift(...items);
+      changed();
+      return length;
+    });
+    methods.set("splice", (...args) => {
+      membership();
+      added(args.slice(2));
+      const removed = call("splice", args);
+      changed();
+      return removed;
+    });
+    methods.set("pop", () => {
+      membership();
+      const removed = raw.pop();
+      changed();
+      return removed;
+    });
+    methods.set("shift", () => {
+      membership();
+      const removed = raw.shift();
+      changed();
+      return removed;
+    });
+    methods.set("sort", (...args) => {
+      membership();
+      call("sort", args);
+      changed();
+      return proxy;
+    });
+    methods.set("reverse", () => {
+      membership();
+      raw.reverse();
+      changed();
+      return proxy;
+    });
+    methods.set("fill", (...args) => {
+      membership();
+      added([args[0]]);
+      call("fill", args);
+      changed();
+      return proxy;
+    });
+    methods.set("copyWithin", (...args) => {
+      membership();
+      call("copyWithin", args);
+      changed();
+      return proxy;
+    });
 
     // Declared after `methods`, which only read it when called (sort/reverse/fill/copyWithin return it).
     const proxy: unknown[] = new Proxy(raw, {
       get: (target, key) => {
-        if (typeof key === "string" && INDEX_KEY.test(key)) {
-          const value = (target as unknown as Loose)[key];
-          note(value);
-          return value;
+        if (typeof key === "string") {
+          const first = key.charCodeAt(0);
+          if (first >= 48 && first <= 57) {
+            // An index ("0", "42", …).
+            const value = (target as unknown as Loose)[key];
+            read(value);
+            return value;
+          }
         }
-        if (Object.hasOwn(methods, key)) return methods[key];
-        return Reflect.get(target, key);
+        return methods.get(key) ?? Reflect.get(target, key);
       },
       set: (target, key, value) => {
         if (typeof key === "string") {
           if (key === "length") {
-            if (typeof value === "number" && value < target.length) identity();
+            if (typeof value === "number" && value < target.length) membership();
           } else if (INDEX_KEY.test(key)) {
             const previous = (target as unknown as Loose)[key];
-            note(value);
-            if (previous !== undefined && idOf(previous) !== idOf(value)) identity();
+            if (previous !== value) {
+              if (previous !== undefined) {
+                // The replaced object left the array: it must not be compared in place of its successor.
+                if (typeof previous === "object" && previous !== null) this.pending.get(name)?.candidates.delete(previous);
+                if (idOf(previous) !== idOf(value)) membership();
+              }
+              this.note(name, value);
+            }
           }
         }
         const ok = Reflect.set(target, key, value);
@@ -487,14 +551,14 @@ export class StoreEngine {
         return ok;
       },
       deleteProperty: (target, key) => {
-        identity();
+        membership();
         const ok = Reflect.deleteProperty(target, key);
         changed();
         return ok;
       },
       defineProperty: (target, key, descriptor) => {
-        identity();
-        if ("value" in descriptor) note(descriptor.value);
+        membership();
+        if ("value" in descriptor) this.note(name, descriptor.value);
         const ok = Reflect.defineProperty(target, key, descriptor);
         changed();
         return ok;
@@ -521,13 +585,6 @@ export class StoreEngine {
       if (request.mode !== "candidates") this.escalate(request.name, request.mode);
       for (const doc of request.candidates ?? []) this.note(request.name, doc);
     }
-  }
-
-  /** Everything that may differ from storage: recorded changes plus a full comparison of every collection read since the last sweep. */
-  private outstandingRequests(): DiffRequest[] {
-    const requests = this.takePending();
-    for (const name of this.accessed) if (this.known.has(name)) requests.push({ name, mode: "full" });
-    return requests;
   }
 
   /* ------------------------------------------------------------------ */
@@ -557,7 +614,7 @@ export class StoreEngine {
     // Coalesce bursts of writes (progress heartbeats, bulk inserts) into one flush.
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      void this.flush();
+      this.persistSoon();
     }, this.options.flushDelayMs);
   }
 
@@ -567,8 +624,20 @@ export class StoreEngine {
     const delay = Math.min(MAX_RETRY_MS, 250 * 2 ** this.failures);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      void this.flush();
+      this.persistSoon();
     }, delay);
+  }
+
+  /** Queue the coalesced write behind the mutations that are running. */
+  private persistSoon(): void {
+    if (!this.db || !this.dirty || this.closed) return;
+    this.enqueue(() => this.persistPending()).catch((err) => this.recordError("save the database", err));
+  }
+
+  private cancelFlushTimer(): void {
+    if (!this.flushTimer) return;
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
   }
 
   /** Cheap bookkeeping on every read: external-change check and sweep scheduling. */
@@ -582,7 +651,7 @@ export class StoreEngine {
     if (!this.tracker || this.sweepTimer || this.sweeping || this.closed || this.accessed.size === 0) return;
     this.sweepTimer = setTimeout(() => {
       this.sweepTimer = null;
-      void this.sweep();
+      this.sweep().catch((err) => this.recordError("check the database for unsaved changes", err));
     }, this.nextSweepDelay);
     this.sweepTimer.unref?.();
   }
@@ -591,118 +660,113 @@ export class StoreEngine {
   /* Persistence                                                         */
   /* ------------------------------------------------------------------ */
 
-  private async persistPending(): Promise<void> {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+  /** The coalesced write after mutations: only what was recorded. */
+  private async persistPending(): Promise<boolean> {
+    this.cancelFlushTimer();
+    if (!this.db || !this.dirty || this.closed) return true;
+    if (!this.tracker) return this.persistWhole();
+    const ok = this.writeTracked();
+    if (ok) this.scheduleSweep();
+    return ok;
+  }
+
+  /** Write every difference between memory and storage (flush(), backups, exclusive operations). */
+  private async persistEverything(): Promise<boolean> {
+    if (!this.db || this.closed) return true;
+    if (!this.tracker) {
+      this.cancelFlushTimer();
+      return this.dirty ? this.persistWhole() : true;
     }
-    if (!this.db || !this.dirty) return;
+    return this.writeEverything("flush");
+  }
+
+  /** Non-incremental drivers: hand the whole database to the driver. */
+  private async persistWhole(): Promise<boolean> {
     this.dirty = false;
-    if (this.tracker) {
-      const started = performance.now();
-      const requests = this.takePending();
-      if (this.write(this.diff(requests), "flush")) {
-        this.stats.lastFlushMs = Math.round(performance.now() - started);
-        this.scheduleSweep();
-      } else {
-        this.restorePending(requests);
-        this.dirty = true;
-        this.scheduleRetry();
-      }
-      return;
-    }
+    const started = performance.now();
     try {
-      await this.driver.persist(this.raw(this.db), null);
-      this.recordFlush(0);
+      await this.driver.persist(this.raw(this.db!), null);
+      this.recordFlush(0, started);
+      return true;
     } catch (err) {
       this.dirty = true;
       this.recordError("save the database", err);
       this.scheduleRetry();
+      return false;
     }
   }
 
-  /** Write every difference between memory and storage (before backups and exclusive operations). */
-  private async persistEverything(): Promise<void> {
-    if (!this.db) return;
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
-    if (this.tracker) {
-      const requests = this.outstandingRequests();
-      this.dirty = false;
-      if (!this.write(this.diff(requests), "flush")) {
-        this.restorePending(requests);
-        this.dirty = true;
-        throw new Error(this.stats.lastError?.message ?? "Pending changes could not be written to the database.");
-      }
-      this.accessed.clear();
-      return;
-    }
-    if (!this.dirty) return;
+  /** Write the recorded changes; after a failure they are kept and a retry is scheduled. */
+  private writeTracked(): boolean {
+    this.cancelFlushTimer();
+    const requests = this.takePending();
     this.dirty = false;
-    try {
-      await this.driver.persist(this.raw(this.db), null);
-      this.recordFlush(0);
-    } catch (err) {
-      this.dirty = true;
-      throw err;
+    if (this.store(requests, "flush")) return true;
+    this.restorePending(requests);
+    this.dirty = true;
+    this.scheduleRetry();
+    return false;
+  }
+
+  /** Compare every collection with storage and write the differences; after a failure a retry is scheduled. */
+  private writeEverything(reason: WriteReason): boolean {
+    this.cancelFlushTimer();
+    const requests = this.takePending();
+    for (const name of this.collections) requests.push({ name, mode: "full" });
+    this.dirty = false;
+    if (this.store(requests, reason)) {
+      this.accessed.clear();
+      return true;
     }
+    this.restorePending(requests);
+    this.dirty = true;
+    this.scheduleRetry();
+    return false;
   }
 
   private async replaceAllNow(data: RawData, source: string): Promise<void> {
     const db = this.options.normalize(data);
     const stored = this.raw(db);
     await this.driver.replaceAll(stored, source);
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    this.cancelFlushTimer();
     this.install(db, stored);
   }
 
-  /** Synchronous last-chance write (process exit, close). */
-  private writeOutstandingSync(reason: "exit" | "close"): void {
-    if (!this.db || this.closed || !this.tracker) return;
-    try {
-      this.write(this.diff(this.outstandingRequests()), reason);
-    } catch (err) {
-      console.error(`[store] could not write outstanding changes on ${reason}:`, err);
-    }
-  }
-
-  private diff(requests: DiffRequest[]): PendingChanges {
+  /**
+   * Compare `requests` with what is stored and write the differences in one
+   * transaction. Returns the diff, or null (logged) when it could not be
+   * computed or stored; the tracker then still describes the storage.
+   */
+  private store(requests: DiffRequest[], reason: WriteReason): PendingChanges | null {
     const db = this.db!;
-    const pending = this.tracker!.diff(db as unknown as Loose, requests, db.settings);
+    const started = performance.now();
+    let pending: PendingChanges;
+    try {
+      pending = this.tracker!.diff(db as unknown as Loose, requests, db.settings);
+      // Incremental drivers write synchronously (see StoreDriver.incremental).
+      if (!isEmptyChangeSet(pending.changeSet)) void this.driver.persist(this.raw(db), pending.changeSet);
+    } catch (err) {
+      this.recordError(isBusyError(err) ? "save changes (the database is locked by another process)" : `save changes (${reason})`, err);
+      return null;
+    }
+    this.tracker!.commit(pending);
+    this.failures = 0;
     this.stats.documentsCompared += pending.compared;
-    for (const [name, n] of pending.invalid) console.warn(`[store] ${n} document(s) in "${name}" have no id and cannot be saved.`);
-    for (const [name, n] of pending.duplicates) console.warn(`[store] "${name}" contains ${n} document(s) with a duplicate id; only the first copy is saved.`);
+    if (!isEmptyChangeSet(pending.changeSet)) this.recordFlush(changeSetSize(pending.changeSet), started);
+    for (const [name, n] of pending.invalid) this.warn(`invalid:${name}`, `${n} document(s) in "${name}" have no id and cannot be saved.`);
+    for (const [name, n] of pending.duplicates) {
+      this.warn(`duplicates:${name}`, `"${name}" contains ${n} document(s) with a duplicate id; only the first copy is saved.`);
+    }
     return pending;
   }
 
-  /** Store a diff; false (logged) when the storage refused it. */
-  private write(pending: PendingChanges, reason: "flush" | "sweep" | "exit" | "close" | "reload"): boolean {
-    if (isEmptyChangeSet(pending.changeSet)) {
-      this.tracker!.commit(pending);
-      this.failures = 0;
-      return true;
-    }
-    try {
-      this.driver.persist(this.raw(this.db!), pending.changeSet);
-    } catch (err) {
-      this.recordError(isBusyError(err) ? "save changes (the database is locked by another process)" : `save changes (${reason})`, err);
-      return false;
-    }
-    this.tracker!.commit(pending);
-    this.recordFlush(changeSetSize(pending.changeSet));
-    return true;
-  }
-
-  private recordFlush(documents: number): void {
+  /** Count a write that reached the storage (`started`: when finding and writing it began). */
+  private recordFlush(documents: number, started: number): void {
     this.failures = 0;
     this.stats.flushes++;
     this.stats.documentsWritten += documents;
     this.stats.lastFlushAt = new Date().toISOString();
+    this.stats.lastFlushMs = Math.round(performance.now() - started);
   }
 
   private recordError(action: string, err: unknown): void {
@@ -711,8 +775,16 @@ export class StoreEngine {
     console.error(`[store] could not ${action}:`, err);
   }
 
+  /** Log a recurring condition at most once per interval and key. */
+  private warn(key: string, message: string): void {
+    const now = Date.now();
+    if (now - (this.warnedAt.get(key) ?? -Infinity) < WARNING_INTERVAL_MS) return;
+    this.warnedAt.set(key, now);
+    console.warn(`[store] ${message}`);
+  }
+
   /* ------------------------------------------------------------------ */
-  /* Sweep (changes made outside mutate)                                 */
+  /* Sweep (changes the engine could not see)                            */
   /* ------------------------------------------------------------------ */
 
   private async sweep(): Promise<void> {
@@ -722,11 +794,10 @@ export class StoreEngine {
     this.accessed.clear();
     let busy = 0;
     try {
-      while (cursor.collection < cursor.names.length && !this.closed && this.db) {
-        const started = performance.now();
-        const ok = await this.enqueue(() => this.sweepSlice(cursor));
-        busy += performance.now() - started;
-        if (!ok) {
+      while (cursor.collection < cursor.names.length && !this.closed) {
+        const slice = await this.enqueue(() => this.sweepSlice(cursor));
+        busy += slice.ms;
+        if (!slice.ok) {
           // Compare the rest next time.
           for (const name of cursor.names.slice(cursor.collection)) this.accessed.add(name);
           break;
@@ -739,64 +810,53 @@ export class StoreEngine {
       this.nextSweepDelay = Math.max(this.options.sweepDelayMs, Math.round(busy * SWEEP_COST_FACTOR));
     } finally {
       this.sweeping = false;
+      this.scheduleSweep();
     }
   }
 
   /**
-   * Compare the next documents of the sweep until the time budget is used.
-   * Recorded changes are flushed first, so whatever the slice finds was
-   * changed outside mutate(). A collection's last slice also compares ids,
-   * which stores documents added or removed behind the store's back.
+   * Compare the next documents of the sweep, a chunk at a time, until the
+   * time budget is used. Recorded changes are flushed first, so whatever a
+   * chunk finds was changed where the engine could not see it. A
+   * collection's last chunk also compares ids, which stores documents added
+   * or removed behind the store's back.
    */
-  private sweepSlice(cursor: SweepCursor): boolean {
-    if (!this.db || !this.tracker) return true;
-    if (this.pending.size || this.dirty) {
-      const requests = this.takePending();
-      this.dirty = false;
-      if (this.flushTimer) {
-        clearTimeout(this.flushTimer);
-        this.flushTimer = null;
-      }
-      if (!this.write(this.diff(requests), "flush")) {
-        this.restorePending(requests);
-        this.dirty = true;
-        this.scheduleRetry();
-        return false;
-      }
-    }
+  private sweepSlice(cursor: SweepCursor): { ok: boolean; ms: number } {
     const started = performance.now();
-    const requests: DiffRequest[] = [];
+    const result = (ok: boolean) => ({ ok, ms: performance.now() - started });
+    if (!this.db || !this.tracker || this.closed) return result(true);
+    if ((this.pending.size || this.dirty) && !this.writeTracked()) return result(false);
     const source = this.db as unknown as Loose;
     while (cursor.collection < cursor.names.length) {
       const name = cursor.names[cursor.collection]!;
       const docs = Array.isArray(source[name]) ? (source[name] as unknown[]) : [];
       const end = Math.min(docs.length, cursor.index + SWEEP_CHUNK);
-      if (cursor.index < end) requests.push({ name, mode: "candidates", candidates: docs.slice(cursor.index, end) });
-      cursor.index = end;
-      if (cursor.index >= docs.length) {
-        requests.push({ name, mode: "identity" });
+      const last = end >= docs.length;
+      const found = this.store([{ name, mode: last ? "identity" : "candidates", candidates: docs.slice(cursor.index, end) }], "sweep");
+      if (!found) {
+        this.scheduleRetry();
+        return result(false);
+      }
+      for (const change of found.changeSet.collections) {
+        this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
+      }
+      if (found.changeSet.settings !== null) this.reportUntracked("the settings", 1);
+      if (last) {
         cursor.collection++;
         cursor.index = 0;
+      } else {
+        cursor.index = end;
       }
       if (performance.now() - started >= this.options.sweepSliceMs) break;
     }
-    const pending = this.diff(requests);
-    if (!this.write(pending, "sweep")) {
-      this.scheduleRetry();
-      return false;
-    }
-    for (const change of pending.changeSet.collections) this.reportUntracked(change.name, change.upserts.length + change.deletes.length);
-    return true;
+    return result(true);
   }
 
-  private reportUntracked(name: string, documents: number): void {
+  private reportUntracked(what: string, documents: number): void {
     this.stats.untrackedWrites += documents;
-    const now = Date.now();
-    const last = this.untrackedWarnedAt.get(name) ?? 0;
-    if (now - last < UNTRACKED_WARNING_INTERVAL_MS) return;
-    this.untrackedWarnedAt.set(name, now);
-    console.warn(
-      `[store] saved ${documents} change(s) to "${name}" that were made outside mutate()/insert()/update(); they are only written by the background sweep. Make the change inside mutate() so it is saved right away.`,
+    this.warn(
+      `untracked:${what}`,
+      `saved ${documents} change(s) to ${what} that the store could not see being made (a document fetched earlier and edited later, or edited outside mutate()); they are only picked up by the background check. Fetch the document inside the mutate() callback that changes it so it is saved right away.`,
     );
   }
 
@@ -809,19 +869,28 @@ export class StoreEngine {
     const now = Date.now();
     if (!force && now - this.lastExternalCheck < this.options.externalCheckMs) return;
     this.lastExternalCheck = now;
-    let changed: boolean;
+    if (!this.reloadNeeded) {
+      try {
+        this.reloadNeeded = this.driver.hasExternalChanges();
+      } catch (err) {
+        this.recordError("check the database for outside changes", err);
+        return;
+      }
+      if (!this.reloadNeeded) return;
+    }
+    // Keep this process's unsaved edits (they win per document), then read everything again.
+    // If they cannot be written now, the cache is kept and the reload is tried again at the next check.
+    if (!this.writeEverything("reload")) return;
+    let data: RawData;
     try {
-      changed = this.driver.hasExternalChanges();
+      data = this.driver.reload();
     } catch (err) {
-      this.recordError("check the database for outside changes", err);
+      this.recordError("reload the database after an outside change", err);
       return;
     }
-    if (!changed) return;
-    // Keep this process's unsaved edits (they win per document), then read everything again.
-    this.write(this.diff(this.outstandingRequests()), "reload");
-    const data = this.driver.reload();
     const db = this.options.normalize(data);
     this.install(db, this.raw(db));
+    this.reloadNeeded = false;
     this.stats.externalReloads++;
     console.info("[store] the database was changed by another process; reloaded it.");
   }

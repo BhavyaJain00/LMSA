@@ -149,3 +149,28 @@ export function parseSeoSettings(input: SeoSettingsInput): { patch: SeoSettingsP
     },
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Category landing pages                                              */
+/* ------------------------------------------------------------------ */
+
+export const CATEGORY_SEO_LIMITS = { intro: 5000, seoTitle: 70, seoDescription: 300 } as const;
+
+export interface CategorySeoPatch {
+  intro: string | undefined;
+  seoTitle: string | undefined;
+  seoDescription: string | undefined;
+}
+
+/** Introduction (markdown), search title and meta description of a category landing page; empty values clear the field. */
+export function parseCategorySeo(input: { intro: string; seoTitle: string; seoDescription: string }): { patch: CategorySeoPatch; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  const L = CATEGORY_SEO_LIMITS;
+  const intro = input.intro.replace(/\r\n/g, "\n").trim();
+  const seoTitle = input.seoTitle.trim().replace(/\s+/g, " ");
+  const seoDescription = input.seoDescription.trim().replace(/\s+/g, " ");
+  if (intro.length > L.intro) errors.intro = `Keep the introduction under ${L.intro.toLocaleString("en-US")} characters.`;
+  if (seoTitle.length > L.seoTitle) errors.seoTitle = `Keep the title under ${L.seoTitle} characters; search engines cut longer ones.`;
+  if (seoDescription.length > L.seoDescription) errors.seoDescription = `Keep the description under ${L.seoDescription} characters.`;
+  return { errors, patch: { intro: intro || undefined, seoTitle: seoTitle || undefined, seoDescription: seoDescription || undefined } };
+}

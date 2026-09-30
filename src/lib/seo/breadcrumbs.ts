@@ -18,6 +18,28 @@ export function courseTrail(course: { title: string }, category: { name: string;
   return items;
 }
 
+/** Home → Courses → Category (the same path a course of that category shows). */
+export function categoryTrail(category: { name: string }): BreadcrumbItem[] {
+  return [HOME_CRUMB, { name: "Courses", path: "/courses" }, { name: category.name }];
+}
+
+/** Home → Courses → Categories. */
+export function categoryIndexTrail(): BreadcrumbItem[] {
+  return [HOME_CRUMB, { name: "Courses", path: "/courses" }, { name: "Categories" }];
+}
+
+/** Home → Courses → Topics → Topic (or the topics index when no label is given). */
+export function tagTrail(label?: string): BreadcrumbItem[] {
+  const items: BreadcrumbItem[] = [HOME_CRUMB, { name: "Courses", path: "/courses" }];
+  if (!label) return [...items, { name: "Topics" }];
+  return [...items, { name: "Topics", path: "/courses/tag" }, { name: label }];
+}
+
+/** Home → Instructors → Instructor. */
+export function instructorTrail(name: string): BreadcrumbItem[] {
+  return [HOME_CRUMB, { name: "Instructors", path: "/instructors" }, { name }];
+}
+
 /** Home → Batches → Batch. */
 export function batchTrail(batch: { title: string }): BreadcrumbItem[] {
   return [HOME_CRUMB, { name: "Batches", path: "/batches" }, { name: batch.title }];

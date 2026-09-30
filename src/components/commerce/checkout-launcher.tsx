@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { confirmRazorpayPaymentAction } from "@/lib/actions/payments";
+import { confirmRazorpayMembershipAction, confirmRazorpayPaymentAction } from "@/lib/actions/payments";
 import type { CheckoutNext, RazorpayLaunchOptions } from "@/lib/payments/types";
 import { useToast } from "@/components/ui/toast";
 
@@ -17,7 +17,10 @@ const RAZORPAY_SRC = "https://checkout.razorpay.com/v1/checkout.js";
 
 interface RazorpaySuccess {
   razorpay_payment_id: string;
-  razorpay_order_id: string;
+  /** One-time payments. */
+  razorpay_order_id?: string;
+  /** Membership checkouts (a Razorpay subscription is authorized instead of an order). */
+  razorpay_subscription_id?: string;
   razorpay_signature: string;
 }
 
@@ -118,14 +121,16 @@ export function useCheckoutLauncher() {
       settledRef.current = false;
       setStatus("paying");
       const cancelledUrl = `/billing/cancelled?order=${encodeURIComponent(options.orderId)}`;
+      const membership = !!options.razorpaySubscriptionId;
       const rzp = new Razorpay({
         key: options.keyId,
-        amount: options.amount,
-        currency: options.currency,
+        // A subscription carries its own amount and currency (from its Razorpay plan).
+        ...(membership
+          ? { subscription_id: options.razorpaySubscriptionId }
+          : { amount: options.amount, currency: options.currency, order_id: options.razorpayOrderId }),
         name: options.name,
         description: options.description,
         image: options.image,
-        order_id: options.razorpayOrderId,
         prefill: { name: options.prefill.name, email: options.prefill.email },
         notes: { orderId: options.orderId },
         theme: options.themeColor ? { color: options.themeColor } : undefined,
@@ -143,12 +148,19 @@ export function useCheckoutLauncher() {
           setStatus("verifying");
           void (async () => {
             try {
-              const res = await confirmRazorpayPaymentAction({
-                orderId: options.orderId,
-                razorpayOrderId: response.razorpay_order_id,
-                razorpayPaymentId: response.razorpay_payment_id,
-                razorpaySignature: response.razorpay_signature,
-              });
+              const res = membership
+                ? await confirmRazorpayMembershipAction({
+                    orderId: options.orderId,
+                    razorpaySubscriptionId: response.razorpay_subscription_id ?? options.razorpaySubscriptionId ?? "",
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  })
+                : await confirmRazorpayPaymentAction({
+                    orderId: options.orderId,
+                    razorpayOrderId: response.razorpay_order_id ?? "",
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  });
               if (res.ok) {
                 if (res.message) toast.success(res.message);
                 navigate(res.data.redirectTo);

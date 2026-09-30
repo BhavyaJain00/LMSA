@@ -12,7 +12,7 @@ import { fd, uid } from "@/lib/utils";
 import { canManageAssessments } from "@/lib/data/assessments";
 import { gradeAssignmentAction } from "@/lib/actions/assignments";
 import { lessonQuery } from "@/components/assessments/shared";
-import { canEditRubric, canUseRubrics } from "@/lib/teaching/rubrics";
+import { canEditRubric, canUseRubrics, type SubmissionWithDraft } from "@/lib/teaching/rubrics";
 import { RUBRIC_LIMITS, cloneCriteria, formatPoints, scoreRubric, validateRubricInput, type RubricSelection } from "@/lib/teaching/rubric-shared";
 
 const criterionId = () => uid("crit");
@@ -189,8 +189,8 @@ function parseSelections(value: string): RubricSelection[] {
  * Score a submission with its assignment's rubric. A fully scored rubric
  * sets Pass/Fail from the rubric's pass mark (for graded assignments) and
  * goes through the regular grading flow, so the learner is notified and
- * badges/points follow the grade. A partly scored rubric is saved as a draft
- * without notifying anyone.
+ * badges/points follow the grade. A partly scored rubric is saved as a draft:
+ * nobody is notified and the learner sees neither the scores nor the comments.
  */
 export async function gradeWithRubricAction(_prev: ActionResult<RubricGradeResult> | null, formData: FormData): Promise<ActionResult<RubricGradeResult>> {
   const user = await getCurrentUser();
@@ -215,13 +215,17 @@ export async function gradeWithRubricAction(_prev: ActionResult<RubricGradeResul
     return { ok: false, error: "This submission is graded: score every criterion to update it.", fieldErrors: { rubric: "Score every criterion." } };
   }
 
+  // Snapshot first: rows read from the store are live and change under the writes below.
+  const before = { status: submission.status, comments: submission.comments ?? "" };
   const scoresChanged = JSON.stringify(submission.rubricScores ?? []) !== JSON.stringify(result.scores);
   const now = new Date().toISOString();
   await mutate((d) => {
-    const row = d.assignmentSubmissions.find((s) => s.id === submissionId);
+    const row = d.assignmentSubmissions.find((s) => s.id === submissionId) as SubmissionWithDraft | undefined;
     if (!row) return;
     row.rubricScores = result.scores;
-    if (!result.complete) row.comments = comments || undefined;
+    // A draft keeps its comments away from the learner; grading publishes them through the regular flow below.
+    if (result.complete || !comments) delete row.draftComments;
+    else row.draftComments = comments;
     if (scoresChanged && row.userId !== user.id) row.evaluatorId = user.id;
     row.updatedAt = now;
   });
@@ -235,12 +239,12 @@ export async function gradeWithRubricAction(_prev: ActionResult<RubricGradeResul
     revalidatePath("/admin/assignments/submissions");
     return {
       ok: true,
-      data: { status: submission.status, ...summary },
+      data: { status: before.status, ...summary },
       message: `Draft saved (${result.scores.length} of ${rubric.criteria.length} criteria scored). Score every criterion to grade.`,
     };
   }
 
-  const status: AssignmentStatus = assignment.gradeAssignment ? (result.passed ? "pass" : "fail") : submission.status;
+  const status: AssignmentStatus = assignment.gradeAssignment ? (result.passed ? "pass" : "fail") : before.status;
   const grade = new FormData();
   grade.set("submissionId", submission.id);
   grade.set("status", status);
@@ -248,7 +252,7 @@ export async function gradeWithRubricAction(_prev: ActionResult<RubricGradeResul
   const graded = await gradeAssignmentAction(null, grade);
   if (!graded.ok) return { ok: false, error: graded.error, fieldErrors: graded.fieldErrors };
 
-  const unchanged = submission.status === status && (submission.comments ?? "") === comments;
+  const unchanged = before.status === status && before.comments === comments;
   if (unchanged && scoresChanged) {
     // The grading flow had nothing to announce; tell the learner their scores moved.
     await notify(submission.userId, {

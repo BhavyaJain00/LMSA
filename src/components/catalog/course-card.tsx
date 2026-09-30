@@ -16,6 +16,8 @@ export interface CourseCardProps {
   className?: string;
   /** Heading level for the title (h3 inside a titled section, h2 on flat pages). */
   headingLevel?: "h2" | "h3";
+  /** Cover loading for cards above the fold (see `CourseCover`). */
+  priority?: "high" | "eager";
 }
 
 /**
@@ -23,7 +25,7 @@ export interface CourseCardProps {
  * page. The whole card is clickable through a stretched title link; the
  * instructor links sit above it.
  */
-export function CourseCard({ course, className, headingLevel = "h3" }: CourseCardProps) {
+export function CourseCard({ course, className, headingLevel = "h3", priority }: CourseCardProps) {
   if (!course.title) return null;
   const Heading = headingLevel;
   const href = `/courses/${course.slug}`;
@@ -38,7 +40,7 @@ export function CourseCard({ course, className, headingLevel = "h3" }: CourseCar
         className,
       )}
     >
-      <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} className="h-42 shrink-0 border-b border-border">
+      <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} priority={priority} className="h-42 shrink-0 border-b border-border">
         {!course.published && (
           <Badge tone="dark" size="xs">
             <Icon.EyeOff className="size-3" aria-hidden="true" />

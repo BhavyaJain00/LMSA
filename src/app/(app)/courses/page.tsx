@@ -321,7 +321,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
         )}
       </div>
 
-      <CourseGrid courses={visible} headingLevel="h2" empty={emptyStateFor(tab, { filtered, clearHref, viewer: user })} />
+      <CourseGrid courses={visible} headingLevel="h2" eagerCount={4} empty={emptyStateFor(tab, { filtered, clearHref, viewer: user })} />
 
       {courses.length > 0 && (
         <CatalogFooter shown={visible.length} total={courses.length} pageSize={pageSize} pageSizes={CATALOG_PAGE_SIZES} nextHref={nextHref} />
