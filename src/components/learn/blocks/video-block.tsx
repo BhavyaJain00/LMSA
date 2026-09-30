@@ -42,6 +42,8 @@ export interface VideoBlockProps {
   player?: VideoBlockPlayerOptions;
   /** The last video of the lesson: only it counts down to the next lesson. */
   lastVideo?: boolean;
+  /** Round 3: HLS master playlist (pre-signed when protected) for adaptive streaming; `src` stays the fallback. */
+  hlsUrl?: string;
 }
 
 interface ActiveQuiz {
@@ -74,6 +76,7 @@ export function VideoBlock({
   passedQuizIds,
   player,
   lastVideo = true,
+  hlsUrl,
 }: VideoBlockProps) {
   const rt = useLessonRuntime();
   const { theater, toggleTheater } = useLearnPrefs();
@@ -144,6 +147,7 @@ export function VideoBlock({
         blockId={blockId}
         src={src}
         sources={sources}
+        hlsUrl={hlsUrl}
         posterUrl={posterUrl}
         captionsUrl={captionsUrl}
         title={title}

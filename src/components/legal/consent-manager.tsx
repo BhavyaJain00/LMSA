@@ -1,6 +1,6 @@
-"use client";
-
-import type { ConsentState } from "./consent-client";
+import { legalLinks } from "@/lib/legal/links";
+import type { ConsentState } from "@/lib/legal/consent-shared";
+import { ConsentBanner } from "./consent-banner";
 
 export interface ConsentManagerProps {
   /** `settings.legal.cookieBanner` */
@@ -11,10 +11,11 @@ export interface ConsentManagerProps {
 
 /**
  * Cookie-consent banner and preferences dialog, mounted once in the root
- * layout. Foundation stub: renders nothing until the legal area implements
- * the banner (optional cookies stay off while the visitor is undecided).
+ * layout. Resolves the published cookie policy (falling back to the privacy
+ * policy) on the server so the banner links to a page that exists.
  */
-export function ConsentManager(props: ConsentManagerProps) {
-  void props;
-  return null;
+export async function ConsentManager({ enabled, initialConsent }: ConsentManagerProps) {
+  const links = await legalLinks();
+  const policy = links.find((l) => l.slug === "cookies") ?? links.find((l) => l.slug === "privacy");
+  return <ConsentBanner enabled={enabled} initialConsent={initialConsent} policy={policy ? { href: policy.href, title: policy.title } : undefined} />;
 }

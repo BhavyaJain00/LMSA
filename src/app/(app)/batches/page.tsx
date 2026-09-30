@@ -19,11 +19,34 @@ import { Icon } from "@/components/ui/icons";
 import { BatchCard } from "@/components/batches/batch-card";
 import { ListFilters } from "@/components/batches/list-filters";
 import type { BatchListTab } from "@/components/batches/types";
+import { itemListJsonLd } from "@/lib/seo/jsonld";
+import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
+import { batchPath } from "@/lib/seo/content-index";
+import { siteOrigin } from "@/lib/seo/site";
+import { JsonLd } from "@/components/seo/json-ld";
 
-export const metadata: Metadata = {
-  title: "Batches",
-  description: "Join a cohort: live classes, a shared schedule and learning together with instructors.",
-};
+export async function generateMetadata(props: PageProps<"/batches">): Promise<Metadata> {
+  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
+  const tab = str(sp.tab);
+  // Tabs, search and filters canonicalise to the plain list of upcoming batches.
+  const { noindex, follow } = listingIndexing({
+    search: str(sp.search),
+    filters: [str(sp.category), str(sp.certification), tab && tab !== "upcoming" ? tab : undefined],
+  });
+  return pageMetadata(
+    {
+      title: "Live batches",
+      description: [
+        `Learn with a cohort on ${settings.brand.name}: scheduled live classes, a shared timetable, assessments and instructor support from start to finish.`,
+      ],
+      path: "/batches",
+      noindex: noindex || !settings.features.batches,
+      follow,
+    },
+    settings,
+  );
+}
 
 const emptyCopy: Record<BatchListTab, { title: string; description: string }> = {
   upcoming: {
@@ -71,8 +94,14 @@ export default async function BatchesPage(props: PageProps<"/batches">) {
   const filtered = !!(search || category || certification);
   const empty = emptyCopy[tab];
 
+  const canonicalView = tab === "upcoming" && !filtered;
+  const publicBatches = batches.filter((b) => b.published);
+
   return (
     <div className="animate-fade-in">
+      {canonicalView && publicBatches.length > 0 && (
+        <JsonLd data={itemListJsonLd("Upcoming batches", publicBatches.map((b) => ({ name: b.title, path: batchPath(b.slug), image: b.imageUrl })), { origin: siteOrigin() })} />
+      )}
       <PageHeader
         title="All Batches"
         description="Learn with a cohort: scheduled live classes, a shared timetable, assessments and instructor support."

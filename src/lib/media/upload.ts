@@ -2,8 +2,9 @@ import "server-only";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { slugify, uid } from "@/lib/utils";
+import { uid } from "@/lib/utils";
 import { PROTECTED_VIDEO_DIR } from "./paths";
+import { DOC_TYPES, IMAGE_TYPES, VIDEO_TYPES, resolveFileType, storedFileName, validateUploadStart } from "./resumable-shared";
 import { MultipartError, multipartBoundary, parseMultipart, type MultipartPart, type MultipartSink } from "./multipart";
 
 /**
@@ -23,49 +24,7 @@ import { MultipartError, multipartBoundary, parseMultipart, type MultipartPart, 
  *    the JSON error instead of a reset connection.
  */
 
-export const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/ogg", "video/quicktime"]);
-export const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/avif"]);
-export const DOC_TYPES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/vtt",
-  "application/zip",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/ogg",
-  "audio/wav",
-  "audio/webm",
-]);
-
-const EXTENSIONS: Record<string, string> = {
-  "video/mp4": ".mp4",
-  "video/webm": ".webm",
-  "video/ogg": ".ogv",
-  "video/quicktime": ".mov",
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/gif": ".gif",
-  "image/webp": ".webp",
-  "image/svg+xml": ".svg",
-  "image/avif": ".avif",
-  "application/pdf": ".pdf",
-  "text/plain": ".txt",
-  "text/markdown": ".md",
-  "text/vtt": ".vtt",
-  "application/zip": ".zip",
-  "audio/mpeg": ".mp3",
-  "audio/mp4": ".m4a",
-  "audio/ogg": ".ogg",
-  "audio/wav": ".wav",
-  "audio/webm": ".weba",
-};
+export { VIDEO_TYPES, IMAGE_TYPES, DOC_TYPES };
 
 /** Room for part headers, boundaries and the small `kind` field on top of the file itself. */
 export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
@@ -192,7 +151,8 @@ export async function receiveUpload(request: Request, config: UploadConfig): Pro
 
   const openFilePart = async (part: MultipartPart): Promise<MultipartSink> => {
     if (file) throw new UploadRejection(400, "Upload one file at a time.");
-    const type = part.contentType || "application/octet-stream";
+    const originalName = (part.filename ?? "").slice(0, 255) || "file";
+    const type = resolveFileType(part.contentType, originalName);
     const isVideo = VIDEO_TYPES.has(type);
     const isImage = IMAGE_TYPES.has(type);
     if (!isVideo && !isImage && !DOC_TYPES.has(type)) throw new UploadRejection(415, `Unsupported file type: ${type}`);
@@ -201,10 +161,10 @@ export async function receiveUpload(request: Request, config: UploadConfig): Pro
     // Everything in the body except the framing is this file: reject what cannot fit before writing.
     if (contentLength - MULTIPART_OVERHEAD_BYTES > limit) throw tooLarge(limit);
 
-    const originalName = (part.filename ?? "").slice(0, 255) || "file";
-    const ext = path.extname(originalName).toLowerCase().replace(/[^a-z0-9.]/g, "") || EXTENSIONS[type] || "";
-    const base = slugify(path.basename(originalName, path.extname(originalName))).slice(0, 40) || "file";
-    const name = `${base}-${uid()}${ext}`;
+    // Same extension and naming rules as resumable uploads (the size is enforced while streaming).
+    const checked = validateUploadStart({ kind: "auto", fileName: originalName, size: 1, mimeType: type }, { staff: true, maxVideoBytes: limit, maxAssetBytes: limit });
+    if (!checked.ok) throw new UploadRejection(checked.status, checked.error);
+    const name = storedFileName(originalName, checked.ext, uid());
     const dir = isVideo ? path.join(/* turbopackIgnore: true */ root, PROTECTED_VIDEO_DIR) : root;
     await fs.mkdir(dir, { recursive: true });
     const target = path.join(/* turbopackIgnore: true */ dir, name);

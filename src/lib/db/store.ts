@@ -1,48 +1,40 @@
 import "server-only";
-import fs from "node:fs/promises";
 import path from "node:path";
-import type { CollectionName, Database } from "@/lib/types";
+import type { CollectionName, Database, Settings } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
-import { defaultSettings, mergeSettings } from "./defaults";
-import { hashPassword } from "@/lib/auth/password";
-import { uid } from "@/lib/utils";
+import { databaseEnv } from "@/lib/server-env";
+import { mergeSettings } from "./defaults";
+import { buildInitialDatabase } from "./bootstrap";
 import { buildSeedDatabase } from "./seed";
+import { StoreEngine, type EngineStats } from "./engine";
+import { JsonDriver } from "./json-driver";
+import { SqliteDriver } from "./sqlite";
+import { rawDataToJson, type RawData } from "./sqlite-core.mjs";
+import type { DriverKind, StoreDriver } from "./driver";
 
 /**
- * A tiny JSON-file database.
+ * The application's data store.
  *
- * - The whole database is held in memory and persisted to `storage/db.json`.
- * - Writes are serialized through a promise chain and saved atomically
- *   (write to a temp file, then rename) so a crash never corrupts the file.
- * - The cache lives on `globalThis` so Next.js hot reloading in development
- *   doesn't create multiple copies.
+ * Every query in the app goes through the small API exported here (`getDb`,
+ * `all`, `findById`, `insert`, `update`, `remove`, `mutate`, …). The whole
+ * database is held in memory for fast reads; persistence is delegated to a
+ * driver chosen with DB_DRIVER:
  *
- * Swap this module for Prisma/Drizzle later: every query in the app goes
- * through the small API exported here (`all`, `findById`, `insert`, `update`,
- * `remove`, `mutate`), so replacing the implementation is localized.
+ *  - `sqlite` (default): `storage/lms.sqlite` (SQLITE_PATH) through Node's
+ *    built-in `node:sqlite`. Only changed documents are written, per
+ *    transaction. On first start an existing `storage/db.json` is imported
+ *    and kept as `db.json.migrated-<timestamp>`.
+ *  - `json`: the original single JSON file (DATA_FILE), rewritten on change.
+ *
+ * `mutate()` runs callbacks one at a time, so read-check-write sequences in
+ * one callback are safe against concurrent requests. See `engine.ts`.
+ *
+ * The engine lives on `globalThis` so Next.js hot reloading and separately
+ * bundled server entries share one cache and one connection.
  */
 
 type Doc = { id: string };
 export type CollectionDoc<K extends CollectionName> = Database[K][number];
-
-interface StoreState {
-  db: Database | null;
-  loading: Promise<Database> | null;
-  writeChain: Promise<void>;
-  dirty: boolean;
-  flushTimer: NodeJS.Timeout | null;
-}
-
-const g = globalThis as unknown as { __llStore?: StoreState };
-const state: StoreState = (g.__llStore ??= {
-  db: null,
-  loading: null,
-  writeChain: Promise.resolve(),
-  dirty: false,
-  flushTimer: null,
-});
-
-const DATA_PATH = path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.dataFile);
 
 export const COLLECTIONS: CollectionName[] = [
   "users",
@@ -136,118 +128,140 @@ export const COLLECTIONS: CollectionName[] = [
   "payouts",
 ];
 
-/** Make sure every collection exists and settings have all keys. */
-function normalize(raw: Partial<Database>): Database {
+/* ------------------------------------------------------------------ */
+/* Engine setup                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Bump when the engine's behaviour changes so a hot reload replaces the running one. */
+const ENGINE_VERSION = 2;
+
+interface EngineHolder {
+  engine: StoreEngine;
+  version: number;
+  driver: DriverKind;
+  file: string;
+}
+
+/** State of the pre-SQLite store module, found after a development hot reload. */
+interface LegacyStoreState {
+  db: Database | null;
+  dirty?: boolean;
+  flushTimer?: NodeJS.Timeout | null;
+}
+
+const g = globalThis as unknown as {
+  __llStoreEngine?: EngineHolder;
+  __llStore?: LegacyStoreState;
+};
+
+const resolvePath = (file: string) => path.resolve(/* turbopackIgnore: true */ process.cwd(), file);
+
+/** Absolute path of the database file for the configured driver. */
+export function databaseFile(driver: DriverKind = databaseEnv.driver): string {
+  return resolvePath(driver === "sqlite" ? databaseEnv.sqlitePath : siteConfig.dataFile);
+}
+
+/** Make sure every collection exists and settings have all keys (document objects are kept as they are). */
+function normalize(data: RawData): Database {
   const db = {} as Database;
+  const target = db as unknown as Record<string, unknown>;
   for (const name of COLLECTIONS) {
-    const value = raw[name];
-    (db as unknown as Record<string, unknown>)[name] = Array.isArray(value) ? value : [];
+    const value = data.collections[name];
+    target[name] = Array.isArray(value) ? value : [];
   }
-  db.settings = mergeSettings(raw.settings);
+  db.settings = mergeSettings((data.settings ?? undefined) as Partial<Settings> | undefined);
   return db;
 }
 
-async function load(): Promise<Database> {
-  try {
-    const raw = await fs.readFile(DATA_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Partial<Database>;
-    state.db = normalize(parsed);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw err;
-    state.db = normalize(siteConfig.seedDemoData ? await buildSeedDatabase() : await buildEmptyDatabase());
-    await writeFile(state.db);
+/** A `Partial<Database>` (seed, bootstrap) as driver data. */
+function toRawData(partial: Partial<Database>): RawData {
+  const collections: Record<string, unknown[]> = {};
+  const source = partial as unknown as Record<string, unknown>;
+  for (const name of COLLECTIONS) {
+    const value = source[name];
+    collections[name] = Array.isArray(value) ? value : [];
   }
-  return state.db;
+  return { collections, settings: partial.settings ?? null };
 }
 
-/**
- * First-run database without demo content (SEED_DEMO_DATA=false): default
- * settings plus a single admin account taken from ADMIN_NAME / ADMIN_EMAIL /
- * ADMIN_PASSWORD.
- */
-async function buildEmptyDatabase(): Promise<Partial<Database>> {
-  const { name, email, password } = siteConfig.bootstrapAdmin;
-  if (!email || !password) {
-    throw new Error("SEED_DEMO_DATA=false requires ADMIN_EMAIL and ADMIN_PASSWORD in your .env file to create the first admin account.");
+/** Contents of a running store that is being replaced (hot reload), for the SQLite import. */
+function legacySnapshot(previous: EngineHolder | undefined): (() => RawData | null) | undefined {
+  if (previous) {
+    const data = previous.engine.snapshot();
+    return data ? () => data : undefined;
   }
-  if (password.length < 8) throw new Error("ADMIN_PASSWORD must be at least 8 characters.");
-  const now = new Date().toISOString();
-  const username = email.split("@")[0]!.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "admin";
-  return {
-    users: [
-      {
-        id: uid("usr"),
-        username,
-        name,
-        email: email.toLowerCase(),
-        passwordHash: await hashPassword(password),
-        roles: ["admin", "moderator", "course_creator", "batch_evaluator"],
-        enabled: true,
-        personaCaptured: true,
-        createdAt: now,
-        lastActiveAt: now,
-      },
-    ],
-    settings: { ...defaultSettings(), updatedAt: now },
-  };
+  const legacy = g.__llStore;
+  if (!legacy?.db) return undefined;
+  // Stop the old module's pending write: its data is imported below instead.
+  if (legacy.flushTimer) clearTimeout(legacy.flushTimer);
+  legacy.flushTimer = null;
+  legacy.dirty = false;
+  const db = legacy.db;
+  return () => toRawData(db);
 }
 
-async function writeFile(db: Database): Promise<void> {
-  await fs.mkdir(path.dirname(DATA_PATH), { recursive: true });
-  const tmp = `${DATA_PATH}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2), "utf8");
-  await fs.rename(tmp, DATA_PATH);
+function createDriver(kind: DriverKind, snapshot: (() => RawData | null) | undefined): StoreDriver {
+  if (kind === "json") return new JsonDriver(databaseFile("json"));
+  return new SqliteDriver({
+    file: databaseFile("sqlite"),
+    collections: COLLECTIONS,
+    legacyJsonFile: resolvePath(siteConfig.dataFile),
+    legacySnapshot: snapshot,
+  });
 }
 
-/** Get the in-memory database, loading (and seeding) it on first access. */
+function engine(): StoreEngine {
+  const kind = databaseEnv.driver;
+  const file = databaseFile(kind);
+  const current = g.__llStoreEngine;
+  // A newer engine from another bundle wins over this (older) module's version.
+  if (current && current.driver === kind && current.file === file && current.version >= ENGINE_VERSION) {
+    current.engine.adoptCollections(COLLECTIONS);
+    return current.engine;
+  }
+  const snapshot = kind === "sqlite" ? legacySnapshot(current) : undefined;
+  if (current) {
+    try {
+      current.engine.close();
+    } catch (err) {
+      console.error("[store] could not close the previous store engine:", err);
+    }
+  }
+  const created = new StoreEngine({
+    driver: createDriver(kind, snapshot),
+    collections: COLLECTIONS,
+    normalize,
+    initialData: async () => toRawData(await buildInitialDatabase()),
+    onOpen: (origin) => {
+      if (origin === "imported-json") console.info("[store] the JSON database was imported into SQLite.");
+      if (origin === "seeded") console.info(`[store] created a new ${kind === "sqlite" ? "SQLite" : "JSON"} database at ${file}.`);
+    },
+  });
+  g.__llStoreEngine = { engine: created, version: ENGINE_VERSION, driver: kind, file };
+  return created;
+}
+
+/* ------------------------------------------------------------------ */
+/* Store API                                                           */
+/* ------------------------------------------------------------------ */
+
+/** Get the in-memory database, loading (and seeding or importing) it on first access. */
 export async function getDb(): Promise<Database> {
-  if (state.db) return state.db;
-  if (!state.loading) state.loading = load().finally(() => (state.loading = null));
-  return state.loading;
-}
-
-function schedulePersist(): void {
-  state.dirty = true;
-  if (state.flushTimer) return;
-  // Coalesce bursts of writes (e.g. progress heartbeats) into one disk write.
-  state.flushTimer = setTimeout(() => {
-    state.flushTimer = null;
-    void flush();
-  }, 150);
+  return engine().getDb();
 }
 
 /** Persist immediately if there are pending changes. */
 export async function flush(): Promise<void> {
-  if (!state.dirty || !state.db) return;
-  const db = state.db;
-  state.dirty = false;
-  state.writeChain = state.writeChain
-    .then(() => writeFile(db))
-    .catch((err) => {
-      console.error("[store] failed to persist database", err);
-      state.dirty = true;
-    });
-  await state.writeChain;
+  await engine().flush();
 }
 
 /**
  * Run a mutation against the database. Mutations are executed one at a time
- * so read-modify-write sequences inside `fn` are safe.
+ * so read-modify-write sequences inside `fn` are safe. Do not call `mutate`
+ * (or `insert`/`update`/…) from inside `fn`: it would wait for itself.
  */
 export async function mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
-  const db = await getDb();
-  let result!: T;
-  const run = async () => {
-    result = await fn(db);
-    schedulePersist();
-  };
-  // Chain behind any in-flight mutation.
-  const prev = state.writeChain;
-  const current = prev.then(run, run);
-  state.writeChain = current.catch(() => undefined);
-  await current;
-  return result;
+  return engine().mutate(fn);
 }
 
 /* ---------------------------- Query helpers ---------------------------- */
@@ -338,7 +352,7 @@ export async function removeWhere<K extends CollectionName>(
     const rows = db[name] as CollectionDoc<K>[];
     const keep = rows.filter((r) => !predicate(r));
     const removed = rows.length - keep.length;
-    (db[name] as CollectionDoc<K>[]) = keep;
+    if (removed) (db[name] as CollectionDoc<K>[]) = keep;
     return removed;
   });
 }
@@ -348,20 +362,30 @@ export async function getSettings() {
   return db.settings;
 }
 
-/** Replace the database with fresh demo data. */
+/** Replace the database with fresh demo data (one transaction with SQLite). */
 export async function resetDatabase(): Promise<void> {
-  const fresh = normalize(await buildSeedDatabase());
-  await mutate((db) => {
-    for (const name of COLLECTIONS) {
-      (db as unknown as Record<string, unknown>)[name] = fresh[name];
-    }
-    db.settings = fresh.settings;
-  });
-  await flush();
+  await engine().replaceAll(toRawData(await buildSeedDatabase()), "demo-reset");
 }
 
-/** Export a JSON snapshot (used by the admin "Download backup" button). */
+/** The current contents in the db.json format (JSON export and "Download backup"). */
 export async function exportDatabase(): Promise<string> {
-  const db = await getDb();
-  return JSON.stringify(db, null, 2);
+  const store = engine();
+  await store.getDb();
+  return rawDataToJson(store.snapshot()!);
+}
+
+/* ------------------------------------------------------------------ */
+/* Storage administration (backups, admin data page)                   */
+/* ------------------------------------------------------------------ */
+
+/** The running store engine, for backup and restore (`backup.ts`). */
+export async function getStoreEngine(): Promise<StoreEngine> {
+  const store = engine();
+  await store.getDb();
+  return store;
+}
+
+/** Persistence counters for the admin data page. */
+export function getStoreStats(): EngineStats | null {
+  return g.__llStoreEngine?.engine.getStats() ?? null;
 }

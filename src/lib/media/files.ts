@@ -51,7 +51,14 @@ export const UPLOAD_MIME_TYPES: Readonly<Record<string, string>> = {
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".ppt": "application/vnd.ms-powerpoint",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // Round 3: HLS streams produced by the transcoder.
+  ".m3u8": "application/vnd.apple.mpegurl",
+  ".m4s": "video/iso.segment",
+  ".ts": "video/mp2t",
 };
+
+/** HLS media segments: immutable, safe to keep in the viewer's private cache while their token is valid. */
+const HLS_SEGMENT_EXTENSIONS = new Set([".m4s", ".ts"]);
 
 export interface LocatedUpload {
   /** Real path of the file on disk (what is streamed). */
@@ -195,6 +202,44 @@ export async function resolveUploadAccess(parts: readonly string[], options: Upl
   return { ok: true, file, signed: videoDir && (await protectionOn()), videoDir };
 }
 
+export type RemoteUploadAccess =
+  | {
+      ok: true;
+      /** Object key in the bucket (the URL path below /uploads/, as spelled). */
+      key: string;
+      /** Canonical media path (`/uploads/<key>`), used to sign playlist children. */
+      path: string;
+      ext: string;
+      signed: boolean;
+      videoDir: boolean;
+    }
+  | { ok: false; status: 404 }
+  | { ok: false; status: 403; reason: MediaTokenFailure }
+  | { ok: false; status: 503 };
+
+/**
+ * Access decision for a file kept in remote (S3-compatible) storage. Object
+ * keys have no aliases (no symlinks, short names or case folding), so the
+ * requested path is the file: anything whose first segment spells the video
+ * folder in any letter case needs a token for exactly that path.
+ */
+export async function resolveRemoteUploadAccess(parts: readonly string[], options: Omit<UploadAccessOptions, "root">): Promise<RemoteUploadAccess> {
+  const request = parseUploadRequestPath(parts);
+  if (!request) return { ok: false, status: 404 };
+  const protection = request.inVideoDir && (await options.protectUploads());
+  if (protection) {
+    let result: MediaTokenResult;
+    try {
+      result = verifyMediaToken(request.path, await options.subject(), options.token, options.now, options.secret);
+    } catch (err) {
+      if (err instanceof MediaSigningUnavailableError) return { ok: false, status: 503 };
+      throw err;
+    }
+    if (!result.ok) return { ok: false, status: 403, reason: result.reason };
+  }
+  return { ok: true, key: request.name, path: request.path, ext: path.extname(request.name).toLowerCase(), signed: protection, videoDir: request.inVideoDir };
+}
+
 /**
  * Response headers for a served upload. Signed videos are personal and short
  * lived (`private, no-store`); anything in the video directory served while
@@ -202,13 +247,28 @@ export async function resolveUploadAccess(parts: readonly string[], options: Upl
  * takes effect; only other uploads are publicly cacheable.
  */
 export function uploadResponseHeaders(file: Pick<LocatedUpload, "ext" | "stat">, access: { signed: boolean; videoDir: boolean }): Record<string, string> {
+  return mediaResponseHeaders({ ext: file.ext, lastModified: file.stat.mtime }, access);
+}
+
+/**
+ * Same rules for any stored file (local or in a bucket). Signed HLS segments
+ * may stay in the viewer's private cache for an hour (their URL carries the
+ * token, so nobody else can reuse the cached copy); signed playlists are
+ * never cached because they embed fresh child tokens.
+ */
+export function mediaResponseHeaders(file: { ext: string; lastModified?: Date | null; hlsPart?: boolean }, access: { signed: boolean; videoDir: boolean }): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": UPLOAD_MIME_TYPES[file.ext] ?? "application/octet-stream",
     "Accept-Ranges": "bytes",
-    "Last-Modified": file.stat.mtime.toUTCString(),
     "X-Content-Type-Options": "nosniff",
   };
-  if (access.signed) {
+  if (file.lastModified && !Number.isNaN(file.lastModified.getTime())) headers["Last-Modified"] = file.lastModified.toUTCString();
+  // fMP4 init segments (init.mp4 inside an HLS folder) are as immutable as media segments.
+  if (access.signed && (HLS_SEGMENT_EXTENSIONS.has(file.ext) || (file.hlsPart && file.ext === ".mp4"))) {
+    headers["Cache-Control"] = "private, max-age=3600";
+    headers["Cross-Origin-Resource-Policy"] = "same-origin";
+    headers["X-Robots-Tag"] = "noindex, nofollow";
+  } else if (access.signed) {
     headers["Cache-Control"] = "private, no-store";
     headers["Content-Disposition"] = "inline";
     headers["Cross-Origin-Resource-Policy"] = "same-origin";

@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError, Input } from "@/components/ui/input";
 import { PasswordField } from "@/components/security/password-field";
 import { PasswordStrengthMeter } from "@/components/security/password-strength-meter";
+import { LegalAgreement } from "@/components/legal/legal-agreement";
+import type { AgreementLink } from "@/lib/legal/agreement";
 
-export function RegisterForm({ next, minLength }: { next?: string; minLength: number }) {
+export function RegisterForm({ next, minLength, legal }: { next?: string; minLength: number; legal: AgreementLink[] }) {
   const [state, action, pending] = useActionState(registerAction, null);
   const [values, setValues] = useState({ name: "", email: "", password: "" });
   const errors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
@@ -58,7 +60,10 @@ export function RegisterForm({ next, minLength }: { next?: string; minLength: nu
       <Button type="submit" className="w-full" loading={pending} size="lg">
         Create account
       </Button>
-      <p className="text-center text-xs text-ink-faint">By signing up you agree to the terms of use and privacy policy. We&apos;ll email you a link to confirm your address.</p>
+      <div className="space-y-1 text-center">
+        <LegalAgreement documents={legal} lead="By creating an account you agree to" />
+        <p className="text-xs text-ink-faint">We&apos;ll email you a link to confirm your address.</p>
+      </div>
     </form>
   );
 }

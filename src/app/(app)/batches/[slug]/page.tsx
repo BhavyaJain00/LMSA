@@ -34,7 +34,13 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import { Icon } from "@/components/ui/icons";
 import { getUpcomingEvaluationsForUser } from "@/lib/data/certificates";
-import { Breadcrumbs } from "@/components/batches/breadcrumbs";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { isBatchPublic } from "@/lib/seo/visibility";
+import { batchPath } from "@/lib/seo/content-index";
+import { batchTrail } from "@/lib/seo/breadcrumbs";
+import { getBatchJsonLd } from "@/lib/data/seo";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
+import { JsonLd } from "@/components/seo/json-ld";
 import { BatchEvaluations } from "@/components/batches/batch-evaluations";
 import { BatchStatusBadge, InstructorNames, SeatBadge } from "@/components/batches/batch-meta";
 import { EnrollPanel } from "@/components/batches/enroll-panel";
@@ -51,13 +57,18 @@ import type { BatchCourseItem, BatchDetailTab } from "@/components/batches/types
 
 export async function generateMetadata(props: PageProps<"/batches/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const batch = await getBatchBySlug(slug);
-  if (!batch || !batch.published) return { title: "Batch" };
-  return {
-    title: batch.title,
-    description: batch.description,
-    openGraph: batch.imageUrl ? { images: [batch.imageUrl] } : undefined,
-  };
+  const [batch, settings] = await Promise.all([getBatchBySlug(slug), getSettings()]);
+  // Unpublished batches are private (enrolled learners and staff only): never indexed.
+  if (!batch || !isBatchPublic(batch) || !settings.features.batches) return notFoundMetadata(batch ? batch.title : "Batch");
+  return pageMetadata(
+    {
+      title: batch.title,
+      description: [batch.description, batch.details],
+      path: batchPath(batch.slug),
+      generatedImage: true,
+    },
+    settings,
+  );
 }
 
 function BatchHero({ batch, isManager, enrolled, showFacts }: { batch: BatchSummary; isManager: boolean; enrolled: boolean; showFacts: boolean }) {
@@ -234,6 +245,8 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
   const liveClassCount = db.liveClasses.filter((c) => c.batchId === batch.id).length;
   const announcementCount = db.announcements.filter((a) => a.batchId === batch.id).length;
   const tabsMode = enrolled || isManager;
+  const structuredData = await getBatchJsonLd(batch);
+  const crumbs = <Breadcrumbs items={batchTrail(batch)} structuredData={isBatchPublic(batch)} />;
 
   if (!tabsMode) {
     const courses = await getBatchCourseItems(batch, user);
@@ -250,7 +263,8 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
     );
     return (
       <div className="animate-fade-in pb-10">
-        <Breadcrumbs items={[{ label: "Batches", href: "/batches" }, { label: batch.title }]} />
+        <JsonLd data={structuredData} />
+        {crumbs}
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <div className="min-w-0 space-y-8">
             <BatchHero batch={summary} isManager={false} enrolled={false} showFacts={false} />
@@ -277,7 +291,8 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
 
   return (
     <div className="animate-fade-in pb-10">
-      <Breadcrumbs items={[{ label: "Batches", href: "/batches" }, { label: batch.title }]} />
+      <JsonLd data={structuredData} />
+      {crumbs}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <BatchHero batch={summary} isManager={isManager} enrolled={enrolled} showFacts />
         {isManager && (

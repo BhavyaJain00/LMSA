@@ -6,7 +6,7 @@ import { isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
 import { canViewCourse } from "@/lib/data/courses";
 import { canManageBatch } from "@/lib/data/batches";
 import { getLessonAccess, type LessonAccess } from "@/lib/data/lessons";
-import { parseMediaSrc, sameMediaPath } from "./paths";
+import { mediaPathKey, parseMediaSrc, sameMediaPath } from "./paths";
 
 /**
  * Who may receive a signed URL for an uploaded video.
@@ -45,13 +45,14 @@ export function uploadPathOf(src: string | undefined | null, origins: readonly s
   return parsed?.isUpload ? parsed.path : null;
 }
 
-/** Every video src of a lesson (main sources and extra qualities). */
+/** Every video src of a lesson (main sources, extra qualities and HLS master playlists). */
 export function lessonVideoSrcs(lesson: Pick<Lesson, "blocks">): string[] {
   const out: string[] = [];
   for (const block of lesson.blocks) {
     if (block.type !== "video") continue;
     if (block.src) out.push(block.src);
     for (const s of block.sources ?? []) if (s?.src) out.push(s.src);
+    if (block.hlsUrl) out.push(block.hlsUrl);
   }
   return out;
 }
@@ -62,9 +63,26 @@ function srcIsUpload(src: string | undefined | null, path: string, origins: read
   return own !== null && sameMediaPath(own, path);
 }
 
-/** Whether a lesson plays the upload at `path`. */
+/**
+ * Whether `path` lies inside the HLS version folder of a stored master
+ * playlist (`…/hls/<version>/720p/seg_00001.m4s` for `…/hls/<version>/master.m3u8`).
+ * Only generated `/hls/<version>/` folders qualify, so a master playlist
+ * never extends access to unrelated files.
+ */
+function insideHlsFolder(hlsUrl: string | undefined, path: string, origins: readonly string[]): boolean {
+  const master = uploadPathOf(hlsUrl, origins);
+  if (!master) return false;
+  const folder = /^(.*\/hls\/[^/]+\/)[^/]+$/.exec(master)?.[1];
+  if (!folder) return false;
+  const key = mediaPathKey(path);
+  const folderKey = mediaPathKey(folder);
+  return key.startsWith(folderKey) && key.length > folderKey.length && !key.slice(folderKey.length).split("/").includes("..");
+}
+
+/** Whether a lesson plays the upload at `path` (a video file, or any file of one of its HLS streams). */
 export function lessonReferencesPath(lesson: Pick<Lesson, "blocks">, path: string, origins: readonly string[] = siteOrigins()): boolean {
-  return lessonVideoSrcs(lesson).some((src) => srcIsUpload(src, path, origins));
+  if (lessonVideoSrcs(lesson).some((src) => srcIsUpload(src, path, origins))) return true;
+  return lesson.blocks.some((b) => b.type === "video" && insideHlsFolder(b.hlsUrl, path, origins));
 }
 
 /**

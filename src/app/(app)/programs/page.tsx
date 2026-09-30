@@ -11,11 +11,31 @@ import { Icon } from "@/components/ui/icons";
 import { ListFilters } from "@/components/batches/list-filters";
 import { ProgramCard } from "@/components/programs/program-card";
 import type { ProgramListTab } from "@/components/programs/types";
+import { itemListJsonLd } from "@/lib/seo/jsonld";
+import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
+import { programPath } from "@/lib/seo/content-index";
+import { siteOrigin } from "@/lib/seo/site";
+import { JsonLd } from "@/components/seo/json-ld";
 
-export const metadata: Metadata = {
-  title: "Programs",
-  description: "Structured learning paths that group courses into a single journey.",
-};
+export async function generateMetadata(props: PageProps<"/programs">): Promise<Metadata> {
+  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const { noindex, follow } = listingIndexing({
+    search: typeof sp.search === "string" ? sp.search : undefined,
+    filters: [typeof sp.tab === "string" && sp.tab !== "published" ? sp.tab : undefined],
+  });
+  return pageMetadata(
+    {
+      title: "Learning programs",
+      description: [
+        `Learning paths on ${settings.brand.name} that bundle courses in a recommended order. Enroll once, follow the path step by step and track your progress across every course.`,
+      ],
+      path: "/programs",
+      noindex: noindex || !settings.features.programs,
+      follow,
+    },
+    settings,
+  );
+}
 
 export default async function ProgramsPage(props: PageProps<"/programs">) {
   const [user, settings, sp] = await Promise.all([getCurrentUser(), getSettings(), props.searchParams]);
@@ -28,8 +48,11 @@ export default async function ProgramsPage(props: PageProps<"/programs">) {
   const tabs = [{ value: "published", label: "Published", count: counts.published }];
   if (user) tabs.push({ value: "enrolled", label: "Enrolled", count: counts.enrolled });
 
+  const listed = tab === "published" && !search ? programs.filter((p) => p.published) : [];
+
   return (
     <div className="animate-fade-in">
+      {listed.length > 0 && <JsonLd data={itemListJsonLd("Learning programs", listed.map((p) => ({ name: p.title, path: programPath(p.slug) })), { origin: siteOrigin() })} />}
       <PageHeader
         title="All Programs"
         description="Learning paths that bundle courses in a recommended order. Enroll once and work through them step by step."

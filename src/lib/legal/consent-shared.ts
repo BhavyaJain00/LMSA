@@ -49,3 +49,42 @@ export function parseConsentValue(raw: string | null | undefined): ConsentState 
 export function serializeConsent(state: Pick<ConsentState, "analytics" | "marketing">): string {
   return encodeURIComponent(JSON.stringify({ a: state.analytics ? 1 : 0, m: state.marketing ? 1 : 0 }));
 }
+
+/**
+ * Window event that opens the cookie preferences dialog (dispatched by
+ * `<CookieSettingsLink />`, handled by the consent manager).
+ */
+export const CONSENT_OPEN_EVENT = "ll:consent-open";
+
+/**
+ * Random, httpOnly visitor id stored with each `ConsentRecord`, so a decision
+ * made before signing in can still be evidenced. Kept as long as the consent
+ * cookie.
+ */
+export const ANON_COOKIE = "ll_anon";
+
+const ANON_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/** True for a well-formed visitor id (anything else is replaced). */
+export function isValidAnonId(value: unknown): value is string {
+  return typeof value === "string" && ANON_ID_PATTERN.test(value);
+}
+
+/** Coerce untrusted input (a Server Action argument) into a decision. */
+export function normalizeConsentInput(input: unknown): Pick<ConsentState, "analytics" | "marketing"> | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const { analytics, marketing } = input as { analytics?: unknown; marketing?: unknown };
+  if (typeof analytics !== "boolean" || typeof marketing !== "boolean") return null;
+  return { analytics, marketing };
+}
+
+/**
+ * Consent category of a cookie set by the optional tags (Google Analytics /
+ * Ads, Meta Pixel), or null for anything else. Used to delete those cookies
+ * as soon as the visitor withdraws consent.
+ */
+export function optionalCookieCategory(name: string): "analytics" | "marketing" | null {
+  if (/^(_ga($|_)|_gid$|_gat($|_))/.test(name)) return "analytics";
+  if (/^(_fbp|_fbc|_gcl_[a-z]+)$/.test(name)) return "marketing";
+  return null;
+}

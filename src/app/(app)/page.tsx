@@ -4,7 +4,10 @@ import type { PublicUser } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { getLandingData } from "@/lib/data/catalog";
-import { siteConfig } from "@/lib/config";
+import { pageMetadata } from "@/lib/seo/metadata";
+import { seoContext, websiteJsonLd } from "@/lib/seo/jsonld";
+import { courseItemList } from "@/lib/data/seo";
+import { JsonLd } from "@/components/seo/json-ld";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { CourseGrid } from "@/components/catalog/course-grid";
@@ -22,19 +25,16 @@ import {
 
 export async function generateMetadata(): Promise<Metadata> {
   const settings = await getSettings();
-  const title = `${settings.brand.name} — ${settings.brand.tagline}`;
-  return {
-    metadataBase: new URL(`${siteConfig.appUrl}/`),
-    title: { absolute: title },
-    description: settings.brand.metaDescription,
-    openGraph: {
-      type: "website",
-      siteName: settings.brand.name,
-      title,
-      description: settings.brand.metaDescription,
-      images: settings.brand.metaImageUrl ? [new URL(settings.brand.metaImageUrl, `${siteConfig.appUrl}/`).href] : undefined,
+  const tagline = settings.brand.tagline.trim();
+  return pageMetadata(
+    {
+      title: tagline ? `${settings.brand.name} — ${tagline}` : settings.brand.name,
+      absoluteTitle: true,
+      description: [settings.seo.defaultDescription, settings.brand.metaDescription],
+      path: "/",
     },
-  };
+    settings,
+  );
 }
 
 /**
@@ -62,8 +62,15 @@ export default async function HomePage() {
   for (const course of data.featured) for (const instructor of course.instructors) instructorMap.set(instructor.id, instructor);
   const instructors = Array.from(instructorMap.values());
 
+  const ctx = seoContext(settings);
+  const structuredData = [
+    websiteJsonLd(ctx, { description: settings.seo.defaultDescription || settings.brand.metaDescription, searchPath: coursesOn ? undefined : null }),
+    coursesOn && data.featured.length > 0 && courseItemList("Popular courses", data.featured, ctx),
+  ];
+
   return (
     <div className="space-y-16 pb-8 sm:space-y-20">
+      <JsonLd data={structuredData} />
       <LandingHero
         brandName={settings.brand.name}
         tagline={settings.brand.tagline || `Learn with ${settings.brand.name}`}

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, isStaff } from "@/lib/auth/session";
@@ -7,18 +8,34 @@ import { Markdown } from "@/lib/markdown";
 import { ButtonLink } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
-import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { isJobPublic } from "@/lib/seo/visibility";
+import { jobPath } from "@/lib/seo/content-index";
+import { jobTrail } from "@/lib/seo/breadcrumbs";
+import { getJobJsonLd } from "@/lib/data/seo";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
+import { JsonLd } from "@/components/seo/json-ld";
 import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel, workModeTone } from "@/components/jobs/job-bits";
 import { ApplyDialog } from "@/components/jobs/apply-dialog";
 import { JobStatusButton, WithdrawApplicationButton } from "@/components/jobs/job-actions";
-import { formatDate, pluralize, relativeTime, stripMarkdown, truncate } from "@/lib/utils";
+import { formatDate, pluralize, relativeTime } from "@/lib/utils";
 
-export async function generateMetadata(props: PageProps<"/jobs/[slug]">) {
+export async function generateMetadata(props: PageProps<"/jobs/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [job, viewer] = await Promise.all([getJobBySlug(slug), getCurrentUser()]);
-  if (!job) return { title: "Job not found" };
-  if (job.status === "closed" && !canManageJob(viewer, job) && !(await getUserApplication(viewer?.id, job.id))) return { title: "Job not found" };
-  return { title: `${job.title} at ${job.company}`, description: truncate(stripMarkdown(job.description).replace(/\n/g, " "), 160) };
+  const [job, viewer, settings] = await Promise.all([getJobBySlug(slug), getCurrentUser(), getSettings()]);
+  if (!job) return notFoundMetadata("Job not found");
+  if (job.status === "closed" && !canManageJob(viewer, job) && !(await getUserApplication(viewer?.id, job.id))) return notFoundMetadata("Job not found");
+  return pageMetadata(
+    {
+      title: `${job.title} at ${job.company}`,
+      description: [job.description, `${job.company} is hiring: ${job.title}${job.location ? ` in ${job.location}` : ""}.`],
+      path: jobPath(job.slug),
+      generatedImage: true,
+      // Closed openings stay reachable for applicants but leave the index (and Google job search).
+      noindex: !isJobPublic(job) || !settings.features.jobs,
+    },
+    settings,
+  );
 }
 
 export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
@@ -35,14 +52,12 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
   const showApplicants = manager || isStaff(viewer);
   const website = job.companyWebsite ? (/^https?:\/\//i.test(job.companyWebsite) ? job.companyWebsite : `https://${job.companyWebsite}`) : null;
 
+  const structuredData = await getJobJsonLd(job);
+
   return (
     <div className="mx-auto max-w-3xl pb-12">
-      <Breadcrumbs
-        items={[
-          { label: "Jobs", href: "/jobs" },
-          { label: job.title },
-        ]}
-      />
+      <JsonLd data={structuredData} />
+      <Breadcrumbs items={jobTrail(job)} structuredData={isJobPublic(job)} />
 
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         {manager && job.applicantCount > 0 && (

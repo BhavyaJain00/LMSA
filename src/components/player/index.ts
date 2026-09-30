@@ -6,3 +6,6 @@ export type { PlayerState, PlayerActions } from "./use-video-player";
 export { useMediaSource } from "./use-media-source";
 export type { MediaPlayerConfig, MediaSourceState } from "./use-media-source";
 export { AudioPlayer } from "./audio-player";
+export { useHls } from "./use-hls";
+export type { HlsPlayback } from "./use-hls";
+export type { HlsLevel, HlsStats } from "./hls/engine";

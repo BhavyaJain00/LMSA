@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox, Field, FormError, Input, Select } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
+import { LegalAgreement } from "@/components/legal/legal-agreement";
+import type { AgreementLink } from "@/lib/legal/agreement";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { BILLING_SOURCES, COUNTRIES, INDIAN_STATES } from "./countries";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
@@ -48,6 +50,7 @@ export function BillingForm({
   taxLabel,
   defaults,
   contactEmail,
+  legal = [],
 }: {
   itemType: PaymentItemType;
   itemId: string;
@@ -62,6 +65,8 @@ export function BillingForm({
   taxLabel: string;
   defaults: BillingDefaults;
   contactEmail?: string;
+  /** Published terms, refund and privacy pages (`agreementDocuments("checkout", await legalLinks())`). */
+  legal?: AgreementLink[];
 }) {
   const [country, setCountry] = useState(defaults.country);
   const launcher = useCheckoutLauncher();
@@ -254,6 +259,7 @@ export function BillingForm({
           <div>
             <Checkbox id="consent" name="consent" label="I consent to my personal information being stored for invoicing" aria-invalid={!!errors.consent || undefined} />
             {errors.consent && <p className="mt-1.5 pl-6.5 text-xs text-danger">{errors.consent}</p>}
+            <LegalAgreement documents={legal} lead={free ? "By enrolling you agree to" : "By placing your order you agree to"} className="mt-2 pl-6.5" />
           </div>
           <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
             <Button

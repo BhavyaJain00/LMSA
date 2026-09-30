@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { VideoSource } from "@/lib/types";
 import { cn, formatTime } from "@/lib/utils";
 import { AUTO_QUALITY, buildQualityOptions, pickAutoQuality, type QualityOption } from "@/lib/media/sources";
@@ -17,6 +17,9 @@ import { EndScreen } from "./end-screen";
 import { useMiniPlayer } from "./use-mini-player";
 import { usePrefersReducedMotion } from "./use-reduced-motion";
 import { DockReturnIcon } from "./player-icons";
+import { detectHlsSupport, type HlsSupport } from "./hls/support";
+import { useHls } from "./use-hls";
+import { StatsPanel, type PlaybackMode } from "./stats-panel";
 
 export interface HeartbeatPayload {
   /** Current playback position in seconds. */
@@ -105,11 +108,24 @@ export interface VideoPlayerProps {
   countdownLabel?: string;
   /** Dock into a floating mini-player when scrolled out of view while playing (lesson pages). */
   miniPlayer?: boolean;
+
+  /* ----- round 3 ----- */
+  /**
+   * HLS master playlist for adaptive streaming. Played with the built-in
+   * MSE engine (or natively on Safari/iOS); `src` stays the progressive
+   * fallback when neither works or the stream fails.
+   */
+  hlsUrl?: string;
 }
 
 type Range = [number, number];
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+const subscribeNothing = () => () => undefined;
+const clientHlsSupport = (): HlsSupport | "pending" => detectHlsSupport();
+const serverHlsSupport = (): HlsSupport | "pending" => "pending";
+const HLS_ID_PREFIX = "hls:";
 
 function connectionInfo(): { effectiveType?: string; saveData?: boolean } {
   if (typeof navigator === "undefined") return {};
@@ -123,7 +139,8 @@ function connectionInfo(): { effectiveType?: string; saveData?: boolean } {
  * PiP, fullscreen, theater mode, playback speed, quality renditions, resume,
  * watch tracking with retention ranges, anti-skip, signed-URL refresh for
  * protected uploads, a moving viewer watermark, seek-bar preview frames,
- * autoplay-next countdown and a docking mini-player.
+ * autoplay-next countdown, a docking mini-player and adaptive HLS streaming
+ * (hand-written MSE engine with a quality menu and "stats for nerds").
  */
 export function VideoPlayer({
   src,
@@ -160,6 +177,7 @@ export function VideoPlayer({
   nextTitle,
   countdownLabel = "Next lesson",
   miniPlayer,
+  hlsUrl,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -173,6 +191,7 @@ export function VideoPlayer({
   const [skipBlocked, setSkipBlocked] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashKey = useRef(0);
   const reducedMotion = usePrefersReducedMotion();
@@ -226,8 +245,23 @@ export function VideoPlayer({
 
   /* --------------------------- protected source --------------------------- */
   const media = useMediaSource(activeOption?.src ?? "", mediaContext?.lessonId, mediaContext?.ttlSeconds);
-  const watermarkOptions = watermark !== undefined ? watermark : (media.config?.watermark ?? null);
-  const thumbnailsOn = seekThumbnails ?? media.config?.seekThumbnails ?? false;
+
+  /* ------------------------------ adaptive HLS ------------------------------ */
+  // "pending" on the server and while hydrating; the browser's capability afterwards.
+  const hlsSupport = useSyncExternalStore(subscribeNothing, clientHlsSupport, serverHlsSupport);
+  const [hlsFailedFor, setHlsFailedFor] = useState<string | null>(null);
+  const hlsWanted = !!hlsUrl && hlsFailedFor !== hlsUrl;
+  const hlsCandidate = hlsWanted && (hlsSupport === "mse" || hlsSupport === "native");
+  const hlsMedia = useMediaSource(hlsCandidate ? (hlsUrl ?? "") : "", mediaContext?.lessonId, mediaContext?.ttlSeconds);
+  // The master could not be signed (no access to the stream): play the MP4 instead.
+  const hlsSignFailed = hlsMedia.status === "denied" || (hlsMedia.status === "error" && !hlsMedia.url);
+  let playback: PlaybackMode | "pending" = "progressive";
+  if (hlsWanted && hlsSupport === "pending") playback = "pending";
+  else if (hlsCandidate && !hlsSignFailed && (hlsSupport === "mse" || hlsSupport === "native")) playback = hlsSupport;
+  const activeMedia = playback === "mse" || playback === "native" ? hlsMedia : media;
+  const playerConfig = media.config ?? hlsMedia.config;
+  const watermarkOptions = watermark !== undefined ? watermark : (playerConfig?.watermark ?? null);
+  const thumbnailsOn = seekThumbnails ?? playerConfig?.seekThumbnails ?? false;
 
   // Watch tracking
   const watchedAccum = useRef(0);
@@ -279,8 +313,23 @@ export function VideoPlayer({
   const mediaRef = useRef(media);
   const playingRef = useRef(false);
   const actionsRef = useRef<{ beginSourceSwap: (o?: { time?: number; play?: boolean }) => void } | null>(null);
+  const playbackRef = useRef(playback);
   useEffect(() => {
-    mediaRef.current = media;
+    mediaRef.current = activeMedia;
+    playbackRef.current = playback;
+  });
+
+  /** Give up on HLS for this stream and continue with the progressive MP4 at the same position. */
+  const fallBackToProgressive = useCallback(() => {
+    if (!hlsUrl) return;
+    const video = videoRef.current;
+    actionsRef.current?.beginSourceSwap({ time: video?.currentTime ?? 0, play: playingRef.current });
+    appliedUrl.current = null;
+    setHlsFailedFor(hlsUrl);
+  }, [hlsUrl]);
+  const fallBackRef = useRef(fallBackToProgressive);
+  useEffect(() => {
+    fallBackRef.current = fallBackToProgressive;
   });
 
   const { state, actions: rawActions } = useVideoPlayer(videoRef, containerRef, {
@@ -323,17 +372,32 @@ export function VideoPlayer({
       return false;
     },
     onMediaError: () => {
+      const mode = playbackRef.current;
+      // The MSE engine retries network errors itself; an element error means the stream cannot be decoded.
+      if (mode === "mse") {
+        fallBackRef.current();
+        return true;
+      }
       const current = mediaRef.current;
-      if (!current.isProtected) return false;
+      if (!current.isProtected) {
+        if (mode !== "native") return false;
+        fallBackRef.current();
+        return true;
+      }
       const now = Date.now();
       if (now - recovery.current.since > 60_000) recovery.current = { attempts: 0, since: now };
-      if (recovery.current.attempts >= 2) return false;
+      if (recovery.current.attempts >= 2) {
+        if (mode !== "native") return false;
+        fallBackRef.current();
+        return true;
+      }
       recovery.current.attempts += 1;
       const video = videoRef.current;
       actionsRef.current?.beginSourceSwap({ time: video?.currentTime ?? 0, play: playingRef.current });
       void current.refresh().then((url) => {
         if (!url) {
-          setRecoveryFailed(true);
+          if (playbackRef.current === "native") fallBackRef.current();
+          else setRecoveryFailed(true);
           return;
         }
         // Same URL (signed within the same second): reload it explicitly.
@@ -348,14 +412,69 @@ export function VideoPlayer({
   });
 
   // Point the <video> at the current (signed) URL; later changes keep time and play state.
+  // The MSE engine attaches its own MediaSource instead.
+  const elementUrl = playback === "native" ? hlsMedia.url : playback === "progressive" ? media.url : null;
   useEffect(() => {
     const video = videoRef.current;
-    const url = media.url;
-    if (!video || !url || appliedUrl.current === url) return;
+    if (!video) return;
+    if (playback === "mse" || playback === "pending") {
+      appliedUrl.current = null;
+      return;
+    }
+    if (!elementUrl || appliedUrl.current === elementUrl) return;
     if (appliedUrl.current !== null) rawActions.beginSourceSwap();
-    appliedUrl.current = url;
-    video.src = url;
-  }, [media.url, rawActions]);
+    appliedUrl.current = elementUrl;
+    video.src = elementUrl;
+  }, [playback, elementUrl, rawActions]);
+
+  const hls = useHls(videoRef, {
+    enabled: playback === "mse",
+    streamKey: hlsUrl ?? "",
+    masterUrl: playback === "mse" ? hlsMedia.url : null,
+    refresh: hlsMedia.refresh,
+    startPosition: () => {
+      const video = videoRef.current;
+      // Switching from another source mid-playback: keep the position and play state.
+      if (video && video.getAttribute("src") && video.readyState >= 1) {
+        actionsRef.current?.beginSourceSwap();
+        return video.currentTime;
+      }
+      return startAt ?? 0;
+    },
+    preferredLabel: () => {
+      const stored = loadPlayerPrefs().quality;
+      return stored && stored !== AUTO_QUALITY ? stored : null;
+    },
+    capHeight: () => {
+      const el = containerRef.current;
+      if (!el || !el.clientHeight) return undefined;
+      return el.clientHeight * (window.devicePixelRatio || 1);
+    },
+    onFatal: () => fallBackRef.current(),
+  });
+  const { levels: hlsLevels, manualLevel: hlsManual, playingLevel: hlsPlaying, setLevel: setHlsLevel, getStats: getHlsStats } = hls;
+
+  const hlsQuality = useMemo(() => {
+    if (playback !== "mse" || hlsLevels.length < 2) return undefined;
+    const options: QualityOption[] = [...hlsLevels].reverse().map((l) => ({ id: `${HLS_ID_PREFIX}${l.index}`, src: "", label: l.label, height: l.height }));
+    const playingIndex = hlsPlaying >= 0 ? hlsPlaying : hlsManual;
+    return {
+      options,
+      selected: hlsManual >= 0 ? `${HLS_ID_PREFIX}${hlsManual}` : AUTO_QUALITY,
+      playingId: playingIndex >= 0 ? `${HLS_ID_PREFIX}${playingIndex}` : "",
+      onSelect: (id: string) => {
+        if (id === AUTO_QUALITY) {
+          savePlayerPrefs({ quality: AUTO_QUALITY });
+          setHlsLevel(-1);
+          return;
+        }
+        const level = hlsLevels[Number(id.slice(HLS_ID_PREFIX.length))];
+        if (!level) return;
+        savePlayerPrefs({ quality: level.label });
+        setHlsLevel(level.index);
+      },
+    };
+  }, [playback, hlsLevels, hlsManual, hlsPlaying, setHlsLevel]);
 
   // Stop downloading when the player goes away.
   useEffect(() => {
@@ -381,13 +500,33 @@ export function VideoPlayer({
     return () => video.removeEventListener("play", onMiniPlay);
   }, [miniPlayer, onMiniPlay]);
 
-  // External seek requests (e.g. clicking a timestamped note).
+  // External seek requests (e.g. clicking a timestamped note or a transcript line).
+  // Requests made before the metadata loaded are applied once it has.
+  const pendingSeek = useRef<{ time: number; play: boolean } | null>(null);
   useEffect(() => {
     if (!seekRequest) return;
+    const video = videoRef.current;
+    if (video && video.readyState < 1) {
+      pendingSeek.current = { time: seekRequest.time, play: !!seekRequest.play };
+      return;
+    }
     const ok = rawActions.seek(seekRequest.time);
     if (ok && seekRequest.play) void rawActions.play();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekRequest?.key]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onMetadata = () => {
+      const pending = pendingSeek.current;
+      if (!pending) return;
+      pendingSeek.current = null;
+      const ok = rawActions.seek(pending.time);
+      if (ok && pending.play) void rawActions.play();
+    };
+    video.addEventListener("loadedmetadata", onMetadata);
+    return () => video.removeEventListener("loadedmetadata", onMetadata);
+  }, [rawActions]);
 
   // Throttled time reporting for consumers (notes, transcript highlighting…).
   const lastReported = useRef(-1);
@@ -663,9 +802,11 @@ export function VideoPlayer({
     ) : undefined;
 
   /* -------------------------------- render -------------------------------- */
-  const mediaMessage = media.status === "denied" || (media.status === "error" && !media.url) ? media.message : null;
-  const errorMessage = mediaMessage ?? (recoveryFailed ? (media.message ?? "The video link expired and could not be renewed.") : state.error);
-  const resolving = media.status === "resolving" && !errorMessage;
+  const mediaMessage = activeMedia.status === "denied" || (activeMedia.status === "error" && !activeMedia.url) ? activeMedia.message : null;
+  // HLS failed and there is no progressive file to fall back to.
+  const noFallback = playback === "progressive" && !src && !sources?.length ? "This video is not available right now." : null;
+  const errorMessage = mediaMessage ?? noFallback ?? (recoveryFailed ? (media.message ?? "The video link expired and could not be renewed.") : state.error);
+  const resolving = (activeMedia.status === "resolving" || playback === "pending") && !errorMessage;
   const showBigPlay = !resolving && !errorMessage && (!state.started || (!state.playing && !state.ended && !state.waiting));
   const shortcutGroups = shortcutsOpen
     ? playerShortcuts({ captions: state.hasCaptions, pip: pipAllowed && typeof document !== "undefined" && !!document.pictureInPictureEnabled, theater: !!onToggleTheater, fullscreen: true })
@@ -698,14 +839,14 @@ export function VideoPlayer({
         poster={poster}
         preload="metadata"
         playsInline
-        crossOrigin={captionsUrl ? "anonymous" : undefined}
+        crossOrigin={captionsUrl && !captionsUrl.startsWith("blob:") ? "anonymous" : undefined}
         className="absolute inset-0 size-full object-contain"
         onClick={handleSurfaceClick}
         onContextMenu={(e) => e.preventDefault()}
         controlsList="nodownload noremoteplayback"
         disablePictureInPicture={!pipAllowed || undefined}
       >
-        {captionsUrl && <track kind="subtitles" src={captionsUrl} srcLang={captionsLang} label={captionsLabel} default={state.captionsOn} />}
+        {captionsUrl && <track key={captionsUrl} kind="subtitles" src={captionsUrl} srcLang={captionsLang} label={captionsLabel} default={state.captionsOn} />}
         Your browser does not support HTML5 video.
       </video>
 
@@ -850,6 +991,16 @@ export function VideoPlayer({
 
       {shortcutsOpen && <ShortcutsOverlay groups={shortcutGroups} onClose={() => setShortcutsOpen(false)} />}
 
+      {statsOpen && !docked && (
+        <StatsPanel
+          mode={playback === "pending" ? "progressive" : playback}
+          videoRef={videoRef}
+          containerRef={containerRef}
+          getHls={getHlsStats}
+          onClose={() => setStatsOpen(false)}
+        />
+      )}
+
       <ControlBar
         state={state}
         actions={actions}
@@ -870,11 +1021,13 @@ export function VideoPlayer({
         compact={docked}
         allowPip={pipAllowed}
         quality={
-          hasQualityChoice
+          hlsQuality ??
+          (hasQualityChoice && playback === "progressive"
             ? { options: qualityOptions, selected: quality.pref, playingId: activeOption?.id ?? quality.pref, onSelect: selectQuality }
-            : undefined
+            : undefined)
         }
         onShowShortcuts={() => setShortcutsOpen(true)}
+        onShowStats={() => setStatsOpen(true)}
         onHoverTime={thumbnailsOn ? onHoverTime : undefined}
         preview={preview}
       />

@@ -78,17 +78,82 @@ const legacyRedirects: LegacyRedirect[] = [
   { source: "/settings/users/:member", destination: "/admin/members", permanent: false },
 ];
 
+/** Short, memorable addresses for the legal pages (the pages themselves live under /legal). */
+const legalRedirects: LegacyRedirect[] = [
+  { source: "/privacy", destination: "/legal/privacy", permanent: true },
+  { source: "/privacy-policy", destination: "/legal/privacy", permanent: true },
+  { source: "/terms", destination: "/legal/terms", permanent: true },
+  { source: "/terms-of-service", destination: "/legal/terms", permanent: true },
+  { source: "/refund-policy", destination: "/legal/refunds", permanent: true },
+  { source: "/refunds", destination: "/legal/refunds", permanent: true },
+  { source: "/cookie-policy", destination: "/legal/cookies", permanent: true },
+];
+
+const isDev = process.env.NODE_ENV === "development";
+
+/**
+ * Content Security Policy. Inline scripts stay allowed (theme bootstrap, JSON-LD,
+ * Next's own inline payloads). 'unsafe-eval' is required because the programming
+ * exercise runner evaluates learner code with `new Function` inside Blob workers,
+ * which inherit this policy (and React Refresh needs it in development).
+ * Third-party scripts: Razorpay checkout, Google Analytics and the Meta Pixel
+ * (both loaded only after cookie consent). Stripe Checkout is a redirect, so it
+ * only needs `form-action`.
+ */
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://www.googletagmanager.com https://connect.facebook.net",
+  "frame-src 'self' https:",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob: https:",
+  "connect-src 'self' https:" + (isDev ? " ws: wss:" : ""),
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self' https://checkout.stripe.com",
+  "frame-ancestors 'self'",
+].join("; ");
+
+const securityHeaders: { key: string; value: string }[] = [
+  { key: "Content-Security-Policy", value: contentSecurityPolicy },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), fullscreen=(self), picture-in-picture=(self), browsing-topics=()",
+  },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+  { key: "X-DNS-Prefetch-Control", value: "on" },
+  // Browsers ignore HSTS on plain HTTP, and in development it would pin localhost to HTTPS.
+  ...(process.env.NODE_ENV === "production" ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }] : []),
+];
+
 const nextConfig: NextConfig = {
+  // Self-contained server bundle for Docker (`node server.js`); see Dockerfile and DEPLOYMENT.md.
+  output: "standalone",
   // Pin the workspace root to this project so a stray lockfile in a parent
   // directory is not picked up as the Turbopack root.
   turbopack: {
     root: path.resolve(__dirname),
   },
+  poweredByHeader: false,
+  images: {
+    // Course covers, avatars and blog images may come from any HTTPS host (or a CDN in front of storage).
+    remotePatterns: [{ protocol: "https", hostname: "**" }],
+    formats: ["image/avif", "image/webp"],
+    qualities: [60, 75, 90],
+    minimumCacheTTL: 60 * 60 * 24,
+  },
   async redirects() {
-    return legacyRedirects;
+    return [...legacyRedirects, ...legalRedirects];
   },
   async headers() {
     return [
+      { source: "/:path*", headers: securityHeaders },
       {
         // The service worker must always be revalidated so a new VERSION reaches browsers promptly.
         source: "/sw.js",

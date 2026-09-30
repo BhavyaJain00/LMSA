@@ -207,6 +207,8 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
       patch({ error: ERROR_MESSAGES[code ?? 0] ?? "The video could not be played.", errorCode: code ?? null, waiting: false, playing: false, swapping: false });
     };
     const onDurationChange = () => patch({ duration: video.duration || 0 });
+    // Caption tracks can arrive after the metadata (e.g. built from a transcript that loads later).
+    const onTracksChange = () => patch({ hasCaptions: video.textTracks.length > 0 });
     const onEnterPip = () => patch({ pip: true });
     const onLeavePip = () => patch({ pip: false });
 
@@ -227,6 +229,8 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
     video.addEventListener("error", onError);
     video.addEventListener("enterpictureinpicture", onEnterPip);
     video.addEventListener("leavepictureinpicture", onLeavePip);
+    video.textTracks.addEventListener("addtrack", onTracksChange);
+    video.textTracks.addEventListener("removetrack", onTracksChange);
     if (video.readyState >= 1) onLoadedMetadata();
 
     return () => {
@@ -247,6 +251,8 @@ export function useVideoPlayer(videoRef: RefObject<HTMLVideoElement | null>, con
       video.removeEventListener("error", onError);
       video.removeEventListener("enterpictureinpicture", onEnterPip);
       video.removeEventListener("leavepictureinpicture", onLeavePip);
+      video.textTracks.removeEventListener("addtrack", onTracksChange);
+      video.textTracks.removeEventListener("removetrack", onTracksChange);
     };
   }, [videoRef, patch]);
 

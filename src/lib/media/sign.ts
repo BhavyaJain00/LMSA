@@ -4,6 +4,7 @@ import { findById, getSettings } from "@/lib/db/store";
 import { lessonReferencesPath, siteOrigins } from "./access";
 import { GUEST_MEDIA_SUBJECT, parseMediaSrc, stripMediaToken, withMediaToken } from "./paths";
 import { issueMediaToken, mediaSigningAvailable } from "./token";
+import { hlsMatchesSource } from "./transcode/lesson-fields";
 
 /**
  * Server-side signing of lesson video URLs.
@@ -82,6 +83,13 @@ export interface LessonPlayerOptions {
 export interface LessonVideoMedia {
   src: string;
   sources?: VideoSource[];
+  /**
+   * Round 3: signed HLS master playlist (adaptive streaming), present when
+   * the block's upload has been converted. The file route signs every
+   * playlist and segment inside it for the same viewer; `src` stays the
+   * progressive fallback.
+   */
+  hlsUrl?: string;
 }
 
 export function watermarkFor(viewer: Pick<User, "email" | "name"> | null, settings: Pick<Settings, "video">): PlayerWatermark | null {
@@ -130,6 +138,8 @@ export async function prepareLessonVideos(
       media[block.id] = {
         src: sign(block.src),
         sources: block.sources?.length ? block.sources.map((s) => ({ ...s, src: sign(s.src) })) : undefined,
+        // Only a stream made from the block's current file (never the previous upload's).
+        hlsUrl: block.hlsUrl && hlsMatchesSource(block, origins) ? sign(block.hlsUrl) : undefined,
       };
     }
   }

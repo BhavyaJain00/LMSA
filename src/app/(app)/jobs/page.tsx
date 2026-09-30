@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, isStaff } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
@@ -19,8 +20,31 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { JobCard } from "@/components/jobs/job-bits";
 import { JobFilters } from "@/components/jobs/job-filters";
+import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
 
-export const metadata = { title: "Jobs", description: "Job openings shared with our learning community." };
+export async function generateMetadata(props: PageProps<"/jobs">): Promise<Metadata> {
+  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const one = (k: string) => (typeof sp[k] === "string" ? (sp[k] as string) : "");
+  const page = Number(one("page") || 1);
+  // Status, search, type, mode, country and "load more" permutations canonicalise to the open-jobs list.
+  const { noindex, follow } = listingIndexing({
+    search: one("search"),
+    filters: [one("status"), one("type"), one("mode") || one("work_mode"), one("country")],
+    page: Number.isFinite(page) ? page : 1,
+  });
+  return pageMetadata(
+    {
+      title: "Jobs",
+      description: [
+        `Open roles shared with the ${settings.brand.name} learning community: full-time, part-time, contract and remote jobs from companies hiring people with the skills our courses teach.`,
+      ],
+      path: "/jobs",
+      noindex: noindex || !settings.features.jobs,
+      follow,
+    },
+    settings,
+  );
+}
 
 export default async function JobsPage(props: PageProps<"/jobs">) {
   const [settings, viewer, sp] = await Promise.all([getSettings(), getCurrentUser(), props.searchParams]);

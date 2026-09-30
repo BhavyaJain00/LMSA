@@ -5,6 +5,8 @@ import { safeRedirectPath } from "@/lib/auth/redirects";
 import { getSettings } from "@/lib/db/store";
 import { Markdown } from "@/lib/markdown";
 import { clampMinLength } from "@/lib/auth/password-policy";
+import { legalLinks } from "@/lib/legal/links";
+import { agreementDocuments } from "@/lib/legal/agreement";
 import { RegisterForm } from "./register-form";
 
 export const metadata = { title: "Create account" };
@@ -14,7 +16,7 @@ export default async function RegisterPage(props: PageProps<"/register">) {
   const sp = await props.searchParams;
   const next = safeRedirectPath(sp.next, undefined);
   if (user) redirect("/dashboard");
-  const settings = await getSettings();
+  const [settings, links] = await Promise.all([getSettings(), legalLinks()]);
 
   return (
     <div className="w-full max-w-md">
@@ -30,7 +32,7 @@ export default async function RegisterPage(props: PageProps<"/register">) {
           {settings.learning.disableSignup ? (
             <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">Sign up is currently disabled. Please contact an administrator for an account.</p>
           ) : (
-            <RegisterForm next={next} minLength={clampMinLength(settings.security.passwordMinLength)} />
+            <RegisterForm next={next} minLength={clampMinLength(settings.security.passwordMinLength)} legal={agreementDocuments("register", links)} />
           )}
         </div>
       </div>

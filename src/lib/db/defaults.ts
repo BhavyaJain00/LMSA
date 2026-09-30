@@ -137,7 +137,7 @@ export function defaultSettings(): Settings {
     },
     ai: {
       enabled: false,
-      model: "claude-sonnet-5",
+      model: "claude-opus-5-5",
       dailyMessageLimit: 30,
       systemPrompt: undefined,
       reviewQueue: true,

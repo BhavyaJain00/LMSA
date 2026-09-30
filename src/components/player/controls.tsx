@@ -127,6 +127,7 @@ export function SettingsMenu({
   onToggleLoop,
   quality,
   onShowShortcuts,
+  onShowStats,
 }: {
   state: PlayerState;
   actions: PlayerActions;
@@ -136,6 +137,7 @@ export function SettingsMenu({
   onToggleLoop: () => void;
   quality?: QualityMenuProps;
   onShowShortcuts?: () => void;
+  onShowStats?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<MenuPage>("root");
@@ -211,6 +213,19 @@ export function SettingsMenu({
                 />
               )}
               <MenuRow label="Loop" value={loop ? "On" : "Off"} onClick={onToggleLoop} icon={<Icon.Replay className="size-4 text-white/70" />} />
+              {onShowStats && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onShowStats();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
+                >
+                  <Icon.BarChart className="size-4 text-white/70" /> Stats for nerds
+                </button>
+              )}
               {onShowShortcuts && (
                 <button
                   type="button"
@@ -326,6 +341,7 @@ export function ControlBar({
   allowPip = true,
   quality,
   onShowShortcuts,
+  onShowStats,
   onHoverTime,
   preview,
 }: {
@@ -349,6 +365,7 @@ export function ControlBar({
   allowPip?: boolean;
   quality?: QualityMenuProps;
   onShowShortcuts?: () => void;
+  onShowStats?: () => void;
   onHoverTime?: (time: number | null) => void;
   preview?: ReactNode;
 }) {
@@ -425,6 +442,7 @@ export function ControlBar({
               onToggleLoop={onToggleLoop}
               quality={quality}
               onShowShortcuts={onShowShortcuts}
+              onShowStats={onShowStats}
             />
             {pipSupported && (
               <ControlButton label="Picture in picture (p)" active={state.pip} onClick={actions.togglePip} className="hidden sm:flex">

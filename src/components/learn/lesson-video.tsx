@@ -54,6 +54,10 @@ export interface LessonVideoProps {
   miniPlayer?: boolean;
   /** Lifetime (seconds) of the pre-signed `src`: renewals are scheduled from it rather than the browser clock. */
   signedUrlTtlSeconds?: number | null;
+
+  /* ----- round 3 ----- */
+  /** HLS master playlist (pre-signed when protected): adaptive streaming, with `src` as the progressive fallback. */
+  hlsUrl?: string;
 }
 
 /**
@@ -93,6 +97,7 @@ export function LessonVideo({
   nextTitle,
   miniPlayer,
   signedUrlTtlSeconds,
+  hlsUrl,
 }: LessonVideoProps) {
   const [completed, setCompleted] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -151,6 +156,7 @@ export function LessonVideo({
       <VideoPlayer
         src={src}
         sources={sources}
+        hlsUrl={hlsUrl}
         mediaContext={mediaContext}
         poster={posterUrl}
         captionsUrl={captionsUrl}

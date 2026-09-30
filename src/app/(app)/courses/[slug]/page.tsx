@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import type { ChapterWithLessons, Course, CourseSummary, PublicUser, Review, Settings, User } from "@/lib/types";
+import type { ChapterWithLessons, Course, PublicUser, Review, User } from "@/lib/types";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import {
@@ -44,37 +44,20 @@ import {
   SectionHeading,
 } from "@/components/catalog/course-sections";
 import { lessonKindFromBlocks, outlineStats, reviewDateLabel } from "@/components/catalog/format";
-import { isPaidCourse } from "@/components/catalog/price-tag";
 import type { OutlineChapterView, OutlineMode, ReviewView } from "@/components/catalog/types";
-import { siteConfig } from "@/lib/config";
-import { formatDuration, stripMarkdown, sum, truncate } from "@/lib/utils";
+import { formatDuration, sum } from "@/lib/utils";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { splitKeywords } from "@/lib/seo/text";
+import { isCoursePublic } from "@/lib/seo/visibility";
+import { coursePath } from "@/lib/seo/content-index";
+import { courseTrail } from "@/lib/seo/breadcrumbs";
+import { getCourseJsonLd } from "@/lib/data/seo";
+import { JsonLd } from "@/components/seo/json-ld";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
-
-/** Absolute URL for a possibly relative asset path (e.g. `/uploads/x.jpg`), for OG tags and JSON-LD. */
-function absoluteUrl(url: string): string {
-  try {
-    return new URL(url, `${siteConfig.appUrl}/`).href;
-  } catch {
-    return url;
-  }
-}
-
-/** Course meta description (set in the course Settings tab), falling back to the introduction. */
-function metaDescription(course: Course): string {
-  const custom = course.metaDescription?.trim();
-  if (custom) return custom;
-  return course.shortIntroduction || truncate(stripMarkdown(course.description).replace(/\s+/g, " "), 160);
-}
-
-/** Course meta keywords (comma-separated), falling back to the course tags. */
-function metaKeywords(course: Course): string[] {
-  const list = (course.metaKeywords ?? "").split(/[,\n]/);
-  const keywords = Array.from(new Set(list.map((k) => k.trim()).filter(Boolean)));
-  return keywords.length ? keywords : course.tags;
-}
 
 function toOutlineView(course: Course, outline: ChapterWithLessons[]): OutlineChapterView[] {
   return outline.map((chapter, index) => ({
@@ -123,69 +106,30 @@ function reviewHint(opts: { user: User | null; enrolled: boolean; instructor: bo
   return null;
 }
 
-function courseJsonLd(course: CourseSummary, settings: Settings): string {
-  const data: Record<string, unknown> = {
-    "@context": "https://schema.org",
-    "@type": "Course",
-    name: course.title,
-    description: metaDescription(course),
-    provider: { "@type": "Organization", name: settings.brand.name },
-    inLanguage: "en",
-    keywords: metaKeywords(course).join(", ") || undefined,
-    url: absoluteUrl(`/courses/${course.slug}`),
-    image: course.imageUrl ? absoluteUrl(course.imageUrl) : undefined,
-    instructor: course.instructors.map((i) => ({ "@type": "Person", name: i.name })),
-    offers: {
-      "@type": "Offer",
-      category: isPaidCourse(course) ? "Paid" : "Free",
-      price: isPaidCourse(course) ? (course.price / 100).toFixed(2) : "0",
-      priceCurrency: course.currency,
-    },
-    hasCourseInstance: {
-      "@type": "CourseInstance",
-      courseMode: "Online",
-      courseWorkload: course.totalDurationSeconds > 0 ? `PT${Math.max(1, Math.round(course.totalDurationSeconds / 60))}M` : undefined,
-    },
-  };
-  if (course.averageRating && course.reviewCount > 0) {
-    data.aggregateRating = { "@type": "AggregateRating", ratingValue: course.averageRating, ratingCount: course.reviewCount, bestRating: 5, worstRating: 1 };
-  }
-  return JSON.stringify(data).replace(/</g, "\\u003c");
-}
-
 /* ------------------------------------------------------------------ */
 /* Metadata                                                            */
 /* ------------------------------------------------------------------ */
 
 export async function generateMetadata(props: PageProps<"/courses/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [course, user] = await Promise.all([getCourseBySlug(slug), getCurrentUser()]);
+  const [course, user, settings] = await Promise.all([getCourseBySlug(slug), getCurrentUser(), getSettings()]);
   const enrolled = course && user && !course.published ? !!(await getEnrollment(user.id, course.id)) : false;
-  if (!course || !(canViewCourse(user, course) || enrolled)) return { title: "Course not found", robots: { index: false, follow: false } };
-  const description = metaDescription(course);
-  const keywords = metaKeywords(course);
-  const image = course.imageUrl ? absoluteUrl(course.imageUrl) : undefined;
-  return {
-    metadataBase: new URL(`${siteConfig.appUrl}/`),
-    alternates: { canonical: `/courses/${course.slug}` },
-    title: course.title,
-    description,
-    keywords: keywords.length ? keywords : undefined,
-    openGraph: {
-      type: "website",
-      title: course.title,
-      description,
-      url: `/courses/${course.slug}`,
-      images: image ? [{ url: image, alt: course.title }] : undefined,
+  if (!course || !(canViewCourse(user, course) || enrolled)) return notFoundMetadata("Course not found");
+  const custom = course.metaDescription?.trim();
+  return pageMetadata(
+    {
+      title: course.seoTitle?.trim() || course.title,
+      description: custom || [course.shortIntroduction, course.description],
+      path: coursePath(course.slug),
+      // An uploaded share image wins; otherwise the generated card (./opengraph-image.tsx) is used.
+      image: course.ogImageUrl ? { url: course.ogImageUrl, alt: course.title } : undefined,
+      generatedImage: !course.ogImageUrl,
+      keywords: splitKeywords(course.metaKeywords, course.tags),
+      // Drafts, scheduled courses and a switched-off catalog stay out of the index.
+      noindex: !isCoursePublic(course) || !settings.features.courses,
     },
-    twitter: {
-      card: image ? "summary_large_image" : "summary",
-      title: course.title,
-      description,
-      images: image ? [image] : undefined,
-    },
-    robots: course.published ? undefined : { index: false, follow: false },
-  };
+    settings,
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -286,7 +230,8 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
 
   return (
     <div className="animate-fade-in pb-6">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: courseJsonLd(summary, settings) }} />
+      {isCoursePublic(course) && <JsonLd data={await getCourseJsonLd(course, summary)} />}
+      <Breadcrumbs items={courseTrail(course, summary.category)} structuredData={isCoursePublic(course)} />
 
       {!course.published && manager && (
         <div role="status" className="mb-6 flex items-start gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-ink">

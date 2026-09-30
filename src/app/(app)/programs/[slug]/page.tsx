@@ -10,15 +10,29 @@ import { ProgressBar } from "@/components/ui/progress";
 import { Tooltip } from "@/components/ui/dropdown";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Icon } from "@/components/ui/icons";
-import { Breadcrumbs } from "@/components/batches/breadcrumbs";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { isProgramPublic } from "@/lib/seo/visibility";
+import { programPath } from "@/lib/seo/content-index";
+import { programTrail } from "@/lib/seo/breadcrumbs";
+import { getProgramJsonLd } from "@/lib/data/seo";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
+import { JsonLd } from "@/components/seo/json-ld";
 import { EnrollProgramButton } from "@/components/programs/program-actions";
 import { ProgramCourseGrid } from "@/components/programs/program-course-grid";
 
 export async function generateMetadata(props: PageProps<"/programs/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const program = await getProgramBySlug(slug);
-  if (!program || !program.published) return { title: "Program" };
-  return { title: program.title, description: program.description };
+  const [program, settings] = await Promise.all([getProgramBySlug(slug), getSettings()]);
+  if (!program || !isProgramPublic(program) || !settings.features.programs) return notFoundMetadata(program ? program.title : "Program");
+  return pageMetadata(
+    {
+      title: program.title,
+      description: [program.description, `A guided learning path of ${program.courseIds.length} ${program.courseIds.length === 1 ? "course" : "courses"} on ${settings.brand.name}. Enroll once and work through the courses step by step.`],
+      path: programPath(program.slug),
+      generatedImage: true,
+    },
+    settings,
+  );
 }
 
 export default async function ProgramPage(props: PageProps<"/programs/[slug]">) {
@@ -36,10 +50,12 @@ export default async function ProgramPage(props: PageProps<"/programs/[slug]">) 
   const progress = summary.progress ?? 0;
   const totalLessons = courses.reduce((a, c) => a + c.lessonCount, 0);
   const completed = courses.filter((c) => c.completed).length;
+  const structuredData = await getProgramJsonLd(program);
 
   return (
     <div className="animate-fade-in pb-10">
-      <Breadcrumbs items={[{ label: "Programs", href: "/programs" }, { label: program.title }]} />
+      <JsonLd data={structuredData} />
+      <Breadcrumbs items={programTrail(program)} structuredData={isProgramPublic(program)} />
       <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 max-w-3xl">
           <div className="flex flex-wrap items-center gap-2">

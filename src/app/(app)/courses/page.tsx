@@ -28,6 +28,10 @@ import { CatalogTabs, type CatalogTabLink } from "@/components/catalog/catalog-t
 import { CatalogToolbar } from "@/components/catalog/catalog-toolbar";
 import { CourseGrid } from "@/components/catalog/course-grid";
 import { CATALOG_QUERY_KEYS, catalogHref, firstParam, type CatalogParams } from "@/components/catalog/catalog-params";
+import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
+import { siteOrigin } from "@/lib/seo/site";
+import { courseItemList } from "@/lib/data/seo";
+import { JsonLd } from "@/components/seo/json-ld";
 
 function readParams(sp: Record<string, string | string[] | undefined>): CatalogParams {
   const out: CatalogParams = {};
@@ -47,16 +51,19 @@ export async function generateMetadata(props: PageProps<"/courses">): Promise<Me
   const params = readParams(await props.searchParams);
   const settings = await getSettings();
   const category = await getCategoryBySlug(params.category);
-  const title = params.search ? `Search results for “${params.search}”` : category ? `${category.name} courses` : "All Courses";
+  const search = params.search?.trim();
+  const title = search ? `Search results for “${search.slice(0, 60)}”` : category ? `${category.name} courses` : "All courses";
   const description = category
-    ? `Browse ${category.name.toLowerCase()} courses on ${settings.brand.name}.`
-    : `Browse self-paced courses with videos, quizzes, assignments and certificates on ${settings.brand.name}.`;
-  return {
-    title,
-    description,
-    robots: params.search ? { index: false, follow: true } : undefined,
-    openGraph: { title: `${title} · ${settings.brand.name}`, description },
-  };
+    ? [category.seoDescription, category.intro, `Browse ${category.name.toLowerCase()} courses on ${settings.brand.name}: self-paced video lessons, quizzes, hands-on assignments and certificates.`]
+    : [`Browse self-paced courses with video lessons, quizzes, assignments and certificates on ${settings.brand.name}. Learn at your own pace and earn a certificate when you finish.`];
+  // Every search, sort, filter, tab or "load more" permutation canonicalises to the plain catalog.
+  const { noindex, follow } = listingIndexing({
+    search,
+    sort: params.sort,
+    filters: [params.category, params.tab && params.tab !== "live" ? params.tab : undefined, params.certification, params.limit],
+    page: Number(params.page) || 1,
+  });
+  return pageMetadata({ title, description, path: "/courses", noindex, follow }, settings);
 }
 
 function emptyStateFor(tab: CatalogTab, opts: { filtered: boolean; clearHref: string; viewer: User | null }) {
@@ -261,8 +268,12 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
   const clearHref = catalogHref({ tab: params.tab, sort: params.sort, limit: params.limit }, {});
   const activeTab = tabs.find((t) => t.active);
 
+  // Structured data only for the canonical view (the plain list crawlers index).
+  const canonicalView = tab === "live" && !filtered && !params.sort && page === 1;
+
   return (
     <div className="animate-fade-in">
+      {canonicalView && visible.length > 0 && <JsonLd data={courseItemList("All courses", visible, { origin: siteOrigin() })} />}
       {header}
 
       <div className="space-y-4">
