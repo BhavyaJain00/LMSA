@@ -16,16 +16,18 @@ import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { money } from "@/components/commerce/order-summary";
 import { MembershipSalesSwitch, PlansManager, type PlanRowData } from "@/components/commerce/plans-manager";
 import { GrantMembershipButton, MembershipMembers, type MemberRowData } from "@/components/commerce/membership-members";
+import { BundleSalesSwitch, BundlesManager, type BundleRowData } from "@/components/commerce/bundles-manager";
+import { getAdminBundles, parseAdminBundleFilter } from "@/lib/commerce/bundle-views";
 import { formatNumber } from "@/lib/utils";
 
-export const metadata = { title: "Membership plans" };
+export const metadata = { title: "Plans & bundles" };
 
 const GATEWAY_NAMES: Record<string, string> = { stripe: "Stripe", razorpay: "Razorpay" };
 
 export default async function PlansSettingsPage(props: PageProps<"/admin/settings/plans">) {
   await requireRole(["admin"], "/admin/settings/plans");
   const sp = await props.searchParams;
-  const tab = sp.tab === "members" ? "members" : "plans";
+  const tab = sp.tab === "members" ? "members" : sp.tab === "bundles" ? "bundles" : "plans";
 
   // No scheduler needed: memberships paid by hand move to "payment due" / "ended", renewal orders are
   // opened and missed gateway webhooks are caught up whenever an administrator opens this page.
@@ -95,6 +97,32 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
     lifetimeValue: r.lifetimeValue,
     currency: r.currency,
   }));
+  const bundleFilter = parseAdminBundleFilter(sp);
+  const bundles = tab === "bundles" ? await getAdminBundles(bundleFilter) : null;
+  const bundleRows: BundleRowData[] = (bundles?.rows ?? []).map((b) => ({
+    id: b.id,
+    slug: b.slug,
+    title: b.title,
+    description: b.description,
+    courseIds: b.liveCourseIds,
+    courseTitles: b.courseTitles,
+    price: b.price,
+    currency: b.currency,
+    imageUrl: b.imageUrl ?? "",
+    published: b.published,
+    onSale: b.onSale,
+    unpublishedCourses: b.unpublishedCourses,
+    missingCourses: b.missingCourses,
+    totalValue: b.totalValue,
+    savingsPercent: b.savingsPercent,
+    comparable: b.comparable,
+    paidOrders: b.paidOrders,
+    openOrders: b.openOrders,
+    revenue: b.revenue,
+    deletable: b.deletable,
+    updatedAt: b.updatedAt,
+  }));
+
   const pickerMembers =
     tab === "members"
       ? db.users
@@ -165,10 +193,31 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
         items={[
           { label: "Plans", value: "plans", count: plans.length },
           { label: "Members", value: "members", count: ongoing },
+          { label: "Bundles", value: "bundles", count: db.bundles.length },
         ]}
       />
 
-      {tab === "plans" ? (
+      {tab === "bundles" ? (
+        bundles && (
+          <>
+            <div className="mb-5 rounded-card border border-border bg-surface-1 px-4 py-3.5 shadow-card sm:px-5">
+              <BundleSalesSwitch enabled={settings.growth.bundlesEnabled} />
+            </div>
+            <BundlesManager
+              rows={bundleRows}
+              total={bundles.total}
+              page={bundles.page}
+              pageCount={bundles.pageCount}
+              filter={{ status: bundleFilter.status, q: bundleFilter.search ?? "" }}
+              courses={bundles.courses}
+              currencies={currencyOptions}
+              defaultCurrency={settings.commerce.defaultCurrency}
+              salesEnabled={settings.growth.bundlesEnabled}
+              bundleCount={bundles.stats.total}
+            />
+          </>
+        )
+      ) : tab === "plans" ? (
         <PlansManager plans={planRows} courses={courses} currencies={currencyOptions} defaultCurrency={settings.commerce.defaultCurrency} salesEnabled={settings.growth.subscriptionsEnabled} />
       ) : (
         members && (

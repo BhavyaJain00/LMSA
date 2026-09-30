@@ -300,7 +300,7 @@ describe("buying seats", () => {
     assert.equal(notes.length, 1);
     assert.equal(notes[0].subject, "Acme Corp asked for an invoice for 5 team seats");
     assert.equal(notes[0].link, "/admin/teams/org_acme");
-    assert.match(notes[0].message, /olive@example\.com/);
+    assert.match(notes[0].message ?? "", /olive@example\.com/);
     const entry = db.auditEvents.find((e) => e.action === "team.invoice_request");
     assert.deepEqual([entry?.targetId, entry?.meta?.seats, entry?.meta?.amount], [acme.id, 5, 37000]);
   });
@@ -592,7 +592,7 @@ describe("accepting an invitation", () => {
     assert.deepEqual(await acceptInviteForSeat(adaSeat.id, stranger), { ok: false, problem: "invalid" });
     assert.deepEqual(await acceptInviteForSeat(bobSeat.id, bob), { ok: false, problem: "invalid" }, "an unconfirmed address proves nothing");
     assert.deepEqual(await pendingInvitesFor(bob), []);
-    assert.deepEqual(await acceptInviteForSeat(bobSeat.id, { ...ada, email: bob.email }), { ok: false, problem: "invalid" }, "the address is read from the stored account, not from the caller");
+    assert.deepEqual(await acceptInviteForSeat(bobSeat.id, Object.assign({}, ada, { email: bob.email })), { ok: false, problem: "invalid" }, "the address is read from the stored account, not from the caller");
     const accepted = await acceptInviteForSeat(adaSeat.id, ada);
     assert.ok(accepted.ok);
     assert.equal((await seatOf(ada.email)).userId, ada.id);
@@ -762,7 +762,7 @@ describe("administration", () => {
     assert.ok(created.ok);
     assert.deepEqual([created.org.slug, created.org.ownerId, created.org.seatCount, created.org.courseIds], ["initech", stranger.id, 4, [js.id]]);
     const welcome = (await getDb()).notifications.find((n) => n.userId === stranger.id);
-    assert.deepEqual([welcome?.subject, welcome?.message.slice(0, 20)], ["Your team Initech is ready", "4 seats are waiting."]);
+    assert.deepEqual([welcome?.subject, welcome?.message?.slice(0, 20)], ["Your team Initech is ready", "4 seats are waiting."]);
     assert.equal((await createTeam({ name: "Initech", ownerEmail: "nobody@example.com", seatCount: 4, courseIds: [js.id] })).ok, false);
     assert.equal((await createTeam({ name: "Initech", ownerEmail: stranger.email, seatCount: 4, courseIds: [] })).ok, false);
     const twin = await createTeam({ name: "Initech", ownerEmail: stranger.email, seatCount: 0, courseIds: [js.id] });
@@ -848,7 +848,7 @@ describe("dashboard read models", () => {
         if (e.courseId === py.id) Object.assign(e, { progress: 100, completedAt: "2026-06-01T00:00:00.000Z" });
       }
       d.progress.push(makeProgress(jsTree.lessons[0], ada.id, { dwellSeconds: 600, updatedAt: recent }));
-      d.progress.push(makeProgress(jsTree.lessons[1], ada.id, { status: "partially_complete", completedAt: undefined, dwellSeconds: 300, updatedAt: "2026-02-01T00:00:00.000Z" }));
+      d.progress.push(makeProgress(jsTree.lessons[1], ada.id, { status: "partial", completedAt: undefined, dwellSeconds: 300, updatedAt: "2026-02-01T00:00:00.000Z" }));
       d.certificates.push(certificate);
     });
 
