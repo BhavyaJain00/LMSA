@@ -59,7 +59,58 @@ export function isLessonLive(lesson: Pick<Lesson, "publishAt">, now: number): bo
   return at === null || at <= now;
 }
 
-export type PublishAtInput = { ok: true; iso: string; at: number } | { ok: false; error: string };
+/* ------------------------------------------------------------------ */
+/* The publish sweep                                                   */
+/* ------------------------------------------------------------------ */
+
+export interface PublishSweepPlan {
+  /** Courses whose time has come: they go live and are announced. */
+  publish: string[];
+  /** Courses published by hand before their schedule: the leftover publish time is removed. */
+  clear: string[];
+  /** Lessons whose time has come: the publish time is removed and the release announced. */
+  release: string[];
+  /** The earliest publish time still ahead (epoch ms), or null when nothing is scheduled. */
+  nextAt: number | null;
+}
+
+/**
+ * What the publish sweep has to write at `now`. A course or lesson is listed
+ * only until the plan is written: writing removes its publish time, so the
+ * next plan no longer contains it. That removal is the "already processed"
+ * flag that makes the side effects happen exactly once.
+ */
+export function planPublishSweep(
+  courses: readonly Pick<Course, "id" | "published" | "publishAt" | "status">[],
+  lessons: readonly Pick<Lesson, "id" | "publishAt">[],
+  now: number,
+): PublishSweepPlan {
+  const plan: PublishSweepPlan = { publish: [], clear: [], release: [], nextAt: null };
+  const ahead = (at: number) => {
+    if (plan.nextAt === null || at < plan.nextAt) plan.nextAt = at;
+  };
+  for (const course of courses) {
+    if (!course.publishAt) continue;
+    const state = coursePublishState(course, now);
+    if (state === "live") plan.clear.push(course.id);
+    else if (state === "due") plan.publish.push(course.id);
+    else if (state === "scheduled") ahead(publishTime(course)!);
+    // "held" waits for an approval, not for the clock; an unreadable time is left alone.
+  }
+  for (const lesson of lessons) {
+    const at = publishTime(lesson);
+    if (at === null) continue;
+    if (at <= now) plan.release.push(lesson.id);
+    else ahead(at);
+  }
+  return plan;
+}
+
+export function sweepHasWork(plan: PublishSweepPlan): boolean {
+  return plan.publish.length + plan.clear.length + plan.release.length > 0;
+}
+
+export type PublishAtInput ={ ok: true; iso: string; at: number } | { ok: false; error: string };
 
 /** Validate a publish time sent by a form (an ISO instant). */
 export function parsePublishAt(input: unknown, now: number): PublishAtInput {
@@ -109,6 +160,22 @@ export function describeTimeUntil(at: number, now: number): string {
 /* View models (server actions → schedule forms)                       */
 /* ------------------------------------------------------------------ */
 
+/** A course with a publish time, for the "Scheduled for …" marker on the course list. */
+export interface CourseScheduleSummary {
+  publishAt: string;
+  state: CoursePublishState;
+}
+
+/** A lesson of a course that learners cannot see yet. */
+export interface ScheduledLessonRow {
+  lessonId: string;
+  title: string;
+  /** "2.3": chapter and lesson number in the editor's outline. */
+  index: string;
+  publishAt: string;
+  editHref: string;
+}
+
 export interface CourseScheduleInfo {
   courseId: string;
   title: string;
@@ -123,6 +190,8 @@ export interface CourseScheduleInfo {
   notifiesMembers: boolean;
   /** The course was never published before, so going live announces it. */
   firstPublish: boolean;
+  /** Lessons hidden until their own publish time, soonest first. */
+  scheduledLessons: ScheduledLessonRow[];
 }
 
 export interface LessonScheduleInfo {
@@ -135,4 +204,22 @@ export interface LessonScheduleInfo {
   courseLive: boolean;
   /** Learners who are told when the lesson appears. */
   learnerCount: number;
+  /** Learners who already opened the lesson (hiding it takes it away from them). */
+  openedCount: number;
+}
+
+/** Short name of a publish state, shared by the badges and the schedule card. */
+export function publishStateLabel(state: CoursePublishState): string {
+  switch (state) {
+    case "live":
+      return "Published";
+    case "scheduled":
+      return "Scheduled";
+    case "due":
+      return "Publishing now";
+    case "held":
+      return "On hold";
+    default:
+      return "Draft";
+  }
 }
