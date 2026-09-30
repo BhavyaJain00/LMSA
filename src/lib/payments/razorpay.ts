@@ -3,7 +3,8 @@ import { razorpayEnv } from "@/lib/server-env";
 import { GatewayError, gatewayFetch, num, obj, readJson, str, stringMap, type GatewayRequestOptions } from "./http";
 
 /**
- * Razorpay REST client (Orders, Payments, Refunds) implemented with `fetch`.
+ * Razorpay REST client (Orders, Payments, Refunds, Plans, Subscriptions)
+ * implemented with `fetch`.
  * Docs: https://razorpay.com/docs/api — JSON requests, HTTP Basic auth with
  * key_id:key_secret. Amounts are in the currency's smallest unit.
  */
@@ -44,7 +45,7 @@ export function razorpayDashboardPaymentUrl(paymentId: string): string {
   return `https://dashboard.razorpay.com/app/payments/${encodeURIComponent(paymentId)}`;
 }
 
-async function razorpayRequest(method: "GET" | "POST", path: string, body?: Record<string, unknown>, opts: GatewayRequestOptions = {}): Promise<Record<string, unknown>> {
+async function razorpayRequest(method: "GET" | "POST" | "PATCH", path: string, body?: Record<string, unknown>, opts: GatewayRequestOptions = {}): Promise<Record<string, unknown>> {
   if (!isRazorpayConfigured()) throw new GatewayError("Razorpay", "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to your .env file.");
   const auth = Buffer.from(`${razorpayEnv.keyId}:${razorpayEnv.keySecret}`, "utf8").toString("base64");
   const headers: Record<string, string> = { Authorization: `Basic ${auth}`, Accept: "application/json" };
@@ -121,6 +122,8 @@ export interface RazorpayPayment {
   errorDescription?: string;
   amountRefunded: number;
   refundStatus?: string;
+  /** Set on payments that pay a subscription invoice. */
+  invoiceId?: string;
   notes: Record<string, string>;
 }
 
@@ -137,6 +140,7 @@ export function parseRazorpayPayment(raw: Record<string, unknown>): RazorpayPaym
     errorDescription: str(raw.error_description),
     amountRefunded: num(raw.amount_refunded) ?? 0,
     refundStatus: str(raw.refund_status),
+    invoiceId: str(raw.invoice_id),
     notes: stringMap(raw.notes),
   };
 }
@@ -224,6 +228,144 @@ export async function listRazorpayRefunds(paymentId: string, opts: GatewayReques
 }
 
 /* ------------------------------------------------------------------ */
+/* Plans and subscriptions (memberships)                               */
+/* ------------------------------------------------------------------ */
+
+const PLAN_ID_RE = /^plan_[A-Za-z0-9]{6,40}$/;
+const SUBSCRIPTION_ID_RE = /^sub_[A-Za-z0-9]{6,40}$/;
+
+export function isRazorpayPlanId(id: string | undefined | null): id is string {
+  return !!id && PLAN_ID_RE.test(id);
+}
+
+export function isRazorpaySubscriptionId(id: string | undefined | null): id is string {
+  return !!id && SUBSCRIPTION_ID_RE.test(id);
+}
+
+/** Link to a subscription in the Razorpay dashboard (for administrators). */
+export function razorpayDashboardSubscriptionUrl(subscriptionId: string): string {
+  return `https://dashboard.razorpay.com/app/subscriptions/${encodeURIComponent(subscriptionId)}`;
+}
+
+export interface RazorpayPlan {
+  id: string;
+  /** "monthly" | "yearly" | "weekly" | "daily" */
+  period: string;
+  interval: number;
+  amount: number;
+  currency: string;
+}
+
+export function parseRazorpayPlan(raw: Record<string, unknown>): RazorpayPlan {
+  const item = obj(raw.item);
+  return {
+    id: str(raw.id) ?? "",
+    period: str(raw.period) ?? "",
+    interval: num(raw.interval) ?? 1,
+    amount: num(item.amount) ?? 0,
+    currency: str(item.currency) ?? "",
+  };
+}
+
+export async function fetchRazorpayPlan(planId: string): Promise<RazorpayPlan> {
+  if (!isRazorpayPlanId(planId)) throw new GatewayError("Razorpay", "Invalid Razorpay plan id.", 400);
+  return parseRazorpayPlan(await razorpayRequest("GET", `/plans/${encodeURIComponent(planId)}`));
+}
+
+/** Create a billing plan (Razorpay plans are immutable: a new price needs a new plan). */
+export async function createRazorpayPlan(input: { name: string; amount: number; currency: string; interval: "month" | "year"; planId: string }): Promise<RazorpayPlan> {
+  if (!Number.isInteger(input.amount) || input.amount <= 0) throw new GatewayError("Razorpay", "The membership price must be greater than zero.");
+  const plan = parseRazorpayPlan(
+    await razorpayRequest("POST", "/plans", {
+      period: input.interval === "year" ? "yearly" : "monthly",
+      interval: 1,
+      item: { name: input.name.replace(/\s+/g, " ").trim().slice(0, 100) || "Membership", amount: input.amount, currency: input.currency.toUpperCase() },
+      notes: { planId: input.planId },
+    }),
+  );
+  if (!plan.id) throw new GatewayError("Razorpay", "Razorpay did not return a plan id.");
+  return plan;
+}
+
+export interface RazorpaySubscription {
+  id: string;
+  planId: string | undefined;
+  /** "created" | "authenticated" | "active" | "pending" | "halted" | "cancelled" | "completed" | "expired" | "paused" */
+  status: string;
+  /** Unix seconds (unset before the first charge). */
+  currentStart: number | undefined;
+  currentEnd: number | undefined;
+  /** When the next charge is attempted. */
+  chargeAt: number | undefined;
+  startAt: number | undefined;
+  endedAt: number | undefined;
+  paidCount: number;
+  totalCount: number | undefined;
+  shortUrl: string | undefined;
+  hasScheduledChanges: boolean;
+  notes: Record<string, string>;
+}
+
+export function parseRazorpaySubscription(raw: Record<string, unknown>): RazorpaySubscription {
+  return {
+    id: str(raw.id) ?? "",
+    planId: str(raw.plan_id),
+    status: str(raw.status) ?? "",
+    currentStart: num(raw.current_start),
+    currentEnd: num(raw.current_end),
+    chargeAt: num(raw.charge_at),
+    startAt: num(raw.start_at),
+    endedAt: num(raw.ended_at),
+    paidCount: num(raw.paid_count) ?? 0,
+    totalCount: num(raw.total_count),
+    shortUrl: str(raw.short_url),
+    hasScheduledChanges: raw.has_scheduled_changes === true,
+    notes: stringMap(raw.notes),
+  };
+}
+
+/**
+ * Create a subscription the member authorizes in Razorpay Checkout.
+ * `startAt` (unix seconds) delays the first charge, which is how a free
+ * trial works on Razorpay. `totalCount` is the number of billing cycles.
+ */
+export async function createRazorpaySubscription(input: {
+  planId: string;
+  totalCount: number;
+  startAt?: number;
+  notes: Record<string, string>;
+}): Promise<RazorpaySubscription> {
+  if (!isRazorpayPlanId(input.planId)) throw new GatewayError("Razorpay", "Invalid Razorpay plan id.", 400);
+  const body: Record<string, unknown> = { plan_id: input.planId, total_count: input.totalCount, quantity: 1, customer_notify: 1, notes: input.notes };
+  if (input.startAt) body.start_at = input.startAt;
+  const sub = parseRazorpaySubscription(await razorpayRequest("POST", "/subscriptions", body));
+  if (!sub.id) throw new GatewayError("Razorpay", "Razorpay did not return a subscription id.");
+  return sub;
+}
+
+export async function fetchRazorpaySubscription(subscriptionId: string, opts: GatewayRequestOptions = {}): Promise<RazorpaySubscription> {
+  if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);
+  return parseRazorpaySubscription(await razorpayRequest("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`, undefined, opts));
+}
+
+/** Cancel now, or at the end of the current billing cycle (which cannot be undone on Razorpay). */
+export async function cancelRazorpaySubscription(subscriptionId: string, atCycleEnd: boolean): Promise<RazorpaySubscription> {
+  if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);
+  return parseRazorpaySubscription(
+    await razorpayRequest("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`, { cancel_at_cycle_end: atCycleEnd ? 1 : 0 }),
+  );
+}
+
+/** Switch a subscription to another plan from its next billing cycle. */
+export async function changeRazorpaySubscriptionPlan(subscriptionId: string, planId: string): Promise<RazorpaySubscription> {
+  if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);
+  if (!isRazorpayPlanId(planId)) throw new GatewayError("Razorpay", "Invalid Razorpay plan id.", 400);
+  return parseRazorpaySubscription(
+    await razorpayRequest("PATCH", `/subscriptions/${encodeURIComponent(subscriptionId)}`, { plan_id: planId, schedule_change_at: "cycle_end", customer_notify: 1 }),
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Webhook payloads                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -232,6 +374,7 @@ export interface RazorpayEvent {
   payment: RazorpayPayment | null;
   order: RazorpayOrder | null;
   refund: RazorpayRefund | null;
+  subscription: RazorpaySubscription | null;
 }
 
 /** Normalize a webhook body (`{ entity: "event", event, payload: { payment: { entity } … } }`). */
@@ -246,11 +389,13 @@ export function parseRazorpayEvent(raw: Record<string, unknown>): RazorpayEvent 
   const payment = entity("payment");
   const order = entity("order");
   const refund = entity("refund");
+  const subscription = entity("subscription");
   return {
     event,
     payment: payment ? parseRazorpayPayment(payment) : null,
     order: order ? parseRazorpayOrder(order) : null,
     refund: refund ? parseRazorpayRefund(refund) : null,
+    subscription: subscription ? parseRazorpaySubscription(subscription) : null,
   };
 }
 

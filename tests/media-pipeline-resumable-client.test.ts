@@ -265,7 +265,7 @@ describe("UploadTask (chunked)", () => {
   it("stops without retrying on a refused file", async () => {
     const h = harness();
     h.server.faults.push(() => result(415, { ok: false, error: "Unsupported file type: video/x-flv" }));
-    const { task, snapshots } = makeTask(h, videoFile());
+    const { task } = makeTask(h, videoFile());
     task.start();
     const final = await runUntil(task, ["done", "error"]);
     assert.equal(final.phase, "error");
@@ -300,7 +300,7 @@ describe("UploadTask (chunked)", () => {
       return req.method === "PATCH" ? result(503, { ok: false, error: "Server busy." }) : "pass";
     };
     h.server.faults.push(failPatch);
-    const { task, snapshots } = makeTask(h, file);
+    const { task } = makeTask(h, file);
     task.start();
     const failed = await runUntil(task, ["done", "error"]);
     assert.equal(failed.phase, "error");
@@ -348,7 +348,7 @@ describe("UploadTask (chunked)", () => {
       });
     };
     h.server.faults.push(hold);
-    const { task, snapshots } = makeTask(h, file);
+    const { task } = makeTask(h, file);
     task.start();
     await new Promise<void>((resolve) => {
       const check = () => (release ? resolve() : setTimeout(check, 1));
@@ -364,6 +364,30 @@ describe("UploadTask (chunked)", () => {
     assert.equal(final.phase, "done");
     const log = h.server.log.join("\n");
     assert.match(log, /PATCH[^\n]*\nHEAD/, "resume asks for the offset first");
+  });
+
+  it("resumes even when Resume is pressed before the paused request has unwound", async () => {
+    const h = harness();
+    const hold: Fault = (req) => {
+      if (req.method !== "PATCH") {
+        h.server.faults.unshift(hold);
+        return "pass";
+      }
+      return new Promise<HttpResult>((_, reject) => req.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true }));
+    };
+    h.server.faults.push(hold);
+    const { task } = makeTask(h, videoFile());
+    task.start();
+    await new Promise<void>((resolve) => {
+      const check = () => (h.server.log.some((l) => l.startsWith("PATCH")) ? resolve() : setTimeout(check, 1));
+      check();
+    });
+    h.server.faults.length = 0;
+    // Pause and resume in the same tick: the first run has not finished unwinding yet.
+    task.pause();
+    task.resume();
+    const final = await runUntil(task, ["done", "error"]);
+    assert.equal(final.phase, "done");
   });
 
   it("continues an upload started before a reload when the same file is chosen", async () => {
@@ -408,7 +432,7 @@ describe("UploadTask (chunked)", () => {
       resumeKeyFor(file, "video"),
       JSON.stringify({ id: "ups_gone00000001", fileName: file.name, size: file.size, offset: 100, savedAt: 1_700_000_000_000, scope: "video:videoUrl" }),
     );
-    const { task, snapshots } = makeTask(h, file);
+    const { task } = makeTask(h, file);
     task.start();
     const final = await runUntil(task, ["done", "error"]);
     assert.equal(final.phase, "done");
@@ -445,7 +469,7 @@ describe("UploadTask (single request)", () => {
   it("sends small documents in one request to /api/upload", async () => {
     const h = harness();
     const file = new File([new Uint8Array(5000)], "notes.pdf", { type: "application/pdf", lastModified: 1 });
-    const { task, snapshots, completed } = makeTask(h, file, { kind: "document", scope: "document:" });
+    const { task, completed } = makeTask(h, file, { kind: "document", scope: "document:" });
     assert.equal(task.chunked, false);
     task.start();
     const final = await runUntil(task, ["done", "error"]);
@@ -461,7 +485,7 @@ describe("UploadTask (single request)", () => {
       throw new NetworkError();
     });
     const file = new File([new Uint8Array(10)], "a.png", { type: "image/png", lastModified: 1 });
-    const { task, snapshots } = makeTask(h, file, { kind: "auto" });
+    const { task } = makeTask(h, file, { kind: "auto" });
     task.start();
     const final = await runUntil(task, ["done", "error"]);
     assert.equal(final.phase, "done");

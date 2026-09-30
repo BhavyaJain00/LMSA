@@ -419,6 +419,8 @@ export class UploadTask {
   private needsSync = false;
   private controller: AbortController | null = null;
   private running = false;
+  /** Set when `resume()` is called while the aborted run is still unwinding. */
+  private restartPending = false;
   private snap: UploadSnapshot;
   private lastEmit = 0;
   private speedMark: { at: number; loaded: number } | null = null;
@@ -454,13 +456,19 @@ export class UploadTask {
 
   /** Start (or continue) sending. Safe to call again after `pause()` or an error. */
   start(): void {
-    if (this.running || this.snap.phase === "done" || this.snap.phase === "cancelled") return;
+    if (this.snap.phase === "done" || this.snap.phase === "cancelled") return;
+    if (this.running) {
+      // A paused run may still be unwinding: start again as soon as it has.
+      if (this.controller?.signal.aborted) this.restartPending = true;
+      return;
+    }
     void this.run();
   }
 
   /** Stop sending; what the server already has is kept. */
   pause(): void {
     if (!this.running || this.snap.phase === "finishing") return;
+    this.restartPending = false;
     this.controller?.abort();
     this.update({ phase: "paused", canResume: true, bytesPerSecond: 0, secondsLeft: null, offline: false }, true);
   }
@@ -474,6 +482,7 @@ export class UploadTask {
   /** Stop and delete what was uploaded so far. */
   cancel(): void {
     if (this.snap.phase === "done" || this.snap.phase === "cancelled") return;
+    this.restartPending = false;
     this.controller?.abort();
     removeRecord(this.env.storage, this.resumeKey);
     const id = this.sessionId;
@@ -565,7 +574,7 @@ export class UploadTask {
           }
           attempt++;
           if (attempt > MAX_CHUNK_RETRIES) {
-            throw new FatalUploadError(`${err instanceof Error ? err.message : "The upload failed."} Resume to try again.`, 0);
+            throw new FatalUploadError(err instanceof Error ? err.message : "The upload failed.", 0);
           }
           const delay = err instanceof TransientUploadError && err.retryAfterMs !== null ? err.retryAfterMs : retryDelayMs(attempt);
           this.update({ phase: "retrying", attempt, offline: false, bytesPerSecond: 0, secondsLeft: null, error: err instanceof Error ? err.message : "The upload failed." }, true);
@@ -583,6 +592,10 @@ export class UploadTask {
     } finally {
       if (this.controller === controller) this.controller = null;
       this.running = false;
+      if (this.restartPending) {
+        this.restartPending = false;
+        this.start();
+      }
     }
   }
 

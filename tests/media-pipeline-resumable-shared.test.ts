@@ -247,7 +247,8 @@ describe("client helpers", () => {
     assert.equal(parseResumeRecord(JSON.stringify({ ...good, offset: 101 }), now), null);
     assert.equal(parseResumeRecord("{not json", now), null);
     assert.equal(parseResumeRecord(null, now), null);
-    const { scope: _scope, ...legacy } = good;
+    const legacy: Partial<typeof good> = { ...good };
+    delete legacy.scope;
     assert.equal(parseResumeRecord(JSON.stringify(legacy), now)?.scope, "");
   });
 

@@ -9,4 +9,6 @@ import "server-only";
  * import line below, e.g. `import "@/lib/commerce/handlers";`.
  */
 
+import "@/lib/growth/handlers";
+
 export {};

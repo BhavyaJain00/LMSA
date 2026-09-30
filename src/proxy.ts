@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { siteConfig } from "@/lib/config";
 import { UNSUBSCRIBE_RECEIPT_COOKIE } from "@/lib/email/unsubscribe-cookie";
+import { trackVisitor } from "@/lib/growth/visitor-cookies";
 
 /**
  * Optimistic auth check: routes under these prefixes need a session cookie.
@@ -23,17 +24,19 @@ function isSignedUnsubscribeLink(request: NextRequest, pathname: string, params:
 }
 
 export function proxy(request: NextRequest) {
+  // Growth: `?ref=CODE` referral cookie (last click) and the anonymous visitor id.
+  const visitor = trackVisitor(request);
   const { pathname, search, searchParams } = request.nextUrl;
   const needsAuth = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  if (!needsAuth) return NextResponse.next();
-  if (isSignedUnsubscribeLink(request, pathname, searchParams)) return NextResponse.next();
+  if (!needsAuth) return visitor.next();
+  if (isSignedUnsubscribeLink(request, pathname, searchParams)) return visitor.next();
 
   const hasSession = request.cookies.has(siteConfig.sessionCookie);
-  if (hasSession) return NextResponse.next();
+  if (hasSession) return visitor.next();
 
   const login = new URL("/login", request.url);
   login.searchParams.set("next", `${pathname}${search}`);
-  return NextResponse.redirect(login);
+  return visitor.apply(NextResponse.redirect(login));
 }
 
 export const config = {

@@ -27,7 +27,6 @@ export interface RssChannel {
   items: RssItem[];
 }
 
-// eslint-disable-next-line no-control-regex
 const INVALID_XML_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g;
 
 export function escapeXml(value: string): string {

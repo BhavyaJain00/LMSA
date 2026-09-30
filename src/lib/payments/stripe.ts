@@ -3,7 +3,8 @@ import { stripeEnv } from "@/lib/server-env";
 import { GatewayError, gatewayFetch, num, obj, readJson, str, stringMap, toFormBody, type GatewayRequestOptions } from "./http";
 
 /**
- * Stripe REST client (Checkout Sessions, Refunds) implemented with `fetch`.
+ * Stripe REST client (Checkout Sessions, Refunds, Subscriptions, Invoices,
+ * Products and Prices) implemented with `fetch`.
  * Docs: https://docs.stripe.com/api — form-encoded requests, Bearer auth.
  */
 
@@ -41,7 +42,7 @@ export function stripeDashboardPaymentUrl(paymentIntentId: string, mode: "test" 
 }
 
 async function stripeRequest(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: Record<string, unknown>,
   opts: GatewayRequestOptions & { idempotencyKey?: string } = {},
@@ -92,6 +93,10 @@ export interface StripeCheckoutSession {
   customerEmail: string | undefined;
   expiresAt: number | undefined;
   livemode: boolean;
+  /** "payment" | "subscription" */
+  mode: string;
+  /** Subscription created by a `mode=subscription` session once it completes. */
+  subscriptionId: string | undefined;
 }
 
 /** Normalize a Checkout Session object (from the API or a webhook event). */
@@ -110,6 +115,8 @@ export function parseStripeSession(raw: Record<string, unknown>): StripeCheckout
     customerEmail: str(raw.customer_email) ?? str(obj(raw.customer_details).email),
     expiresAt: num(raw.expires_at),
     livemode: raw.livemode === true,
+    mode: str(raw.mode) ?? "payment",
+    subscriptionId: typeof raw.subscription === "string" ? raw.subscription : str(obj(raw.subscription).id),
   };
 }
 
@@ -339,6 +346,282 @@ export async function listStripeRefunds(paymentIntentId: string, opts: GatewayRe
   const json = await stripeRequest("GET", `/refunds?payment_intent=${encodeURIComponent(paymentIntentId)}&limit=100`, undefined, opts);
   const data = Array.isArray(json.data) ? json.data : [];
   return data.map((r) => parseStripeRefund(obj(r))).filter((r) => r.id);
+}
+
+/* ------------------------------------------------------------------ */
+/* Subscriptions (memberships)                                         */
+/* ------------------------------------------------------------------ */
+
+const SUBSCRIPTION_ID_RE = /^sub_[A-Za-z0-9]{8,200}$/;
+const PRICE_ID_RE = /^price_[A-Za-z0-9]{6,200}$/;
+
+export function isStripeSubscriptionId(id: string | undefined | null): id is string {
+  return !!id && SUBSCRIPTION_ID_RE.test(id);
+}
+
+export function isStripePriceId(id: string | undefined | null): id is string {
+  return !!id && PRICE_ID_RE.test(id);
+}
+
+/** Link to a subscription in the Stripe dashboard (for administrators). */
+export function stripeDashboardSubscriptionUrl(subscriptionId: string, mode: "test" | "live" | null = stripeMode()): string {
+  return `https://dashboard.stripe.com/${mode === "live" ? "" : "test/"}subscriptions/${encodeURIComponent(subscriptionId)}`;
+}
+
+export interface CreateStripeSubscriptionSessionInput {
+  paymentId: string;
+  orderId: string;
+  planId: string;
+  userId: string;
+  title: string;
+  description?: string;
+  /** Recurring amount in the currency's smallest unit (already converted). */
+  unitAmount: number;
+  currency: string;
+  interval: "month" | "year";
+  /** Reuse this recurring Price instead of inline price data (must match amount, currency and interval). */
+  priceId?: string;
+  /** Free days before the first charge (0 = charge now). */
+  trialDays: number;
+  customerEmail?: string;
+  successUrl: string;
+  cancelUrl: string;
+}
+
+/**
+ * Hosted Checkout for a membership (`mode=subscription`). The session,
+ * the subscription it creates and its first invoice all carry our payment,
+ * order, plan and member ids in `metadata`, so webhooks arriving in any order
+ * can be matched back to the order.
+ */
+export async function createStripeSubscriptionSession(input: CreateStripeSubscriptionSessionInput): Promise<StripeCheckoutSession> {
+  if (!Number.isInteger(input.unitAmount) || input.unitAmount <= 0) throw new GatewayError("Stripe", "The membership price must be greater than zero.");
+  const name = input.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Membership ${input.orderId}`;
+  const description = input.description?.replace(/\s+/g, " ").trim().slice(0, 500);
+  const email = input.customerEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.customerEmail) ? input.customerEmail : undefined;
+  const metadata = { paymentId: input.paymentId, orderId: input.orderId, planId: input.planId, userId: input.userId };
+  const lineItem: Record<string, unknown> = isStripePriceId(input.priceId)
+    ? { quantity: 1, price: input.priceId }
+    : {
+        quantity: 1,
+        price_data: {
+          currency: input.currency.toLowerCase(),
+          unit_amount: input.unitAmount,
+          recurring: { interval: input.interval, interval_count: 1 },
+          product_data: description ? { name, description } : { name },
+        },
+      };
+  const json = await stripeRequest("POST", "/checkout/sessions", {
+    mode: "subscription",
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+    client_reference_id: input.paymentId,
+    customer_email: email,
+    locale: "auto",
+    line_items: [lineItem],
+    metadata,
+    subscription_data: {
+      description: `Membership · order ${input.orderId}`,
+      metadata,
+      trial_period_days: input.trialDays > 0 ? input.trialDays : undefined,
+    },
+  });
+  const session = parseStripeSession(json);
+  if (!session.id || !session.url) throw new GatewayError("Stripe", "Stripe did not return a checkout URL.");
+  return session;
+}
+
+export interface StripeSubscription {
+  id: string;
+  /** "trialing" | "active" | "past_due" | "canceled" | "unpaid" | "incomplete" | "incomplete_expired" | "paused" */
+  status: string;
+  /** Unix seconds. */
+  currentPeriodStart: number | undefined;
+  currentPeriodEnd: number | undefined;
+  trialEnd: number | undefined;
+  cancelAtPeriodEnd: boolean;
+  /** Unix seconds when the subscription ended (canceled or expired). */
+  endedAt: number | undefined;
+  canceledAt: number | undefined;
+  customerId: string | undefined;
+  /** First subscription item (memberships have exactly one). */
+  itemId: string | undefined;
+  priceId: string | undefined;
+  productId: string | undefined;
+  metadata: Record<string, string>;
+  latestInvoice: StripeInvoice | null;
+  latestInvoiceId: string | undefined;
+}
+
+export function parseStripeSubscription(raw: Record<string, unknown>): StripeSubscription {
+  const items = Array.isArray(obj(raw.items).data) ? (obj(raw.items).data as unknown[]) : [];
+  const first = obj(items[0]);
+  const price = obj(first.price);
+  const product = price.product;
+  const latest = raw.latest_invoice;
+  return {
+    id: str(raw.id) ?? "",
+    status: str(raw.status) ?? "",
+    currentPeriodStart: num(raw.current_period_start) ?? num(first.current_period_start),
+    currentPeriodEnd: num(raw.current_period_end) ?? num(first.current_period_end),
+    trialEnd: num(raw.trial_end),
+    cancelAtPeriodEnd: raw.cancel_at_period_end === true,
+    endedAt: num(raw.ended_at),
+    canceledAt: num(raw.canceled_at),
+    customerId: typeof raw.customer === "string" ? raw.customer : str(obj(raw.customer).id),
+    itemId: str(first.id),
+    priceId: str(price.id),
+    productId: typeof product === "string" ? product : str(obj(product).id),
+    metadata: stringMap(raw.metadata),
+    latestInvoice: latest && typeof latest === "object" ? parseStripeInvoice(obj(latest)) : null,
+    latestInvoiceId: typeof latest === "string" ? latest : str(obj(latest).id),
+  };
+}
+
+/** Read a subscription with its latest invoice. */
+export async function retrieveStripeSubscription(subscriptionId: string, opts: GatewayRequestOptions = {}): Promise<StripeSubscription> {
+  if (!isStripeSubscriptionId(subscriptionId)) throw new GatewayError("Stripe", "Invalid subscription id.", 400);
+  const json = await stripeRequest("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}?expand%5B%5D=latest_invoice`, undefined, opts);
+  return parseStripeSubscription(json);
+}
+
+/** Schedule (or undo) the end of a subscription at its current period end. */
+export async function setStripeCancelAtPeriodEnd(subscriptionId: string, cancel: boolean): Promise<StripeSubscription> {
+  if (!isStripeSubscriptionId(subscriptionId)) throw new GatewayError("Stripe", "Invalid subscription id.", 400);
+  return parseStripeSubscription(await stripeRequest("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}`, { cancel_at_period_end: cancel }));
+}
+
+/**
+ * Move a subscription to another recurring price. Stripe prorates the
+ * difference on the next invoice (`create_prorations`).
+ */
+export async function changeStripeSubscriptionPrice(input: {
+  subscriptionId: string;
+  itemId: string;
+  priceId: string;
+  planId: string;
+  idempotencyKey: string;
+}): Promise<StripeSubscription> {
+  if (!isStripeSubscriptionId(input.subscriptionId)) throw new GatewayError("Stripe", "Invalid subscription id.", 400);
+  if (!isStripePriceId(input.priceId)) throw new GatewayError("Stripe", "Invalid price id.", 400);
+  const json = await stripeRequest(
+    "POST",
+    `/subscriptions/${encodeURIComponent(input.subscriptionId)}`,
+    {
+      items: [{ id: input.itemId, price: input.priceId }],
+      proration_behavior: "create_prorations",
+      cancel_at_period_end: false,
+      metadata: { planId: input.planId },
+    },
+    { idempotencyKey: input.idempotencyKey },
+  );
+  return parseStripeSubscription(json);
+}
+
+/** End a subscription immediately (no further invoices). */
+export async function cancelStripeSubscriptionNow(subscriptionId: string): Promise<StripeSubscription> {
+  if (!isStripeSubscriptionId(subscriptionId)) throw new GatewayError("Stripe", "Invalid subscription id.", 400);
+  try {
+    return parseStripeSubscription(await stripeRequest("DELETE", `/subscriptions/${encodeURIComponent(subscriptionId)}`));
+  } catch (error) {
+    // Already canceled on Stripe: read its final state instead.
+    if (error instanceof GatewayError && error.status >= 400 && error.status < 500 && error.status !== 401) return retrieveStripeSubscription(subscriptionId);
+    throw error;
+  }
+}
+
+export interface StripePrice {
+  id: string;
+  productId: string | undefined;
+  unitAmount: number | undefined;
+  currency: string;
+  interval: string | undefined;
+  active: boolean;
+}
+
+export function parseStripePrice(raw: Record<string, unknown>): StripePrice {
+  const product = raw.product;
+  return {
+    id: str(raw.id) ?? "",
+    productId: typeof product === "string" ? product : str(obj(product).id),
+    unitAmount: num(raw.unit_amount),
+    currency: str(raw.currency) ?? "",
+    interval: str(obj(raw.recurring).interval),
+    active: raw.active === true,
+  };
+}
+
+export async function retrieveStripePrice(priceId: string): Promise<StripePrice> {
+  if (!isStripePriceId(priceId)) throw new GatewayError("Stripe", "Invalid price id.", 400);
+  return parseStripePrice(await stripeRequest("GET", `/prices/${encodeURIComponent(priceId)}`));
+}
+
+/**
+ * Create a recurring Price. With `productId` the price joins that product;
+ * otherwise a product named `productName` is created with it.
+ */
+export async function createStripeRecurringPrice(input: {
+  unitAmount: number;
+  currency: string;
+  interval: "month" | "year";
+  productId?: string;
+  productName: string;
+  planId: string;
+  idempotencyKey: string;
+}): Promise<StripePrice> {
+  if (!Number.isInteger(input.unitAmount) || input.unitAmount <= 0) throw new GatewayError("Stripe", "The membership price must be greater than zero.");
+  const body: Record<string, unknown> = {
+    unit_amount: input.unitAmount,
+    currency: input.currency.toLowerCase(),
+    recurring: { interval: input.interval, interval_count: 1 },
+    metadata: { planId: input.planId },
+  };
+  if (input.productId) body.product = input.productId;
+  else body.product_data = { name: input.productName.replace(/\s+/g, " ").trim().slice(0, 250) || "Membership", metadata: { planId: input.planId } };
+  const price = parseStripePrice(await stripeRequest("POST", "/prices", body, { idempotencyKey: input.idempotencyKey }));
+  if (!price.id) throw new GatewayError("Stripe", "Stripe did not return a price id.");
+  return price;
+}
+
+export interface StripeInvoice {
+  id: string;
+  subscriptionId: string | undefined;
+  /** "subscription_create" | "subscription_cycle" | "subscription_update" | "manual" | … */
+  billingReason: string;
+  status: string;
+  amountPaid: number;
+  amountDue: number;
+  currency: string;
+  paymentIntentId: string | undefined;
+  /** Stripe's own invoice number (shown next to ours). */
+  number: string | undefined;
+  hostedInvoiceUrl: string | undefined;
+  /** Unix seconds of the service period the invoice covers (first line). */
+  periodStart: number | undefined;
+  periodEnd: number | undefined;
+  metadata: Record<string, string>;
+}
+
+export function parseStripeInvoice(raw: Record<string, unknown>): StripeInvoice {
+  const pi = raw.payment_intent;
+  const sub = raw.subscription;
+  const lines = Array.isArray(obj(raw.lines).data) ? (obj(raw.lines).data as unknown[]) : [];
+  const period = obj(obj(lines[0]).period);
+  return {
+    id: str(raw.id) ?? "",
+    subscriptionId: typeof sub === "string" ? sub : str(obj(sub).id),
+    billingReason: str(raw.billing_reason) ?? "",
+    status: str(raw.status) ?? "",
+    amountPaid: num(raw.amount_paid) ?? 0,
+    amountDue: num(raw.amount_due) ?? 0,
+    currency: str(raw.currency) ?? "",
+    paymentIntentId: typeof pi === "string" ? pi : str(obj(pi).id),
+    number: str(raw.number),
+    hostedInvoiceUrl: str(raw.hosted_invoice_url),
+    periodStart: num(period.start),
+    periodEnd: num(period.end),
+    metadata: stringMap(raw.metadata),
+  };
 }
 
 /* ------------------------------------------------------------------ */

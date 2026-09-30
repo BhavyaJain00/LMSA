@@ -112,6 +112,18 @@ export function verifyRazorpayPaymentSignature(input: { orderId: string; payment
   return safeEqualHex(expected, input.signature.trim());
 }
 
+/**
+ * Verify the signature Razorpay Checkout returns after the first payment of a
+ * subscription: HMAC-SHA256(key_secret, `${payment_id}|${subscription_id}`)
+ * (note the order: payment first, unlike one-time orders).
+ */
+export function verifyRazorpaySubscriptionSignature(input: { subscriptionId: string; paymentId: string; signature: string }, keySecret: string): boolean {
+  if (!keySecret || !input.subscriptionId || !input.paymentId || !input.signature) return false;
+  if (input.signature.length > 256 || input.subscriptionId.length > 64 || input.paymentId.length > 64) return false;
+  const expected = hmacSha256Hex(keySecret, `${input.paymentId}|${input.subscriptionId}`);
+  return safeEqualHex(expected, input.signature.trim());
+}
+
 /** Verify an `X-Razorpay-Signature` header: HMAC-SHA256(webhook_secret, rawBody). */
 export function verifyRazorpayWebhookSignature(rawBody: RawBody, header: string | null | undefined, webhookSecret: string): boolean {
   if (!webhookSecret || !header || header.length > 256) return false;

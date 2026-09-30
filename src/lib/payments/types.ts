@@ -9,8 +9,10 @@ export type RealGateway = "stripe" | "razorpay";
 export interface RazorpayLaunchOptions {
   /** Public key id (rzp_test_… / rzp_live_…). */
   keyId: string;
-  /** Razorpay order id (order_…). */
-  razorpayOrderId: string;
+  /** Razorpay order id (order_…) of a one-time payment. */
+  razorpayOrderId?: string;
+  /** Razorpay subscription id (sub_…) of a membership checkout (instead of an order id). */
+  razorpaySubscriptionId?: string;
   /** Our order id (ORD-…), used for the return pages. */
   orderId: string;
   /** Amount in the currency's smallest unit, as sent to Razorpay. */

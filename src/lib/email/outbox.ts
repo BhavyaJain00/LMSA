@@ -12,6 +12,18 @@ import { wrapHtmlFragment } from "./templates/layout";
 import { findUnsubscribeScope, oneClickUnsubscribeUrl, preferencesUrl } from "./signing";
 import { AUTH_TOKEN_TTL_MS } from "@/lib/auth/tokens";
 import { SENSITIVE_EMAIL_CATEGORIES, TRANSACTIONAL_EMAIL_CATEGORIES } from "./preferences";
+import { addEmailTracking } from "@/lib/comms/tracking";
+import { normalizeTrackingId, stripTracking } from "@/lib/comms/tracking-core";
+
+declare module "@/lib/types" {
+  interface EmailMessage {
+    /**
+     * Round 3 comms: campaign of a tracked marketing email ("broadcast:<id>",
+     * "sequence:<id>:<stepId>"), used to attribute opens and clicks.
+     */
+    trackingId?: string;
+  }
+}
 
 /**
  * The outbox: every email is an `EmailMessage` row in the JSON store.
@@ -41,6 +53,12 @@ export interface EnqueueEmailInput {
   /** Plain-text alternative. Derived from the HTML when omitted. */
   text?: string;
   category: EmailCategory;
+  /** Campaign reference stored on the message (`broadcastTrackingId` / `sequenceTrackingId` from `@/lib/comms/tracking-core`). */
+  trackingId?: string;
+  /** Add an open-tracking pixel (only when Settings → email tracking allows it). */
+  trackOpens?: boolean;
+  /** Send links through the signed click redirect (only when Settings → email tracking allows it). */
+  trackClicks?: boolean;
 }
 
 export interface EnqueueOptions {
@@ -151,8 +169,13 @@ function prepareMessage(input: EnqueueEmailInput, settings: Settings, nowIso: st
   if (!html.trim() && !text.trim()) problems.push("The message has no content.");
   if (Buffer.byteLength(html, "utf8") + Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) problems.push("The message is larger than 2 MB.");
   const failed = problems.length > 0;
+  const id = uid("eml");
+  const trackOpens = !failed && !!input.trackOpens && settings.email.trackOpens;
+  const trackClicks = !failed && !!input.trackClicks && settings.email.trackClicks;
+  if (trackOpens || trackClicks) html = addEmailTracking(html, id, { opens: trackOpens, clicks: trackClicks });
+  const trackingId = normalizeTrackingId(input.trackingId);
   return {
-    id: uid("eml"),
+    id,
     to,
     toName: input.toName ? sanitizeHeaderValue(input.toName).slice(0, 120) || undefined : undefined,
     cc: cc.length ? cc : undefined,
@@ -161,6 +184,7 @@ function prepareMessage(input: EnqueueEmailInput, settings: Settings, nowIso: st
     html,
     text,
     category: input.category,
+    ...(trackingId ? { trackingId } : {}),
     status: failed ? "failed" : "queued",
     attempts: 0,
     lastError: failed ? problems.join(" ") : undefined,
@@ -224,10 +248,12 @@ const UNSUBSCRIBE_SIG_RE = /([?&](?:amp;)?t=)[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/
 /**
  * For admin views: hide every `token=` value regardless of category, and the
  * signature of unsubscribe links, so staff opening a preview can neither use
- * a member's one-time link nor unsubscribe them.
+ * a member's one-time link nor unsubscribe them. Open pixels and click
+ * redirects are removed too, so viewing a message never records an open or
+ * a click on the recipient's behalf.
  */
 export function redactForView(value: string): string {
-  return value.replace(ANY_TOKEN_RE, "$1••••••••").replace(UNSUBSCRIBE_SIG_RE, "$1••••••••");
+  return stripTracking(value).replace(ANY_TOKEN_RE, "$1••••••••").replace(UNSUBSCRIBE_SIG_RE, "$1••••••••");
 }
 
 /* ------------------------------------------------------------------ */
