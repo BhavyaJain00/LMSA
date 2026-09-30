@@ -356,6 +356,40 @@ export async function cancelRazorpaySubscription(subscriptionId: string, atCycle
   );
 }
 
+export interface RazorpayInvoice {
+  id: string;
+  subscriptionId: string | undefined;
+  paymentId: string | undefined;
+  /** "issued" | "paid" | "partially_paid" | "expired" | "cancelled" */
+  status: string;
+  amountPaid: number;
+  currency: string;
+  /** Unix seconds of the billing cycle the invoice covers. */
+  billingStart: number | undefined;
+  billingEnd: number | undefined;
+}
+
+export function parseRazorpayInvoice(raw: Record<string, unknown>): RazorpayInvoice {
+  return {
+    id: str(raw.id) ?? "",
+    subscriptionId: str(raw.subscription_id),
+    paymentId: str(raw.payment_id),
+    status: str(raw.status) ?? "",
+    amountPaid: num(raw.amount_paid) ?? 0,
+    currency: str(raw.currency) ?? "",
+    billingStart: num(raw.billing_start),
+    billingEnd: num(raw.billing_end),
+  };
+}
+
+/** Invoices of a subscription, newest first (one per billing cycle). */
+export async function listRazorpaySubscriptionInvoices(subscriptionId: string, opts: GatewayRequestOptions = {}): Promise<RazorpayInvoice[]> {
+  if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);
+  const json = await razorpayRequest("GET", `/invoices?subscription_id=${encodeURIComponent(subscriptionId)}&count=50`, undefined, opts);
+  const items = Array.isArray(json.items) ? json.items : [];
+  return items.map((i) => parseRazorpayInvoice(obj(i))).filter((i) => i.id);
+}
+
 /** Switch a subscription to another plan from its next billing cycle. */
 export async function changeRazorpaySubscriptionPlan(subscriptionId: string, planId: string): Promise<RazorpaySubscription> {
   if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);

@@ -13,6 +13,7 @@ import { isRole } from "@/components/admin/settings/roles";
 import { MEMBER_IMPORT_MAX_ROWS, parseRoleList, type MemberImportRow } from "@/components/admin/settings/member-import-csv";
 import { setFlash } from "@/lib/flash";
 import { emit } from "@/lib/events";
+import { audit } from "@/lib/audit";
 import { fd, isValidEmail, slugify, uid } from "@/lib/utils";
 
 /**
@@ -136,6 +137,7 @@ async function insertMember(actor: User, formData: FormData): Promise<ActionResu
   });
   if (result.ok) {
     emit("user.registered", { userId: result.data.id, email: result.data.email, name: result.data.name, source: "admin" });
+    await audit(actor, "user.create", { type: "user", id: result.data.id }, { roles: result.data.roles.join(",") });
     revalidateMember();
   }
   return result;
@@ -204,6 +206,7 @@ export async function updateMemberProfileAction(_prev: ActionResult | null, form
     row.bio = bio || undefined;
     if (changeEmail) row.email = email;
   });
+  await audit(actor, "user.update", { type: "user", id }, { emailChanged: !!changeEmail, usernameChanged: username !== target.username });
   revalidateMember(id, username);
   if (username !== target.username) revalidatePath(`/user/${target.username}`);
   return { ok: true, data: undefined, message: "Member updated" };
@@ -238,6 +241,7 @@ export async function updateMemberRolesAction(_prev: ActionResult | null, formDa
     const row = d.users.find((u) => u.id === id);
     if (row) row.roles = roles;
   });
+  await audit(actor, "user.roles", { type: "user", id }, { from: target.roles.join(","), to: roles.join(",") });
   revalidateMember(id, target.username);
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message: "Member updated" };
@@ -259,6 +263,7 @@ export async function setMemberEnabledAction(id: string, enabled: boolean): Prom
     if (row) row.enabled = enabled;
   });
   if (!enabled) await destroyAllSessions(id);
+  await audit(actor, enabled ? "user.enable" : "user.disable", { type: "user", id });
   revalidateMember(id, target.username);
   return { ok: true, data: undefined, message: enabled ? `${target.name} can sign in again.` : `${target.name} has been disabled and signed out.` };
 }
@@ -289,6 +294,7 @@ export async function resetMemberPasswordAction(_prev: ActionResult | null, form
   await revokeAuthTokens(id, "password_reset");
   await revokeAuthTokens(id, "two_factor_login");
   if (formData.get("signOut") !== "off" && target.id !== actor.id) await destroyAllSessions(id);
+  await audit(actor, "user.password", { type: "user", id }, { signedOut: formData.get("signOut") !== "off" && target.id !== actor.id });
   revalidateMember(id);
   return { ok: true, data: undefined, message: `Password updated for ${target.name}.` };
 }
@@ -353,6 +359,7 @@ export async function deleteMemberAction(id: string): Promise<ActionResult> {
     for (const p of d.payments) if (p.userId === id && p.status === "pending") p.status = "failed";
     for (const lc of d.liveClasses) lc.attendeeIds = lc.attendeeIds.filter((a) => a !== id);
   });
+  await audit(actor, "user.delete", { type: "user", id }, { username: target.username, roles: target.roles.join(",") });
   revalidateMember(undefined, target.username);
   revalidatePath("/", "layout");
   await setFlash("User deleted", "success");
@@ -531,6 +538,7 @@ export async function importMembersAction(rows: MemberImportRow[]): Promise<Acti
 
   skipped.sort((a, b) => a.line - b.line);
   for (const member of created) emit("user.registered", { userId: member.id, email: member.email, name: member.name, source: "import" });
+  if (created.length) await audit(actor, "user.import", undefined, { created: created.length, skipped: skipped.length });
   if (created.length) revalidateMember();
   const message = created.length
     ? `Imported ${created.length} ${created.length === 1 ? "member" : "members"}${skipped.length ? `, skipped ${skipped.length}` : ""}.`

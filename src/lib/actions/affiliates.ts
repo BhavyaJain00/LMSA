@@ -7,8 +7,8 @@ import { mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
 import { notify, notifyMany } from "@/lib/services/notifications";
 import { fd, fdBool, formatPrice, isValidEmail } from "@/lib/utils";
-import { AFFILIATE_STATUSES, clampCookieDays, clampPercent, MAX_COOKIE_DAYS, normalizeCode } from "@/lib/growth/affiliates-shared";
-import { PAYOUT_METHODS, applyForAffiliate, approveCommissions, recordAffiliatePayout, voidCommissions } from "@/lib/growth/affiliates";
+import { AFFILIATE_STATUSES, clampCookieDays, clampPercent, MAX_COOKIE_DAYS, normalizeCode, PAYOUT_METHODS } from "@/lib/growth/affiliates-shared";
+import { applyForAffiliate, approveCommissions, recordAffiliatePayout, voidCommissions } from "@/lib/growth/affiliates";
 
 /**
  * Affiliate programme actions (growth area): members join and manage their

@@ -6,6 +6,7 @@ import { issueCertificate } from "@/lib/services/progress";
 import { notify, notifyMany, type NotifyInput } from "@/lib/services/notifications";
 import { formatPrice } from "@/lib/utils";
 import { emit } from "@/lib/events";
+import { grantMembership, revokeMembershipIn } from "@/lib/commerce/membership-store";
 import { couponOverflow } from "./coupon-rules";
 import { assignInvoiceNumber, isInvoiceable } from "./invoice";
 
@@ -70,12 +71,17 @@ function transactionsLink(search: string): string {
   return `/admin/settings/transactions?search=${encodeURIComponent(search)}`;
 }
 
-/** Whether the buyer of an order currently has what it bought. */
+/**
+ * Whether the buyer of an order has what it bought. For a membership order
+ * that means its membership was set up (whether it is still running is a
+ * question of the membership's own period, see `src/lib/commerce/access.ts`).
+ */
 export function hasOrderAccess(
-  db: Pick<Database, "enrollments" | "batchEnrollments">,
-  payment: Pick<Payment, "userId" | "itemType" | "itemId">,
+  db: Pick<Database, "enrollments" | "batchEnrollments" | "subscriptions">,
+  payment: Pick<Payment, "userId" | "itemType" | "itemId" | "subscriptionId">,
 ): boolean {
   if (payment.itemType === "course") return db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId);
+  if (payment.itemType === "plan") return !!payment.subscriptionId && db.subscriptions.some((s) => s.id === payment.subscriptionId);
   if (payment.itemType === "batch") return db.batchEnrollments.some((e) => e.batchId === payment.itemId && e.userId === payment.userId);
   return db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId && e.purchasedCertificate);
 }
@@ -132,8 +138,10 @@ export async function fulfillPayment(
       }
     }
     // Another paid order for the same item (e.g. a cancelled attempt that was paid in another tab).
+    // Membership orders repeat by design (one per renewal), so they are not compared.
     const paidTwice =
       row.amount > 0 &&
+      row.itemType !== "plan" &&
       d.payments.some((p) => p.id !== row.id && p.status === "paid" && p.userId === row.userId && p.itemType === row.itemType && p.itemId === row.itemId);
     // Held until access is granted (released in `runGrant`).
     granting.add(row.id);
@@ -295,8 +303,16 @@ async function grantAccess(payment: Payment): Promise<{ learnerExists: boolean; 
     const course = db.courses.find((c) => c.id === payment.itemId);
     if (!course) return { learnerExists: true, notice: `The course of order ${payment.orderId} no longer exists, so no enrollment was created.` };
     await enrollUserInCourse(user.id, course.id, { paymentId: payment.id });
+    // A course opened through a membership becomes the learner's own once it is bought.
+    await mutate((d) => {
+      const row = d.enrollments.find((e) => e.userId === user.id && e.courseId === course.id);
+      const source = row?.paymentId ? d.payments.find((p) => p.id === row.paymentId) : undefined;
+      if (row && source?.itemType === "plan") row.paymentId = payment.id;
+    });
     return { learnerExists: true };
   }
+
+  if (payment.itemType === "plan") return { learnerExists: true, ...(await grantMembership(payment)) };
 
   if (payment.itemType === "batch") {
     const batch = db.batches.find((b) => b.id === payment.itemId);
@@ -599,8 +615,12 @@ function removeCourseEnrollment(d: Database, userId: string, courseId: string): 
  *  - an enrollment or seat created by a different order;
  *  - course access through a batch the learner still belongs to.
  */
-export function revokeAccessIn(d: Database, payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId">): void {
+export function revokeAccessIn(d: Database, payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "paidAt">): void {
   const userId = payment.userId;
+  if (payment.itemType === "plan") {
+    revokeMembershipIn(d, payment);
+    return;
+  }
   const paidOrderFor = (itemType: Payment["itemType"], itemId: string) =>
     d.payments.find((p) => p.id !== payment.id && p.status === "paid" && p.userId === userId && p.itemType === itemType && p.itemId === itemId);
   const other = paidOrderFor(payment.itemType, payment.itemId);

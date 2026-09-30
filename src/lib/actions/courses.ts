@@ -13,6 +13,7 @@ import { RESERVED_COURSE_SLUGS, canCreateCourses, getStudentProgressDetail, getW
 import { enrollUserInCourse, unenrollUserFromCourse } from "@/lib/services/enrollment";
 import { notify, notifyMany, notifyModerators } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd, fdBool, isValidUrl, toDateKey, uid, unique, uniqueSlug } from "@/lib/utils";
 import { MAX_PREREQUISITES, findPrerequisiteCycle } from "@/components/learn/drip-shared";
 
@@ -395,6 +396,7 @@ export async function setCoursePublishedAction(courseId: string, published: bool
     updatedAt: new Date().toISOString(),
   });
   if (!next) return { ok: false, error: "This course no longer exists." };
+  await audit(user, published ? "course.publish" : "course.unpublish", { type: "course", id: course.id }, { title: course.title, firstPublish });
 
   if (firstPublish) {
     const db = await getDb();
@@ -449,6 +451,7 @@ export async function approveCourseAction(courseId: string): Promise<ActionResul
 
   const next = await update("courses", course.id, { status: "approved", updatedAt: new Date().toISOString() });
   if (!next) return { ok: false, error: "This course no longer exists." };
+  await audit(user, "course.approve", { type: "course", id: course.id }, { title: course.title });
   await notifyMany(
     course.instructorIds.filter((id) => id !== user.id),
     {
@@ -493,7 +496,7 @@ export async function requestCourseChangesAction(courseId: string, note: string)
 export async function deleteCourseAction(courseId: string): Promise<ActionResult> {
   const loaded = await loadManageable(courseId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course } = loaded;
+  const { user, course } = loaded;
   const id = course.id;
 
   await mutate((db) => {
@@ -550,6 +553,7 @@ export async function deleteCourseAction(courseId: string): Promise<ActionResult
     );
   });
 
+  await audit(user, "course.delete", { type: "course", id }, { title: course.title, slug: course.slug });
   revalidateCourse(course);
   revalidatePath("/batches");
   revalidatePath("/programs");

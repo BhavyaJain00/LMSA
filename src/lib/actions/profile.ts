@@ -10,6 +10,7 @@ import { destroyAllSessions, destroySession, getCurrentUser, isAdmin, isModerato
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
 import { roleLabels, siteConfig } from "@/lib/config";
+import { audit } from "@/lib/audit";
 import { fd, isValidUrl, toDateKey, uid } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -275,6 +276,7 @@ export async function setUserRoleAction(userId: string, role: Role, enabled: boo
   const ordered = ALL_ROLES.filter((r) => roles.includes(r));
 
   await update("users", target.id, { roles: ordered });
+  await audit(viewer, "user.roles", { type: "user", id: target.id }, { from: target.roles.join(","), to: ordered.join(",") });
   if (enabled && target.id !== viewer.id) {
     await notify(target.id, {
       type: "system",

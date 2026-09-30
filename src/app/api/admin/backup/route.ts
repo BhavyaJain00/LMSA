@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { exportDatabase } from "@/lib/db/store";
+import { audit } from "@/lib/audit";
 import { toDateKey } from "@/lib/utils";
 
 /**
@@ -13,6 +14,7 @@ export async function GET() {
   if (!isAdmin(user)) return NextResponse.json({ ok: false, error: "Only administrators can download backups." }, { status: 403 });
 
   const json = await exportDatabase();
+  await audit(user, "backup.download", { type: "settings", id: "data" }, { bytes: json.length });
   return new NextResponse(json, {
     status: 200,
     headers: {

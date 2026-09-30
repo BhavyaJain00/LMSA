@@ -29,14 +29,24 @@ export function stripeSnapshot(sub: Pick<StripeSubscription, "status" | "current
   };
 }
 
-export function razorpaySnapshot(sub: Pick<RazorpaySubscription, "status" | "currentStart" | "currentEnd" | "chargeAt" | "startAt" | "endedAt">, nowMs: number = Date.now()): SubscriptionSnapshot | null {
+/**
+ * Razorpay has no trial status: a trial is a subscription whose first charge
+ * was deferred with `start_at`. Checkouts from this app record the trial
+ * length in the subscription notes (`trialDays`), which tells a trial apart
+ * from a mandate whose immediate first charge is still being processed.
+ */
+export function razorpaySnapshot(
+  sub: Pick<RazorpaySubscription, "status" | "currentStart" | "currentEnd" | "chargeAt" | "startAt" | "endedAt" | "notes">,
+  nowMs: number = Date.now(),
+): SubscriptionSnapshot | null {
   const nowSec = Math.floor(nowMs / 1000);
-  // Authenticated with the first charge still ahead and no paid cycle yet: a free trial.
   const firstCharge = sub.chargeAt ?? sub.startAt;
-  const chargeInFuture = !sub.currentStart && !!firstCharge && firstCharge > nowSec;
+  const trialRequested = Number(sub.notes.trialDays ?? "0") > 0;
+  const chargeInFuture = trialRequested && !sub.currentStart && !!firstCharge && firstCharge > nowSec;
   const status = mapRazorpayStatus(sub.status, { chargeInFuture });
   if (!status) return null;
-  if (status === "trialing") return { status, currentPeriodStart: iso(nowSec), currentPeriodEnd: iso(firstCharge) };
+  // The trial started when the row was created; only its end is reported.
+  if (status === "trialing") return { status, currentPeriodEnd: iso(firstCharge) };
   if (status === "cancelled" || status === "expired") {
     return { status, currentPeriodStart: iso(sub.currentStart), currentPeriodEnd: iso(sub.endedAt ?? Math.min(sub.currentEnd ?? nowSec, nowSec)), cancelAtPeriodEnd: false };
   }

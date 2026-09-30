@@ -23,22 +23,26 @@ import {
   pingStripe,
   retrieveStripeCheckoutSession,
   retrieveStripePaymentIntent,
+  retrieveStripeSubscription,
   stripeDashboardPaymentUrl,
   stripeMode,
   stripeSettlement,
   type StripeCheckoutSession,
 } from "./stripe";
 import {
+  cancelRazorpaySubscription,
   captureRazorpayPayment,
   createRazorpayOrder,
   createRazorpayRefund,
   fetchRazorpayOrder,
   fetchRazorpayOrderPayments,
   fetchRazorpayPayment,
+  fetchRazorpaySubscription,
   isActiveRazorpayRefund,
   isRazorpayConfigured,
   isRazorpayOrderId,
   isRazorpayPaymentReversed,
+  isRazorpaySubscriptionId,
   isRazorpayWebhookConfigured,
   listRazorpayRefunds,
   pingRazorpay,
@@ -57,6 +61,14 @@ import {
   type FulfillmentSource,
 } from "./fulfillment";
 import type { CheckoutNext, GatewayStatusView, RazorpayLaunchOptions, RealGateway } from "./types";
+import {
+  applyStripeSubscription,
+  isRecurringMembershipOrder,
+  settleRazorpayMembershipOrder,
+  settleTrialOrder,
+  startMembershipCheckout,
+  syncRazorpayMembershipOrder,
+} from "@/lib/commerce/memberships";
 
 /**
  * Gateway abstraction used by checkout, the return/webhook handlers and the
@@ -121,6 +133,10 @@ export function paymentDashboardUrl(payment: Pick<Payment, "gateway" | "gatewayP
 /* ------------------------------------------------------------------ */
 
 function itemDetails(db: Database, payment: Payment): { description?: string; imageUrl?: string } {
+  if (payment.itemType === "plan") {
+    const plan = db.plans.find((p) => p.id === (payment.planId ?? payment.itemId));
+    return { description: plan ? `Membership: ${plan.name}` : undefined };
+  }
   if (payment.itemType === "batch") {
     const batch = db.batches.find((b) => b.id === payment.itemId);
     return { description: batch?.description, imageUrl: batch?.imageUrl };
@@ -152,15 +168,16 @@ async function saveCheckoutAttempt(paymentId: string, gateway: RealGateway, gate
   });
 }
 
-function razorpayOptions(db: Database, payment: Payment, order: RazorpayOrder): RazorpayLaunchOptions {
+function razorpayOptions(db: Database, payment: Payment, target: { order: RazorpayOrder } | { subscriptionId: string }): RazorpayLaunchOptions {
   const user = db.users.find((u) => u.id === payment.userId);
   const brand = db.settings.brand;
+  const order = "order" in target ? target.order : null;
   return {
     keyId: razorpayPublicKeyId(),
-    razorpayOrderId: order.id,
+    ...(order ? { razorpayOrderId: order.id } : { razorpaySubscriptionId: (target as { subscriptionId: string }).subscriptionId }),
     orderId: payment.orderId,
-    amount: order.amount,
-    currency: order.currency || payment.currency.toUpperCase(),
+    amount: order ? order.amount : toGatewayAmount(payment.amount, payment.currency),
+    currency: order?.currency || payment.currency.toUpperCase(),
     name: brand.name,
     description: payment.itemTitle.slice(0, 255),
     image: publicImageUrl(brand.logoUrl),
@@ -183,6 +200,14 @@ export async function createCheckout(payment: Payment, urls: { successUrl: strin
   }
   const db = await getDb();
   const amount = toGatewayAmount(payment.amount, payment.currency);
+
+  // First order of a monthly/yearly membership: a recurring gateway subscription.
+  const plan = payment.itemType === "plan" ? db.plans.find((p) => p.id === (payment.planId ?? payment.itemId)) : undefined;
+  if (isRecurringMembershipOrder(payment, plan)) {
+    const started = await startMembershipCheckout(payment, urls);
+    if (started.gateway === "stripe") return { kind: "redirect", url: started.url };
+    return { kind: "razorpay", options: razorpayOptions(db, payment, { subscriptionId: started.subscriptionId }) };
+  }
 
   if (payment.gateway === "stripe") {
     const user = db.users.find((u) => u.id === payment.userId);
@@ -208,7 +233,7 @@ export async function createCheckout(payment: Payment, urls: { successUrl: strin
 
   const order = await createRazorpayOrder({ amount, currency: payment.currency, receipt: payment.orderId, paymentId: payment.id, orderId: payment.orderId });
   if (!(await saveCheckoutAttempt(payment.id, "razorpay", order.id))) throw new GatewayError("Razorpay", "This order can no longer be paid.");
-  return { kind: "razorpay", options: razorpayOptions(db, payment, order) };
+  return { kind: "razorpay", options: razorpayOptions(db, payment, { order }) };
 }
 
 export type ResumeResult = { ok: true; next: CheckoutNext; message?: string } | { ok: false; error: string };
@@ -249,6 +274,17 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
       return { ok: true, next: await createCheckout(current, checkoutUrls(current)) };
     }
 
+    // Razorpay membership: the subscription can be authorized until it is used.
+    if (isRazorpaySubscriptionId(payment.gatewayOrderId)) {
+      const state = await syncRazorpayMembershipOrder(payment, "sync");
+      if (state.state === "paid") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your membership is active." };
+      if (state.state === "processing") return { ok: true, next: { kind: "redirect", url: orderPage }, message: "Your payment is still being processed." };
+      if (state.state === "error") return { ok: false, error: state.message };
+      if (state.state === "failed") return { ok: false, error: closedMessage(state.reason) };
+      const db = await getDb();
+      return { ok: true, next: { kind: "razorpay", options: razorpayOptions(db, payment, { subscriptionId: payment.gatewayOrderId }) } };
+    }
+
     // Razorpay: an order can be attempted many times until it is paid.
     if (isRazorpayOrderId(payment.gatewayOrderId)) {
       const state = await syncRazorpayOrder(payment, "sync");
@@ -258,7 +294,7 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
       const order = await fetchRazorpayOrder(payment.gatewayOrderId);
       if (order.status !== "paid" && amountMatches(payment.amount, payment.currency, order.amount, order.currency)) {
         const db = await getDb();
-        return { ok: true, next: { kind: "razorpay", options: razorpayOptions(db, payment, order) } };
+        return { ok: true, next: { kind: "razorpay", options: razorpayOptions(db, payment, { order }) } };
       }
     }
     return { ok: true, next: await createCheckout(payment, checkoutUrls(payment)) };
@@ -389,6 +425,7 @@ async function closeReversed(payment: Payment, gateway: RealGateway, reason: str
 export async function reconcileStripeSession(payment: Payment, session: StripeCheckoutSession, source: FulfillmentSource): Promise<SyncState> {
   const belongs = session.metadata.paymentId === payment.id || session.clientReferenceId === payment.id;
   if (!belongs) return { state: "error", message: "This checkout session does not belong to the order." };
+  if (session.mode === "subscription") return reconcileStripeMembershipSession(payment, session, source);
 
   if (isStripeSessionPaid(session)) {
     if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
@@ -511,6 +548,7 @@ export async function syncPaymentStatus(payment: Payment, opts: { timeoutMs?: nu
       const session = await retrieveStripeCheckoutSession(payment.gatewayOrderId, { timeoutMs: opts.timeoutMs });
       return await reconcileStripeSession(payment, session, source);
     }
+    if (isRazorpaySubscriptionId(payment.gatewayOrderId)) return await syncRazorpayMembershipOrder(payment, source, opts.timeoutMs);
     return await syncRazorpayOrder(payment, source, opts.timeoutMs);
   } catch (error) {
     return { state: "error", message: gatewayErrorMessage(error) };
@@ -536,11 +574,60 @@ export async function closeGatewayCheckout(payment: Payment): Promise<{ paid: bo
       }
       return { paid: false, reached: true };
     }
+    if (isRazorpaySubscriptionId(payment.gatewayOrderId)) {
+      // A membership nobody authorized yet is cancelled so it can no longer be paid.
+      const live = await fetchRazorpaySubscription(payment.gatewayOrderId, { timeoutMs: 10_000 });
+      if (live.status === "created") {
+        await cancelRazorpaySubscription(live.id, false);
+        return { paid: false, reached: true };
+      }
+      const state = await settleRazorpayMembershipOrder(payment, live, "sync");
+      return { paid: state.state === "paid" || state.state === "processing", reached: state.state !== "error" };
+    }
     const state = await syncRazorpayOrder(payment, "sync");
     return { paid: state.state === "paid", reached: state.state !== "error" };
   } catch {
     return { paid: false, reached: false };
   }
+}
+
+/**
+ * A completed Checkout Session in subscription mode (a membership). The
+ * subscription row is written first, so access starts as soon as the order
+ * settles: a trial settles as a zero-amount order; a charged first invoice
+ * must match the order and its PaymentIntent must still hold the money.
+ */
+async function reconcileStripeMembershipSession(payment: Payment, session: StripeCheckoutSession, source: FulfillmentSource): Promise<SyncState> {
+  if (session.status === "expired") {
+    const reason = "The checkout session expired before the membership was started.";
+    await markPaymentFailed(payment.id, reason, { gatewayOrderId: session.id });
+    return { state: "failed", reason };
+  }
+  if (session.status !== "complete") return { state: "pending" };
+  if (!session.subscriptionId) return { state: "processing" };
+
+  const live = await retrieveStripeSubscription(session.subscriptionId, { timeoutMs: 15_000 });
+  const synced = await applyStripeSubscription(live, { paymentId: payment.id });
+  if (!synced.subscription) return { state: "processing" };
+
+  const charged = (session.amountTotal ?? 0) > 0;
+  if (!charged) {
+    if (session.paymentStatus !== "no_payment_required" && session.paymentStatus !== "paid") return { state: "processing" };
+    await settleTrialOrder(payment.id);
+    return paidState(await fulfillPayment(payment.id, undefined, { gatewayOrderId: session.id, source }));
+  }
+  if (session.paymentStatus !== "paid") return { state: "processing" };
+  if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
+    return reportAmountMismatch(payment, `${session.amountTotal ?? "?"} ${(session.currency ?? "?").toUpperCase()} (smallest unit)`);
+  }
+  const pi = live.latestInvoice?.paymentIntentId;
+  if (isSettling(await currentRow(payment))) {
+    if (!isStripePaymentIntentId(pi)) return { state: "processing" };
+    const settlement = stripeSettlement(await retrieveStripePaymentIntent(pi, { timeoutMs: 15_000 }));
+    if (settlement.kind === "reversed") return closeReversed(payment, "stripe", `${settlement.reason} The membership was not started.`, pi);
+    if (settlement.kind === "incomplete") return { state: "processing" };
+  }
+  return paidState(await fulfillPayment(payment.id, pi, { gatewayOrderId: session.id, source }));
 }
 
 /** Whether Razorpay Checkout's `razorpay_signature` is genuine for this order/payment pair. */
@@ -678,9 +765,27 @@ export const STRIPE_WEBHOOK_EVENTS = [
   "checkout.session.async_payment_failed",
   "checkout.session.expired",
   "charge.refunded",
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "invoice.paid",
+  "invoice.payment_failed",
 ];
 
-export const RAZORPAY_WEBHOOK_EVENTS = ["payment.authorized", "payment.captured", "payment.failed", "order.paid", "refund.processed"];
+export const RAZORPAY_WEBHOOK_EVENTS = [
+  "payment.authorized",
+  "payment.captured",
+  "payment.failed",
+  "order.paid",
+  "refund.processed",
+  "subscription.authenticated",
+  "subscription.activated",
+  "subscription.charged",
+  "subscription.pending",
+  "subscription.halted",
+  "subscription.cancelled",
+  "subscription.completed",
+];
 
 /** Configuration of every real gateway, safe to show to administrators (secrets are masked). */
 export function getGatewayStatuses(): GatewayStatusView[] {

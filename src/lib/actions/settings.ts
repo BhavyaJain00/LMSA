@@ -7,6 +7,7 @@ import { createSession, getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate, resetDatabase } from "@/lib/db/store";
 import { Icon } from "@/components/ui/icons";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd, fdBool, isValidEmail, isValidUrl, uid } from "@/lib/utils";
 
 /**
@@ -28,11 +29,13 @@ function fail(errors: Errors): ActionResult {
   return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
 }
 
-async function commit(fn: (s: Settings) => void, message = "Settings saved"): Promise<ActionResult> {
+/** Apply a settings change, audit it as `settings.update` for `section`, and refresh every page. */
+async function commit(fn: (s: Settings) => void, message: string, section: string): Promise<ActionResult> {
   await mutate((db) => {
     fn(db.settings);
     db.settings.updatedAt = new Date().toISOString();
   });
+  await audit(await getCurrentUser(), "settings.update", { type: "settings", id: section }, { section });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message };
 }
@@ -72,7 +75,7 @@ export async function saveGeneralSettingsAction(_prev: ActionResult | null, form
     s.contact.email = contactEmail || undefined;
     s.contact.url = contactUrl || undefined;
     s.textDirection = textDirection as Settings["textDirection"];
-  }, "General settings saved");
+  }, "General settings saved", "general");
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,7 +105,7 @@ export async function saveBrandingSettingsAction(_prev: ActionResult | null, for
     s.brand.logoUrl = logoUrl || undefined;
     s.brand.faviconUrl = faviconUrl || undefined;
     s.brand.accentColor = accent;
-  }, "Branding saved");
+  }, "Branding saved", "branding");
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,7 +131,7 @@ export async function saveSeoSettingsAction(_prev: ActionResult | null, formData
     s.brand.metaDescription = metaDescription || undefined;
     s.brand.metaKeywords = keywords.length ? Array.from(new Set(keywords)).join(", ") : undefined;
     s.brand.metaImageUrl = metaImageUrl || undefined;
-  }, "SEO settings saved");
+  }, "SEO settings saved", "seo");
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,7 +144,7 @@ export async function saveFeatureSettingsAction(_prev: ActionResult | null, form
   const keys = Object.keys(db.settings.features) as (keyof Settings["features"])[];
   return commit((s) => {
     for (const key of keys) s.features[key] = fdBool(formData, key);
-  }, "Features updated");
+  }, "Features updated", "features");
 }
 
 /* ------------------------------------------------------------------ */
@@ -182,7 +185,7 @@ export async function saveLearningSettingsAction(_prev: ActionResult | null, for
     s.learning.notifyOnPublishedCourses = notifyCourses as Settings["learning"]["notifyOnPublishedCourses"];
     s.learning.notifyOnPublishedBatches = notifyBatches as Settings["learning"]["notifyOnPublishedBatches"];
     s.customSignupContent = customSignupContent || undefined;
-  }, "Learning settings saved");
+  }, "Learning settings saved", "learning");
 }
 
 /* ------------------------------------------------------------------ */
@@ -235,6 +238,7 @@ export async function saveSidebarItemAction(_prev: ActionResult | null, formData
       s.sidebarItems = renumber(s.sidebarItems);
     },
     existing ? "Sidebar link updated" : "Link added to sidebar",
+    "sidebar",
   );
 }
 
@@ -244,7 +248,7 @@ export async function deleteSidebarItemAction(id: string): Promise<ActionResult>
   if (!db.settings.sidebarItems.some((s) => s.id === id)) return { ok: false, error: "This sidebar link no longer exists." };
   return commit((s) => {
     s.sidebarItems = renumber(s.sidebarItems.filter((item) => item.id !== id));
-  }, "Sidebar link removed");
+  }, "Sidebar link removed", "sidebar");
 }
 
 export async function moveSidebarItemAction(id: string, direction: "up" | "down"): Promise<ActionResult> {
@@ -261,7 +265,7 @@ export async function moveSidebarItemAction(id: string, direction: "up" | "down"
   sorted[target] = { ...a, order: b.order };
   return commit((s) => {
     s.sidebarItems = renumber(sorted);
-  }, "Sidebar order saved");
+  }, "Sidebar order saved", "sidebar");
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,6 +280,7 @@ export async function resetDemoDataAction(_prev: ActionResult | null, formData: 
     return { ok: false, error: "Type RESET to confirm.", fieldErrors: { confirm: "Type RESET (in capitals) to confirm." } };
   }
   await resetDatabase();
+  await audit(actor, "data.reset", { type: "settings", id: "data" });
   revalidatePath("/", "layout");
   // Sessions are wiped by the reset. Keep the admin signed in when their account exists in the demo data.
   const db = await getDb();

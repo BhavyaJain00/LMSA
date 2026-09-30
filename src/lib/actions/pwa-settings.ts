@@ -5,6 +5,7 @@ import type { ActionResult, Settings } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { mutate } from "@/lib/db/store";
 import { fdBool } from "@/lib/utils";
+import { audit } from "@/lib/audit";
 
 /**
  * Admin → Settings → Installable app. Admin-only; writes `settings.pwa` and
@@ -29,6 +30,7 @@ export async function savePwaSettingsAction(_prev: ActionResult | null, formData
     db.settings.updatedAt = new Date().toISOString();
     return next;
   });
+  await audit(user, "settings.update", { type: "settings", id: "pwa" }, { section: "pwa", enabled: saved.enabled });
 
   revalidatePath("/", "layout");
   return {

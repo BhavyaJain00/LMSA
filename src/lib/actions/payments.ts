@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { ActionResult, Payment, Settings, User } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
+import { audit } from "@/lib/audit";
 import {
   checkBillingAccess,
   checkReminderEligibility,
@@ -415,6 +416,7 @@ export async function markPaymentPaidAction(paymentId: string): Promise<ActionRe
   });
   const res = await fulfillPayment(payment.id, payment.gatewayPaymentId ? undefined : reference, { source: "admin" });
   if (!res.ok) return { ok: false, error: res.error };
+  await audit(actor, "payment.mark_paid", { type: "payment", id: payment.id }, { orderId: payment.orderId, amount: payment.amount, currency: payment.currency });
   revalidateCommerce(payment.orderId);
   return { ok: true, data: { notice: res.data.notice }, message: `Order ${payment.orderId} marked as paid.` };
 }
@@ -426,6 +428,14 @@ export async function markPaymentPaidAction(paymentId: string): Promise<ActionRe
  * recorded. Either way the order is marked refunded and its access removed.
  */
 export async function refundPaymentAction(paymentId: string, opts: { amount?: string; recordOnly?: boolean } = {}): Promise<ActionResult<{ viaGateway: boolean }>> {
+  const result = await refundPayment(paymentId, opts);
+  if (result.ok) {
+    await audit(await getCurrentUser(), "payment.refund", { type: "payment", id: paymentId }, { amount: opts?.amount?.trim() || "remaining", viaGateway: result.data.viaGateway, recordOnly: opts?.recordOnly === true });
+  }
+  return result;
+}
+
+async function refundPayment(paymentId: string, opts: { amount?: string; recordOnly?: boolean }): Promise<ActionResult<{ viaGateway: boolean }>> {
   const actor = await requireAdminActor();
   if (!actor) return { ok: false, error: "Only administrators can refund payments." };
   const payment = await findPayment(paymentId);
@@ -582,6 +592,7 @@ export async function deletePaymentAction(paymentId: string): Promise<ActionResu
   await mutate((d) => {
     d.payments = d.payments.filter((p) => !(p.id === paymentId && p.status !== "paid" && !p.invoiceNumber));
   });
+  await audit(actor, "payment.delete", { type: "payment", id: payment.id }, { orderId: payment.orderId, status: payment.status });
   revalidateCommerce(payment.orderId);
   return { ok: true, data: undefined, message: "Transaction deleted successfully" };
 }
@@ -654,8 +665,13 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
   if (!itemType) errors.itemType = "Paid For is required";
 
   let itemTitle = "";
-  if (itemType && !itemId) errors.itemId = itemType === "batch" ? "Batch is required" : "Course is required";
-  else if (itemType === "batch") {
+  if (itemType && !itemId) errors.itemId = itemType === "batch" ? "Batch is required" : itemType === "plan" ? "Membership plan is required" : "Course is required";
+  else if (itemType === "plan") {
+    // A received membership payment starts the member's membership or extends it by one billing period.
+    const plan = db.plans.find((p) => p.id === itemId);
+    if (!plan) errors.itemId = "This membership plan no longer exists.";
+    else itemTitle = plan.name;
+  } else if (itemType === "batch") {
     const batch = db.batches.find((b) => b.id === itemId);
     if (!batch) errors.itemId = "This batch no longer exists.";
     else itemTitle = batch.title;
@@ -705,6 +721,7 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
     itemType,
     itemId,
     itemTitle,
+    ...(itemType === "plan" ? { planId: itemId, subscriptionId: planSubscriptionFor(db, member.id, itemId) } : {}),
     originalAmount: original,
     discountAmount: discount,
     taxAmount: tax,
@@ -729,6 +746,7 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
     if (!res.ok) return { ok: false, error: res.error };
     message = res.data.notice ? `Transaction created. ${res.data.notice}` : `Transaction created and ${member.name} now has access.`;
   }
+  await audit(actor, "payment.record", { type: "payment", id: payment.id }, { orderId: payment.orderId, amount, currency, received: !!received });
   revalidateCommerce(payment.orderId);
   return { ok: true, data: { orderId: payment.orderId }, message };
 }
@@ -770,6 +788,7 @@ export async function updatePaymentDetailsAction(_prev: ActionResult | null, for
     row.gstin = gstin || undefined;
     row.pan = pan || undefined;
   });
+  await audit(actor, "payment.update", { type: "payment", id: payment.id }, { orderId: payment.orderId });
   revalidateCommerce(payment.orderId);
   revalidatePath(`/billing/invoice/${payment.orderId}`);
   return { ok: true, data: undefined, message: `Transaction updated successfully (${payment.orderId}, ${formatPrice(payment.amount, payment.currency)}).` };
@@ -820,6 +839,7 @@ export async function savePaymentGatewaySettingsAction(_prev: ActionResult | nul
     c.sendPaymentReminders = fdBool(formData, "sendPaymentReminders");
     d.settings.updatedAt = new Date().toISOString();
   });
+  await audit(actor, "settings.update", { type: "settings", id: "payments" }, { section: "payments", paymentGateway, defaultCurrency, applyTax });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message: "Payment settings saved" };
 }

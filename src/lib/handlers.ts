@@ -10,5 +10,6 @@ import "server-only";
  */
 
 import "@/lib/growth/handlers";
+import "@/lib/teaching/handlers";
 
 export {};

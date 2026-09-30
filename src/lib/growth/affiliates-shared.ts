@@ -127,6 +127,12 @@ export function sanitizeLandingPath(path: string | null | undefined): string {
   return clean.length > 300 ? clean.slice(0, 300) : clean;
 }
 
+/** A group of pages offered in the share-link builder. */
+export interface ShareTargetGroup {
+  label: string;
+  items: { label: string; path: string }[];
+}
+
 /** Share link: `path` on `origin` with `?ref=CODE` (existing query kept, an older ref replaced). */
 export function shareUrl(origin: string, path: string, code: string): string {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, origin);
@@ -211,6 +217,20 @@ export function planRefund(rows: readonly CommissionLike[], order: { amount: num
   if (!anyPaid && target === 0) return { voidIds: live.map((r) => r.id), adjustment: null };
   const status = anyPaid ? "approved" : original.status === "approved" ? "approved" : "pending";
   return { voidIds: [], adjustment: { amount: target - current, status } };
+}
+
+/** How an affiliate payout was sent. */
+export const PAYOUT_METHODS = [
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "paypal", label: "PayPal" },
+  { value: "wise", label: "Wise" },
+  { value: "upi", label: "UPI" },
+  { value: "store_credit", label: "Store credit" },
+  { value: "other", label: "Other" },
+] as const;
+
+export function methodLabel(method: string): string {
+  return PAYOUT_METHODS.find((m) => m.value === method)?.label ?? method;
 }
 
 /* ------------------------------------------------------------------ */

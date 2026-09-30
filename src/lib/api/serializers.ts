@@ -545,6 +545,8 @@ export interface ApiBatch {
   endTime: string;
   timezone: string;
   medium: Batch["medium"];
+  /** Relative to now, using the batch's own time zone. */
+  status: "upcoming" | "active" | "completed";
   /** 0 = unlimited. */
   seatCount: number;
   seatsTaken: number;
@@ -561,7 +563,13 @@ export interface ApiBatch {
   updatedAt: string;
 }
 
-export function serializeBatch(batch: Batch, seatsTaken: number, users: ReadonlyMap<string, User>, ctx: SerializeContext): ApiBatch {
+export function serializeBatch(
+  batch: Batch,
+  state: { seatsTaken: number; status: ApiBatch["status"] },
+  users: ReadonlyMap<string, User>,
+  ctx: SerializeContext,
+): ApiBatch {
+  const { seatsTaken, status } = state;
   return {
     id: batch.id,
     slug: batch.slug,
@@ -575,6 +583,7 @@ export function serializeBatch(batch: Batch, seatsTaken: number, users: Readonly
     endTime: batch.endTime,
     timezone: batch.timezone,
     medium: batch.medium,
+    status,
     seatCount: batch.seatCount,
     seatsTaken,
     seatsLeft: batch.seatCount > 0 ? Math.max(0, batch.seatCount - seatsTaken) : null,

@@ -26,6 +26,7 @@ import { normalizeTotpInput } from "@/lib/auth/totp";
 import { describeUserAgent } from "@/lib/auth/user-agent";
 import { PASSWORD_MIN_LENGTH_CEILING, PASSWORD_MIN_LENGTH_FLOOR } from "@/lib/auth/password-policy";
 import { fd, fdBool } from "@/lib/utils";
+import { audit } from "@/lib/audit";
 
 /**
  * Account-security actions: email verification resend, two-step verification
@@ -273,6 +274,7 @@ export async function saveSecuritySettingsAction(_prev: ActionResult | null, for
     db.settings.security = next;
     db.settings.updatedAt = new Date().toISOString();
   });
+  await audit(admin, "settings.update", { type: "settings", id: "security" }, { section: "security", ...next });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message: "Security settings saved" };
 }
@@ -300,6 +302,7 @@ export async function unlockAccountAction(userId: string): Promise<ActionResult>
   const ctx = await adminTarget(userId);
   if ("ok" in ctx) return ctx;
   await unlockAccount(ctx.target.id);
+  await audit(ctx.admin, "user.unlock", { type: "user", id: ctx.target.id });
   revalidateAdmin();
   return { ok: true, data: undefined, message: `${ctx.target.name} can sign in again.` };
 }
@@ -320,6 +323,7 @@ export async function adminResetTwoFactorAction(userId: string): Promise<ActionR
   await revokeAuthTokens(ctx.target.id, "two_factor_login");
   await destroyAllSessions(ctx.target.id);
   await sendSecurityNotice(ctx.target, "two_factor_reset");
+  await audit(ctx.admin, "user.two_factor_reset", { type: "user", id: ctx.target.id });
   revalidateAdmin();
   return { ok: true, data: undefined, message: `Two-step verification was reset for ${ctx.target.name}. They were signed out everywhere.` };
 }
@@ -329,6 +333,7 @@ export async function adminMarkEmailVerifiedAction(userId: string): Promise<Acti
   if ("ok" in ctx) return ctx;
   if (isEmailVerified(ctx.target) && ctx.target.emailVerifiedAt) return { ok: true, data: undefined, message: "This email address is already confirmed." };
   await markEmailVerified(ctx.target.id);
+  await audit(ctx.admin, "user.email_verified", { type: "user", id: ctx.target.id });
   revalidateAdmin();
   return { ok: true, data: undefined, message: `${ctx.target.email} is now marked as confirmed.` };
 }
@@ -344,6 +349,7 @@ export async function adminSendPasswordResetAction(userId: string): Promise<Acti
     console.error("[security] could not queue reset email", err instanceof Error ? err.message : err);
     return { ok: false, error: "We couldn't send the email right now. Please try again." };
   }
+  await audit(ctx.admin, "user.password_reset_sent", { type: "user", id: ctx.target.id });
   return { ok: true, data: undefined, message: `A password reset link was sent to ${ctx.target.email}.` };
 }
 
@@ -353,6 +359,7 @@ export async function adminSignOutEverywhereAction(userId: string): Promise<Acti
   if (ctx.target.id === ctx.admin.id) return { ok: false, error: "Use Settings → Security to sign yourself out of other devices." };
   await destroyAllSessions(ctx.target.id);
   await revokeAuthTokens(ctx.target.id, "two_factor_login");
+  await audit(ctx.admin, "user.sign_out_everywhere", { type: "user", id: ctx.target.id });
   revalidateAdmin();
   return { ok: true, data: undefined, message: `${ctx.target.name} was signed out on every device.` };
 }

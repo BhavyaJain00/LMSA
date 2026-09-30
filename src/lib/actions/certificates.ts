@@ -11,6 +11,7 @@ import { notify } from "@/lib/services/notifications";
 import { evaluateBadges } from "@/lib/services/badges";
 import { awardCertificatePoints, revokeCertificatePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd, fdBool, shortCode, toDateKey, uid } from "@/lib/utils";
 import { isValidDateKey } from "@/components/certificates/time";
 import { DEFAULT_CERTIFICATE_TEMPLATE_ID, isCertificateTemplateId } from "@/components/certificates/templates";
@@ -189,6 +190,7 @@ export async function issueCertificateAction(_prev: ActionResult<{ code: string 
     cert = await issueBatchCertificate(learner!, batch!, { ...opts, batchId: batch!.id });
     revalidateCertificates([`/batches/${batch!.slug}`]);
   }
+  await audit(user, "certificate.issue", { type: "certificate", id: cert.id }, { code: cert.code, userId: learner!.id, courseId: course?.id ?? null, batchId: batch?.id ?? null });
   revalidatePath(`/user/${learner!.username}`);
   await setFlash(`Certificate ${cert.code} issued to ${learner!.name}`);
   redirect("/admin/certificates");
@@ -267,6 +269,7 @@ export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueR
     }
   }
 
+  if (result.issued.length) await audit(user, "certificate.bulk_issue", { type: "batch", id: batch.id }, { issued: result.issued.length, skipped: result.skipped.length, courseId: course?.id ?? null });
   revalidateCertificates([`/batches/${batch.slug}`, `/admin/certificates/bulk`]);
   if (!result.skipped.length) {
     await setFlash(result.issued.length === 1 ? "Certificate generated successfully" : "Certificates generated successfully");
@@ -314,6 +317,7 @@ export async function revokeCertificateAction(id: string): Promise<ActionResult>
   if (!removed) return { ok: false, error: "This certificate no longer exists." };
   // A revoked certificate takes its points back (re-issuing it pays once again, never twice).
   await revokeCertificatePoints(removed);
+  await audit(user, "certificate.revoke", { type: "certificate", id: removed.id }, { code: removed.code, userId: removed.userId });
   const db = await getDb();
   const course = removed.courseId ? db.courses.find((c) => c.id === removed.courseId) : undefined;
   const learner = db.users.find((u) => u.id === removed.userId);

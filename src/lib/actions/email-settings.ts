@@ -5,6 +5,7 @@ import type { ActionResult, EmailMessage, EmailStatus, NotificationType, User } 
 import { getCurrentUser, isAdmin, isModerator } from "@/lib/auth/session";
 import { mutate } from "@/lib/db/store";
 import { fd, fdBool, isValidEmail } from "@/lib/utils";
+import { audit } from "@/lib/audit";
 import {
   deleteEmail,
   deliverDueEmails,
@@ -49,7 +50,8 @@ function revalidateOutbox(id?: string) {
 /* ------------------------------------------------------------------ */
 
 export async function saveEmailSettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  if (!(await adminUser())) return ADMIN_ONLY;
+  const admin = await adminUser();
+  if (!admin) return ADMIN_ONLY;
   const enabled = fdBool(formData, "enabled");
   const fromName = fd(formData, "fromName").replace(/\s+/g, " ");
   const replyTo = fd(formData, "replyTo");
@@ -79,6 +81,7 @@ export async function saveEmailSettingsAction(_prev: ActionResult | null, formDa
     };
     db.settings.updatedAt = new Date().toISOString();
   });
+  await audit(admin, "settings.update", { type: "settings", id: "email" }, { section: "email", enabled });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message: enabled ? "Email settings saved" : "Email settings saved — notification emails are off" };
 }

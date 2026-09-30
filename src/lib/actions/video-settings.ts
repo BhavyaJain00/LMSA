@@ -6,6 +6,7 @@ import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { mutate } from "@/lib/db/store";
 import { VIDEO_SETTINGS_LIMITS } from "@/lib/media/video-settings";
 import { fd, fdBool } from "@/lib/utils";
+import { audit } from "@/lib/audit";
 
 /**
  * Admin → Settings → Video: protected uploads (signed, expiring URLs),
@@ -46,6 +47,7 @@ export async function saveVideoSettingsAction(_prev: ActionResult | null, formDa
     db.settings.video = next;
     db.settings.updatedAt = new Date().toISOString();
   });
+  await audit(user, "settings.update", { type: "settings", id: "video" }, { section: "video", protectUploads: next.protectUploads, watermark: next.watermark });
   revalidatePath("/", "layout");
   return { ok: true, data: undefined, message: "Video settings saved" };
 }

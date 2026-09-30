@@ -15,6 +15,7 @@ import {
 import { CONFIGURABLE_REASONS, MAX_MANUAL_POINTS, MAX_REASON_POINTS, REASON_META } from "@/components/gamification/reasons";
 import { formatPoints } from "@/components/gamification/levels";
 import { fd, fdBool } from "@/lib/utils";
+import { audit } from "@/lib/audit";
 
 /**
  * Admin actions for points, levels and the leaderboard
@@ -46,7 +47,8 @@ function revalidatePointsPages() {
 /* ------------------------------------------------------------------ */
 
 export async function saveGamificationSettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  if (!(await requireAdmin())) return DENIED;
+  const admin = await requireAdmin();
+  if (!admin) return DENIED;
 
   const errors: Errors = {};
   const values = {} as Record<(typeof CONFIGURABLE_REASONS)[number], number>;
@@ -74,6 +76,7 @@ export async function saveGamificationSettingsAction(_prev: ActionResult | null,
   });
   // Turning points on for the first time fills the ledger from past activity.
   if (enabled && !wasEnabled) await ensurePointsLedger();
+  await audit(admin, "settings.update", { type: "settings", id: "gamification" }, { section: "gamification", enabled });
 
   revalidatePath("/", "layout");
   return {

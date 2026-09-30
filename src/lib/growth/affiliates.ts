@@ -23,6 +23,8 @@ import {
   type CommissionIneligibility,
   type CurrencyTotals,
   type FraudFlag,
+  type ShareTargetGroup,
+  methodLabel,
 } from "./affiliates-shared";
 
 /**
@@ -319,19 +321,6 @@ export async function recordAffiliatePayout(input: { affiliateId: string; curren
   }
   if (!result.ok) return result;
   return { ok: true, payout: result.payout, count: result.count };
-}
-
-export const PAYOUT_METHODS = [
-  { value: "bank_transfer", label: "Bank transfer" },
-  { value: "paypal", label: "PayPal" },
-  { value: "wise", label: "Wise" },
-  { value: "upi", label: "UPI" },
-  { value: "store_credit", label: "Store credit" },
-  { value: "other", label: "Other" },
-] as const;
-
-export function methodLabel(method: string): string {
-  return PAYOUT_METHODS.find((m) => m.value === method)?.label ?? method;
 }
 
 /* ------------------------------------------------------------------ */
@@ -778,4 +767,26 @@ export function payoutsToCsv(rows: readonly AdminPayoutRow[]): string {
     header,
     ...rows.map((r) => [r.payout.id, r.payout.createdAt.slice(0, 10), r.affiliateCode, r.affiliateName, r.payoutEmail ?? "", decimal(r.payout.amount), r.payout.currency, methodLabel(r.payout.method), r.payout.reference ?? ""]),
   ]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Share targets                                                       */
+/* ------------------------------------------------------------------ */
+
+/** Pages an affiliate can link to: key pages, published courses and bundles. */
+export async function getShareTargets(): Promise<ShareTargetGroup[]> {
+  const db = await getDb();
+  const g = db.settings.growth;
+  const pages = [
+    { label: "Home page", path: "/" },
+    { label: "All courses", path: "/courses" },
+  ];
+  const bundles = g.bundlesEnabled ? db.bundles.filter((b) => b.published).sort((a, b) => a.title.localeCompare(b.title)) : [];
+  if (g.subscriptionsEnabled && db.plans.some((p) => p.active)) pages.push({ label: "Membership plans", path: "/pricing" });
+  if (bundles.length) pages.push({ label: "All bundles", path: "/bundles" });
+  const courses = db.courses.filter((c) => c.published).sort((a, b) => a.title.localeCompare(b.title));
+  const groups: ShareTargetGroup[] = [{ label: "Pages", items: pages }];
+  if (courses.length) groups.push({ label: "Courses", items: courses.map((c) => ({ label: c.title, path: `/courses/${c.slug}` })) });
+  if (bundles.length) groups.push({ label: "Bundles", items: bundles.map((b) => ({ label: b.title, path: `/bundles/${b.slug}` })) });
+  return groups;
 }

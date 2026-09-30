@@ -1,5 +1,5 @@
 import "server-only";
-import type { Batch, Coupon, Course, Database, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
+import type { Batch, Coupon, Course, Database, MembershipPlan, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
@@ -8,6 +8,9 @@ import { sendPaymentReminderEmail } from "@/lib/email";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { formatPrice, shortCode, toDateKey, uid } from "@/lib/utils";
 import { getRequestInfo } from "@/lib/auth/request-info";
+import { currentSubscription, resolveCourseAccess } from "@/lib/commerce/access";
+import { intervalNoun, isRecurringInterval, planAccessLabel } from "@/lib/commerce/plans";
+import { isOngoing, trialEligible } from "@/lib/commerce/subscriptions";
 import {
   couponAppliesTo,
   couponAttemptsBlocked,
@@ -71,12 +74,12 @@ export function paymentStatusLabel(p: Pick<Payment, "status" | "failureReason" |
 }
 
 export function parseItemType(raw: string | undefined | null): PaymentItemType | null {
-  return raw === "course" || raw === "batch" || raw === "certificate" ? raw : null;
+  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" ? raw : null;
 }
 
 export interface BillingItem {
   type: PaymentItemType;
-  /** Course id (course & certificate purchases) or batch id. */
+  /** Course id (course & certificate purchases), batch id or membership plan id. */
   id: string;
   /** Title stored on the payment. */
   title: string;
@@ -92,6 +95,8 @@ export interface BillingItem {
   href: string;
   course: Course | null;
   batch: Batch | null;
+  /** Membership plan (itemType "plan"). */
+  plan?: MembershipPlan | null;
 }
 
 function itemFromCourse(course: Course, type: "course" | "certificate"): BillingItem {
@@ -129,6 +134,23 @@ function itemFromBatch(batch: Batch): BillingItem {
   };
 }
 
+export function itemFromPlan(plan: MembershipPlan): BillingItem {
+  return {
+    type: "plan",
+    id: plan.id,
+    title: plan.name,
+    name: plan.name,
+    description: `${planAccessLabel(plan.access)} · ${plan.interval === "one_time" ? "pay once, keep access" : `billed every ${intervalNoun(plan.interval)}`}`,
+    gradient: "purple",
+    amount: plan.price,
+    currency: plan.currency || "USD",
+    href: "/pricing",
+    course: null,
+    batch: null,
+    plan,
+  };
+}
+
 /** Resolve the thing being bought. Accepts an id or a slug. */
 export async function getBillingItem(type: PaymentItemType, idOrSlug: string): Promise<BillingItem | null> {
   const db = await getDb();
@@ -136,7 +158,11 @@ export async function getBillingItem(type: PaymentItemType, idOrSlug: string): P
     const batch = db.batches.find((b) => b.id === idOrSlug || b.slug === idOrSlug);
     return batch ? itemFromBatch(batch) : null;
   }
-  // Round 3 wave B item types (plans, bundles, gifts, seats) are resolved by their own checkout flows.
+  if (type === "plan") {
+    const plan = db.plans.find((p) => p.id === idOrSlug || p.slug === idOrSlug);
+    return plan ? itemFromPlan(plan) : null;
+  }
+  // Other round 3 wave B item types (bundles, gifts, seats) are resolved by their own checkout flows.
   if (type !== "course" && type !== "certificate") return null;
   const course = db.courses.find((c) => c.id === idOrSlug || c.slug === idOrSlug);
   return course ? itemFromCourse(course, type) : null;
@@ -171,7 +197,8 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     const back = { backHref: `/courses/${course.slug}`, backLabel: "Checkout Course" };
     if (!db.settings.features.courses) return { status: "denied", message: "Courses are currently disabled on this platform.", ...back };
     if (!course.published && !manager) return { status: "denied", message: "This course is not available for purchase.", ...back };
-    if (db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id)) {
+    // Enrolled learners own the course, unless the enrollment came from a membership that lapsed.
+    if (resolveCourseAccess(db, user.id, course.id).granted) {
       return { status: "owned", redirectTo: `/courses/${course.slug}` };
     }
     if (course.upcoming && !manager) return { status: "denied", message: "This course is not open for enrollment yet.", ...back };
@@ -225,7 +252,40 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     return { status: "ok" };
   }
 
+  if (item.type === "plan" && item.plan) {
+    const plan = item.plan;
+    const back = { backHref: "/pricing", backLabel: "See membership plans" };
+    if (!db.settings.growth.subscriptionsEnabled) return { status: "denied", message: "Memberships are not available at the moment.", ...back };
+    if (!plan.active) return { status: "denied", message: "This membership plan is no longer offered.", ...back };
+    const current = currentSubscription(db, user.id);
+    if (current && isOngoing(current)) return { status: "owned", redirectTo: "/settings/subscription" };
+    if (pending) return { status: "pending", payment: pending };
+    return { status: "ok" };
+  }
+
   return { status: "denied", message: "Module Name is incorrect or does not exist.", backHref: "/courses", backLabel: "Browse courses" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Membership checkout terms                                           */
+/* ------------------------------------------------------------------ */
+
+export interface MembershipTerms {
+  /** Free days before the first charge for this buyer (0 = charged at checkout). */
+  trialDays: number;
+  /** Billed every month/year; false for lifetime plans. */
+  recurring: boolean;
+  interval: MembershipPlan["interval"];
+}
+
+/**
+ * What a member signs up for when buying `plan`: one free trial per member
+ * (never for someone who had a membership before) and whether it renews.
+ */
+export function membershipTerms(db: Pick<Database, "subscriptions">, userId: string, plan: MembershipPlan): MembershipTerms {
+  const recurring = isRecurringInterval(plan.interval);
+  const trialDays = recurring && plan.trialDays > 0 && trialEligible(db.subscriptions.filter((s) => s.userId === userId)) ? plan.trialDays : 0;
+  return { trialDays, recurring, interval: plan.interval };
 }
 
 /* ------------------------------------------------------------------ */
@@ -478,6 +538,11 @@ function evaluateReminder(db: Database, payment: Payment, now: number): Reminder
     const batch = db.batches.find((b) => b.id === payment.itemId);
     const taken = db.batchEnrollments.filter((e) => e.batchId === payment.itemId).length;
     if (batch && batch.seatCount > 0 && taken >= batch.seatCount) return { ok: false, reason: "sold_out", message: "This batch is sold out." };
+  } else if (payment.itemType === "plan") {
+    const running = currentSubscription(db, payment.userId, now);
+    if (running && isOngoing(running) && running.id !== payment.subscriptionId) {
+      return { ok: false, reason: "has_access", message: "The member already has a running membership." };
+    }
   } else if (db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId && e.purchasedCertificate)) {
     return { ok: false, reason: "has_access", message: "The learner already purchased this certificate." };
   }
@@ -696,6 +761,7 @@ export async function getTransactions(filter: TransactionFilter): Promise<Transa
 }
 
 function itemHrefFor(p: Pick<Payment, "itemType" | "itemId">, courses: Map<string, Course>, batches: Map<string, Batch>): string | null {
+  if (p.itemType === "plan") return "/pricing";
   if (p.itemType === "batch") {
     const b = batches.get(p.itemId);
     return b ? `/batches/${b.slug}` : null;
@@ -921,7 +987,7 @@ export interface RecordableItem {
   currency: string;
 }
 
-/** Everything an admin can record a payment against: courses, batches and paid certificates. */
+/** Everything an admin can record a payment against: courses, batches, paid certificates and membership plans. */
 export async function getRecordableItems(): Promise<RecordableItem[]> {
   const db = await getDb();
   const byTitle = (a: { title: string }, b: { title: string }) => a.title.localeCompare(b.title);
@@ -931,5 +997,8 @@ export async function getRecordableItems(): Promise<RecordableItem[]> {
     .filter((c) => c.paidCertificate)
     .map((c) => ({ type: "certificate" as const, id: c.id, title: `Certificate for ${c.title}`, price: c.certificatePrice, currency: c.currency || "USD" }))
     .sort(byTitle);
-  return [...courses, ...batches, ...certificates];
+  const plans = db.plans
+    .map((p) => ({ type: "plan" as const, id: p.id, title: `${p.name}${p.active ? "" : " (retired)"}`, price: p.price, currency: p.currency || "USD" }))
+    .sort(byTitle);
+  return [...courses, ...batches, ...certificates, ...plans];
 }

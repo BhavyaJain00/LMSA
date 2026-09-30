@@ -25,7 +25,12 @@ import { SegmentedControl } from "@/components/ui/tabs";
 import { cn, formatNumber } from "@/lib/utils";
 import { CourseMultiSelect, type CourseChoice } from "./course-multi-select";
 
-type PreviewState = { status: "loading"; data?: SegmentPreview } | { status: "ready"; data: SegmentPreview } | { status: "error"; error: string; data?: SegmentPreview };
+/** The last answer, for the request `key` (filter + retry count) it belongs to. */
+interface PreviewResult {
+  key: string;
+  data?: SegmentPreview;
+  error?: string;
+}
 
 const PREVIEW_DELAY_MS = 350;
 
@@ -77,13 +82,18 @@ export function SegmentBuilder({
     const days = defaultValue?.inactiveDays;
     return !!days && !(INACTIVE_DAY_PRESETS as readonly number[]).includes(days);
   });
-  const [preview, setPreview] = useState<PreviewState>({ status: "loading" });
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const requestRef = useRef(0);
 
   const audience = filter.leadsOnly ? "leads" : "members";
   const courseTitle = useCallback((courseId: string) => courses.find((c) => c.id === courseId)?.title, [courses]);
   const encoded = encodeSegmentParam(filter);
+  const requestKey = `${encoded}:${retryKey}`;
+  // Loading until the answer for the current filter arrives (the previous numbers stay visible meanwhile).
+  const loading = preview?.key !== requestKey;
+  const data = preview?.data;
+  const error = !loading ? preview?.error : undefined;
 
   const commit = (next: SegmentFilter) => {
     setFilter(next);
@@ -97,7 +107,7 @@ export function SegmentBuilder({
   // Live preview (debounced; only the latest answer is shown) and the optional URL sync.
   useEffect(() => {
     const request = ++requestRef.current;
-    setPreview((prev) => ({ status: "loading", data: prev.data }));
+    const key = requestKey;
     const timer = setTimeout(async () => {
       if (syncUrl) {
         const params = new URLSearchParams(searchParams.toString());
@@ -109,16 +119,16 @@ export function SegmentBuilder({
       try {
         const result = await previewSegmentAction(filter);
         if (request !== requestRef.current) return;
-        setPreview((prev) => (result.ok ? { status: "ready", data: result.data } : { status: "error", error: result.error, data: prev.data }));
+        setPreview((prev) => (result.ok ? { key, data: result.data } : { key, error: result.error, data: prev?.data }));
       } catch {
         if (request !== requestRef.current) return;
-        setPreview((prev) => ({ status: "error", error: "The audience couldn't be counted. Check your connection and try again.", data: prev.data }));
+        setPreview((prev) => ({ key, error: "The audience couldn't be counted. Check your connection and try again.", data: prev?.data }));
       }
     }, PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
     // searchParams/router/pathname only matter when the filter changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [encoded, retryKey]);
+  }, [requestKey]);
 
   const toggleRole = (role: Role) => {
     const roles = filter.roles ?? [];
@@ -126,7 +136,6 @@ export function SegmentBuilder({
   };
 
   const inactivityValue = customDays ? "custom" : filter.inactiveDays ? String(filter.inactiveDays) : "";
-  const data = preview.data;
   const conditions = describeSegment(filter, courseTitle);
 
   return (
@@ -276,10 +285,10 @@ export function SegmentBuilder({
           <h2 id={`${id}-preview-title`} className="text-sm font-medium text-ink-muted">
             Recipients
           </h2>
-          {preview.status === "loading" && data && <Spinner className="size-4 text-ink-muted" />}
+          {loading && data && <Spinner className="size-4 text-ink-muted" />}
         </div>
 
-        <div aria-live="polite" aria-busy={preview.status === "loading"}>
+        <div aria-live="polite" aria-busy={loading}>
           {data ? (
             <>
               <p className="mt-1 text-3xl font-semibold tracking-tight text-ink tabular-nums">{formatNumber(data.count)}</p>
@@ -288,16 +297,16 @@ export function SegmentBuilder({
                 {audience === "members" ? "" : " (leads)"}
               </p>
             </>
-          ) : preview.status === "error" ? null : (
+          ) : error ? null : (
             <div className="mt-2 space-y-2">
               <Skeleton className="h-8 w-24" />
               <Skeleton className="h-4 w-40" />
             </div>
           )}
 
-          {preview.status === "error" && (
+          {error && (
             <div role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-              <p>{preview.error}</p>
+              <p>{error}</p>
               <Button size="xs" variant="outline" className="mt-2" onClick={() => setRetryKey((k) => k + 1)} leftIcon={<Icon.Refresh className="size-3.5" />}>
                 Try again
               </Button>
