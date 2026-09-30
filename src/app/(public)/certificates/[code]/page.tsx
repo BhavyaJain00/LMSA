@@ -10,6 +10,13 @@ import { Icon } from "@/components/ui/icons";
 import { CertificateSheet } from "@/components/certificates/certificate-sheet";
 import { CertificateActions } from "@/components/certificates/certificate-actions";
 import { formatLongDate } from "@/components/certificates/time";
+import { getSettings } from "@/lib/db/store";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { credentialJsonLd, seoContext } from "@/lib/seo/jsonld";
+import { batchPath, certificatePath, coursePath } from "@/lib/seo/content-index";
+import { certificateTrail } from "@/lib/seo/breadcrumbs";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
+import { JsonLd } from "@/components/seo/json-ld";
 
 /** Route params are already URL-decoded; decoding again throws on a literal "%" (e.g. /certificates/100%25). */
 function safeDecode(value: string): string {
@@ -31,22 +38,32 @@ async function loadVisible(code: string): Promise<{ detail: CertificateDetail; o
   return { detail, owner, staff };
 }
 
+/**
+ * Published, unexpired certificates are public verification pages the
+ * learner shares (LinkedIn, CVs), so they are indexed with credential markup;
+ * unpublished (owner/staff preview) and expired ones are not.
+ */
+function isIndexableCertificate(detail: CertificateDetail): boolean {
+  return detail.certificate.published && !detail.expired;
+}
+
 export async function generateMetadata(props: PageProps<"/certificates/[code]">): Promise<Metadata> {
   const { code } = await props.params;
-  const loaded = await loadVisible(code);
-  if (!loaded) return { title: "Certificate not found", robots: { index: false } };
+  const [loaded, settings] = await Promise.all([loadVisible(code), getSettings()]);
+  if (!loaded) return notFoundMetadata("Certificate not found");
   const { detail } = loaded;
   const title = detail.course?.title ?? detail.batch?.title ?? "Certificate";
   const name = detail.learner?.name ?? "Learner";
-  const description = `${name} earned a certificate for ${title} from ${detail.brand.name} on ${formatLongDate(detail.certificate.issueDate)}.`;
-  const url = await getCertificateUrl(detail.certificate.code);
-  return {
-    title: `${name} · ${title}`,
-    description,
-    alternates: { canonical: url },
-    openGraph: { title: `${name} · ${title}`, description, url, type: "website", siteName: detail.brand.name },
-    robots: detail.certificate.published ? undefined : { index: false },
-  };
+  return pageMetadata(
+    {
+      title: `${name} · ${title}`,
+      description: `${name} earned a certificate for ${title} from ${detail.brand.name} on ${formatLongDate(detail.certificate.issueDate)}. Verify the certificate ID and see what the course covered.`,
+      path: certificatePath(detail.certificate.code),
+      noindex: !isIndexableCertificate(detail),
+      follow: true,
+    },
+    settings,
+  );
 }
 
 export default async function CertificatePage(props: PageProps<"/certificates/[code]">) {
@@ -65,8 +82,28 @@ export default async function CertificatePage(props: PageProps<"/certificates/[c
   const issueMonth = String(Number(certificate.issueDate.slice(5, 7)));
   const linkedIn = `https://www.linkedin.com/profile/add?startTask=CERTIFICATION_NAME&name=${encodeURIComponent(title)}&organizationName=${encodeURIComponent(brand.name)}&issueYear=${issueYear}&issueMonth=${issueMonth}&certUrl=${encodeURIComponent(verifyUrl)}&certId=${encodeURIComponent(certificate.code)}`;
 
+  const indexable = isIndexableCertificate(detail);
+  const structuredData = indexable
+    ? credentialJsonLd(
+        {
+          name: `${title} certificate`,
+          description: `Certificate of completion for ${title}, issued by ${brand.name} to ${learnerName}.`,
+          path: certificatePath(certificate.code),
+          code: certificate.code,
+          recipient: learnerName,
+          issueDate: certificate.issueDate,
+          expiryDate: certificate.expiryDate,
+          aboutName: title,
+          aboutPath: course ? coursePath(course.slug) : batch ? batchPath(batch.slug) : undefined,
+        },
+        seoContext(await getSettings()),
+      )
+    : null;
+
   return (
     <div className="space-y-6 animate-fade-in">
+      <JsonLd data={structuredData} />
+      <Breadcrumbs items={certificateTrail(`${learnerName} · ${title}`)} structuredData={indexable} className="public-chrome" />
       {/* Verification banner */}
       <div className="public-chrome flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSettings } from "@/lib/db/store";
@@ -11,6 +12,11 @@ import { BadgeGrid } from "@/components/profile/badge-grid";
 import { EducationTimeline, ProfileCompletenessCard, WorkTimeline } from "@/components/profile/profile-sections";
 import { SocialLinks } from "@/components/profile/social-icons";
 import { formatDate, relativeTime } from "@/lib/utils";
+import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
+import { guestsCanBrowse } from "@/lib/seo/visibility";
+import { profilePath } from "@/lib/seo/content-index";
+import { getProfileJsonLd } from "@/lib/data/seo";
+import { JsonLd } from "@/components/seo/json-ld";
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -21,6 +27,34 @@ function Section({ title, action, children }: { title: string; action?: React.Re
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Profiles of people who teach a published course are public landing pages
+ * (indexed, with ProfilePage/Person markup); learner profiles stay out of the
+ * index so joining the platform never puts someone's name in search results.
+ */
+function isIndexableProfile(view: NonNullable<Awaited<ReturnType<typeof getProfileView>>>, guestsBrowse: boolean): boolean {
+  return guestsBrowse && view.user.enabled && view.stats.teaching > 0;
+}
+
+export async function generateMetadata(props: PageProps<"/user/[username]">): Promise<Metadata> {
+  const { username } = await props.params;
+  const [view, settings] = await Promise.all([getProfileView(decodeURIComponent(username)), getSettings()]);
+  if (!view) return notFoundMetadata("Profile not found");
+  const { user } = view;
+  return pageMetadata(
+    {
+      title: user.headline ? `${user.name} — ${user.headline}` : user.name,
+      description: [user.bio, user.headline, `${user.name} on ${settings.brand.name}.`],
+      path: profilePath(user.username),
+      type: "profile",
+      image: user.avatarUrl ? { url: user.avatarUrl, alt: user.name } : undefined,
+      noindex: !isIndexableProfile(view, guestsCanBrowse(settings)),
+      follow: true,
+    },
+    settings,
   );
 }
 
@@ -40,9 +74,11 @@ export default async function ProfileAboutPage(props: PageProps<"/user/[username
   const hasExperience = !!user.workExperience?.length;
   const hasEducation = !!user.education?.length;
   const website = user.socials?.website;
+  const structuredData = isIndexableProfile(view, guestsCanBrowse(settings)) ? await getProfileJsonLd(user) : null;
 
   return (
     <div className="grid gap-8 lg:grid-cols-3">
+      <JsonLd data={structuredData} />
       <div className="min-w-0 space-y-8 lg:col-span-2">
         <Section title="About">
           {user.bio ? (

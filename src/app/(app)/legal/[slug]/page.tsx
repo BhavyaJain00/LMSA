@@ -7,6 +7,8 @@ import { getLegalPage, renderLegalMarkdown } from "@/lib/legal/pages";
 import { legalLinks } from "@/lib/legal/links";
 import { isTemplateContent, isValidLegalSlug, legalHref, removeTemplateNotice } from "@/lib/legal/pages-shared";
 import { pageMetadata } from "@/lib/seo/metadata";
+import { legalTrail } from "@/lib/seo/breadcrumbs";
+import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { extractHeadings, Markdown } from "@/lib/markdown";
 import { ButtonLink, buttonClasses } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
@@ -77,25 +79,7 @@ export default async function LegalPageView(props: PageProps<"/legal/[slug]">) {
         </div>
       )}
 
-      <nav aria-label="Breadcrumb" className="mb-3 text-sm text-ink-muted">
-        <ol className="flex flex-wrap items-center gap-1">
-          <li>
-            <Link href="/" className="hover:text-ink hover:underline">
-              Home
-            </Link>
-          </li>
-          <li aria-hidden="true">
-            <Icon.ChevronRight className="size-3.5 text-ink-faint" />
-          </li>
-          <li>Legal</li>
-          <li aria-hidden="true">
-            <Icon.ChevronRight className="size-3.5 text-ink-faint" />
-          </li>
-          <li aria-current="page" className="font-medium text-ink">
-            {page.title}
-          </li>
-        </ol>
-      </nav>
+      <Breadcrumbs items={legalTrail(page)} structuredData={!preview} />
 
       <header className="border-b border-border pb-6">
         <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{page.title}</h1>

@@ -10,11 +10,10 @@ import { ProfileHeader } from "@/components/profile/profile-header";
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
   const { username } = await params;
   const view = await getProfileView(decodeURIComponent(username));
+  // Tab pages (certificates, badges, roles, slots, schedule) keep the root noindex default;
+  // the About page opts into indexing for instructor profiles.
   if (!view) return { title: "Profile not found" };
-  return {
-    title: view.user.name,
-    description: view.user.headline ?? `${view.user.name}'s learning profile`,
-  };
+  return { title: view.user.name };
 }
 
 /** Profile shell: header + tab bar (About | Certificates | Badges | Roles | Slots | Schedule). */

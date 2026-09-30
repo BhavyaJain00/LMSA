@@ -21,6 +21,7 @@ export const blogTagPath = (tagSlug: string) => `/blog/tag/${tagSlug}`;
 export const instructorPath = (username: string) => `/instructors/${encodeURIComponent(username)}`;
 export const profilePath = (username: string) => `/user/${encodeURIComponent(username)}`;
 export const legalPath = (slug: string) => `/legal/${slug}`;
+export const certificatePath = (code: string) => `/certificates/${encodeURIComponent(code)}`;
 
 /** FNV-1a hash (hex) — a cheap change detector for rows without an `updatedAt`. */
 export function fingerprint(text: string): string {

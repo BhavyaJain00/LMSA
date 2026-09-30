@@ -52,7 +52,7 @@ function unsatisfiable(headers: Record<string, string>, size: number | null): Ne
 function playlistResponse(text: string, headers: Record<string, string>, head: boolean, sign: ((text: string) => string) | null): NextResponse {
   const body = sign ? sign(text) : text;
   const bytes = Buffer.from(body, "utf8");
-  const out = { ...headers, "Content-Length": String(bytes.byteLength) };
+  const out: Record<string, string> = { ...headers, "Content-Length": String(bytes.byteLength) };
   // A playlist is always sent whole (Range is ignored), and signed ones embed fresh tokens: never cache them.
   if (sign) out["Cache-Control"] = "private, no-store";
   return new NextResponse(head ? null : bytes, { status: 200, headers: out });

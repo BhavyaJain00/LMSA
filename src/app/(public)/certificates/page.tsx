@@ -4,8 +4,19 @@ import { getSettings } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { Icon } from "@/components/ui/icons";
 import { VerifyForm } from "@/components/certificates/verify-form";
+import { pageMetadata } from "@/lib/seo/metadata";
 
-export const metadata: Metadata = { title: "Verify a certificate" };
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getSettings();
+  return pageMetadata(
+    {
+      title: "Verify a certificate",
+      description: `Check that a certificate issued by ${settings.brand.name} is genuine: enter the certificate ID printed at the bottom to see who earned it, for which course and when.`,
+      path: "/certificates",
+    },
+    settings,
+  );
+}
 
 export default async function VerifyCertificatePage() {
   const [settings, viewer] = await Promise.all([getSettings(), getCurrentUser()]);

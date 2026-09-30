@@ -216,7 +216,7 @@ describe("UploadTask (chunked)", () => {
     const file = videoFile();
     const bytes = await fileBytes(file);
     let patches = 0;
-    const dropSecond: Fault = async (req, server) => {
+    const dropSecond: Fault = async (req, server): Promise<HttpResult | "pass"> => {
       if (req.method !== "PATCH" || ++patches !== 2) {
         h.server.faults.unshift(dropSecond);
         return "pass";

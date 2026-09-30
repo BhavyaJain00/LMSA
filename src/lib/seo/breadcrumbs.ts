@@ -38,9 +38,9 @@ export function legalTrail(page: { title: string }): BreadcrumbItem[] {
   return [HOME_CRUMB, { name: "Legal" }, { name: page.title }];
 }
 
-/** Home → Certified members → Recipient's certificate. */
-export function certificateTrail(title: string, certifiedMembersPublic: boolean): BreadcrumbItem[] {
-  return [HOME_CRUMB, certifiedMembersPublic ? { name: "Certified members", path: "/certified-members" } : { name: "Certificates", path: "/certificates" }, { name: title }];
+/** Home → Verify a certificate → Recipient's certificate. */
+export function certificateTrail(title: string): BreadcrumbItem[] {
+  return [HOME_CRUMB, { name: "Verify a certificate", path: "/certificates" }, { name: title }];
 }
 
 /** Home → Section (for top-level lists: catalog, batches, programs, jobs…). */
