@@ -69,6 +69,51 @@ export function copyTitle(title: string): string {
   return full.length > COURSE_TITLE_MAX ? `${full.slice(0, COURSE_TITLE_MAX - 1).trimEnd()}…` : full;
 }
 
+/**
+ * A copy title nobody uses yet: "Copy of X", then "Copy of X (2)", "(3)"…
+ * Titles are compared without regard to case.
+ */
+export function uniqueCopyTitle(title: string, takenTitles: Iterable<string>): string {
+  const taken = new Set(Array.from(takenTitles, (t) => t.trim().toLowerCase()));
+  const base = copyTitle(title);
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const suffix = ` (${n})`;
+    const candidate = `${base.length + suffix.length > COURSE_TITLE_MAX ? `${base.slice(0, COURSE_TITLE_MAX - suffix.length - 1).trimEnd()}…` : base}${suffix}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/** What a copy contains, for the confirmation dialog and the audit entry. */
+export interface CopyCounts {
+  chapters: number;
+  lessons: number;
+  blocks: number;
+  quizzes: number;
+  questions: number;
+  assignments: number;
+  exercises: number;
+  transcripts: number;
+}
+
+export function countGraph(graph: CourseGraph): CopyCounts {
+  const chapterIds = new Set(graph.chapters.map((c) => c.id));
+  const lessons = graph.lessons.filter((l) => chapterIds.has(l.chapterId));
+  const lessonIds = new Set(lessons.map((l) => l.id));
+  const blockIds = new Set(lessons.flatMap((l) => l.blocks.map((b) => b.id)));
+  const questionIds = new Set(graph.quizzes.flatMap((q) => q.questions.map((ref) => ref.questionId)));
+  return {
+    chapters: graph.chapters.length,
+    lessons: lessons.length,
+    blocks: blockIds.size,
+    quizzes: graph.quizzes.length,
+    questions: graph.questions.filter((q) => questionIds.has(q.id)).length,
+    assignments: graph.assignments.length,
+    exercises: graph.exercises.length,
+    transcripts: graph.transcripts.filter((t) => t.status === "ready" && lessonIds.has(t.lessonId) && blockIds.has(t.blockId)).length,
+  };
+}
+
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /** Peer review settings without the reviewer/submission pairs an instructor excluded (they name submissions of the original). */

@@ -690,10 +690,18 @@ export async function acceptInvite(rawToken: string, user: Pick<User, "id" | "na
 }
 
 /** Accept an invitation from inside the app: only for the account whose confirmed email was invited. */
-export async function acceptInviteForSeat(seatId: string, user: Pick<User, "id" | "name" | "email" | "emailVerifiedAt">, now: Date = new Date()): Promise<AcceptResult> {
-  if (!user.emailVerifiedAt) return { ok: false, problem: "invalid" };
-  const email = user.email.toLowerCase();
-  return activateSeat((d) => d.orgSeats.find((s) => s.id === seatId && s.email.toLowerCase() === email), user, now);
+export async function acceptInviteForSeat(seatId: string, user: Pick<User, "id" | "name">, now: Date = new Date()): Promise<AcceptResult> {
+  return activateSeat(
+    (d) => {
+      // The address comes from the stored account: the session's copy can be older than a change of email.
+      const account = d.users.find((u) => u.id === user.id);
+      if (!account?.emailVerifiedAt) return undefined;
+      const email = account.email.toLowerCase();
+      return d.orgSeats.find((s) => s.id === seatId && s.email.toLowerCase() === email);
+    },
+    user,
+    now,
+  );
 }
 
 export type ClaimResult = { ok: true; team: { id: string; name: string } } | { ok: false; error: string };
