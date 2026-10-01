@@ -195,6 +195,100 @@ export function filterErrorEvents(events: readonly ErrorEvent[], filter: ErrorFi
     .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
+const STATUS_VALUES: readonly ErrorStatusFilter[] = ["open", "resolved", "all"];
+const SOURCE_VALUES: readonly ErrorSourceFilter[] = ["all", "server", "browser"];
+
+/** Filter from query parameters (`status` defaults to open groups). */
+export function parseErrorFilter(get: (key: string) => string): ErrorFilter {
+  const status = get("status") as ErrorStatusFilter;
+  const source = get("source") as ErrorSourceFilter;
+  return {
+    status: STATUS_VALUES.includes(status) ? status : "open",
+    source: SOURCE_VALUES.includes(source) ? source : "all",
+    q: get("q").trim().slice(0, 200),
+  };
+}
+
+/** Query parameters for a filter, defaults left out so URLs stay short. */
+export function errorFilterToQuery(filter: ErrorFilter): Record<string, string | undefined> {
+  return {
+    status: filter.status === "open" ? undefined : filter.status,
+    source: filter.source === "all" ? undefined : filter.source,
+    q: filter.q || undefined,
+  };
+}
+
+export interface ErrorLogStats {
+  open: number;
+  resolved: number;
+  /** Occurrences of the open groups. */
+  openOccurrences: number;
+  /** Groups first seen in the last 24 hours. */
+  newToday: number;
+  /** Open groups reported by browsers. */
+  openBrowser: number;
+  lastSeenAt: string | null;
+}
+
+export function errorLogStats(events: readonly ErrorEvent[], now: Date): ErrorLogStats {
+  const dayAgo = now.getTime() - 24 * 60 * 60 * 1000;
+  const stats: ErrorLogStats = { open: 0, resolved: 0, openOccurrences: 0, newToday: 0, openBrowser: 0, lastSeenAt: null };
+  for (const e of events) {
+    if (e.resolved) stats.resolved++;
+    else {
+      stats.open++;
+      stats.openOccurrences += e.count || 0;
+      if (isBrowserError(e)) stats.openBrowser++;
+    }
+    if (new Date(e.createdAt).getTime() >= dayAgo) stats.newToday++;
+    if (!stats.lastSeenAt || e.lastSeenAt > stats.lastSeenAt) stats.lastSeenAt = e.lastSeenAt;
+  }
+  return stats;
+}
+
+/** Where the error came from, for badges. */
+export function describeErrorSource(event: Pick<ErrorEvent, "method">): string {
+  if (isBrowserError(event)) return "Browser";
+  if (event.method === "ACTION") return "Server action";
+  return event.method ? `Server · ${event.method}` : "Server";
+}
+
+export type StackLineKind = "message" | "app" | "framework";
+
+export interface StackLine {
+  text: string;
+  kind: StackLineKind;
+}
+
+const FRAMEWORK_FRAME = /node_modules|node:internal|\(node:|next\/dist|webpack-internal:\/\/\/\(?(?:rsc|ssr|app-pages-browser)\)?\/\.\/node_modules|\[turbopack\]|<anonymous>/;
+
+/**
+ * Split a stack trace into lines, marking which frames are the app's own
+ * code (shown prominently) and which belong to Node, Next or packages.
+ */
+export function parseStackLines(stack: string | undefined): StackLine[] {
+  if (!stack) return [];
+  return stack
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""))
+    .filter(Boolean)
+    .map((text) => {
+      if (!/^\s*at\s/.test(text) && !/@\S+:\d+:\d+$/.test(text)) return { text, kind: "message" as const };
+      return { text: text.trim(), kind: FRAMEWORK_FRAME.test(text) ? ("framework" as const) : ("app" as const) };
+    });
+}
+
+/** Ids from a bulk action request: strings in the shape `uid("err")` produces, deduplicated, at most `max`. */
+export function normalizeErrorIds(raw: unknown, max = MAX_ERROR_GROUPS): string[] {
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [];
+  const out = new Set<string>();
+  for (const id of list) {
+    if (typeof id === "string" && /^err_[a-z0-9]{6,40}$/.test(id)) out.add(id);
+    if (out.size >= max) break;
+  }
+  return [...out];
+}
+
 /** Parse a browser error report body; null when it is not a usable report. */
 export function parseBrowserReport(body: unknown): ErrorInput | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
