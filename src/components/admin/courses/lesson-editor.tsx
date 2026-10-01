@@ -238,12 +238,11 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
               dirty={dirty}
               onRestored={(restored) => {
                 // The restored content becomes the saved state of the editor (slug and preview are not versioned).
-                const saved: Draft = { title: restored.title, slug, includeInPreview, instructorNotes: restored.instructorNotes, blocks: restored.blocks };
-                setTitle(saved.title);
-                setInstructorNotes(saved.instructorNotes);
-                setBlocks(saved.blocks);
+                setTitle(restored.title);
+                setInstructorNotes(restored.instructorNotes);
+                setBlocks(restored.blocks);
                 setRevision((r) => r + 1);
-                setBaselineDraft({ ...saved, slug: baselineDraft.slug, includeInPreview: baselineDraft.includeInPreview });
+                setBaselineDraft((base) => ({ ...base, title: restored.title, instructorNotes: restored.instructorNotes, blocks: restored.blocks }));
                 setSavedAt(restored.updatedAt);
               }}
             />
