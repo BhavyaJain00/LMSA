@@ -1,3 +1,4 @@
+import type { Database } from "@/lib/types";
 import { requireRole } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { aiKeyHint, aiSiteStatus } from "@/lib/ai/access";
@@ -13,15 +14,29 @@ export const metadata = { title: "AI tutor settings" };
 
 const DAY_MS = 86_400_000;
 
+/** Answers of the last 30 days, how many the course didn't cover, and flagged answers not yet reviewed. */
+function tutorStats(messages: Database["aiMessages"], now = Date.now()) {
+  const since = new Date(now - 30 * DAY_MS).toISOString();
+  let answers = 0;
+  let unknown = 0;
+  let awaitingReview = 0;
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    if (m.createdAt >= since) {
+      answers++;
+      if (isUnknownAnswer(m.content)) unknown++;
+    }
+    if (m.flagged && m.reviewStatus !== "approved" && m.reviewStatus !== "corrected") awaitingReview++;
+  }
+  return { answers, unknown, awaitingReview };
+}
+
 export default async function AiSettingsPage() {
   await requireRole(["admin"], "/admin/settings/ai");
   const db = await getDb();
   const site = aiSiteStatus(db.settings);
   const coursesOn = db.courses.filter((c) => c.aiTutorEnabled);
-  const since = new Date(Date.now() - 30 * DAY_MS).toISOString();
-  const answers = db.aiMessages.filter((m) => m.role === "assistant" && m.createdAt >= since);
-  const unknown = answers.filter((m) => isUnknownAnswer(m.content)).length;
-  const awaitingReview = db.aiMessages.filter((m) => m.role === "assistant" && m.flagged && m.reviewStatus !== "approved" && m.reviewStatus !== "corrected").length;
+  const { answers, unknown, awaitingReview } = tutorStats(db.aiMessages);
 
   const status = site.ready ? "Ready" : !site.enabled ? "Off" : "Key missing";
   const baseRules = buildSystemPrompt({ siteName: db.settings.brand.name, courseTitle: "<course title>", addition: null });
@@ -50,7 +65,7 @@ export default async function AiSettingsPage() {
           hint="Switch it on in a course's Settings tab"
           icon={<Icon.BookOpen className="size-5" />}
         />
-        <StatCard label="Answers (30 days)" value={formatNumber(answers.length)} hint={answers.length ? `${percent(unknown, answers.length)}% not covered by the course` : "No questions yet"} icon={<Icon.MessageSquare className="size-5" />} />
+        <StatCard label="Answers (30 days)" value={formatNumber(answers)} hint={answers ? `${percent(unknown, answers)}% not covered by the course` : "No questions yet"} icon={<Icon.MessageSquare className="size-5" />} />
         <StatCard label="Awaiting review" value={formatNumber(awaitingReview)} hint="Flagged or reported answers" icon={<Icon.AlertCircle className="size-5" />} />
       </div>
       <AiSettingsForm initial={db.settings.ai} keyHint={aiKeyHint()} baseRules={baseRules} />

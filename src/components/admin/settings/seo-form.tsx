@@ -29,6 +29,7 @@ export interface SeoValues {
   googleVerification: string;
   bingVerification: string;
   noindexSite: boolean;
+  blogEnabled: boolean;
 }
 
 export function SeoForm({ initial }: { initial: SeoValues }) {
@@ -202,6 +203,17 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
             invalid={!!errors.bingVerification}
           />
         </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="Blog">
+        <SettingsSwitchRow error={errors.blogEnabled}>
+          <Switch
+            name="blogEnabled"
+            defaultChecked={initial.blogEnabled}
+            label="Publish the blog"
+            description="Shows /blog with its categories, topics and RSS feed, adds articles to the sitemap, the footer and course pages. When off, articles stay editable under Admin → Blog but are not public."
+          />
+        </SettingsSwitchRow>
       </SettingsSection>
 
       <SettingsSection title="Indexing">

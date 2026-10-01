@@ -227,6 +227,8 @@ export async function rateAnswerAction(messageId: string, helpful: boolean | nul
   if (!found) return { ok: false, error: "This answer no longer exists." };
   const reported = db.auditEvents.some((e) => e.action === "ai.message.report" && e.targetId === messageId);
   const queue = db.settings.ai.reviewQueue;
+  // Read before the write: the snapshot may be the same object the write changes.
+  const wasFlagged = !!found.message.flagged;
   const result = await mutate((d) => {
     const m = d.aiMessages.find((x) => x.id === messageId);
     if (!m) return null;
@@ -241,7 +243,7 @@ export async function rateAnswerAction(messageId: string, helpful: boolean | nul
       delete m.flagged;
       delete m.reviewStatus;
     }
-    return { helpful: m.helpful ?? null, flagged: !!m.flagged, newlyFlagged: helpful === false && !found.message.flagged };
+    return { helpful: m.helpful ?? null, flagged: !!m.flagged, newlyFlagged: helpful === false && !wasFlagged };
   });
   if (!result) return { ok: false, error: "This answer no longer exists." };
   if (result.newlyFlagged) await notifyReviewers(db, found.course, found.message, user, "A learner marked an answer as not helpful.");

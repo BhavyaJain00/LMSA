@@ -55,7 +55,8 @@ import { parseDecimalAmount } from "@/lib/payments/amounts";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
 import type { CheckoutNext } from "@/lib/payments/types";
-import { BILLING_SOURCES, GSTIN_RE, PAN_RE, canonicalIndianState, isKnownCountry } from "@/components/commerce/countries";
+import { GSTIN_RE, PAN_RE } from "@/components/commerce/countries";
+import { billingFields, readBilling, validateBilling } from "@/lib/payments/billing-input";
 import { setFlash } from "@/lib/flash";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, formatPrice, uid } from "@/lib/utils";
@@ -74,67 +75,12 @@ import { confirmRazorpayMembership } from "@/lib/commerce/memberships";
 import { startManualTrial } from "@/lib/commerce/membership-store";
 import { isRecurringInterval } from "@/lib/commerce/plans";
 import { isGatewayManaged, isOngoing } from "@/lib/commerce/subscriptions";
+import { orderBumpFor } from "@/lib/commerce/upsell-service";
+import { isOrderBump } from "@/lib/commerce/upsells";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
 /* ------------------------------------------------------------------ */
-
-interface BillingInput {
-  billingName: string;
-  line1: string;
-  line2: string;
-  city: string;
-  state: string;
-  country: string;
-  pincode: string;
-  gstin: string;
-  pan: string;
-  source: string;
-  consent: boolean;
-}
-
-function readBilling(formData: FormData): BillingInput {
-  return {
-    billingName: fd(formData, "billingName"),
-    line1: fd(formData, "line1"),
-    line2: fd(formData, "line2"),
-    city: fd(formData, "city"),
-    state: fd(formData, "state"),
-    country: fd(formData, "country"),
-    pincode: fd(formData, "pincode"),
-    gstin: fd(formData, "gstin").toUpperCase(),
-    pan: fd(formData, "pan").toUpperCase(),
-    source: fd(formData, "source"),
-    consent: fdBool(formData, "consent"),
-  };
-}
-
-/** Validation order mirrors Frappe's checkout: source, consent, mandatory fields, tax ids, state. */
-function validateBilling(input: BillingInput, applyTax: boolean): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (!input.source || !(BILLING_SOURCES as readonly string[]).includes(input.source)) {
-    errors.source = "Please let us know where you heard about us from.";
-  }
-  if (!input.consent) errors.consent = "Please provide your consent to proceed with the payment.";
-  if (input.billingName.length < 2 || input.billingName.length > 140) errors.billingName = "Please enter a valid Billing Name";
-  if (input.line1.length < 3 || input.line1.length > 200) errors.line1 = "Please enter a valid Address Line 1";
-  if (input.line2.length > 200) errors.line2 = "Please enter a valid Address Line 2";
-  if (input.city.length < 2 || input.city.length > 100) errors.city = "Please enter a valid City";
-  if (!isKnownCountry(input.country)) errors.country = "Please select your country.";
-  if (input.pincode && !/^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$/.test(input.pincode)) errors.pincode = "Please enter a valid Postal Code";
-  if (input.country === "India") {
-    if (!input.state) errors.state = "Please select your state.";
-    else if (!canonicalIndianState(input.state)) errors.state = "Please select your state from the list.";
-  } else if (input.state.length > 100) {
-    errors.state = "Please enter a valid State/Province";
-  }
-  if (applyTax) {
-    if (input.gstin && !GSTIN_RE.test(input.gstin)) errors.gstin = "Please enter a valid GST number.";
-    if (input.gstin && !input.pan) errors.pan = "Please enter a valid pan number.";
-    else if (input.pan && !PAN_RE.test(input.pan)) errors.pan = "Please enter a valid pan number.";
-  }
-  return errors;
-}
 
 function orderPath(orderId: string): string {
   return `/billing/success/${encodeURIComponent(orderId)}`;
@@ -222,12 +168,26 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     if (!gate.ok) return { ok: false, error: gate.error };
   }
 
+  // Order bump ticked at checkout: offered again on the server (still active, still buyable, same price).
+  const bumpId = fd(formData, "bump");
+  const bump = bumpId && !split ? await orderBumpFor(user, item) : null;
+  if (bumpId && (!bump || bump.upsell.id !== bumpId)) {
+    return { ok: false, error: "The add-on offer is no longer available. Reload the page to see your order without it." };
+  }
+  if (bump && fd(formData, "bumpExpected") !== "" && Number(fd(formData, "bumpExpected")) !== bump.summary.total) {
+    return { ok: false, error: "The price of the add-on changed while you were checking out. Please review your order and try again." };
+  }
+  const total = charge.amount + (bump?.summary.total ?? 0);
+
   const gateway = settings.commerce.paymentGateway;
-  const settleNow = charge.amount <= 0 || gateway === "none";
+  const settleNow = total <= 0 || gateway === "none";
   if (!settleNow && isRealGateway(gateway) && !isConfigured(gateway)) {
     return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
   }
 
+  const billing = billingFields(input, settings.commerce.applyTax);
+  const orderGateway = total <= 0 ? "free" : gateway;
+  const createdAt = new Date().toISOString();
   // The coupon's usage limit is enforced again inside this serialized insert (the use is reserved there).
   const inserted = await insertPendingOrder({
     id: uid("pay"),
@@ -245,22 +205,29 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     currency: summary.currency,
     couponId: coupon?.id,
     couponCode: coupon?.code,
-    billingName: input.billingName,
-    address: {
-      line1: input.line1,
-      line2: input.line2 || undefined,
-      city: input.city,
-      state: input.country === "India" ? (canonicalIndianState(input.state) ?? undefined) : input.state || undefined,
-      country: input.country,
-      pincode: input.pincode || undefined,
-    },
-    gstin: settings.commerce.applyTax ? input.gstin || undefined : undefined,
-    pan: settings.commerce.applyTax ? input.pan || undefined : undefined,
-    source: input.source,
-    gateway: charge.amount <= 0 ? "free" : gateway,
+    ...billing,
+    gateway: orderGateway,
     status: "pending",
-    createdAt: new Date().toISOString(),
-  });
+    createdAt,
+  }, bump
+    ? {
+        id: uid("pay"),
+        userId: user.id,
+        itemType: bump.item.type,
+        itemId: bump.item.id,
+        itemTitle: bump.item.title,
+        ...(bump.item.bundle ? { bundleId: bump.item.bundle.id } : {}),
+        originalAmount: bump.summary.originalAmount,
+        discountAmount: bump.summary.discountAmount,
+        taxAmount: bump.summary.taxAmount,
+        amount: bump.summary.total,
+        currency: bump.summary.currency,
+        ...billing,
+        gateway: orderGateway,
+        status: "pending",
+        createdAt,
+      }
+    : undefined);
   if (!inserted.ok) return { ok: false, error: inserted.error, fieldErrors: { coupon: inserted.error } };
   const { payment, existing } = inserted;
   if (existing) {
@@ -273,7 +240,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     if (!res.ok) return { ok: false, error: res.error };
     revalidatePath("/", "layout");
     await finishFulfilledCheckout(res.data, item.course?.slug);
-    await setFlash(charge.amount <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.", "success");
+    await setFlash(total <= 0 ? "You're enrolled! Enjoy learning." : "Your order is confirmed.", "success");
     redirect(orderPath(payment.orderId));
   }
 
@@ -332,7 +299,13 @@ async function ownPayment(orderId: string): Promise<{ user: User; payment: Payme
 export async function resumeCheckoutAction(orderId: string): Promise<ActionResult<CheckoutNext>> {
   const found = await ownPayment(typeof orderId === "string" ? orderId : "");
   if ("error" in found) return { ok: false, error: found.error };
-  const { payment } = found;
+  let { payment } = found;
+  // An order bump is paid in the checkout of its main order.
+  if (isOrderBump(payment)) {
+    const main = (await getDb()).payments.find((p) => p.id === payment.upsellOfPaymentId);
+    if (!main) return { ok: false, error: "Order not found." };
+    payment = { ...main };
+  }
   if (payment.status === "failed") return { ok: false, error: "This order was cancelled. Start a new checkout to buy it again." };
   if (payment.status === "refunded") return { ok: false, error: "This order was refunded." };
   const res = await resumeCheckout(payment);
@@ -431,6 +404,7 @@ export async function cancelOrderAction(_prev: ActionResult | null, formData: Fo
   if (isInstallmentOrder(payment) && payment.installmentNumber! > 1) {
     return { ok: false, error: "This payment belongs to your payment plan and can't be cancelled on its own. Contact us if you'd like to stop the plan." };
   }
+  if (isOrderBump(payment)) return { ok: false, error: "This add-on is paid together with its main order. Cancel that order instead." };
 
   if (isRealGateway(payment.gateway)) {
     const closed = await closeGatewayCheckout(payment);
@@ -692,7 +666,8 @@ export async function deletePaymentAction(paymentId: string): Promise<ActionResu
     if (!closed.reached) return { ok: false, error: `${GATEWAY_NAMES[payment.gateway]} could not be reached to close the open checkout. Try again in a moment.` };
   }
   await mutate((d) => {
-    d.payments = d.payments.filter((p) => !(p.id === paymentId && p.status !== "paid" && !p.invoiceNumber));
+    // Unpaid order bumps go with their main order (they can't be paid without it).
+    d.payments = d.payments.filter((p) => !((p.id === paymentId || (p.upsellOfPaymentId === paymentId && isOrderBump(p))) && p.status !== "paid" && !p.invoiceNumber));
   });
   await audit(actor, "payment.delete", { type: "payment", id: payment.id }, { orderId: payment.orderId, status: payment.status });
   revalidateCommerce(payment.orderId);
@@ -778,6 +753,7 @@ export async function recordPaymentAction(_prev: ActionResult<{ orderId: string 
   if (!userId) errors.userId = "Member is required";
   else if (!member) errors.userId = "This member no longer exists.";
   if (!itemType) errors.itemType = "Paid For is required";
+  else if (itemType === "gift") errors.itemType = "Gifts are bought from the gift checkout, not recorded by hand.";
 
   let itemTitle = "";
   if (itemType && !itemId) {

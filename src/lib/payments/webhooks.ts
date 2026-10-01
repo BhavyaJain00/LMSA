@@ -13,6 +13,7 @@ import {
   syncStripeInstallmentSubscription,
 } from "@/lib/commerce/installment-gateway";
 import { isRazorpaySubscriptionId, type RazorpayEvent, type RazorpayPayment } from "./razorpay";
+import { allocateGroupRefund, isOrderBump } from "@/lib/commerce/upsells";
 
 /**
  * Webhook event handlers. Signature verification happens in the route
@@ -38,6 +39,56 @@ async function findPayment(predicate: (p: Payment) => boolean): Promise<Payment 
   const db = await getDb();
   const row = db.payments.find(predicate);
   return row ? { ...row } : null;
+}
+
+/**
+ * The order rows paid with one gateway payment: usually one, or an order and
+ * its order bumps (charged in the same checkout). The main order comes first.
+ */
+async function rowsForGatewayPayment(gatewayPaymentId: string): Promise<Payment[]> {
+  const db = await getDb();
+  return db.payments
+    .filter((p) => p.gatewayPaymentId === gatewayPaymentId)
+    .sort((a, b) => Number(isOrderBump(a)) - Number(isOrderBump(b)))
+    .map((p) => ({ ...p }));
+}
+
+/**
+ * Record a refund the gateway reports on a payment shared by an order and its
+ * bumps. `total` (the gateway's running total) is split across the rows; a
+ * single refund tagged with one row's id goes to that row. Returns the
+ * outcome for the main order (for the log line).
+ */
+async function recordSharedRefund(rows: Payment[], update: { total?: number; full?: boolean; refundId?: string; amount?: number; tag?: string }): Promise<GatewayRefundOutcome> {
+  const main = rows[0]!;
+  if (rows.length === 1) return recordGatewayRefund(main.id, update);
+  if (update.full) {
+    let outcome: GatewayRefundOutcome = { kind: "missing" };
+    for (const row of rows) {
+      const res = await recordGatewayRefund(row.id, { full: true, total: row.amount, ...(row.id === main.id ? { refundId: update.refundId } : {}) });
+      if (row.id === main.id) outcome = res;
+    }
+    return outcome;
+  }
+  if (update.total === undefined) {
+    // One refund without the running total: it belongs to the row it was sent for, else to the main order.
+    const target = rows.find((r) => r.id === update.tag) ?? main;
+    return recordGatewayRefund(target.id, { refundId: update.refundId, amount: update.amount });
+  }
+  const split = allocateGroupRefund(
+    rows.map((r) => ({ id: r.id, amount: r.amount, refundedAmount: r.status === "refunded" ? (r.refundedAmount ?? r.amount) : (r.refundedAmount ?? 0), main: r.id === main.id })),
+    update.total,
+    false,
+  );
+  let outcome: GatewayRefundOutcome = { kind: "unchanged", payment: main };
+  for (const row of rows) {
+    const share = split.get(row.id) ?? 0;
+    if (share <= 0) continue;
+    const tagged = update.tag === row.id || (row.id === main.id && !rows.some((r) => r.id === update.tag));
+    const res = await recordGatewayRefund(row.id, { total: share, ...(tagged ? { refundId: update.refundId } : {}) });
+    if (row.id === main.id) outcome = res;
+  }
+  return outcome;
 }
 
 /**
@@ -102,11 +153,13 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
       const charge = parseStripeCharge(event.object);
       if (!charge.paymentIntentId) return { handled: false, message: "refund without payment intent" };
       const paymentIntentId = charge.paymentIntentId;
-      const payment = await findPayment((p) => p.gatewayPaymentId === paymentIntentId);
+      const rows = await rowsForGatewayPayment(paymentIntentId);
+      const payment = rows[0];
       if (!payment) return { handled: false, message: `no order for ${paymentIntentId}` };
-      if (isRefundInProgress(payment.id)) return refundBusy(payment);
+      const busy = rows.find((r) => isRefundInProgress(r.id));
+      if (busy) return refundBusy(busy);
       // `amount_refunded` is the charge's running total: redeliveries and out-of-order events cannot double count it.
-      const outcome = await recordGatewayRefund(payment.id, { total: fromGatewayAmount(charge.amountRefunded, payment.currency), full: charge.refunded });
+      const outcome = await recordSharedRefund(rows, { total: fromGatewayAmount(charge.amountRefunded, payment.currency), full: charge.refunded });
       return { handled: true, message: refundMessage(payment, outcome, "Stripe") };
     }
 
@@ -200,18 +253,22 @@ export async function handleRazorpayEvent(event: RazorpayEvent): Promise<Webhook
       const refund = event.refund;
       if (!refund?.paymentId) return { handled: false, message: "refund without payment id" };
       const razorpayPaymentId = refund.paymentId;
-      const payment = await findPayment((p) => p.gatewayPaymentId === razorpayPaymentId);
+      const rows = await rowsForGatewayPayment(razorpayPaymentId);
+      const payment = rows[0];
       if (!payment) return { handled: false, message: `no order for ${razorpayPaymentId}` };
-      if (isRefundInProgress(payment.id)) return refundBusy(payment);
+      const busy = rows.find((r) => isRefundInProgress(r.id));
+      if (busy) return refundBusy(busy);
       // The payment entity in the payload carries the running refunded total; the refund id is
       // remembered on the order, so a redelivered event is never counted twice.
       const rp = event.payment && event.payment.id === razorpayPaymentId ? event.payment : null;
       const total = rp && rp.amountRefunded > 0 ? fromGatewayAmount(rp.amountRefunded, payment.currency) : undefined;
-      const outcome = await recordGatewayRefund(payment.id, {
+      const outcome = await recordSharedRefund(rows, {
         refundId: refund.id || undefined,
         amount: fromGatewayAmount(refund.amount, payment.currency),
-        total,
+        // A shared payment's running total covers every row: a tagged refund is placed by its tag instead.
+        total: rows.length > 1 && refund.notes.paymentId ? undefined : total,
         full: rp?.refundStatus === "full" || rp?.status === "refunded",
+        tag: refund.notes.paymentId,
       });
       return { handled: true, message: refundMessage(payment, outcome, "Razorpay") };
     }

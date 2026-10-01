@@ -306,6 +306,8 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
   }
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the highlighted settings.", fieldErrors };
 
+  // Like prerequisites, the AI tutor switch is saved only when the form rendered it.
+  const aiTutorEnabled = fd(formData, "aiTutorField") === "1" ? fdBool(formData, "aiTutorEnabled") : null;
   const changes: Partial<Course> = {
     featured,
     upcoming,
@@ -320,6 +322,7 @@ export async function updateCourseSettingsAction(_prev: ActionResult | null, for
     evaluatorId,
     metaDescription: metaDescription || undefined,
     metaKeywords: metaKeywords || undefined,
+    ...(aiTutorEnabled === null ? {} : { aiTutorEnabled: aiTutorEnabled || undefined }),
     updatedAt: new Date().toISOString(),
   };
   // The prerequisite rules (courses exist and are published, no cycle) are applied inside the

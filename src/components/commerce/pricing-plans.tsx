@@ -8,6 +8,7 @@ import { Icon } from "@/components/ui/icons";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { intervalSuffix, planMatchesCycle } from "@/lib/commerce/plans";
 import { cn, formatPrice } from "@/lib/utils";
+import { GiveGiftLink } from "./give-gift-link";
 
 export interface PricingCardPlan {
   id: string;
@@ -57,7 +58,7 @@ function cta(plan: PricingCardPlan, viewer: PricingViewer): { label: string; hre
  * both views. Every price comes from the server; this component only picks
  * which cards are visible.
  */
-export function PricingPlans({ plans, viewer, initialCycle }: { plans: PricingCardPlan[]; viewer: PricingViewer; initialCycle: Cycle }) {
+export function PricingPlans({ plans, viewer, initialCycle, giftable = false }: { plans: PricingCardPlan[]; viewer: PricingViewer; initialCycle: Cycle; giftable?: boolean }) {
   const [cycle, setCycle] = useState<Cycle>(initialCycle);
   const hasMonthly = plans.some((p) => p.interval === "month");
   const hasYearly = plans.some((p) => p.interval === "year");
@@ -167,6 +168,14 @@ export function PricingPlans({ plans, viewer, initialCycle }: { plans: PricingCa
               </ButtonLink>
               {!viewer.currentPlanId && plan.trialDays > 0 && plan.interval !== "one_time" && !viewer.trialEligible && (
                 <p className="mt-2 text-center text-xs text-ink-muted">The free trial is for first-time members.</p>
+              )}
+              {giftable && plan.price > 0 && (
+                <GiveGiftLink
+                  type="plan"
+                  id={plan.slug}
+                  className="mt-3 w-full"
+                  label={plan.interval === "one_time" ? "Give as a gift" : `Gift 1 ${plan.interval === "year" ? "year" : "month"}`}
+                />
               )}
             </li>
           );

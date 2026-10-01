@@ -15,6 +15,7 @@ import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
+import { GiveGiftLink } from "@/components/commerce/give-gift-link";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
@@ -58,7 +59,7 @@ function Fact({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 }
 
 /** The buy box: price against the value of the courses, and the action that fits the viewer. */
-function PurchaseCard({ detail, loggedIn, admin }: { detail: BundleDetail; loggedIn: boolean; admin: boolean }) {
+function PurchaseCard({ detail, loggedIn, admin, giftable }: { detail: BundleDetail; loggedIn: boolean; admin: boolean; giftable: boolean }) {
   const { bundle, courses, pricing, onSale, ownsAll, ownedIds, paidOrderId, pendingOrderId } = detail;
   const cheaper = pricing.comparable && pricing.savings > 0;
   const first = courses.find((c) => !c.enrollment?.completedAt) ?? courses[0];
@@ -158,6 +159,11 @@ function PurchaseCard({ detail, loggedIn, admin }: { detail: BundleDetail; logge
           )}
         </div>
         {action}
+        {giftable && detail.onSale && (
+          <div className="flex justify-center">
+            <GiveGiftLink type="bundle" id={bundle.id} />
+          </div>
+        )}
         {admin && (
           <ButtonLink href={`/admin/settings/plans?tab=bundles&bq=${encodeURIComponent(bundle.slug)}`} variant="ghost" size="sm" className="w-full" leftIcon={<Icon.Edit className="size-4" />}>
             Manage this bundle
@@ -311,7 +317,7 @@ export default async function BundlePage(props: PageProps<"/bundles/[slug]">) {
 
           {/* On small screens the buy box comes before the long course list. */}
           <div className="lg:hidden">
-            <PurchaseCard detail={detail} loggedIn={!!user} admin={admin} />
+            <PurchaseCard detail={detail} loggedIn={!!user} admin={admin} giftable={settings.growth.giftsEnabled} />
           </div>
 
           <section aria-labelledby="bundle-courses-heading">
@@ -402,7 +408,7 @@ export default async function BundlePage(props: PageProps<"/bundles/[slug]">) {
         </div>
 
         <aside className="hidden lg:sticky lg:top-20 lg:block" aria-label="Buy this bundle">
-          <PurchaseCard detail={detail} loggedIn={!!user} admin={admin} />
+          <PurchaseCard detail={detail} loggedIn={!!user} admin={admin} giftable={settings.growth.giftsEnabled} />
         </aside>
       </div>
 

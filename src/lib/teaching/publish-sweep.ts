@@ -8,7 +8,7 @@ import { sendNotificationEmails } from "@/lib/services/notifications";
 import { syncContentIndex } from "@/lib/seo/content-sync";
 import { hasReleaseRule } from "@/components/learn/drip-shared";
 import { pluralize, toDateKey, uid } from "@/lib/utils";
-import { isLessonLive, planPublishSweep, sweepHasWork } from "./schedule-shared";
+import { planPublishSweep, sweepHasWork } from "./schedule-shared";
 import { armPublishTimer } from "./scheduling";
 
 /**
@@ -111,18 +111,17 @@ function announceCourse(db: Database, course: Course, writer: Writer): void {
  * Lessons still held back by a release schedule (drip) are left to the
  * "unlocked" notifications of that schedule. Returns the announced lesson ids.
  */
-function announceLessons(db: Database, course: Course, lessons: Lesson[], now: number, writer: Writer): Set<string> {
+function announceLessons(db: Database, course: Course, lessons: Lesson[], writer: Writer): Set<string> {
   const announced = new Set<string>();
   if (!course.published || !db.settings.features.notifications) return announced;
   const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
-  // Positions as learners see them: lessons that are still hidden do not count.
-  const visible = db.lessons.filter((l) => l.courseId === course.id && isLessonLive(l, now));
+  // Positions count every lesson of the chapter, hidden ones included (as the learner outline numbers them).
   const located = lessons
     .map((lesson) => {
       const ci = chapters.findIndex((c) => c.id === lesson.chapterId);
       const chapter = chapters[ci];
       if (!chapter || hasReleaseRule(lesson) || hasReleaseRule(chapter)) return null;
-      const li = visible
+      const li = db.lessons
         .filter((l) => l.chapterId === chapter.id)
         .sort((a, b) => a.order - b.order)
         .findIndex((l) => l.id === lesson.id);
@@ -193,7 +192,7 @@ function applySweep(db: Database, now: number): Applied {
   }
   for (const [courseId, lessons] of byCourse) {
     const course = db.courses.find((c) => c.id === courseId);
-    const announced = course ? announceLessons(db, course, lessons, now, writer) : new Set<string>();
+    const announced = course ? announceLessons(db, course, lessons, writer) : new Set<string>();
     for (const lesson of lessons) released.push({ id: lesson.id, courseId, title: lesson.title, announced: announced.has(lesson.id) });
   }
 

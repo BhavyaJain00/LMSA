@@ -31,7 +31,7 @@ export function transcriptionEndpoint(configured: string): string | null {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   const path = url.pathname.replace(/\/+$/, "");
-  if (!/\/audio\/transcriptions$/.test(path)) url.pathname = `${path}/audio/transcriptions`;
+  url.pathname = /\/audio\/transcriptions$/.test(path) ? path : `${path}/audio/transcriptions`;
   return url.href;
 }
 

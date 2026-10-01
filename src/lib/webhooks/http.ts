@@ -87,7 +87,6 @@ export function postWebhook(url: string, body: string, headers: Record<string, s
 
   return new Promise<WebhookHttpResult>((resolve) => {
     let settled = false;
-    let timer: NodeJS.Timeout | undefined;
     const finish = (result: Omit<WebhookHttpResult, "durationMs">) => {
       if (settled) return;
       settled = true;
@@ -107,7 +106,8 @@ export function postWebhook(url: string, body: string, headers: Record<string, s
       lookup: opts.allowPrivate ? undefined : guardedLookup,
     });
 
-    timer = setTimeout(() => {
+    // `finish` only runs from request events, which fire after this line.
+    const timer = setTimeout(() => {
       finish({ ok: false, error: `No complete response within ${Math.round(timeoutMs / 1000)} seconds (timed out).` });
       request.destroy();
     }, timeoutMs);

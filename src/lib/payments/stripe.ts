@@ -225,14 +225,30 @@ export interface CreateStripeSessionInput {
   customerEmail?: string;
   successUrl: string;
   cancelUrl: string;
+  /** Order bumps charged in the same checkout, each as its own line (amounts already converted). */
+  extraItems?: { title: string; description?: string; imageUrl?: string; unitAmount: number }[];
+}
+
+function stripeProductData(title: string, fallback: string, description?: string, imageUrl?: string): Record<string, unknown> {
+  const productData: Record<string, unknown> = { name: title.replace(/\s+/g, " ").trim().slice(0, 250) || fallback };
+  const text = description?.replace(/\s+/g, " ").trim();
+  if (text) productData.description = text.slice(0, 500);
+  if (imageUrl && /^https:\/\/[^\s"'<>]+$/.test(imageUrl)) productData.images = [imageUrl];
+  return productData;
 }
 
 export async function createStripeCheckoutSession(input: CreateStripeSessionInput): Promise<StripeCheckoutSession> {
-  if (!Number.isInteger(input.unitAmount) || input.unitAmount <= 0) throw new GatewayError("Stripe", "The order total must be greater than zero.");
-  const productData: Record<string, unknown> = { name: input.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Order ${input.orderId}` };
-  const description = input.description?.replace(/\s+/g, " ").trim();
-  if (description) productData.description = description.slice(0, 500);
-  if (input.imageUrl && /^https:\/\/[^\s"'<>]+$/.test(input.imageUrl)) productData.images = [input.imageUrl];
+  const extras = input.extraItems ?? [];
+  // The main line may be free (a coupon covered it) when an order bump is charged with it.
+  if (!Number.isInteger(input.unitAmount) || input.unitAmount < 0 || (input.unitAmount === 0 && !extras.length)) {
+    throw new GatewayError("Stripe", "The order total must be greater than zero.");
+  }
+  if (extras.some((x) => !Number.isInteger(x.unitAmount) || x.unitAmount <= 0)) throw new GatewayError("Stripe", "Every item of the order must cost more than zero.");
+  const currency = input.currency.toLowerCase();
+  const lines = [
+    ...(input.unitAmount > 0 ? [{ quantity: 1, price_data: { currency, unit_amount: input.unitAmount, product_data: stripeProductData(input.title, `Order ${input.orderId}`, input.description, input.imageUrl) } }] : []),
+    ...extras.map((x) => ({ quantity: 1, price_data: { currency, unit_amount: x.unitAmount, product_data: stripeProductData(x.title, `Order ${input.orderId}`, x.description, x.imageUrl) } })),
+  ];
   const email = input.customerEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.customerEmail) ? input.customerEmail : undefined;
 
   const json = await stripeRequest("POST", "/checkout/sessions", {
@@ -242,16 +258,7 @@ export async function createStripeCheckoutSession(input: CreateStripeSessionInpu
     client_reference_id: input.paymentId,
     customer_email: email,
     locale: "auto",
-    line_items: [
-      {
-        quantity: 1,
-        price_data: {
-          currency: input.currency.toLowerCase(),
-          unit_amount: input.unitAmount,
-          product_data: productData,
-        },
-      },
-    ],
+    line_items: lines,
     metadata: { paymentId: input.paymentId, orderId: input.orderId },
     payment_intent_data: {
       description: `Order ${input.orderId}`,

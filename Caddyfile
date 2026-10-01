@@ -1,0 +1,37 @@
+# Caddy in front of LearnLoop: automatic HTTPS (Let's Encrypt / ZeroSSL),
+# HTTP -> HTTPS redirects, compression and the reverse proxy to the app.
+# DOMAIN and ACME_EMAIL come from the environment (see docker-compose.yml).
+
+{
+	email {$ACME_EMAIL}
+}
+
+# Redirect the www name to the main domain (remove this block if you do not
+# point www at the server: Caddy would fail to get a certificate for it).
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The app sets its own security headers (next.config.ts); Caddy only
+	# hides its own banner.
+	header -Server
+
+	reverse_proxy app:3000 {
+		# Caddy sets X-Forwarded-For to the client address (one proxy
+		# hop, so the app runs with TRUST_PROXY_HOPS=1).
+
+		# Long video uploads and streamed exports must not be cut off.
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

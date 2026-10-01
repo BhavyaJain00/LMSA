@@ -4,6 +4,7 @@ import type { InstructorStats } from "@/lib/data/catalog";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
 import { Markdown } from "@/lib/markdown";
+import { MessageUserButton } from "@/components/messages/message-button";
 import { instructorPath, profilePath } from "@/lib/seo/content-index";
 import { compactCount, plural } from "./format";
 
@@ -80,10 +81,14 @@ export function CourseInstructors({ instructors, stats, teachingProfiles = false
                   <Markdown content={instructor.bio} className="text-sm! text-ink-muted!" />
                 </div>
               )}
-              <Link href={profile} className="mt-auto inline-flex items-center gap-1 pt-4 text-sm font-medium text-accent hover:underline">
-                View profile
-                <Icon.ArrowRight className="size-3.5" aria-hidden="true" />
-              </Link>
+              <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-4">
+                <Link href={profile} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+                  View profile
+                  <Icon.ArrowRight className="size-3.5" aria-hidden="true" />
+                </Link>
+                {/* Round 3 comms: shown only to members allowed to message this instructor. */}
+                <MessageUserButton userId={instructor.id} label="Message instructor" size="xs" />
+              </div>
             </li>
           );
         })}

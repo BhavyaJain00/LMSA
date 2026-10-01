@@ -6,6 +6,7 @@ import { getProfileView } from "@/lib/data/profile";
 import { Icon } from "@/components/ui/icons";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import { ProfileHeader } from "@/components/profile/profile-header";
+import { MessageUserButton } from "@/components/messages/message-button";
 
 export async function generateMetadata({ params }: { params: Promise<{ username: string }> }): Promise<Metadata> {
   const { username } = await params;
@@ -41,6 +42,8 @@ export default async function ProfileLayout(props: LayoutProps<"/user/[username]
   return (
     <div className="animate-fade-in">
       <ProfileHeader view={view} />
+      {/* Round 3 comms: direct message button, shown only when the viewer may message this member. */}
+      <MessageUserButton userId={view.user.id} label="Send message" className="mt-4" />
       {tabs.length > 1 ? (
         <Tabs items={tabs} className="mt-8" />
       ) : (

@@ -235,16 +235,18 @@ export async function scheduleCoursePublishAction(courseId: string, publishAt: s
   if ("error" in loaded) return { ok: false, error: loaded.error };
   const { user, course } = loaded;
   const now = Date.now();
+  // Store rows are live objects: keep what the schedule was before writing.
+  const previous = course.publishAt;
 
   if (publishAt === null) {
-    if (!course.publishAt) return { ok: false, error: "This course has no publish schedule." };
+    if (!previous) return { ok: false, error: "This course has no publish schedule." };
     await mutate((db) => {
       const row = db.courses.find((c) => c.id === course.id);
       if (!row) return;
       delete row.publishAt;
       row.updatedAt = new Date(now).toISOString();
     });
-    await audit(user, "course.schedule_cancel", { type: "course", id: course.id }, { title: course.title, publishAt: course.publishAt });
+    await audit(user, "course.schedule_cancel", { type: "course", id: course.id }, { title: course.title, publishAt: previous });
     revalidateCourse(course);
     const db = await getDb();
     const fresh = db.courses.find((c) => c.id === course.id) ?? course;
@@ -266,11 +268,11 @@ export async function scheduleCoursePublishAction(courseId: string, publishAt: s
     row.updatedAt = new Date(now).toISOString();
   });
   armPublishTimer(parsed.at);
-  await audit(user, course.publishAt ? "course.schedule_change" : "course.schedule", { type: "course", id: course.id }, { title: course.title, publishAt: parsed.iso });
+  await audit(user, previous ? "course.schedule_change" : "course.schedule", { type: "course", id: course.id }, { title: course.title, publishAt: parsed.iso });
   revalidateCourse(course);
   const db = await getDb();
   const fresh = db.courses.find((c) => c.id === course.id) ?? course;
-  return { ok: true, data: scheduleInfo(db, user, fresh, now), message: course.publishAt ? "Publish time changed" : "Course scheduled" };
+  return { ok: true, data: scheduleInfo(db, user, fresh, now), message: previous ? "Publish time changed" : "Course scheduled" };
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,9 +309,10 @@ export async function scheduleLessonPublishAction(lessonId: string, publishAt: s
   if ("error" in loaded) return { ok: false, error: loaded.error };
   const { user, course, lesson } = loaded;
   const now = Date.now();
+  const previous = lesson.publishAt;
 
   if (publishAt === null) {
-    if (!lesson.publishAt) return { ok: false, error: "This lesson has no publish schedule." };
+    if (!previous) return { ok: false, error: "This lesson has no publish schedule." };
     // The publish time moves to now and the sweep releases it, so learners are told as they would be at the scheduled time.
     await mutate((db) => {
       const row = db.lessons.find((l) => l.id === lesson.id);
@@ -317,7 +320,7 @@ export async function scheduleLessonPublishAction(lessonId: string, publishAt: s
     });
     const sweep = await runPublishSweep(now);
     const announced = sweep.released.some((l) => l.id === lesson.id && l.announced);
-    await audit(user, "lesson.publish_now", { type: "lesson", id: lesson.id }, { courseId: course.id, title: lesson.title, scheduledFor: lesson.publishAt });
+    await audit(user, "lesson.publish_now", { type: "lesson", id: lesson.id }, { courseId: course.id, title: lesson.title, scheduledFor: previous });
     revalidateCourse(course, lesson.id);
     const db = await getDb();
     const fresh = db.lessons.find((l) => l.id === lesson.id) ?? lesson;
@@ -336,13 +339,13 @@ export async function scheduleLessonPublishAction(lessonId: string, publishAt: s
     reviewReset = touchCourseContent(db, course.id, user);
   });
   armPublishTimer(parsed.at);
-  await audit(user, lesson.publishAt ? "lesson.schedule_change" : "lesson.schedule", { type: "lesson", id: lesson.id }, { courseId: course.id, title: lesson.title, publishAt: parsed.iso });
+  await audit(user, previous ? "lesson.schedule_change" : "lesson.schedule", { type: "lesson", id: lesson.id }, { courseId: course.id, title: lesson.title, publishAt: parsed.iso });
   revalidateCourse(course, lesson.id);
   const db = await getDb();
   const fresh = db.lessons.find((l) => l.id === lesson.id) ?? lesson;
   return {
     ok: true,
     data: lessonInfo(db, course, fresh, now),
-    message: withReviewNote(lesson.publishAt ? "Publish time changed" : "Lesson scheduled. Learners will not see it until then", reviewReset),
+    message: withReviewNote(previous ? "Publish time changed" : "Lesson scheduled. Learners will not see it until then", reviewReset),
   };
 }

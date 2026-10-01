@@ -22,6 +22,7 @@ import { VideoStatsDialog } from "./video-stats-dialog";
 import { LessonHelpDialog } from "./lesson-help-dialog";
 import { LessonReleaseSection, useLessonRelease } from "./lesson-release-section";
 import { LessonHistoryButton } from "@/components/teaching/version-history";
+import { LessonScheduleCard } from "@/components/teaching/lesson-schedule";
 
 export interface LessonEditorProps {
   courseId: string;
@@ -367,6 +368,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
               </div>
             </dl>
           </Card>
+          <LessonScheduleCard lessonId={lesson.id} />
           <Card>
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <p className="text-sm font-semibold text-ink">Chapters</p>

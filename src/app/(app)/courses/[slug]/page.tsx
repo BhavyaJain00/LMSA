@@ -43,7 +43,7 @@ import {
   RelatedCourses,
   SectionHeading,
 } from "@/components/catalog/course-sections";
-import { lessonKindFromBlocks, outlineStats, reviewDateLabel } from "@/components/catalog/format";
+import { lessonKindFromBlocks, outlineStats, plural, reviewDateLabel } from "@/components/catalog/format";
 import type { OutlineChapterView, OutlineMode, ReviewView } from "@/components/catalog/types";
 import { formatDuration, sum } from "@/lib/utils";
 import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
@@ -55,6 +55,11 @@ import { getCourseJsonLd } from "@/lib/data/seo";
 import { JsonLd } from "@/components/seo/json-ld";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { CourseArticles } from "@/components/marketing/course-articles";
+import { LeadForm } from "@/components/marketing/lead-form";
+import { SalesHero } from "@/components/marketing/sales/sales-hero";
+import { ENROLL_ANCHOR, SalesSections } from "@/components/marketing/sales/sales-sections";
+import { isPaidCourse } from "@/components/catalog/price-tag";
+import { hasSalesPage } from "@/lib/seo/sales-page";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -228,6 +233,85 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   );
 
   const showCertification = certificationsEnabled && (course.enableCertification || course.paidCertificate || !!certificate);
+  const salesPage = hasSalesPage(course.salesPage) ? course.salesPage : null;
+  // "Get the syllabus by email" for visitors who are not learners of a public course yet.
+  const offerSyllabus = isCoursePublic(course) && !enrollment && !manager && lessonCount > 0;
+  const serverNow = Date.now();
+
+  const curriculumBody = (
+    <>
+      {chapters.length && lessonCount ? (
+        <CourseOutline chapters={chapters} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={enrollment ? (nextLesson?.id ?? null) : null} />
+      ) : (
+        <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-border-strong px-6 py-10 text-center">
+          <Icon.BookOpen className="size-7 text-ink-faint" aria-hidden="true" />
+          <p className="mt-2 text-sm font-medium text-ink-muted">Course content coming soon!</p>
+        </div>
+      )}
+      {mode === "guest" && content.previewLessonCount > 0 && (
+        <p className="mt-3 flex items-center gap-2 text-sm text-ink-muted">
+          <Icon.Eye className="size-4 text-accent" aria-hidden="true" />
+          Lessons marked <span className="font-medium text-ink">Preview</span> are free to watch without an account.
+        </p>
+      )}
+    </>
+  );
+
+  const syllabusForm = offerSyllabus ? (
+    <LeadForm
+      source="course"
+      courseId={course.id}
+      title="Get the syllabus by email"
+      description={`The full outline of ${course.title}, chapter by chapter, straight to your inbox. Confirm your address and it is on its way.`}
+      submitLabel="Email me the syllabus"
+    />
+  ) : null;
+
+  const certificationBlock =
+    showCertification || batches.length > 0 ? (
+      <div className="grid gap-5 md:grid-cols-2">
+        {showCertification && (
+          <CertificationCard
+            slug={course.slug}
+            enableCertification={course.enableCertification}
+            paidCertificate={course.paidCertificate}
+            certificatePrice={course.certificatePrice}
+            currency={course.currency}
+            evaluatorName={evaluator?.name}
+            certificate={certificate ? { code: certificate.code, issueDate: certificate.issueDate } : null}
+            lessonCount={lessonCount}
+          />
+        )}
+        <CourseBatches batches={batches} />
+      </div>
+    ) : null;
+
+  const reviewsBlock = settings.features.reviews ? (
+    <section id="reviews" aria-label="Reviews" className="scroll-mt-20">
+      <ReviewsPanel
+        courseSlug={course.slug}
+        courseTitle={course.title}
+        summary={breakdown}
+        reviews={reviewViews}
+        canWrite={canWriteReview}
+        writeHint={reviewHint({ user, enrolled: !!enrollment, instructor: isInstructor, hasOwn: hasOwnReview, upcoming: course.upcoming })}
+        canModerate={isModerator(user)}
+      />
+    </section>
+  ) : null;
+
+  const handsOn = content.assignmentCount + content.exerciseCount;
+  const salesIncludes = salesPage
+    ? [
+        lessonCount > 0 ? `${lessonCount} ${plural(lessonCount, "lesson")}${summary.totalDurationSeconds > 0 ? ` · ${formatDuration(summary.totalDurationSeconds)} in total` : ""}` : "",
+        content.quizCount > 0 ? `${content.quizCount} ${plural(content.quizCount, "quiz", "quizzes")} to check your progress` : "",
+        handsOn > 0 ? `${handsOn} hands-on ${plural(handsOn, "exercise")}` : "",
+        showCertification ? (course.paidCertificate ? "Certificate after an evaluation" : "Certificate of completion") : "",
+        content.previewLessonCount > 0 ? `${content.previewLessonCount} free preview ${plural(content.previewLessonCount, "lesson")}` : "",
+        "Learn at your own pace on any device",
+      ].filter(Boolean)
+    : [];
+  const salesAction = enrollment ? "Continue learning" : isPaidCourse(course) && !alreadyPaid ? "Get the course" : "Enroll now";
 
   return (
     <div className="animate-fade-in pb-6">
@@ -246,84 +330,63 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
 
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="min-w-0 lg:col-start-1 lg:row-start-1">
-          <CourseHero course={summary} manager={manager} />
+          {salesPage ? <SalesHero course={summary} page={salesPage} manager={manager} serverNow={serverNow} /> : <CourseHero course={summary} manager={manager} />}
         </div>
 
-        <aside aria-label="Enrollment" className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+        <aside id={ENROLL_ANCHOR} aria-label="Enrollment" className="min-w-0 scroll-mt-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <div className="lg:sticky lg:top-20">{enrollCard}</div>
         </aside>
 
-        <div className="min-w-0 space-y-12 lg:col-start-1 lg:row-start-2">
-          <CourseOutcomes outcomes={course.outcomes} />
+        {salesPage ? (
+          <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
+            <SalesSections
+              page={salesPage}
+              courseTitle={course.title}
+              video={course.videoUrl ? { url: course.videoUrl, poster: course.imageUrl } : null}
+              pricing={{ course, includes: salesIncludes, actionLabel: salesAction }}
+              slots={{
+                curriculum: curriculumBody,
+                instructor: <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />,
+              }}
+              serverNow={serverNow}
+            />
+            <CourseRequirements requirements={course.requirements} />
+            {!salesPage.sections.some((s) => s.type === "text") && <CourseDescription description={course.description} />}
+            {syllabusForm}
+            {certificationBlock}
+            <CourseAnnouncements announcements={announcements} />
+            {reviewsBlock}
+          </div>
+        ) : (
+          <div className="min-w-0 space-y-12 lg:col-start-1 lg:row-start-2">
+            <CourseOutcomes outcomes={course.outcomes} />
 
-          <section aria-labelledby="curriculum-heading" id="curriculum" className="scroll-mt-20">
-            <SectionHeading
-              id="curriculum-heading"
-              aside={
-                lessonCount > 0 ? (
-                  <span>
-                    {outlineStats(chapters.length, lessonCount)}
-                    {summary.totalDurationSeconds > 0 && ` · ${formatDuration(summary.totalDurationSeconds)} total length`}
-                  </span>
-                ) : undefined
-              }
-            >
-              Course content
-            </SectionHeading>
-            {chapters.length && lessonCount ? (
-              <CourseOutline chapters={chapters} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={enrollment ? (nextLesson?.id ?? null) : null} />
-            ) : (
-              <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-border-strong px-6 py-10 text-center">
-                <Icon.BookOpen className="size-7 text-ink-faint" aria-hidden="true" />
-                <p className="mt-2 text-sm font-medium text-ink-muted">Course content coming soon!</p>
-              </div>
-            )}
-            {mode === "guest" && content.previewLessonCount > 0 && (
-              <p className="mt-3 flex items-center gap-2 text-sm text-ink-muted">
-                <Icon.Eye className="size-4 text-accent" aria-hidden="true" />
-                Lessons marked <span className="font-medium text-ink">Preview</span> are free to watch without an account.
-              </p>
-            )}
-          </section>
-
-          <CourseRequirements requirements={course.requirements} />
-          <CourseDescription description={course.description} />
-
-          {(showCertification || batches.length > 0) && (
-            <div className="grid gap-5 md:grid-cols-2">
-              {showCertification && (
-                <CertificationCard
-                  slug={course.slug}
-                  enableCertification={course.enableCertification}
-                  paidCertificate={course.paidCertificate}
-                  certificatePrice={course.certificatePrice}
-                  currency={course.currency}
-                  evaluatorName={evaluator?.name}
-                  certificate={certificate ? { code: certificate.code, issueDate: certificate.issueDate } : null}
-                  lessonCount={lessonCount}
-                />
-              )}
-              <CourseBatches batches={batches} />
-            </div>
-          )}
-
-          <CourseAnnouncements announcements={announcements} />
-          <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />
-
-          {settings.features.reviews && (
-            <section id="reviews" aria-label="Reviews" className="scroll-mt-20">
-              <ReviewsPanel
-                courseSlug={course.slug}
-                courseTitle={course.title}
-                summary={breakdown}
-                reviews={reviewViews}
-                canWrite={canWriteReview}
-                writeHint={reviewHint({ user, enrolled: !!enrollment, instructor: isInstructor, hasOwn: hasOwnReview, upcoming: course.upcoming })}
-                canModerate={isModerator(user)}
-              />
+            <section aria-labelledby="curriculum-heading" id="curriculum" className="scroll-mt-20">
+              <SectionHeading
+                id="curriculum-heading"
+                aside={
+                  lessonCount > 0 ? (
+                    <span>
+                      {outlineStats(chapters.length, lessonCount)}
+                      {summary.totalDurationSeconds > 0 && ` · ${formatDuration(summary.totalDurationSeconds)} total length`}
+                    </span>
+                  ) : undefined
+                }
+              >
+                Course content
+              </SectionHeading>
+              {curriculumBody}
             </section>
-          )}
-        </div>
+
+            {syllabusForm}
+            <CourseRequirements requirements={course.requirements} />
+            <CourseDescription description={course.description} />
+            {certificationBlock}
+            <CourseAnnouncements announcements={announcements} />
+            <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />
+            {reviewsBlock}
+          </div>
+        )}
       </div>
 
       <div className="mt-16 space-y-16">

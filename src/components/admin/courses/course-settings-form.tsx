@@ -17,6 +17,7 @@ import { UnsavedChangesGuard } from "./unsaved-changes-guard";
 import { CREATE_MEMBER_OPTION, CreateMemberDialog, memberQualifies } from "./create-member-dialog";
 import { CERTIFICATE_TEMPLATES } from "@/components/certificates/templates";
 import { CoursePrerequisitesField, usePrerequisiteField } from "./course-prerequisites-field";
+import { CourseAiTutorField, useCourseAiTutorField } from "@/components/ai/course-ai-tutor-field";
 
 export interface CourseSettingsFormProps {
   courseId: string;
@@ -84,6 +85,7 @@ export function CourseSettingsForm({
   const [memberDialog, setMemberDialog] = useState(false);
   const [evaluators, setEvaluators] = useState(initialEvaluators);
   const prerequisites = usePrerequisiteField(courseId, providedPrerequisites);
+  const aiTutor = useCourseAiTutorField(courseId);
 
   const snapshot = JSON.stringify([upcoming, featured, selfEnrollment, enforceLessonCompletion, paidCourse, paidCourse ? price : "", currency, enableCertification, paidCertificate, paidCertificate ? certificatePrice : "", paidCertificate ? evaluatorId : "", metaDescription.trim(), metaKeywords.trim()]);
   const [baseline] = useState(() =>
@@ -103,7 +105,7 @@ export function CourseSettingsForm({
       (initial.metaKeywords ?? "").trim(),
     ]),
   );
-  const dirty = snapshot !== baseline || prerequisites.dirty;
+  const dirty = snapshot !== baseline || prerequisites.dirty || aiTutor.dirty;
 
   const [state, formAction, pending] = useActionState(async (prev: ActionResult | null, formData: FormData): Promise<ActionResult | null> => {
     const result = await updateCourseSettingsAction(null, formData);
@@ -168,6 +170,10 @@ export function CourseSettingsForm({
 
       <Section title="Prerequisites" description="Courses learners must complete before they can enroll in this one.">
         <CoursePrerequisitesField state={prerequisites} error={errors.prerequisiteCourseIds} />
+      </Section>
+
+      <Section title="AI tutor" description="A course-grounded teaching assistant learners can ask while they study.">
+        <CourseAiTutorField courseId={courseId} state={aiTutor} />
       </Section>
 
       <Section title="Pricing and certification" description="Charge for the course or its certificate, and choose how certificates are issued.">

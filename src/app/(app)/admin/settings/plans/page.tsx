@@ -23,15 +23,17 @@ import { getAdminInstallments, getInstallmentCourses, installmentStats, parseIns
 import { INSTALLMENT_GRACE_DAYS, installmentPlans } from "@/lib/commerce/installments";
 import { InstallmentCoursesTable, InstallmentPlansTable, InstallmentSalesSwitch, type InstallmentRowData } from "@/components/commerce/installments-manager";
 import { formatNumber } from "@/lib/utils";
+import { deliverDueGiftsQuietly, getAdminGifts, parseAdminGiftFilter } from "@/lib/commerce/gift-service";
+import { GiftSalesSwitch, GiftsManager, type GiftRowData } from "@/components/commerce/gifts-manager";
 
-export const metadata = { title: "Plans, bundles & installments" };
+export const metadata = { title: "Plans, bundles, installments & gifts" };
 
 const GATEWAY_NAMES: Record<string, string> = { stripe: "Stripe", razorpay: "Razorpay" };
 
 export default async function PlansSettingsPage(props: PageProps<"/admin/settings/plans">) {
   await requireRole(["admin"], "/admin/settings/plans");
   const sp = await props.searchParams;
-  const tab = sp.tab === "members" || sp.tab === "bundles" || sp.tab === "installments" ? sp.tab : "plans";
+  const tab = sp.tab === "members" || sp.tab === "bundles" || sp.tab === "installments" || sp.tab === "gifts" ? sp.tab : "plans";
 
   // No scheduler needed: memberships paid by hand move to "payment due" / "ended", renewal orders are
   // opened and missed gateway webhooks are caught up whenever an administrator opens this page.
@@ -44,6 +46,9 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
       console.error("[installments] maintenance failed:", error instanceof Error ? error.message : String(error));
     });
   }
+
+  // Gifts scheduled for a date that has come are sent when an administrator opens the gifts tab.
+  if (tab === "gifts") await deliverDueGiftsQuietly();
 
   const [{ plans, stats, courses }, db] = await Promise.all([getAdminPlans(), getDb()]);
   const settings = db.settings;
@@ -159,6 +164,30 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
   }));
   const installmentPlanCount = installments?.stats.total ?? 0;
 
+  const giftFilter = parseAdminGiftFilter(sp);
+  const gifts = tab === "gifts" ? await getAdminGifts(giftFilter) : null;
+  const giftRows: GiftRowData[] = (gifts?.rows ?? []).map((g) => ({
+    id: g.id,
+    code: g.code,
+    itemType: g.itemType,
+    title: g.title,
+    href: g.href,
+    recipientEmail: g.recipientEmail,
+    recipientName: g.recipientName,
+    message: g.message,
+    sendAt: g.sendAt,
+    sentAt: g.sentAt,
+    redeemedAt: g.redeemedAt,
+    redeemedByName: g.redeemedByName,
+    purchaserName: g.purchaserName,
+    purchaserEmail: g.purchaserEmail,
+    orderId: g.orderId,
+    amount: g.amount,
+    currency: g.currency,
+    status: g.status,
+    createdAt: g.createdAt,
+  }));
+
   const exportHref = (() => {
     if (tab === "members") return db.subscriptions.length ? membersExportHref : null;
     const qs = new URLSearchParams({ tab });
@@ -173,6 +202,12 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
       if (installmentFilter.status !== "open") qs.set("istatus", installmentFilter.status);
       if (installmentFilter.courseId) qs.set("icourse", installmentFilter.courseId);
       if (installmentFilter.search) qs.set("iq", installmentFilter.search);
+      return `/admin/settings/plans/export?${qs}`;
+    }
+    if (tab === "gifts") {
+      if (!db.gifts.length) return null;
+      if (giftFilter.status !== "all") qs.set("gstatus", giftFilter.status);
+      if (giftFilter.search) qs.set("gq", giftFilter.search);
       return `/admin/settings/plans/export?${qs}`;
     }
     return null;
@@ -193,6 +228,10 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
     installments: {
       title: "Installments",
       description: `Let learners pay a course in equal parts. Access starts with the first payment and pauses when a payment is more than ${INSTALLMENT_GRACE_DAYS} days late.`,
+    },
+    gifts: {
+      title: "Gifts",
+      description: "Courses, bundles and memberships bought for someone else. The recipient gets an email with a single-use code on the date the buyer chose.",
     },
   } as const;
   const amountsLabel = (rows: { currency: string; amount: number }[]) =>
@@ -225,6 +264,18 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
           <StatCard label="Bundle revenue" value={<span className="text-2xl">{amountsLabel(bundles.stats.revenue)}</span>} hint="Paid, less refunds" icon={<Icon.TrendingUp className="size-4" />} />
           <StatCard label="Courses available" value={formatNumber(bundles.courses.length)} hint="Can be put in a bundle" icon={<Icon.BookOpen className="size-4" />} />
         </div>
+      ) : tab === "gifts" && gifts ? (
+        <>
+          <div className="mb-5 rounded-card border border-border bg-surface-1 px-4 py-3.5 shadow-card sm:px-5">
+            <GiftSalesSwitch enabled={settings.growth.giftsEnabled} />
+          </div>
+          <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <StatCard label="Gifts sold" value={formatNumber(gifts.stats.paid)} hint={`${formatNumber(gifts.stats.total)} ordered`} icon={<Icon.Gift className="size-4" />} />
+            <StatCard label="Redeemed" value={formatNumber(gifts.stats.redeemed)} hint={gifts.stats.paid ? `${Math.round((gifts.stats.redeemed / gifts.stats.paid) * 100)}% of gifts sold` : "No gifts sold yet"} icon={<Icon.CheckCircle className="size-4" />} />
+            <StatCard label="Scheduled" value={formatNumber(gifts.stats.scheduled)} hint="Waiting for their send date" icon={<Icon.Calendar className="size-4" />} />
+            <StatCard label="Gift revenue" value={<span className="text-2xl">{amountsLabel(gifts.stats.revenue)}</span>} hint="Paid gift orders" icon={<Icon.TrendingUp className="size-4" />} />
+          </div>
+        </>
       ) : tab === "installments" && installments ? (
         <>
           <div className="mb-5 rounded-card border border-border bg-surface-1 px-4 py-3.5 shadow-card sm:px-5">
@@ -300,10 +351,22 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
           { label: "Members", value: "members", count: ongoing },
           { label: "Bundles", value: "bundles", count: db.bundles.length },
           { label: "Installments", value: "installments", count: runningPlans },
+          { label: "Gifts", value: "gifts", count: db.gifts.length },
         ]}
       />
 
-      {tab === "bundles" ? (
+      {tab === "gifts" ? (
+        gifts && (
+          <GiftsManager
+            rows={giftRows}
+            total={gifts.total}
+            page={gifts.page}
+            pageCount={gifts.pageCount}
+            filter={{ status: giftFilter.status, q: giftFilter.search ?? "" }}
+            giftCount={gifts.stats.total}
+          />
+        )
+      ) : tab === "bundles" ? (
         bundles && (
           <>
             <div className="mb-5 rounded-card border border-border bg-surface-1 px-4 py-3.5 shadow-card sm:px-5">

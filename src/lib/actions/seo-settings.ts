@@ -49,12 +49,14 @@ export async function saveSeoSettingsAction(_prev: ActionResult | null, formData
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
 
   const before = (await getSettings()).seo.noindexSite;
+  const blogEnabled = fdBool(formData, "blogEnabled");
   await mutate((db) => {
     Object.assign(db.settings.brand, patch.brand);
     Object.assign(db.settings.seo, patch.seo);
+    db.settings.seo.blogEnabled = blogEnabled;
     db.settings.updatedAt = new Date().toISOString();
   });
-  await audit(user, "settings.update", { type: "settings", id: "seo" }, { section: "seo", noindexSite: patch.seo.noindexSite, noindexChanged: before !== patch.seo.noindexSite });
+  await audit(user, "settings.update", { type: "settings", id: "seo" }, { section: "seo", noindexSite: patch.seo.noindexSite, noindexChanged: before !== patch.seo.noindexSite, blogEnabled });
   revalidatePath("/", "layout");
   return {
     ok: true,

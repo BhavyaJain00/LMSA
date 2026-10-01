@@ -17,6 +17,7 @@ import type {
 import { all, findById, findOne, getDb } from "@/lib/db/store";
 import { hasRole, isModerator } from "@/lib/auth/session";
 import { getUserMap } from "./users";
+import { isLessonPublishedNow, isPublishedNow } from "@/lib/teaching/scheduling";
 import { percent } from "@/lib/utils";
 import {
   computeLessonLocks,
@@ -73,7 +74,7 @@ export function canManageCourse(user: Pick<User, "id" | "roles"> | null | undefi
 
 /** Whether a user can view a course page at all. */
 export function canViewCourse(user: Pick<User, "id" | "roles"> | null | undefined, course: Course): boolean {
-  if (course.published) return true;
+  if (isPublishedNow(course)) return true;
   return canManageCourse(user, course);
 }
 
@@ -124,13 +125,15 @@ export async function getCourseSummaries(viewer: User | null, filter: CourseFilt
   const search = filter.search?.trim().toLowerCase();
 
   let list = db.courses.filter((c) => {
-    if (!c.published && !filter.includeUnpublished && !canManageCourse(viewer, c)) return false;
-    if (filter.tab === "live" && (!c.published || c.upcoming)) return false;
-    if (filter.tab === "upcoming" && (!c.published || !c.upcoming)) return false;
-    if (filter.tab === "new" && (!c.published || !c.publishedOn || new Date(c.publishedOn).getTime() < thirtyDaysAgo)) return false;
+    // Scheduled publishing: a course whose publish time has passed is public now (see teaching/scheduling.ts).
+    const published = isPublishedNow(c);
+    if (!published && !filter.includeUnpublished && !canManageCourse(viewer, c)) return false;
+    if (filter.tab === "live" && (!published || c.upcoming)) return false;
+    if (filter.tab === "upcoming" && (!published || !c.upcoming)) return false;
+    if (filter.tab === "new" && (!published || (!c.publishedOn && !c.publishAt) || new Date(c.publishedOn ?? c.publishAt!).getTime() < thirtyDaysAgo)) return false;
     if (filter.tab === "enrolled" && !viewerEnrollments.has(c.id)) return false;
     if (filter.tab === "created" && !(viewer && (c.instructorIds.includes(viewer.id) || c.createdById === viewer.id))) return false;
-    if (filter.tab === "all" && !c.published && !canManageCourse(viewer, c)) return false;
+    if (filter.tab === "all" && !published && !canManageCourse(viewer, c)) return false;
     if (filter.categoryId && c.categoryId !== filter.categoryId) return false;
     if (filter.instructorId && !c.instructorIds.includes(filter.instructorId)) return false;
     if (filter.featured && !c.featured) return false;
@@ -282,6 +285,7 @@ export function computeViewerLessons(
   now: number,
 ): { state: ViewerCourseState; chapters: Chapter[]; lessons: ViewerLesson[] } {
   const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
+  const state = getViewerCourseState(db, course, viewer);
   const lessonsByChapter = new Map<string, Lesson[]>();
   for (const lesson of db.lessons) {
     if (lesson.courseId !== course.id) continue;
@@ -291,7 +295,6 @@ export function computeViewerLessons(
   }
   for (const list of lessonsByChapter.values()) list.sort((a, b) => a.order - b.order);
 
-  const state = getViewerCourseState(db, course, viewer);
   const progressMap = new Map<string, ProgressStatus>();
   if (viewer) {
     for (const p of db.progress) if (p.userId === viewer.id && p.courseId === course.id) progressMap.set(p.lessonId, p.status);
@@ -299,9 +302,12 @@ export function computeViewerLessons(
 
   const ordered: { lesson: Lesson; chapter: Chapter; ci: number; li: number; status: ProgressStatus }[] = [];
   chapters.forEach((chapter, ci) =>
-    (lessonsByChapter.get(chapter.id) ?? []).forEach((lesson, li) =>
-      ordered.push({ lesson, chapter, ci, li, status: progressMap.get(lesson.id) ?? "incomplete" }),
-    ),
+    (lessonsByChapter.get(chapter.id) ?? []).forEach((lesson, li) => {
+      // Scheduled lessons stay out of a learner's outline until their publish time (managers see them).
+      // Numbering counts them, so lesson links stay the same when they appear.
+      if (!state.manager && !isLessonPublishedNow(lesson, now)) return;
+      ordered.push({ lesson, chapter, ci, li, status: progressMap.get(lesson.id) ?? "incomplete" });
+    }),
   );
 
   const locks = computeLessonLocks(

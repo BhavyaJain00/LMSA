@@ -244,3 +244,49 @@ export function countdownParts(endsAt: string | undefined, now: number = Date.no
     seconds: left % 60,
   };
 }
+
+/**
+ * FAQ entries to mark up as FAQPage structured data: only when the sales page
+ * is live and actually shows its FAQ section (Google requires the questions to
+ * be visible on the page).
+ */
+export function visibleSalesFaq(page: CourseSalesPage | undefined | null): CourseSalesPage["faq"] {
+  if (!hasSalesPage(page) || !page.sections.some((s) => s.type === "faq")) return [];
+  return page.faq;
+}
+
+export const SALES_SEO_LIMITS = { seoTitle: 70, metaDescription: 160 } as const;
+
+export interface SalesSeoPatch {
+  seoTitle: string | undefined;
+  metaDescription: string | undefined;
+  ogImageUrl: string | undefined;
+}
+
+/** SEO title, meta description and share image of the course page (empty values clear the field). */
+export function parseSalesSeo(input: { seoTitle: string; metaDescription: string; ogImageUrl: string }): { patch: SalesSeoPatch; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  const seoTitle = input.seoTitle.trim().replace(/\s+/g, " ");
+  const metaDescription = input.metaDescription.trim().replace(/\s+/g, " ");
+  const ogImageUrl = input.ogImageUrl.trim();
+  if (seoTitle.length > SALES_SEO_LIMITS.seoTitle) errors.seoTitle = `Keep the title under ${SALES_SEO_LIMITS.seoTitle} characters; search engines cut longer ones.`;
+  if (metaDescription.length > SALES_SEO_LIMITS.metaDescription) errors.metaDescription = `Keep the description under ${SALES_SEO_LIMITS.metaDescription} characters.`;
+  if (ogImageUrl && !(ogImageUrl.startsWith("/") ? !ogImageUrl.startsWith("//") : /^https?:\/\/[^\s]+$/i.test(ogImageUrl))) errors.ogImageUrl = "Upload an image or enter a valid image address.";
+  return { errors, patch: { seoTitle: seoTitle || undefined, metaDescription: metaDescription || undefined, ogImageUrl: ogImageUrl || undefined } };
+}
+
+/** Sections the builder can still add (repeatable ones always; single ones only once). */
+export function addableSectionTypes(sections: Pick<SalesSection, "type">[]): SalesSectionType[] {
+  const used = new Set(sections.map((s) => s.type));
+  return SALES_SECTION_TYPES.filter((t) => t.repeatable || !used.has(t.type)).map((t) => t.type);
+}
+
+/** Move the item at `index` by `delta` places (no-op at the ends). Returns a new array. */
+export function moveItem<T>(items: readonly T[], index: number, delta: number): T[] {
+  const target = index + delta;
+  if (index < 0 || index >= items.length || target < 0 || target >= items.length) return [...items];
+  const next = [...items];
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item!);
+  return next;
+}

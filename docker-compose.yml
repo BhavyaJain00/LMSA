@@ -1,0 +1,94 @@
+# LearnLoop on one server: the app plus Caddy for automatic HTTPS.
+#
+#   cp .env.example .env      # fill in APP_URL, APP_SECRET, DOMAIN, ACME_EMAIL, …
+#   docker compose up -d --build
+#
+# Optional scheduler for the email/commerce/comms/media/webhook jobs (set
+# CRON_KEY in .env first; Admin -> Settings -> Email shows it):
+#
+#   docker compose --profile cron up -d
+#
+# See DEPLOYMENT.md for the full walkthrough.
+
+name: learnloop
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-}
+    image: learnloop:${APP_VERSION:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Behind exactly one reverse proxy (Caddy): the client IP is the last
+      # X-Forwarded-For entry. 0 would make every per-IP rate limit shared.
+      TRUST_PROXY_HOPS: "1"
+      DATA_FILE: storage/db.json
+      SQLITE_PATH: storage/lms.sqlite
+      UPLOAD_DIR: storage/uploads
+    volumes:
+      - storage:/app/storage
+    # Not published on the host: only Caddy talks to the app.
+    expose:
+      - "3000"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env (e.g. learn.example.com)}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env (certificate expiry notices)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Calls the scheduled-job endpoints over the internal network. Every job
+  # also runs lazily when people use the site; the schedule keeps queued
+  # emails, renewals and video conversions on time.
+  cron:
+    image: alpine:3.20
+    profiles: ["cron"]
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    configs:
+      - source: crontab
+        target: /etc/crontabs/root
+    command: ["crond", "-f", "-l", "8", "-c", "/etc/crontabs"]
+
+configs:
+  crontab:
+    content: |
+      * * * * * wget -q -O /dev/null --header "Authorization: Bearer ${CRON_KEY:-missing}" http://app:3000/api/cron/emails
+      * * * * * wget -q -O /dev/null --header "Authorization: Bearer ${CRON_KEY:-missing}" http://app:3000/api/cron/webhooks
+      * * * * * wget -q -O /dev/null --header "Authorization: Bearer ${CRON_KEY:-missing}" http://app:3000/api/cron/comms
+      */10 * * * * wget -q -O /dev/null --header "Authorization: Bearer ${CRON_KEY:-missing}" http://app:3000/api/cron/media
+      17 * * * * wget -q -O /dev/null --header "Authorization: Bearer ${CRON_KEY:-missing}" http://app:3000/api/cron/commerce
+
+volumes:
+  storage:
+  caddy_data:
+  caddy_config:

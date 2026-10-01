@@ -13,6 +13,7 @@ import { bundleCourses, isBundleOnSale } from "@/lib/commerce/bundles";
 import { installmentPlanPrice, isInstallmentOrder, offeredInstallmentPlan, splitOrder, type OrderAmounts } from "@/lib/commerce/installments";
 import { intervalNoun, isRecurringInterval, planAccessLabel } from "@/lib/commerce/plans";
 import { isOngoing, trialEligible, trialEnd } from "@/lib/commerce/subscriptions";
+import { bumpOrderId, isOrderBump } from "@/lib/commerce/upsells";
 import {
   couponAppliesTo,
   couponAttemptsBlocked,
@@ -86,7 +87,7 @@ export function isScheduledPart(p: Pick<Payment, "status"> & Partial<Pick<Paymen
 }
 
 export function parseItemType(raw: string | undefined | null): PaymentItemType | null {
-  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" || raw === "bundle" ? raw : null;
+  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" || raw === "bundle" || raw === "gift" ? raw : null;
 }
 
 export interface BillingItem {
@@ -513,9 +514,14 @@ export async function generateOrderId(): Promise<string> {
  * reservation: concurrent checkouts cannot all pass a snapshot check and
  * over-redeem a limited code.
  */
-export type InsertOrderResult = { ok: true; payment: Payment; existing: boolean } | { ok: false; error: string };
+export type InsertOrderResult = { ok: true; payment: Payment; existing: boolean; bump?: Payment } | { ok: false; error: string };
 
-export async function insertPendingOrder(draft: Omit<Payment, "orderId">): Promise<InsertOrderResult> {
+/**
+ * `bump` is an order bump ticked at checkout: it is inserted in the same
+ * write as `<order id>-B`, linked to the new order (`upsellOfPaymentId`), and
+ * charged together with it. An existing open order is returned without one.
+ */
+export async function insertPendingOrder(draft: Omit<Payment, "orderId">, bump?: Omit<Payment, "orderId" | "upsellOfPaymentId">): Promise<InsertOrderResult> {
   const today = toDateKey();
   return mutate((d): InsertOrderResult => {
     const open = d.payments.find((p) => p.userId === draft.userId && p.itemType === draft.itemType && p.itemId === draft.itemId && p.status === "pending");
@@ -535,7 +541,10 @@ export async function insertPendingOrder(draft: Omit<Payment, "orderId">): Promi
     while (taken.has(orderId)) orderId = `ORD-${shortCode(2, 4)}`;
     const payment: Payment = { ...draft, orderId };
     d.payments.push(payment);
-    return { ok: true, payment: { ...payment }, existing: false };
+    if (!bump) return { ok: true, payment: { ...payment }, existing: false };
+    const added: Payment = { ...bump, orderId: bumpOrderId(orderId), upsellOfPaymentId: payment.id };
+    d.payments.push(added);
+    return { ok: true, payment: { ...payment }, existing: false, bump: { ...added } };
   });
 }
 
@@ -608,6 +617,7 @@ function lastReminderTime(db: Database, payment: Payment): number | null {
 /** Pure eligibility check against a database snapshot (safe to call inside `mutate`). */
 function evaluateReminder(db: Database, payment: Payment, now: number): ReminderCheck {
   if (payment.status !== "pending") return { ok: false, reason: "not_pending", message: "Only unpaid orders can be reminded." };
+  if (isOrderBump(payment)) return { ok: false, reason: "not_pending", message: "Add-ons are paid together with their main order, which is reminded instead." };
   const user = db.users.find((u) => u.id === payment.userId && u.enabled);
   if (!user) return { ok: false, reason: "no_user", message: "The learner account no longer exists or is disabled." };
 
@@ -723,8 +733,8 @@ export async function sendPaymentReminder(payment: Payment): Promise<ReminderChe
 function remindableCandidates(db: Database, now: number, minAgeMs = 0): Payment[] {
   return db.payments.filter((p) => {
     if (p.status !== "pending") return false;
-    // Scheduled parts of a payment plan are not abandoned checkouts.
-    if (isInstallmentOrder(p) && p.installmentNumber! > 1) return false;
+    // Scheduled parts of a payment plan are not abandoned checkouts, and order bumps go with their main order.
+    if ((isInstallmentOrder(p) && p.installmentNumber! > 1) || isOrderBump(p)) return false;
     const created = new Date(p.createdAt).getTime();
     return created >= now - REMINDER_WINDOW_MS && created <= now - minAgeMs;
   });

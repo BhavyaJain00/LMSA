@@ -21,6 +21,11 @@ import { bundleCourses } from "@/lib/commerce/bundles";
 import { isCancelledPart, isInstallmentOrder } from "@/lib/commerce/installments";
 import { getPlanViewForOrder } from "@/lib/commerce/installment-views";
 import { InstallmentPlanCard } from "@/components/commerce/installment-plan-card";
+import { deliveryLabel, getGiftForOrder } from "@/lib/commerce/gift-service";
+import { GIFT_STATUS_LABELS } from "@/lib/commerce/gifts";
+import { bumpsOf, chargeAmount, isOrderBump } from "@/lib/commerce/upsells";
+import { postPurchaseOfferFor } from "@/lib/commerce/upsell-service";
+import { PostPurchaseOffer } from "@/components/commerce/post-purchase-offer";
 import { formatDate, formatDateTime } from "@/lib/utils";
 
 export const metadata = { title: "Order" };
@@ -53,7 +58,16 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
   const laterPart = isInstallmentOrder(payment) && payment.installmentNumber! > 1;
   const partLabel = plan ? `Payment ${payment.installmentNumber} of ${plan.total}` : "";
   const dueInFuture = laterPart && Date.parse(payment.createdAt) > Date.now();
-  const checkoutHref = `/billing/${payment.itemType}/${payment.itemId}${plan ? "?pay=installments" : ""}`;
+  // Gift orders: the gift they bought (recipient, delivery, code).
+  const gift = await getGiftForOrder(payment);
+  const giftRow = gift ? db.gifts.find((g) => g.id === gift.id) : undefined;
+  const checkoutHref = gift && giftRow ? `/gift?type=${giftRow.itemType}&id=${encodeURIComponent(giftRow.itemId)}` : `/billing/${payment.itemType}/${payment.itemId}${plan ? "?pay=installments" : ""}`;
+  // Order bumps: add-ons charged with this order, or the main order of an add-on.
+  const bump = isOrderBump(payment);
+  const mainOrder = bump ? (db.payments.find((p) => p.id === payment.upsellOfPaymentId) ?? null) : null;
+  const addOns = bump ? [] : bumpsOf(db.payments, payment).filter((b) => b.status !== "failed" || payment.status === "failed");
+  const toCollect = bump ? payment.amount : chargeAmount(db.payments, payment);
+  const upsellOffer = payment.userId === user.id && !bump ? await postPurchaseOfferFor(user, payment) : null;
   const invoiceHref = `/billing/invoice/${encodeURIComponent(payment.orderId)}`;
   const invoiced = hasInvoice(payment);
   const online = isRealGateway(payment.gateway);
@@ -200,6 +214,19 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
           </ButtonLink>,
         );
       }
+    } else if (gift) {
+      heading = gift.status === "redeemed" ? "Your gift was redeemed" : gift.status === "scheduled" ? "Your gift is scheduled" : "Your gift is on its way";
+      message = (
+        <>
+          <strong className="text-ink">{gift.title}</strong> for {gift.recipientName ? `${gift.recipientName} (${gift.recipientEmail})` : gift.recipientEmail}.{" "}
+          {gift.status === "redeemed" ? `${gift.redeemedByName ?? "They"} redeemed it on ${formatDate(gift.redeemedAt!)}.` : `${deliveryLabel(gift)}. They redeem it with the code in the email.`}
+        </>
+      );
+      actions.push(
+        <ButtonLink key="gifts" href="/gift" leftIcon={<Icon.Gift className="size-4" />}>
+          Manage your gifts
+        </ButtonLink>,
+      );
     } else {
       message = <>Thanks for your purchase of {payment.itemTitle}.</>;
     }
@@ -231,13 +258,26 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
         {plan.status === "paused" ? "The lessons are locked until it is paid." : "Pay it to keep your access without interruption."}
       </>
     );
+  } else if (payment.status === "pending" && bump && mainOrder) {
+    tone = "warning";
+    heading = "Paid together with your order";
+    message = (
+      <>
+        This add-on is charged in the same payment as order <span className="font-mono font-semibold text-ink">{mainOrder.orderId}</span> and unlocks as soon as that order is paid.
+      </>
+    );
+    actions.push(
+      <ButtonLink key="main" href={`/billing/success/${encodeURIComponent(mainOrder.orderId)}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+        Go to the order
+      </ButtonLink>,
+    );
   } else if (payment.status === "pending" && online) {
     tone = "warning";
     if (processing) {
       heading = "Payment processing";
       message = (
         <>
-          {gatewayName} is still confirming your payment of <strong className="text-ink">{money(payment.amount, payment.currency)}</strong>. Some payment methods take a few
+          {gatewayName} is still confirming your payment of <strong className="text-ink">{money(toCollect, payment.currency)}</strong>. Some payment methods take a few
           minutes (bank debits can take a few days). You&apos;ll be enrolled and notified automatically.
         </>
       );
@@ -245,7 +285,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       heading = "Complete your payment";
       message = (
         <>
-          Your order is saved, but the payment of <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> hasn&apos;t been completed yet. Nothing has
+          Your order is saved, but the payment of <strong className="text-ink">{money(toCollect, payment.currency)}</strong> hasn&apos;t been completed yet. Nothing has
           been charged. Continue with {gatewayName} to get access.
         </>
       );
@@ -255,7 +295,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
     heading = "Order placed — awaiting confirmation";
     message = (
       <>
-        Complete your payment of <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> and include your order ID{" "}
+        Complete your payment of <strong className="text-ink">{money(toCollect, payment.currency)}</strong> and include your order ID{" "}
         <span className="font-mono font-semibold text-ink">{payment.orderId}</span> as the reference.{" "}
         {payment.itemType === "plan"
           ? trialRunning && membership
@@ -263,7 +303,9 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
             : payment.source === "Renewal"
               ? "Your membership is extended as soon as an administrator confirms the payment."
               : "Your membership starts as soon as an administrator confirms the payment."
-          : "You'll be enrolled automatically and notified as soon as an administrator confirms the payment."}
+          : gift
+            ? "Your gift is sent as soon as an administrator confirms the payment."
+            : "You'll be enrolled automatically and notified as soon as an administrator confirms the payment."}
       </>
     );
     if (payment.itemType === "plan" && own && membership) {
@@ -348,7 +390,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
 
   const address = formatAddressLines(payment.address).join(", ");
   // Later parts of a plan are paid from the plan card and cannot be cancelled one by one.
-  const showPendingActions = own && payment.status === "pending" && !laterPart;
+  const showPendingActions = own && payment.status === "pending" && !laterPart && !bump;
 
   return (
     <>
@@ -390,12 +432,12 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
                 )}
               </div>
             </div>
-            {payment.status === "pending" && !online && (
+            {payment.status === "pending" && !online && !bump && (
               <div className="mt-6 rounded-xl border border-border bg-surface-2 p-4 text-sm">
                 <p className="font-medium text-ink">How to pay</p>
                 <ol className="mt-2 list-decimal space-y-1 pl-5 text-ink-muted">
                   <li>
-                    Transfer <strong className="text-ink">{money(payment.amount, payment.currency)}</strong> using the payment details shared by our team.
+                    Transfer <strong className="text-ink">{money(toCollect, payment.currency)}</strong> using the payment details shared by our team.
                   </li>
                   <li>
                     Use <span className="font-mono text-ink">{payment.orderId}</span> as the payment reference.
@@ -425,6 +467,73 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
               </div>
             )}
           </section>
+
+          {upsellOffer && (
+            <PostPurchaseOffer
+              offer={{
+                orderId: payment.orderId,
+                headline: upsellOffer.upsell.headline,
+                title: upsellOffer.item.title,
+                description: upsellOffer.item.description,
+                href: upsellOffer.item.href,
+                imageUrl: upsellOffer.item.imageUrl,
+                priceLabel: money(upsellOffer.summary.total, upsellOffer.summary.currency),
+                listPriceLabel: upsellOffer.listTotal > upsellOffer.summary.total ? money(upsellOffer.listTotal, upsellOffer.summary.currency) : null,
+                discountPercent: upsellOffer.upsell.discountPercent,
+                gateway: settings.commerce.paymentGateway,
+              }}
+            />
+          )}
+
+          {addOns.length > 0 && (
+            <section className="rounded-card border border-border bg-surface-1 p-6 shadow-card" aria-labelledby="order-addons-heading">
+              <h2 id="order-addons-heading" className="text-base font-semibold text-ink">
+                Also in this order
+              </h2>
+              <ul className="mt-3 divide-y divide-border">
+                {addOns.map((a) => (
+                  <li key={a.id} className="flex flex-col gap-1 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <Link href={`/billing/success/${encodeURIComponent(a.orderId)}`} className="min-w-0 truncate text-sm font-medium text-ink hover:text-accent hover:underline">
+                      {a.itemTitle}
+                    </Link>
+                    <span className="flex items-center gap-2 text-sm tabular-nums text-ink-muted">
+                      {money(a.amount, a.currency)}
+                      <PaymentStatusBadge status={a.status} failureReason={a.failureReason} refundedAmount={a.refundedAmount} amount={a.amount} audience="learner" />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 border-t border-border pt-3 text-sm text-ink-muted">
+                Charged together: <strong className="text-ink">{money(toCollect, payment.currency)}</strong>. Each item has its own order and invoice.
+              </p>
+            </section>
+          )}
+
+          {gift && (
+            <section className="rounded-card border border-border bg-surface-1 p-6 shadow-card" aria-labelledby="order-gift-heading">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 id="order-gift-heading" className="text-base font-semibold text-ink">
+                  The gift
+                </h2>
+                <span className="text-xs font-medium text-ink-muted">{GIFT_STATUS_LABELS[gift.status]}</span>
+              </div>
+              <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+                <DetailItem label="Gift">
+                  <Link href={gift.href} className="text-accent hover:underline">
+                    {gift.title}
+                  </Link>
+                </DetailItem>
+                <DetailItem label="Recipient">{gift.recipientName ? `${gift.recipientName} · ${gift.recipientEmail}` : gift.recipientEmail}</DetailItem>
+                <DetailItem label="Delivery">{deliveryLabel(gift)}</DetailItem>
+                {own && payment.status === "paid" && gift.status !== "redeemed" && (
+                  <DetailItem label="Gift code">
+                    <span className="font-mono">{gift.code}</span>
+                  </DetailItem>
+                )}
+                {gift.message && <DetailItem label="Your message">{gift.message}</DetailItem>}
+              </dl>
+            </section>
+          )}
 
           {plan && <InstallmentPlanCard plan={plan} own={own} currentOrderId={payment.orderId} />}
 

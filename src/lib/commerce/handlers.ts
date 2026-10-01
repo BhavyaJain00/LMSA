@@ -3,6 +3,7 @@ import type { SubscriptionStatus } from "@/lib/types";
 import { on } from "@/lib/events";
 import { sendMembershipMessage, type MembershipMessage } from "./emails";
 import { afterInstallmentPaid, afterInstallmentRefunded } from "./installment-gateway";
+import { deliverGift } from "./gift-service";
 
 /**
  * Commerce reactions to domain events (registered from `src/lib/handlers.ts`).
@@ -11,6 +12,9 @@ import { afterInstallmentPaid, afterInstallmentRefunded } from "./installment-ga
  * first payment ties a Stripe subscription to the plan and sends the
  * schedule, the last one stops the subscription; a refund (which closed the
  * plan's remaining parts) stops it too.
+ *
+ * `payment.paid` of a gift order: email the recipient now, unless the buyer
+ * chose a later send time (then the delivery run sends it).
  *
  * `subscription.changed`: tell the member when their membership starts,
  * needs a payment, or ends. Period-only changes (a renewal) are covered by
@@ -60,4 +64,12 @@ on(
     if (event.data.itemType === "course" && event.data.full) await afterInstallmentRefunded(event.data.paymentId);
   },
   { key: "commerce:installments-refunded" },
+);
+
+on(
+  "payment.paid",
+  async (event) => {
+    if (event.data.itemType === "gift") await deliverGift(event.data.itemId);
+  },
+  { key: "commerce:gift-delivery" },
 );

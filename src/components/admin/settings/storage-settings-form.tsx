@@ -285,26 +285,3 @@ export function QueueAutoRefresh({ active, intervalMs = 5000 }: { active: boolea
     </span>
   );
 }
-
-/** Copyable read-only value (cron URL). */
-export function CopyField({ value, label }: { value: string; label: string }) {
-  const toast = useToast();
-  return (
-    <div className="flex gap-2">
-      <Input readOnly value={value} aria-label={label} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-      <Button
-        variant="outline"
-        size="sm"
-        leftIcon={<Icon.Copy className="size-4" />}
-        onClick={() => {
-          void navigator.clipboard?.writeText(value).then(
-            () => toast.success("Copied"),
-            () => toast.error("Copy failed. Select the text and copy it manually."),
-          );
-        }}
-      >
-        Copy
-      </Button>
-    </div>
-  );
-}

@@ -2,8 +2,11 @@ import "server-only";
 import type { BlogPost, BlogPostStatus, Category, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { hasRole, isModerator } from "@/lib/auth/session";
-import { effectivePostStatus, isPostPublic } from "@/lib/seo/visibility";
+import { effectivePostStatus, isCoursePublic, isPostPublic } from "@/lib/seo/visibility";
 import { tagLabel, tagSlug } from "@/lib/seo/text";
+import { instructorPath, postPath, profilePath } from "@/lib/seo/content-index";
+import type { AdminPostFilter } from "@/lib/seo/blog";
+import { notify } from "@/lib/services/notifications";
 
 /**
  * Blog queries (round 3). Posts use the shared course categories. Scheduled
@@ -70,20 +73,33 @@ function toListItem(post: BlogPost, users: Map<string, User>, categories: Map<st
   };
 }
 
-/** Move scheduled posts whose time has come to "published" (idempotent, cheap when nothing is due). */
+/**
+ * Move scheduled posts whose time has come to "published" (idempotent, cheap
+ * when nothing is due) and tell each author their article is live.
+ */
 export async function publishDuePosts(now: number = Date.now()): Promise<number> {
   const db = await getDb();
   if (!db.blogPosts.some((p) => p.status === "scheduled" && effectivePostStatus(p, now) === "published")) return 0;
-  return mutate((d) => {
-    let changed = 0;
+  const published = await mutate((d) => {
+    const out: Pick<BlogPost, "id" | "slug" | "title" | "authorId">[] = [];
     for (const post of d.blogPosts) {
       if (post.status === "scheduled" && effectivePostStatus(post, now) === "published") {
         post.status = "published";
-        changed++;
+        out.push({ id: post.id, slug: post.slug, title: post.title, authorId: post.authorId });
       }
     }
-    return changed;
+    return out;
   });
+  for (const post of published) {
+    await notify(post.authorId, {
+      type: "system",
+      subject: `Your article “${post.title}” is now live`,
+      message: "The scheduled publication time has passed, so the article is now on the blog and in the sitemap.",
+      link: postPath(post.slug),
+      dedupeKey: `blog-live:${post.id}`,
+    }).catch(() => undefined);
+  }
+  return published.length;
 }
 
 export interface PublicPostQuery {
@@ -227,7 +243,6 @@ export async function getPostsForCourse(courseId: string, limit = 3, now: number
 /* Admin                                                               */
 /* ------------------------------------------------------------------ */
 
-export type AdminPostFilter = "all" | BlogPostStatus;
 
 export interface AdminPostRow extends PostListItem {
   status: BlogPostStatus;
@@ -242,6 +257,8 @@ export interface AdminPostQuery {
   authorId?: string;
   categoryId?: string;
   page?: number;
+  /** Rows per page (the CSV export asks for every row). */
+  pageSize?: number;
 }
 
 /** Posts visible in /admin/blog for `viewer` (creators see their own posts, moderators all). */
@@ -257,11 +274,12 @@ export async function getAdminPosts(viewer: User, query: AdminPostQuery, now: nu
     .filter((p) => !query.categoryId || p.categoryIds.includes(query.categoryId))
     .filter((p) => !q || `${p.title} ${p.slug} ${p.tags.join(" ")} ${p.focusKeyword ?? ""}`.toLowerCase().includes(q))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const pages = Math.max(1, Math.ceil(list.length / ADMIN_BLOG_PAGE_SIZE));
+  const pageSize = query.pageSize ?? ADMIN_BLOG_PAGE_SIZE;
+  const pages = Math.max(1, Math.ceil(list.length / pageSize));
   const page = Math.min(Math.max(1, query.page ?? 1), pages);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const categories = new Map(db.categories.map((c) => [c.id, c]));
-  const rows: AdminPostRow[] = list.slice((page - 1) * ADMIN_BLOG_PAGE_SIZE, page * ADMIN_BLOG_PAGE_SIZE).map((p) => ({
+  const rows: AdminPostRow[] = list.slice((page - 1) * pageSize, page * pageSize).map((p) => ({
     ...toListItem(p, users, categories),
     status: effectivePostStatus(p, now),
     views: p.views,
@@ -278,4 +296,103 @@ export async function getAdminPosts(viewer: User, query: AdminPostQuery, now: nu
 export async function getPostById(id: string): Promise<BlogPost | null> {
   const db = await getDb();
   return db.blogPosts.find((p) => p.id === id) ?? null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Archive pages                                                       */
+/* ------------------------------------------------------------------ */
+
+export interface BlogCategoryLanding {
+  category: Category;
+  posts: PostPage;
+  /** Other categories with public posts (internal links). */
+  otherCategories: (Category & { postCount: number })[];
+}
+
+/** /blog/category/[slug]: the category (only when it has public posts) and one page of them. */
+export async function getBlogCategoryLanding(slug: string, page = 1, now: number = Date.now()): Promise<BlogCategoryLanding | null> {
+  const categories = await getBlogCategories(now);
+  const category = categories.find((c) => c.slug === slug);
+  if (!category) return null;
+  const posts = await getPublicPosts({ categoryId: category.id, page }, now);
+  return { category, posts, otherCategories: categories.filter((c) => c.id !== category.id) };
+}
+
+export interface BlogTagLanding {
+  slug: string;
+  label: string;
+  posts: PostPage;
+  relatedTags: { slug: string; label: string; count: number }[];
+}
+
+/** /blog/tag/[tag]: the most common spelling of the tag and one page of its posts. */
+export async function getBlogTagLanding(slug: string, page = 1, now: number = Date.now()): Promise<BlogTagLanding | null> {
+  const tags = await getBlogTags(now);
+  const tag = tags.find((t) => t.slug === slug);
+  if (!tag) return null;
+  const posts = await getPublicPosts({ tag: slug, page }, now);
+  // Tags that appear on the same posts, most shared first.
+  const db = await getDb();
+  const shared = new Map<string, number>();
+  for (const p of db.blogPosts) {
+    if (!isPostPublic(p, now) || !p.tags.some((t) => tagSlug(t) === slug)) continue;
+    for (const t of p.tags) {
+      const s = tagSlug(t);
+      if (s && s !== slug) shared.set(s, (shared.get(s) ?? 0) + 1);
+    }
+  }
+  const relatedTags = tags
+    .filter((t) => shared.has(t.slug))
+    .sort((a, b) => shared.get(b.slug)! - shared.get(a.slug)! || b.count - a.count)
+    .slice(0, 12);
+  return { slug, label: tag.label, posts, relatedTags };
+}
+
+/* ------------------------------------------------------------------ */
+/* Post page extras                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Count a read. Called after the response for visitors who are not bots or the post's editors. */
+export async function recordPostView(postId: string): Promise<void> {
+  await mutate((d) => {
+    const post = d.blogPosts.find((p) => p.id === postId);
+    if (post) post.views = (post.views ?? 0) + 1;
+  });
+}
+
+/** Public profile path for an author: the teaching profile when they teach a public course. */
+export async function authorProfilePath(authorId: string): Promise<string | null> {
+  const db = await getDb();
+  const user = db.users.find((u) => u.id === authorId);
+  if (!user) return null;
+  const now = Date.now();
+  const teaches = db.courses.some((c) => isCoursePublic(c, now) && c.instructorIds.includes(authorId));
+  return teaches ? instructorPath(user.username) : profilePath(user.username);
+}
+
+/* ------------------------------------------------------------------ */
+/* Editor                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface PostEditorOptions {
+  categories: Pick<Category, "id" | "name">[];
+  courses: { id: string; title: string; published: boolean }[];
+  /** Staff the post can be attributed to (moderators only; empty for creators). */
+  authors: { id: string; name: string }[];
+}
+
+export async function getPostEditorOptions(viewer: User): Promise<PostEditorOptions> {
+  const db = await getDb();
+  return {
+    categories: db.categories.map((c) => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)),
+    courses: db.courses
+      .map((c) => ({ id: c.id, title: c.title, published: c.published }))
+      .sort((a, b) => Number(b.published) - Number(a.published) || a.title.localeCompare(b.title)),
+    authors: isModerator(viewer)
+      ? db.users
+          .filter((u) => canWritePosts(u) && u.enabled !== false)
+          .map((u) => ({ id: u.id, name: u.name }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      : [],
+  };
 }

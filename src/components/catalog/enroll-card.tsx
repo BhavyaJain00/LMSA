@@ -19,6 +19,7 @@ import { bestBundleFor, type CourseBundleOffer } from "@/lib/commerce/bundle-vie
 import { installmentOffer, offeredInstallmentPlan } from "@/lib/commerce/installments";
 import { toPlanView, type InstallmentPlanView } from "@/lib/commerce/installment-views";
 import { InstallmentNotice, orderPath } from "@/components/commerce/installment-plan-card";
+import { GiveGiftLink } from "@/components/commerce/give-gift-link";
 import { ClaimCertificateButton, EnrollButton, LeaveCourseButton } from "./enroll-actions";
 import { enrolledTier, plural } from "./format";
 import { isPaidCourse, PriceTag } from "./price-tag";
@@ -448,6 +449,8 @@ export async function EnrollCard(props: EnrollCardProps) {
     planOffer: offerPlan ? { name: offerPlan.name, priceLabel: `${formatPrice(offerPlan.price, offerPlan.currency)}${intervalSuffix(offerPlan.interval)}` } : null,
   };
   const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
+  // Commerce (round 3): gifts. Anyone may buy a paid course on sale for someone else.
+  const giftable = !manager && db.settings.growth.giftsEnabled && isPaidCourse(course) && course.published && !course.upcoming && !course.disableSelfLearning;
 
   return (
     <Card className={cn("overflow-hidden", className)}>
@@ -481,6 +484,11 @@ export async function EnrollCard(props: EnrollCardProps) {
           </div>
         )}
         <CertificateLinks props={props} />
+        {giftable && (
+          <div className="flex justify-center">
+            <GiveGiftLink type="course" id={course.id} />
+          </div>
+        )}
 
         {enrollment?.canLeave && !manager && (
           <div className="flex justify-center">

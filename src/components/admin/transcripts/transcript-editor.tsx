@@ -939,7 +939,7 @@ export function TranscriptEditor({ lessonId, lessonTitle, video, initial, initia
           count={cues.length}
           selection={selection}
           focusIndex={Math.max(0, activeIndex)}
-          playhead={timeRef.current}
+          playhead={playhead}
           cueStart={(i) => cues[i]?.start ?? null}
           onApply={applyTiming}
         />

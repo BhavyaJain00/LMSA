@@ -11,6 +11,7 @@ import { membershipFor, membershipOrderFor } from "@/lib/commerce/access";
 import { bundleCourses } from "@/lib/commerce/bundles";
 import { isInstallmentOrder, planKeyOf } from "@/lib/commerce/installments";
 import { cancelScheduleIn, ensureInstallmentSchedule, planRowsIn } from "@/lib/commerce/installment-store";
+import { bumpsOf, isOrderBump } from "@/lib/commerce/upsells";
 import { couponOverflow } from "./coupon-rules";
 import { assignInvoiceNumber, isInvoiceable } from "./invoice";
 
@@ -81,9 +82,11 @@ function transactionsLink(search: string): string {
  * question of the membership's own period, see `src/lib/commerce/access.ts`).
  */
 export function hasOrderAccess(
-  db: Pick<Database, "enrollments" | "batchEnrollments" | "subscriptions" | "bundles" | "courses" | "payments">,
-  payment: Pick<Payment, "userId" | "itemType" | "itemId" | "subscriptionId" | "orderId" | "installmentNumber" | "installmentsTotal">,
+  db: Pick<Database, "enrollments" | "batchEnrollments" | "subscriptions" | "bundles" | "courses" | "payments" | "gifts">,
+  payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "orderId" | "installmentNumber" | "installmentsTotal">,
 ): boolean {
+  // A gift order buys the gift itself (its code); the recipient's access comes with their own order when it is redeemed.
+  if (payment.itemType === "gift") return db.gifts.some((g) => g.id === payment.itemId);
   if (payment.itemType === "course") {
     if (!db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId)) return false;
     // The first part of a payment plan also owes the buyer the schedule of the remaining parts.
@@ -186,6 +189,8 @@ export async function fulfillPayment(
         dedupeKey: `duplicate-payment:${claim.row.id}:${gatewayPaymentId}`,
       });
     }
+    // Order bumps paid with this order that were not settled yet (an earlier run stopped half-way).
+    await settleBumps(claim.row, opts.source);
     if (claim.missingAccess) {
       // An earlier fulfilment could not grant access: try again (every step is idempotent).
       const retried = await runGrant(claim.row, false);
@@ -212,6 +217,8 @@ export async function fulfillPayment(
     couponCode: payment.couponCode,
     affiliateId: payment.affiliateId,
   });
+  // Order bumps were charged in the same checkout: they are paid now too.
+  await settleBumps(payment, opts.source);
   const couponNotice = claim.overLimit
     ? `Coupon ${claim.overLimit.code} has now been used ${claim.overLimit.used} times, more than its usage limit of ${claim.overLimit.limit}.`
     : undefined;
@@ -263,6 +270,21 @@ export async function fulfillPayment(
       accessFailed: granted.failed || undefined,
     },
   };
+}
+
+/**
+ * Fulfil the order bumps charged together with `main` (they share its
+ * gateway payment, so a gateway refund of either can find them). Bumps of an
+ * order never have bumps themselves.
+ */
+async function settleBumps(main: Payment, source: FulfillmentSource | undefined): Promise<void> {
+  if (isOrderBump(main)) return;
+  const db = await getDb();
+  for (const bump of bumpsOf(db.payments, main)) {
+    // Cancelled bumps were not part of the charge (see `chargeAmount`).
+    if (bump.status !== "pending") continue;
+    await fulfillPayment(bump.id, main.gatewayPaymentId, { source });
+  }
 }
 
 interface GrantOutcome {
@@ -351,6 +373,9 @@ async function grantAccess(payment: Payment): Promise<{ learnerExists: boolean; 
 
   if (payment.itemType === "plan") return { learnerExists: true, ...(await grantMembership(payment)) };
 
+  // The gift email is sent by the `payment.paid` handler (or at the gift's send time); the code works from now on.
+  if (payment.itemType === "gift") return { learnerExists: true };
+
   if (payment.itemType === "batch") {
     const batch = db.batches.find((b) => b.id === payment.itemId);
     if (!batch) return { learnerExists: true, notice: `The batch of order ${payment.orderId} no longer exists, so no enrollment was created.` };
@@ -410,8 +435,20 @@ export async function markPaymentFailed(paymentId: string, reason?: string, opts
     row.status = "failed";
     row.failureReason = reason ? reason.slice(0, 300) : undefined;
     row.checkoutUrl = undefined;
+    failBumpsIn(d, row, reason);
     return true;
   });
+}
+
+/** Order bumps of a main order that did not go through are cancelled with it (pure; inside `mutate`). */
+function failBumpsIn(d: Database, main: Payment, reason: string | undefined): void {
+  if (isOrderBump(main)) return;
+  for (const bump of bumpsOf(d.payments, main)) {
+    if (bump.status !== "pending") continue;
+    bump.status = "failed";
+    bump.failureReason = reason ? reason.slice(0, 300) : undefined;
+    bump.checkoutUrl = undefined;
+  }
 }
 
 /**
@@ -432,6 +469,7 @@ export async function closeReversedPayment(
     row.status = "failed";
     row.failureReason = info.reason.slice(0, 300);
     row.checkoutUrl = undefined;
+    failBumpsIn(d, row, info.reason);
     if (info.gatewayPaymentId && !row.gatewayPaymentId) row.gatewayPaymentId = info.gatewayPaymentId;
     return { status: "failed" as const, changed, payment: { ...row } };
   });
@@ -536,7 +574,24 @@ function closeAsRefunded(d: Database, row: Payment, at: string): void {
     const coupon = d.coupons.find((c) => c.id === row.couponId);
     if (coupon) coupon.redemptionCount = Math.max(0, coupon.redemptionCount - 1);
   }
-  revokeAccessIn(d, row);
+  revokeAccessIn(d, row, at);
+}
+
+/**
+ * A refunded gift order: the code stops working (its status follows the
+ * order), and when it was already redeemed the recipient's order is closed
+ * as refunded too, which removes what it granted (pure; inside `mutate`).
+ */
+function revokeGiftIn(d: Database, payment: Pick<Payment, "itemId">, at: string): void {
+  const gift = d.gifts.find((g) => g.id === payment.itemId);
+  if (!gift) return;
+  for (const row of d.payments) {
+    if (row.giftId !== gift.id || row.itemType === "gift" || row.status !== "paid") continue;
+    row.status = "refunded";
+    row.refundedAt = at;
+    row.refundedAmount = row.amount;
+    revokeAccessIn(d, row, at);
+  }
 }
 
 /** Publish `payment.refunded` for a refund that was just recorded (`full`: the order is now refunded). */
@@ -731,8 +786,13 @@ function revokeBundleIn(d: Database, payment: Pick<Payment, "id" | "userId" | "i
 export function revokeAccessIn(
   d: Database,
   payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "paidAt" | "orderId" | "installmentNumber" | "installmentsTotal">,
+  at: string = new Date().toISOString(),
 ): void {
   const userId = payment.userId;
+  if (payment.itemType === "gift") {
+    revokeGiftIn(d, payment, at);
+    return;
+  }
   if (payment.itemType === "plan") {
     revokeMembershipIn(d, payment);
     return;

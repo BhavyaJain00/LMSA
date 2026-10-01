@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import type { LessonBlock, VideoSource } from "@/lib/types";
 import { cn, formatBytes, formatTime, isValidUrl, parseTime } from "@/lib/utils";
 import { VideoPlayer, AudioPlayer, useMediaSource } from "@/components/player";
@@ -12,6 +14,12 @@ import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/dialog";
+import { ProgressBar } from "@/components/ui/progress";
+import { useToast } from "@/components/ui/toast";
+import type { BlockMediaStatus } from "@/lib/media/transcode/status";
+import { POLL_IDLE_MS, describeMediaStatus, formatBitrate } from "@/lib/media/transcode/status-view";
+import { cancelVideoBlockTranscodeAction, transcodeVideoBlockAction } from "@/lib/actions/storage-settings";
 import type { AssessmentKind, AssessmentOption } from "./types";
 import { CALLOUT_LABELS, CALLOUT_TONES, CODE_LANGUAGES, DEFAULT_EMBED_HEIGHT, checkEmbedUrl, isBlockedVideoHost, type CalloutTone } from "./blocks";
 import { MarkdownEditor } from "./markdown-editor";
@@ -550,6 +558,183 @@ function VideoQualitiesEditor({ block, onChange }: EditorProps<"video">) {
   );
 }
 
+/** Lesson and course ids of the lesson editor page this block editor is on (null elsewhere). */
+function useEditorRoute(): { courseId: string | null; lessonId: string | null } {
+  const params = useParams<{ id?: string | string[]; lessonId?: string | string[] }>();
+  const one = (v: string | string[] | undefined) => (typeof v === "string" && v ? v : null);
+  return { courseId: one(params?.id), lessonId: one(params?.lessonId) };
+}
+
+const PROGRESS_TONES = { info: "accent", success: "success", warning: "warning", danger: "danger", neutral: "accent" } as const;
+
+/**
+ * Adaptive-streaming state of an uploaded video: polls `GET /api/media/status`
+ * while a conversion is queued or running ("Processing 42% (1080p/720p/480p)"),
+ * then shows "Ready" with the renditions or "Failed" with Retry. Also links
+ * the block's transcript editor.
+ */
+function VideoConversionPanel({ blockId, src }: { blockId: string; src: string }) {
+  const { courseId, lessonId } = useEditorRoute();
+  const toast = useToast();
+  const [status, setStatus] = useState<BlockMediaStatus | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [askCancel, setAskCancel] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const settledSrc = useSettledValue(src, MEDIA_URL_SETTLE_MS);
+  const srcRef = useRef(src);
+  useEffect(() => {
+    srcRef.current = src;
+  }, [src]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | null = null;
+    const schedule = (ms: number | null) => {
+      if (!stopped && ms !== null) timer = window.setTimeout(load, ms);
+    };
+    async function load() {
+      if (document.visibilityState === "hidden") return schedule(POLL_IDLE_MS);
+      controller = new AbortController();
+      const qs = new URLSearchParams({ blockId });
+      if (lessonId) qs.set("lessonId", lessonId);
+      let next: number | null = POLL_IDLE_MS;
+      try {
+        const res = await fetch(`/api/media/status?${qs.toString()}`, { cache: "no-store", signal: controller.signal });
+        const body = (await res.json().catch(() => null)) as { ok: true; status: BlockMediaStatus } | { ok: false; error?: string } | null;
+        if (stopped) return;
+        if (res.ok && body?.ok) {
+          setStatus(body.status);
+          setLoadError(null);
+          next = describeMediaStatus(body.status, srcRef.current).pollMs;
+        } else if (res.status === 404) {
+          // Block not saved yet (outside a lesson page the lesson id is unknown).
+          setStatus(null);
+          setLoadError(null);
+        } else {
+          setLoadError((body && !body.ok && body.error) || "Couldn't load the conversion status.");
+          if (res.status === 401 || res.status === 403) next = null;
+        }
+      } catch {
+        if (stopped) return;
+        setLoadError("Couldn't reach the server. Trying again shortly.");
+      }
+      setLoaded(true);
+      schedule(next);
+    }
+    void load();
+    return () => {
+      stopped = true;
+      controller?.abort();
+      window.clearTimeout(timer);
+    };
+  }, [blockId, lessonId, settledSrc, reload]);
+
+  const view = describeMediaStatus(status, src);
+  const transcriptHref = status?.transcriptHref ?? (courseId && lessonId ? `/admin/courses/${courseId}/lessons/${lessonId}/transcript?block=${encodeURIComponent(blockId)}` : null);
+  const titleId = `conversion-${blockId}`;
+
+  const run = (kind: "convert" | "cancel") => {
+    if (!status) return;
+    startTransition(async () => {
+      const result = kind === "cancel" ? await cancelVideoBlockTranscodeAction(status.lessonId, blockId) : await transcodeVideoBlockAction(status.lessonId, blockId);
+      setAskCancel(false);
+      if (result.ok) {
+        setStatus(result.data);
+        toast.success(result.message ?? "Done");
+      } else {
+        toast.error(result.error);
+      }
+      setReload((r) => r + 1);
+    });
+  };
+
+  return (
+    <section aria-labelledby={titleId} className="rounded-xl border border-border p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h4 id={titleId} className="text-sm font-semibold text-ink">
+            Adaptive streaming
+          </h4>
+          <p className="text-xs text-ink-muted">Uploaded videos are converted to several qualities so the player can match each learner&apos;s connection.</p>
+        </div>
+        {transcriptHref && (
+          <Link
+            href={transcriptHref}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-accent hover:bg-accent/10 focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <Icon.Captions className="size-4" />
+            {status?.transcriptId ? "Edit transcript" : "Transcript"}
+          </Link>
+        )}
+      </div>
+
+      <div className="mt-3 space-y-2" aria-live="polite" aria-busy={!loaded}>
+        {!loaded ? (
+          <p className="inline-flex items-center gap-1.5 text-sm text-ink-muted">
+            <Icon.Loader className="size-4 animate-spin" aria-hidden="true" /> Checking conversion status…
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={view.tone} dot>
+                {view.title}
+              </Badge>
+              {view.detail && <p className="min-w-0 flex-1 text-xs text-ink-muted">{view.detail}</p>}
+            </div>
+            {view.progress !== null && <ProgressBar value={view.progress} size="sm" tone={PROGRESS_TONES[view.tone]} label={view.title} />}
+            {view.renditions.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5" aria-label="Available qualities">
+                {view.renditions.map((r) => (
+                  <li key={r.height} className="rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-ink-muted">
+                    <span className="font-medium text-ink">{r.label}</span>
+                    {r.bandwidth > 0 && <span> · {formatBitrate(r.bandwidth)}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {loadError && <p className="text-xs text-danger">{loadError}</p>}
+          </>
+        )}
+      </div>
+
+      {status && (view.convert || view.cancel) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {view.convert && (
+            <Button
+              variant={view.convert === "retry" ? "primary" : "outline"}
+              size="sm"
+              loading={pending}
+              disabled={pending}
+              onClick={() => run("convert")}
+              leftIcon={<Icon.Refresh className="size-4" />}
+            >
+              {view.convert === "retry" ? "Retry" : view.convert === "again" ? "Convert again" : "Convert now"}
+            </Button>
+          )}
+          {view.cancel && (
+            <Button variant="ghost" size="sm" disabled={pending} onClick={() => setAskCancel(true)} leftIcon={<Icon.X className="size-4" />}>
+              Cancel conversion
+            </Button>
+          )}
+        </div>
+      )}
+      <ConfirmDialog
+        open={askCancel}
+        onClose={() => setAskCancel(false)}
+        onConfirm={() => run("cancel")}
+        title="Cancel this conversion?"
+        description="Learners keep getting the original file (or the previous stream). You can convert the video again later."
+        confirmLabel="Cancel conversion"
+        destructive
+        loading={pending}
+      />
+    </section>
+  );
+}
+
 export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"video"> & { quizzes: AssessmentOption[] }) {
   const [detect, setDetect] = useState<{ src: string; status: "loading" | "error" } | null>(() => (block.src && !block.duration ? { src: block.src, status: "loading" } : null));
   const [durationKey, setDurationKey] = useState(0);
@@ -648,6 +833,8 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
           onFailed={onDetectFailed}
         />
       )}
+
+      {srcOk && <VideoConversionPanel blockId={block.id} src={block.src} />}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Field label="Poster image" hint="Shown before playback starts.">

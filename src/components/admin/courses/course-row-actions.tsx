@@ -6,13 +6,16 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Dropdown, type DropdownItem } from "@/components/ui/dropdown";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { DuplicateCourseDialog } from "@/components/teaching/duplicate-course";
+import { CourseScheduleDialog } from "@/components/teaching/course-schedule";
 import type { WorkflowFlags } from "./types";
 
-/** Row menu on the course list: edit, view, export and quick publishing actions. */
+/** Row menu on the course list: edit, view, export, duplicate and quick publishing actions (incl. scheduling). */
 export function CourseRowActions({ id, slug, title, workflow }: { id: string; slug: string; title: string; workflow: WorkflowFlags }) {
   const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [confirm, setConfirm] = useState<"publish" | "unpublish" | null>(null);
+  const [tool, setTool] = useState<"duplicate" | "schedule" | null>(null);
 
   const run = (fn: () => Promise<{ ok: boolean; message?: string; error?: string }>) =>
     startTransition(async () => {
@@ -46,9 +49,11 @@ export function CourseRowActions({ id, slug, title, workflow }: { id: string; sl
         a.remove();
       },
     });
+    items.push({ label: "Duplicate…", icon: <Icon.Copy />, onClick: () => setTool("duplicate") });
   }
   if (workflow.canApprove) items.push({ label: "Approve", icon: <Icon.ShieldCheck />, separator: true, onClick: () => run(() => approveCourseAction(id)) });
   if (workflow.canPublish) items.push({ label: "Publish", icon: <Icon.Globe />, separator: !workflow.canApprove, onClick: () => setConfirm("publish") });
+  if (workflow.canEdit && !workflow.canUnpublish) items.push({ label: "Schedule publish…", icon: <Icon.Calendar />, separator: !workflow.canApprove && !workflow.canPublish, onClick: () => setTool("schedule") });
   if (workflow.canUnpublish) items.push({ label: "Unpublish", icon: <Icon.EyeOff />, destructive: true, separator: true, onClick: () => setConfirm("unpublish") });
 
   return (
@@ -76,6 +81,8 @@ export function CourseRowActions({ id, slug, title, workflow }: { id: string; sl
         confirmLabel={confirm === "publish" ? "Publish" : "Unpublish"}
         destructive={confirm === "unpublish"}
       />
+      <DuplicateCourseDialog courseId={id} open={tool === "duplicate"} onClose={() => setTool(null)} />
+      <CourseScheduleDialog courseId={id} title={title} open={tool === "schedule"} onClose={() => setTool(null)} />
     </>
   );
 }

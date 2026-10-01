@@ -13,7 +13,8 @@ import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { OrderSummary, money } from "@/components/commerce/order-summary";
 import { CouponForm } from "@/components/commerce/coupon-form";
-import { BillingForm, type InstallmentCheckoutTerms, type MembershipCheckoutTerms } from "@/components/commerce/billing-form";
+import { BillingForm, type InstallmentCheckoutTerms, type MembershipCheckoutTerms, type OrderBumpView } from "@/components/commerce/billing-form";
+import { orderBumpFor } from "@/lib/commerce/upsell-service";
 import { PaymentOptionPicker } from "@/components/commerce/payment-option-picker";
 import { NotPermitted } from "@/components/commerce/not-permitted";
 import { FreeEnrollForm } from "@/components/commerce/free-enroll-form";
@@ -113,6 +114,21 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     if (parts) query.set("pay", "installments");
     return query.size ? `${basePath}?${query}` : basePath;
   };
+  // Order bump: an upsell offered for this item, charged in the same payment (not with installments).
+  const offer = !inParts ? await orderBumpFor(user, item) : null;
+  const bump: OrderBumpView | null = offer
+    ? {
+        upsellId: offer.upsell.id,
+        headline: offer.upsell.headline,
+        title: offer.item.title,
+        href: offer.item.href,
+        amount: offer.summary.total,
+        priceLabel: money(offer.summary.total, offer.summary.currency),
+        listPriceLabel: offer.listTotal > offer.summary.total ? money(offer.listTotal, offer.summary.currency) : null,
+        discountPercent: offer.upsell.discountPercent,
+        totalWithBumpLabel: money(charge.amount + offer.summary.total, summary.currency),
+      }
+    : null;
   const membership: MembershipCheckoutTerms | null =
     terms && item.plan
       ? {
@@ -258,6 +274,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
             legal={agreementDocuments("checkout", links)}
             membership={membership}
             installments={installments}
+            bump={bump}
             defaults={{
               billingName: saved?.billingName ?? user.name,
               line1: saved?.address?.line1 ?? "",

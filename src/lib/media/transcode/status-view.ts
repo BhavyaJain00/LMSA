@@ -1,0 +1,130 @@
+import type { BlockMediaStatus } from "./status";
+import { renditionLabel } from "./lesson-fields";
+
+/**
+ * Pure view model for the conversion panel under a video block in the lesson
+ * editor: what to say, which buttons to offer and how often to poll
+ * `GET /api/media/status`. Shared by the editor component and tests.
+ */
+
+export type MediaPanelTone = "neutral" | "info" | "success" | "warning" | "danger";
+
+export interface MediaPanelView {
+  /** Short status line, e.g. "Processing 42% (1080p/720p/480p)". */
+  title: string;
+  detail: string | null;
+  tone: MediaPanelTone;
+  /** 0-100 while converting, else null. */
+  progress: number | null;
+  /** Offer "Convert" / "Convert again" / "Retry". */
+  convert: "convert" | "again" | "retry" | null;
+  cancel: boolean;
+  /** Renditions of the finished stream, highest first. */
+  renditions: { height: number; bandwidth: number; label: string }[];
+  /** Poll again after this many milliseconds; null stops polling. */
+  pollMs: number | null;
+}
+
+/** Fast while a job moves, slower while waiting for a save or for the worker to pick it up. */
+export const POLL_RUNNING_MS = 3_000;
+export const POLL_QUEUED_MS = 5_000;
+export const POLL_IDLE_MS = 15_000;
+
+/** "2.8 Mbit/s" / "850 kbit/s". */
+export function formatBitrate(bps: number): string {
+  if (!Number.isFinite(bps) || bps <= 0) return "";
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(bps >= 10_000_000 ? 0 : 1)} Mbit/s`;
+  return `${Math.max(1, Math.round(bps / 1000))} kbit/s`;
+}
+
+function base(partial: Partial<MediaPanelView> & Pick<MediaPanelView, "title" | "tone">): MediaPanelView {
+  return { detail: null, progress: null, convert: null, cancel: false, renditions: [], pollMs: null, ...partial };
+}
+
+/**
+ * @param status  latest answer of the status endpoint (null when the block is not saved yet)
+ * @param src     the block's current (possibly unsaved) video URL
+ */
+export function describeMediaStatus(status: BlockMediaStatus | null, src: string): MediaPanelView {
+  if (!src.trim()) return base({ title: "Add a video", tone: "neutral", detail: "Upload a file to convert it for adaptive streaming." });
+  if (!status || !status.saved) {
+    return base({ title: "Not saved yet", tone: "neutral", detail: "Save the lesson to convert this video for adaptive streaming.", pollMs: POLL_IDLE_MS });
+  }
+  if (status.savedSrc !== src) {
+    return base({ title: "New video not saved", tone: "neutral", detail: "Save the lesson to convert the new video. Learners see the saved one until then.", pollMs: POLL_IDLE_MS });
+  }
+  if (!status.convertible) {
+    return base({ title: "Plays as linked", tone: "neutral", detail: "Only videos uploaded to this site are converted. Linked videos play exactly as they are." });
+  }
+
+  const renditions = (status.hlsReady ? (status.transcode?.renditions ?? []) : [])
+    .slice()
+    .sort((a, b) => b.height - a.height)
+    .map((r) => ({ ...r, label: `${r.height}p` }));
+  const job = status.job;
+
+  if (job?.status === "running") {
+    const heights = job.heights ?? status.configuredRenditions;
+    const pct = Math.max(0, Math.min(100, Math.round(job.progress)));
+    return base({
+      title: `Processing ${pct}%${heights.length ? ` (${renditionLabel(heights)})` : ""}`,
+      tone: "info",
+      progress: pct,
+      detail: status.hlsReady ? "Learners keep getting the previous stream until this one is ready." : "Learners get the original file until the conversion finishes.",
+      cancel: true,
+      renditions,
+      pollMs: POLL_RUNNING_MS,
+    });
+  }
+  if (job?.status === "queued") {
+    return base({
+      title: job.queuePosition && job.queuePosition > 1 ? `Queued (number ${job.queuePosition} in line)` : "Queued, starting soon",
+      tone: "info",
+      progress: 0,
+      detail: "Videos are converted one at a time in the background. You can keep editing or leave this page.",
+      cancel: true,
+      renditions,
+      pollMs: POLL_QUEUED_MS,
+    });
+  }
+  if (!status.ffmpeg.available || status.transcode?.status === "unavailable") {
+    return base({
+      title: "Converter not installed",
+      tone: "warning",
+      detail: `The original file plays as uploaded. ${status.ffmpeg.hint ?? "Ask an administrator to install ffmpeg."}`,
+      renditions,
+    });
+  }
+  if (!status.enabled) {
+    return base({
+      title: status.hlsReady ? "Ready" : "Adaptive streaming is off",
+      tone: status.hlsReady ? "success" : "neutral",
+      detail: status.hlsReady
+        ? "This video already has a stream. New uploads aren't converted while adaptive streaming is off in Settings → Storage & video."
+        : "The original file plays. An administrator can turn on conversion in Settings → Storage & video.",
+      renditions,
+    });
+  }
+  if (job?.status === "failed" || status.transcode?.status === "failed") {
+    const error = job?.error ?? status.transcode?.error ?? "";
+    const firstLine = error.split(/\r?\n/).find((l) => l.trim())?.trim() ?? "";
+    const reason = firstLine ? (/[.!?]$/.test(firstLine) ? firstLine : `${firstLine}.`) : "The conversion didn't finish.";
+    return base({
+      title: "Failed",
+      tone: "danger",
+      detail: `${reason} ${status.hlsReady ? "The previous stream keeps playing." : "Learners get the original file."}`.trim(),
+      convert: "retry",
+      renditions,
+    });
+  }
+  if (status.hlsReady) {
+    return base({
+      title: "Ready",
+      tone: "success",
+      detail: renditions.length ? `Adaptive streaming in ${renditionLabel(renditions.map((r) => r.height))}.` : "Adaptive streaming is ready.",
+      convert: "again",
+      renditions,
+    });
+  }
+  return base({ title: "Waiting to convert", tone: "neutral", detail: "The conversion starts in a moment.", convert: "convert", pollMs: POLL_QUEUED_MS });
+}

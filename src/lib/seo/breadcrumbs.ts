@@ -1,5 +1,5 @@
 import type { BreadcrumbItem } from "./jsonld";
-import { categoryPath } from "./content-index";
+import { blogCategoryPath, categoryPath } from "./content-index";
 
 /**
  * Breadcrumb trails of the public pages. One definition feeds both the
@@ -68,6 +68,21 @@ export function certificateTrail(title: string): BreadcrumbItem[] {
 /** Home → Section (for top-level lists: catalog, batches, programs, jobs…). */
 export function sectionTrail(name: string): BreadcrumbItem[] {
   return [HOME_CRUMB, { name }];
+}
+
+const BLOG_CRUMB: BreadcrumbItem = { name: "Blog", path: "/blog" };
+
+/** Home → Blog → Category → Article (the first category of the post, when it has one). */
+export function postTrail(post: { title: string }, category: { name: string; slug: string } | null | undefined): BreadcrumbItem[] {
+  const items: BreadcrumbItem[] = [HOME_CRUMB, BLOG_CRUMB];
+  if (category) items.push({ name: category.name, path: blogCategoryPath(category.slug) });
+  items.push({ name: post.title });
+  return items;
+}
+
+/** Home → Blog → Category, or Home → Blog → Topic. */
+export function blogArchiveTrail(name: string): BreadcrumbItem[] {
+  return [HOME_CRUMB, BLOG_CRUMB, { name }];
 }
 
 /** Drop nameless items and strip the link from the last item (the current page). */

@@ -142,7 +142,7 @@ export default async function PricingPage() {
       )}
 
       <section aria-label="Membership plans" className="mt-8">
-        <PricingPlans plans={plans} viewer={{ loggedIn: data.viewer.loggedIn, currentPlanId: data.viewer.currentPlanId, trialEligible: data.viewer.trialEligible }} initialCycle={initialCycle} />
+        <PricingPlans plans={plans} viewer={{ loggedIn: data.viewer.loggedIn, currentPlanId: data.viewer.currentPlanId, trialEligible: data.viewer.trialEligible }} initialCycle={initialCycle} giftable={settings.growth.giftsEnabled} />
       </section>
 
       <section aria-label="What every plan includes" className="mx-auto mt-12 grid max-w-4xl gap-4 sm:grid-cols-3">

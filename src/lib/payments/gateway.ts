@@ -74,6 +74,7 @@ import {
 import { bundleCourses } from "@/lib/commerce/bundles";
 import { autoChargeSubscriptionId, isInstallmentOrder, isValidInstallmentPlan } from "@/lib/commerce/installments";
 import { adoptStripeInstallmentSubscription, syncStripeInstallmentSubscription } from "@/lib/commerce/installment-gateway";
+import { bumpsOf, chargeAmount, isOrderBump } from "@/lib/commerce/upsells";
 
 /**
  * Gateway abstraction used by checkout, the return/webhook handlers and the
@@ -138,6 +139,11 @@ export function paymentDashboardUrl(payment: Pick<Payment, "gateway" | "gatewayP
 /* ------------------------------------------------------------------ */
 
 function itemDetails(db: Database, payment: Payment): { description?: string; imageUrl?: string } {
+  if (payment.itemType === "gift") {
+    const gift = db.gifts.find((g) => g.id === payment.itemId);
+    const target = gift?.itemType === "bundle" ? db.bundles.find((b) => b.id === gift.itemId) : gift?.itemType === "course" ? db.courses.find((c) => c.id === gift.itemId) : undefined;
+    return { description: gift ? `A gift for ${gift.recipientName || gift.recipientEmail}, delivered by email with a redeem code` : undefined, imageUrl: target?.imageUrl };
+  }
   if (payment.itemType === "plan") {
     const plan = db.plans.find((p) => p.id === (payment.planId ?? payment.itemId));
     return { description: plan ? `Membership: ${plan.name}` : undefined };
@@ -211,8 +217,11 @@ export async function createCheckout(payment: Payment, urls: { successUrl: strin
   if (!isConfigured(payment.gateway)) {
     throw new GatewayError(GATEWAY_NAMES[payment.gateway], `${GATEWAY_NAMES[payment.gateway]} is not available right now. Please try again later or contact support.`);
   }
+  if (isOrderBump(payment)) throw new GatewayError(payment.gateway, "This add-on is paid together with its main order.");
   const db = await getDb();
-  const amount = toGatewayAmount(payment.amount, payment.currency);
+  // Order bumps still open are charged in the same checkout as their main order.
+  const bumps = bumpsOf(db.payments, payment).filter((b) => b.status === "pending");
+  const amount = toGatewayAmount(chargeAmount(db.payments, payment), payment.currency);
 
   // First order of a monthly/yearly membership: a recurring gateway subscription.
   const plan = payment.itemType === "plan" ? db.plans.find((p) => p.id === (payment.planId ?? payment.itemId)) : undefined;
@@ -256,7 +265,11 @@ export async function createCheckout(payment: Payment, urls: { successUrl: strin
       title: payment.itemTitle,
       description: details.description,
       imageUrl: publicImageUrl(details.imageUrl),
-      unitAmount: amount,
+      unitAmount: toGatewayAmount(payment.amount, payment.currency),
+      extraItems: bumps.map((b) => {
+        const extra = itemDetails(db, b);
+        return { title: b.itemTitle, description: extra.description, imageUrl: publicImageUrl(extra.imageUrl), unitAmount: toGatewayAmount(b.amount, b.currency) };
+      }),
       currency: payment.currency,
       customerEmail: user?.email,
       successUrl: urls.successUrl,
@@ -349,7 +362,7 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
       if (state.state === "error") return { ok: false, error: state.message };
       if (state.state === "failed") return { ok: false, error: closedMessage(state.reason) };
       const order = await fetchRazorpayOrder(payment.gatewayOrderId);
-      if (order.status !== "paid" && amountMatches(payment.amount, payment.currency, order.amount, order.currency)) {
+      if (order.status !== "paid" && amountMatches(await expectedCharge(payment), payment.currency, order.amount, order.currency)) {
         const db = await getDb();
         return { ok: true, next: { kind: "razorpay", options: razorpayOptions(db, payment, { order }) } };
       }
@@ -358,6 +371,11 @@ export async function resumeCheckout(payment: Payment): Promise<ResumeResult> {
   } catch (error) {
     return { ok: false, error: gatewayErrorMessage(error) };
   }
+}
+
+/** What the gateway should have charged for `payment`: its amount plus its open order bumps. */
+async function expectedCharge(payment: Payment): Promise<number> {
+  return chargeAmount((await getDb()).payments, payment);
 }
 
 async function getFreshPayment(paymentId: string): Promise<Payment | null> {
@@ -395,6 +413,12 @@ export async function reopenFailedOrder(paymentId: string): Promise<{ ok: true }
     }
     row.status = "pending";
     row.failureReason = undefined;
+    // Order bumps cancelled with the order are offered again in the new checkout.
+    for (const bump of bumpsOf(d.payments, row)) {
+      if (bump.status !== "failed") continue;
+      bump.status = "pending";
+      bump.failureReason = undefined;
+    }
     return { ok: true };
   });
 }
@@ -487,7 +511,7 @@ export async function reconcileStripeSession(payment: Payment, session: StripeCh
   }
 
   if (isStripeSessionPaid(session)) {
-    if (!amountMatches(payment.amount, payment.currency, session.amountTotal, session.currency)) {
+    if (!amountMatches(await expectedCharge(payment), payment.currency, session.amountTotal, session.currency)) {
       return reportAmountMismatch(payment, `${session.amountTotal ?? "?"} ${(session.currency ?? "?").toUpperCase()} (smallest unit)`);
     }
     if (isSettling(await currentRow(payment))) {
@@ -551,7 +575,7 @@ export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPay
       }
       return row.status === "paid" ? { state: "paid", payment: row } : { state: "failed", reason: "This order was refunded." };
     }
-    if (!amountMatches(payment.amount, payment.currency, current.amount, current.currency)) {
+    if (!amountMatches(await expectedCharge(payment), payment.currency, current.amount, current.currency)) {
       return reportAmountMismatch(payment, `${current.amount} ${current.currency} (smallest unit)`);
     }
     try {
@@ -564,7 +588,7 @@ export async function reconcileRazorpayPayment(payment: Payment, rp: RazorpayPay
     if (isRazorpayPaymentReversed(current)) return closeReversed(payment, "razorpay", reversedReason(current), current.id);
   }
   if (current.status === "captured") {
-    if (!amountMatches(payment.amount, payment.currency, current.amount, current.currency)) {
+    if (!amountMatches(await expectedCharge(payment), payment.currency, current.amount, current.currency)) {
       return reportAmountMismatch(payment, `${current.amount} ${current.currency} (smallest unit)`);
     }
     return paidState(await fulfillPayment(payment.id, current.id, { gatewayOrderId: current.orderId, source }));
@@ -793,11 +817,12 @@ export async function readGatewayRefunds(payment: Payment): Promise<GatewayRefun
   const known = new Set((payment.refunds ?? []).map((r) => r.id));
   if (payment.refundId) known.add(payment.refundId);
   const toApp = (amount: number) => fromGatewayAmount(amount, payment.currency);
+  const mine = await refundOwnership(payment);
 
   if (payment.gateway === "stripe") {
     if (!isStripeConfigured()) throw gatewayNotConfigured("stripe");
     const refunds = await listStripeRefunds(payment.gatewayPaymentId!, { timeoutMs: 15_000 });
-    const active = refunds.filter(isActiveStripeRefund);
+    const active = refunds.filter(isActiveStripeRefund).filter((r) => mine(r.paymentId));
     return {
       total: active.reduce((sum, r) => sum + toApp(r.amount), 0),
       unrecorded: active.filter((r) => r.paymentId === payment.id && !known.has(r.id)).map((r) => ({ id: r.id, amount: toApp(r.amount) })),
@@ -806,12 +831,32 @@ export async function readGatewayRefunds(payment: Payment): Promise<GatewayRefun
   }
   if (!isRazorpayConfigured()) throw gatewayNotConfigured("razorpay");
   const refunds = await listRazorpayRefunds(payment.gatewayPaymentId!, { timeoutMs: 15_000 });
-  const active = refunds.filter(isActiveRazorpayRefund);
+  const active = refunds.filter(isActiveRazorpayRefund).filter((r) => mine(r.notes.paymentId));
   return {
     total: active.reduce((sum, r) => sum + toApp(r.amount), 0),
     unrecorded: active.filter((r) => r.notes.paymentId === payment.id && !known.has(r.id)).map((r) => ({ id: r.id, amount: toApp(r.amount) })),
     count: refunds.length,
   };
+}
+
+/**
+ * Which gateway refunds count for `payment`. Usually all of them; when the
+ * gateway payment is shared with order bumps, each row owns the refunds sent
+ * for it (tagged with its id) and the main order also owns untagged ones
+ * (made in the gateway dashboard).
+ */
+async function refundOwnership(payment: Payment): Promise<(taggedPaymentId: string | undefined) => boolean> {
+  const db = await getDb();
+  const group = db.payments.filter((p) => p.gatewayPaymentId === payment.gatewayPaymentId);
+  if (group.length < 2) return () => true;
+  const ids = new Set(group.map((p) => p.id));
+  const main = !isOrderBump(payment);
+  return (tag) => tag === payment.id || (main && (!tag || !ids.has(tag)));
+}
+
+/** Whether other order rows share this order's gateway payment (an order and its bumps). */
+function sharesGatewayPayment(db: Pick<Database, "payments">, payment: Pick<Payment, "id" | "gatewayPaymentId">): boolean {
+  return !!payment.gatewayPaymentId && db.payments.some((p) => p.id !== payment.id && p.gatewayPaymentId === payment.gatewayPaymentId);
 }
 
 /**
@@ -826,7 +871,8 @@ export async function sendGatewayRefund(payment: Payment, amount: number, ledger
   if (remaining <= 0) throw new GatewayError(payment.gateway, "Nothing is left to refund on this order.");
   if (!Number.isFinite(amount) || amount <= 0) throw new GatewayError(payment.gateway, "The refund amount must be greater than zero.");
   if (amount > remaining) throw new GatewayError(payment.gateway, `You can refund at most ${formatPrice(remaining, payment.currency)}.`);
-  const full = amount === remaining;
+  // A payment shared with order bumps is always refunded by amount: "everything" would refund the other rows too.
+  const full = amount === remaining && !sharesGatewayPayment(await getDb(), payment);
   const gatewayAmount = full ? undefined : toGatewayAmount(amount, payment.currency);
   const received = (value: number) => (value > 0 ? Math.min(remaining, fromGatewayAmount(value, payment.currency)) : amount);
 

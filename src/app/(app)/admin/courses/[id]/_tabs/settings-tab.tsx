@@ -2,12 +2,14 @@ import type { Course, User } from "@/lib/types";
 import { isAdmin, isModerator } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { listEvaluators } from "@/lib/data/users";
-import { getWorkflowFlags } from "@/lib/data/admin-courses";
 import { currencies } from "@/lib/config";
 import { loadPrerequisiteSettingsAction } from "@/lib/actions/drip";
 import { CourseSettingsForm } from "@/components/admin/courses/course-settings-form";
 import { CourseWorkflow } from "@/components/admin/courses/course-workflow";
 import { DeleteCourseCard } from "@/components/admin/courses/delete-course-card";
+import { CourseScheduleCard } from "@/components/teaching/course-schedule";
+import { DuplicateCourseCard } from "@/components/teaching/duplicate-course";
+import { canCreateCourses, getWorkflowFlags } from "@/lib/data/admin-courses";
 
 export async function SettingsTab({ course, user }: { course: Course; user: User }) {
   const [db, evaluators, prerequisites] = await Promise.all([getDb(), listEvaluators(), loadPrerequisiteSettingsAction(course.id)]);
@@ -53,6 +55,8 @@ export async function SettingsTab({ course, user }: { course: Course; user: User
       </div>
       <div className="space-y-6">
         <CourseWorkflow courseId={course.id} status={course.status} published={course.published} publishedOn={course.publishedOn} flags={flags} lessonCount={lessonCount} />
+        <CourseScheduleCard courseId={course.id} />
+        {canCreateCourses(user) && <DuplicateCourseCard courseId={course.id} />}
         {flags.canDelete && <DeleteCourseCard courseId={course.id} title={course.title} counts={counts} />}
       </div>
     </div>

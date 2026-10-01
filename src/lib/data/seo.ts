@@ -29,6 +29,7 @@ import { lastIndexNowResult } from "@/lib/seo/indexnow-client";
 import type { LandingSort } from "@/lib/seo/landing";
 import { type RedirectTargetStatus, redirectTargetStatus } from "@/lib/seo/redirects";
 import { siteOrigin } from "@/lib/seo/site";
+import { visibleSalesFaq } from "@/lib/seo/sales-page";
 import { type ResourceHints, resourceHints } from "@/lib/seo/resource-hints";
 import { type SitemapSummary, buildSitemap, publicCourses, summarizeSitemap } from "@/lib/seo/sitemap";
 import { sitemapChunkCount } from "@/lib/seo/sitemap-xml";
@@ -629,7 +630,9 @@ export async function getCourseJsonLd(course: Course, summary: CourseSummary): P
       ),
     );
   }
-  const faq = course.salesPage?.faq?.length ? faqPageJsonLd(course.salesPage.faq) : null;
+  // Only questions the page shows (the sales page is live and has an FAQ section).
+  const salesFaq = visibleSalesFaq(course.salesPage);
+  const faq = salesFaq.length ? faqPageJsonLd(salesFaq) : null;
   if (faq) out.push(faq);
   return out;
 }

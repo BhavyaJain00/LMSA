@@ -27,6 +27,7 @@ export default async function SeoSettingsPage() {
         googleVerification: seo.googleVerification ?? "",
         bingVerification: seo.bingVerification ?? "",
         noindexSite: seo.noindexSite,
+        blogEnabled: seo.blogEnabled,
       }}
     />
   );

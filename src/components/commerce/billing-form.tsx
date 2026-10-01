@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import type { PaymentItemType, Settings } from "@/lib/types";
+import { useState, type ReactNode } from "react";
+import type { ActionResult, PaymentItemType, Settings } from "@/lib/types";
+import type { CheckoutNext } from "@/lib/payments/types";
 import { placeOrderAction } from "@/lib/actions/payments";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +56,25 @@ export interface InstallmentCheckoutTerms {
   automatic: boolean;
 }
 
+/** An order bump offered on this checkout (computed on the server). */
+export interface OrderBumpView {
+  upsellId: string;
+  headline: string;
+  title: string;
+  href: string;
+  /** Offer price after the upsell discount, tax included (smallest unit). */
+  amount: number;
+  priceLabel: string;
+  /** List price, shown struck through when there is a discount. */
+  listPriceLabel: string | null;
+  discountPercent: number;
+  /** What the checkout charges with the bump ticked, e.g. "$129.00". */
+  totalWithBumpLabel: string;
+}
+
 const GATEWAY_NAME: Record<Gateway, string> = { none: "", manual: "Manual payment", stripe: "Stripe", razorpay: "Razorpay" };
+
+type CheckoutAction = (prev: ActionResult<CheckoutNext> | null, formData: FormData) => Promise<ActionResult<CheckoutNext>>;
 
 /**
  * Billing details + payment section of the checkout page. Submits to
@@ -80,6 +99,10 @@ export function BillingForm({
   legal = [],
   membership = null,
   installments = null,
+  bump = null,
+  action = placeOrderAction,
+  extraFields,
+  gift = false,
 }: {
   itemType: PaymentItemType;
   itemId: string;
@@ -100,21 +123,33 @@ export function BillingForm({
   membership?: MembershipCheckoutTerms | null;
   /** Set when the order is the first payment of a plan: `expectedTotal` and `totalLabel` are one payment. */
   installments?: InstallmentCheckoutTerms | null;
+  /** An order bump the buyer can tick: added to the same payment at its offer price. */
+  bump?: OrderBumpView | null;
+  /** Server Action that places the order (the gift checkout uses its own). */
+  action?: CheckoutAction;
+  /** Fields shown above the address (e.g. the gift recipient), given the field errors of the last submit. */
+  extraFields?: (errors: Record<string, string>) => ReactNode;
+  /** The order is a gift for someone else: changes the payment wording. */
+  gift?: boolean;
 }) {
   const [country, setCountry] = useState(defaults.country);
+  const [withBump, setWithBump] = useState(false);
   const launcher = useCheckoutLauncher();
-  const { onSubmit, pending, errors, formError } = useFormAction(placeOrderAction, {
+  const { onSubmit, pending, errors, formError } = useFormAction(action, {
     toastSuccess: false,
     toastError: false,
     onSuccess: (result) => void launcher.launch(result.data),
   });
-  const free = expectedTotal <= 0 || gateway === "none";
+  const bumped = !!bump && withBump;
+  const free = (expectedTotal <= 0 && !bumped) || gateway === "none";
   const online = !free && (gateway === "stripe" || gateway === "razorpay");
   const unavailable = online && !gatewayReady;
   usePreloadRazorpay(!free && gateway === "razorpay" && gatewayReady);
   const india = country === "India";
   const busy = pending || launcher.busy;
   const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] || "payment");
+  // What the order charges today, with the order bump when it is ticked.
+  const payLabel = bumped ? bump.totalWithBumpLabel : totalLabel;
   const trial = !!membership && membership.trialDays > 0 && !free;
   const renews = !!membership?.recurring;
   const later = installments ? installments.count - 1 : 0;
@@ -131,7 +166,15 @@ export function BillingForm({
       : installments?.automatic
         ? installmentLine
         : null;
-  const submitLabel = installments && !free
+  const submitLabel = gift
+    ? free
+      ? "Send the gift"
+      : gateway === "manual"
+        ? `Place gift order · ${payLabel}`
+        : gateway === "stripe"
+          ? `Continue to payment · ${payLabel}`
+          : `Pay ${payLabel}`
+    : installments && !free
     ? gateway === "manual"
       ? `Place order · ${totalLabel} today`
       : gateway === "stripe"
@@ -148,10 +191,10 @@ export function BillingForm({
           ? `Place order · ${membership.periodLabel}`
           : `Subscribe · ${membership.periodLabel}`
         : gateway === "manual"
-          ? `Place order · ${totalLabel}`
+          ? `Place order · ${payLabel}`
           : gateway === "stripe"
-            ? `Continue to payment · ${totalLabel}`
-            : `Pay ${totalLabel}`;
+            ? `Continue to payment · ${payLabel}`
+            : `Pay ${payLabel}`;
 
   return (
     <form onSubmit={onSubmit} noValidate aria-labelledby="billing-address-heading">
@@ -160,10 +203,18 @@ export function BillingForm({
       <input type="hidden" name="coupon" value={couponCode} />
       <input type="hidden" name="expectedTotal" value={expectedTotal} />
       {installments && <input type="hidden" name="paymentOption" value="installments" />}
+      {bumped && (
+        <>
+          <input type="hidden" name="bump" value={bump.upsellId} />
+          <input type="hidden" name="bumpExpected" value={bump.amount} />
+        </>
+      )}
 
-      <div className="rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
+      {extraFields?.(errors)}
+
+      <div className={`rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6${extraFields ? " mt-5" : ""}`}>
         <h2 id="billing-address-heading" className="text-lg font-semibold text-ink">
-          Address
+          {gift ? "Your billing address" : "Address"}
         </h2>
         {formError && !Object.keys(errors).length && (
           <div className="mt-4">
@@ -269,8 +320,8 @@ export function BillingForm({
                 </span>
               ) : (
                 <span>
-                  Place your order and we&apos;ll share the payment details on the next page. Your {membership ? "membership starts" : "access is activated"} as soon as an
-                  administrator confirms the {installments ? "first " : ""}payment of <strong className="text-ink">{totalLabel}</strong>.
+                  Place your order and we&apos;ll share the payment details on the next page. {gift ? "Your gift is sent" : membership ? "Your membership starts" : "Your access is activated"} as soon as
+                  an administrator confirms the {installments ? "first " : ""}payment of <strong className="text-ink">{payLabel}</strong>.
                   {installmentLine && <> {installmentLine}</>}
                 </span>
               )}
@@ -313,7 +364,7 @@ export function BillingForm({
                 </span>
               ) : (
                 <span>
-                  You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{totalLabel}</strong> by card or wallet. Card details never touch our
+                  You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{payLabel}</strong> by card or wallet. Card details never touch our
                   servers.
                 </span>
               )}
@@ -338,7 +389,7 @@ export function BillingForm({
                 </span>
               ) : (
                 <span>
-                  Pay <strong className="text-ink">{totalLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you
+                  Pay <strong className="text-ink">{payLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you
                   place the order.
                   {installmentLine && <strong className="text-ink"> {installmentLine}</strong>}
                 </span>
@@ -353,13 +404,45 @@ export function BillingForm({
           </div>
         )}
 
+        {bump && (
+          <div className={`mt-5 rounded-xl border-2 border-dashed p-4 transition-colors ${withBump ? "border-success bg-success/8" : "border-accent/50 bg-accent/5"}`}>
+            <label htmlFor="order-bump" className="flex cursor-pointer items-start gap-3">
+              <input
+                id="order-bump"
+                type="checkbox"
+                className="mt-1 size-5 shrink-0 cursor-pointer rounded border-border-strong accent-accent"
+                checked={withBump}
+                onChange={(e) => setWithBump(e.target.checked)}
+                aria-describedby="order-bump-details"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-ink">{bump.headline}</span>
+                <span id="order-bump-details" className="mt-1 block text-sm text-ink-muted">
+                  Yes, add <strong className="text-ink">{bump.title}</strong> for <strong className="text-ink">{bump.priceLabel}</strong>
+                  {bump.listPriceLabel && (
+                    <>
+                      {" "}
+                      <span className="line-through">{bump.listPriceLabel}</span>
+                      {bump.discountPercent > 0 && <span className="ml-1 font-medium text-success">({bump.discountPercent}% off)</span>}
+                    </>
+                  )}
+                  . It&apos;s charged with this order, so it&apos;s one payment.{" "}
+                  <a href={bump.href} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">
+                    What&apos;s included
+                  </a>
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="mt-6 flex flex-col gap-4 border-t border-border pt-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <Checkbox id="consent" name="consent" label="I consent to my personal information being stored for invoicing" aria-invalid={!!errors.consent || undefined} />
             {errors.consent && <p className="mt-1.5 pl-6.5 text-xs text-danger">{errors.consent}</p>}
             <LegalAgreement
               documents={legal}
-              lead={membership ? "By starting this membership you agree to" : free ? "By enrolling you agree to" : "By placing your order you agree to"}
+              lead={membership ? "By starting this membership you agree to" : free && !gift ? "By enrolling you agree to" : "By placing your order you agree to"}
               className="mt-2 pl-6.5"
             />
           </div>
