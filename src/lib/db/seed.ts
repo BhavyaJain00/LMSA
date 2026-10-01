@@ -42,7 +42,16 @@ import type {
 import { hashPassword } from "@/lib/auth/password";
 import { defaultSettings } from "./defaults";
 import { buildSeedBlogPosts, buildSeedLegalPages } from "./seed-round3";
-import { buildSeedBundles, buildSeedPlans, buildSeedRubrics, buildSeedTaxRules } from "./seed-round3b";
+import {
+  SEED_WELCOME_TRANSCRIPT_ID,
+  buildSeedBundles,
+  buildSeedConversations,
+  buildSeedPlans,
+  buildSeedRubrics,
+  buildSeedTaxRules,
+  buildSeedTranscripts,
+  buildSeedUpsells,
+} from "./seed-round3b";
 import { readingTimeSeconds, toDateKey, addDays } from "@/lib/utils";
 
 /**
@@ -539,6 +548,9 @@ Submit a link to a public repository or a deployed demo.`,
     gradeAssignment: true,
     courseId: "crs_js",
     enableScheduling: false,
+    // Round 3: graded with the demo rubric, and learners review each other's apps.
+    rubricId: "rub_project",
+    peerReview: { enabled: true, reviewsPerSubmission: 2, dueDays: 5, anonymous: true },
     authorId: "usr_maya",
     createdAt: daysAgo(30),
     updatedAt: daysAgo(30),
@@ -815,7 +827,7 @@ const jsOutline = buildOutline("crs_js", [
         title: "Welcome & Course Overview",
         preview: true,
         blocks: [
-          video(VIDEOS.bullrun, "Welcome to the course"),
+          video(VIDEOS.bullrun, "Welcome to the course", { transcriptId: SEED_WELCOME_TRANSCRIPT_ID }),
           md(`## Welcome!
 
 In this course you'll learn JavaScript by **writing** JavaScript. Every chapter ends with something you built yourself.
@@ -1717,7 +1729,7 @@ export async function buildSeedDatabase(): Promise<Database> {
     // round 3
     uploadSessions: [],
     transcodeJobs: [],
-    transcripts: [],
+    transcripts: buildSeedTranscripts(lessons, NOW),
     blogPosts: buildSeedBlogPosts(NOW),
     slugRedirects: [],
     leads: [],
@@ -1733,7 +1745,7 @@ export async function buildSeedDatabase(): Promise<Database> {
     subscriptions: [],
     bundles: buildSeedBundles(NOW),
     gifts: [],
-    upsells: [],
+    upsells: buildSeedUpsells(NOW),
     taxRules: buildSeedTaxRules(),
     checkoutSessions: [],
     affiliates: [],
@@ -1746,8 +1758,7 @@ export async function buildSeedDatabase(): Promise<Database> {
     emailSequences: [],
     sequenceEnrollments: [],
     emailEvents: [],
-    conversations: [],
-    directMessages: [],
+    ...buildSeedConversations(NOW),
     apiKeys: [],
     webhookEndpoints: [],
     webhookDeliveries: [],

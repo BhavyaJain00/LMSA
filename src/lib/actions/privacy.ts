@@ -19,7 +19,8 @@ import { setFlash } from "@/lib/flash";
 import { notifyMany } from "@/lib/services/notifications";
 import { recordConsent } from "@/lib/legal/consent";
 import { ANON_COOKIE, CONSENT_MAX_AGE, isValidAnonId, normalizeConsentInput } from "@/lib/legal/consent-shared";
-import { billedSubscriptions, eraseAccountInDb, isDeletedAccount, isLastAdmin, type ErasureSummary } from "@/lib/legal/erase";
+import { billedSubscriptions, eraseAccountInDb, isDeletedAccount, isLastAdmin, personalUploadUrls, type ErasureSummary } from "@/lib/legal/erase";
+import { deleteErasedUploads } from "@/lib/legal/erase-files";
 import { sendErasureConfirmation, type ErasureRecipient } from "@/lib/legal/erasure-email";
 import { fd, uid } from "@/lib/utils";
 
@@ -107,8 +108,10 @@ async function erasureBlocker(userId: string, self: boolean): Promise<string | n
 async function eraseAccount(userId: string, admin?: { id: string }): Promise<{ removed: number; anonymized: number } | null> {
   const now = new Date();
   const ip = admin ? (await getRequestInfo()).ip : undefined;
-  return mutate((db) => {
+  let files: string[] = [];
+  const erased = await mutate((db) => {
     if (isLastAdmin(db, userId) || billedSubscriptions(db, userId).length) return null;
+    files = personalUploadUrls(db, userId);
     const summary = eraseAccountInDb(db, userId, { now, username: newDeletedUsername() });
     if (!summary) return null;
     const counts = totals(summary);
@@ -119,6 +122,9 @@ async function eraseAccount(userId: string, admin?: { id: string }): Promise<{ r
     );
     return counts;
   });
+  // Their profile pictures and résumés go too, once the erasure is saved (after the response).
+  if (erased && files.length) after(() => deleteErasedUploads(files).then(() => undefined));
+  return erased;
 }
 
 /** Confirm the erasure to the address the account had, once the response has been sent. */

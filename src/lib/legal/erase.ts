@@ -40,6 +40,20 @@ export interface ErasureSummary {
   anonymized: Record<string, number>;
 }
 
+/**
+ * Uploaded files that belong to the person alone: profile picture, cover
+ * image and job-application résumés. Read them before the erasure (it
+ * removes the references); `erase-files.ts` deletes the files afterwards when
+ * nothing else still points at them. Coursework attachments stay with the
+ * anonymized coursework.
+ */
+export function personalUploadUrls(db: Pick<Database, "users" | "jobApplications">, userId: string): string[] {
+  const user = db.users.find((u) => u.id === userId);
+  if (!user) return [];
+  const urls = [user.avatarUrl, user.coverImageUrl, ...db.jobApplications.filter((a) => a.userId === userId).map((a) => a.resumeUrl)];
+  return [...new Set(urls.filter((u): u is string => typeof u === "string" && u.length > 0))];
+}
+
 /** Only the last enabled administrator cannot delete their account (someone must run the platform). */
 export function isLastAdmin(db: Pick<Database, "users">, userId: string): boolean {
   const user = db.users.find((u) => u.id === userId);
