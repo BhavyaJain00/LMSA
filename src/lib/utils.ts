@@ -2,6 +2,23 @@
  * Small, dependency-free utilities shared across server and client code.
  */
 
+import { intlLocale, isLocale } from "@/i18n/config";
+
+/**
+ * The `Intl` tag for an optional locale argument: an interface locale code
+ * ("ar") maps to its formatting tag, any other BCP 47 tag is used as is, and
+ * no argument keeps the historical US English output.
+ */
+function intlTag(locale: string | undefined): string {
+  if (!locale) return "en-US";
+  return isLocale(locale) ? intlLocale(locale) : locale;
+}
+
+/** Whether output should keep the original English formatting (no locale, or English). */
+function isEnglish(locale: string | undefined): boolean {
+  return !locale || locale === "en" || locale === "en-US";
+}
+
 /** Join class names, skipping falsy values. */
 export function cn(...classes: unknown[]): string {
   return classes.filter((c): c is string => typeof c === "string" && c.length > 0).join(" ");
@@ -90,18 +107,18 @@ export function formatDuration(totalSeconds: number): string {
   return `${s}s`;
 }
 
-/** Format an amount given in the smallest currency unit. */
-export function formatPrice(cents: number, currency = "USD", freeLabel = "Free"): string {
+/** Format an amount given in the smallest currency unit (optionally for a locale, e.g. "fr" → "19,99 €"). */
+export function formatPrice(cents: number, currency = "USD", freeLabel = "Free", locale?: string): string {
   if (!cents) return freeLabel;
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
+    return new Intl.NumberFormat(intlTag(locale), { style: "currency", currency }).format(cents / 100);
   } catch {
     return `${currency} ${(cents / 100).toFixed(2)}`;
   }
 }
 
-export function formatNumber(n: number): string {
-  return new Intl.NumberFormat("en-US", { notation: n >= 10000 ? "compact" : "standard" }).format(n);
+export function formatNumber(n: number, locale?: string): string {
+  return new Intl.NumberFormat(intlTag(locale), { notation: n >= 10000 ? "compact" : "standard" }).format(n);
 }
 
 export function formatBytes(bytes: number): string {
@@ -111,18 +128,18 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-export function formatDate(iso: string | undefined, opts: Intl.DateTimeFormatOptions = {}): string {
+export function formatDate(iso: string | undefined, opts: Intl.DateTimeFormatOptions = {}, locale?: string): string {
   if (!iso) return "";
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", ...opts });
+  return d.toLocaleDateString(intlTag(locale), { year: "numeric", month: "short", day: "numeric", ...opts });
 }
 
-export function formatDateTime(iso: string | undefined): string {
+export function formatDateTime(iso: string | undefined, locale?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("en-US", {
+  return d.toLocaleString(intlTag(locale), {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -131,22 +148,29 @@ export function formatDateTime(iso: string | undefined): string {
   });
 }
 
-/** "14:30" -> "2:30 PM" */
-export function formatClock(hhmm: string | undefined): string {
+/** "14:30" -> "2:30 PM" (or the locale's clock, e.g. "14:30" in French). */
+export function formatClock(hhmm: string | undefined, locale?: string): string {
   if (!hhmm) return "";
   const [h, m] = hhmm.split(":").map(Number);
   if (h === undefined || m === undefined || Number.isNaN(h) || Number.isNaN(m)) return hhmm;
+  if (!isEnglish(locale)) {
+    try {
+      return new Intl.DateTimeFormat(intlTag(locale), { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(Date.UTC(2000, 0, 1, h, m));
+    } catch {
+      return hhmm;
+    }
+  }
   const suffix = h >= 12 ? "PM" : "AM";
   const hour = h % 12 === 0 ? 12 : h % 12;
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
-export function relativeTime(iso: string, now: Date = new Date()): string {
+export function relativeTime(iso: string, now: Date = new Date(), locale?: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const diff = Math.round((now.getTime() - then) / 1000);
   const abs = Math.abs(diff);
-  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat(isEnglish(locale) ? "en" : intlTag(locale), { numeric: "auto" });
   const units: [Intl.RelativeTimeFormatUnit, number][] = [
     ["year", 31536000],
     ["month", 2592000],
@@ -158,7 +182,8 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   for (const [unit, secs] of units) {
     if (abs >= secs) return rtf.format(-Math.round(diff / secs), unit);
   }
-  return abs < 10 ? "just now" : rtf.format(-diff, "second");
+  if (abs < 10) return isEnglish(locale) ? "just now" : rtf.format(0, "second");
+  return rtf.format(-diff, "second");
 }
 
 /** Local YYYY-MM-DD for a date. */

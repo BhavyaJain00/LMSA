@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { Course } from "@/lib/types";
+import type { Course, Settings } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { getDripOverview, getPrerequisiteStatus, type DripOverview, type PrerequisiteStatus } from "@/lib/services/drip";
@@ -12,6 +12,9 @@ import { ProgressBar } from "@/components/ui/progress";
 import { cn, formatDate, formatDuration, formatPrice } from "@/lib/utils";
 import { UnlockLabel } from "@/components/learn/unlock-time";
 import { resolveCourseAccess } from "@/lib/commerce/access";
+import { getBillingItem, itemCurrencies, priceItemIn } from "@/lib/data/commerce";
+import { requestCountry, viewerCurrency } from "@/lib/commerce/buyer";
+import { preferredCurrency } from "@/lib/commerce/currency";
 import { cheapestPlanFor } from "@/lib/commerce/membership-views";
 import { intervalSuffix } from "@/lib/commerce/plans";
 import { MembershipCourseButton } from "@/components/commerce/membership-course-button";
@@ -427,12 +430,17 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
  * A Server Component: it resolves the viewer's prerequisite and drip status
  * itself so every page rendering the card gets them.
  */
-export async function EnrollCard(props: EnrollCardProps) {
-  const { course, enrollment, includes, manager, certificationsEnabled, className } = props;
+export async function EnrollCard(listedProps: EnrollCardProps) {
+  const { enrollment, includes, manager, certificationsEnabled, className } = listedProps;
+  const listedCourse = listedProps.course;
   const showPrice = !enrollment && !manager;
-  const certificate = certificationsEnabled && (course.enableCertification || course.paidCertificate);
+  const certificate = certificationsEnabled && (listedCourse.enableCertification || listedCourse.paidCertificate);
 
   const [viewer, db] = await Promise.all([getCurrentUser(), getDb()]);
+  // Commerce (round 3): the course price in the visitor's currency (as checkout charges it) when the
+  // course has a fixed price in it. The certificate keeps its own price and currency.
+  const course = showPrice && isPaidCourse(listedCourse) ? await inViewerCurrency(listedCourse, db.settings) : listedCourse;
+  const props: EnrollCardProps = course === listedCourse ? listedProps : { ...listedProps, course };
   const fullCourse = db.courses.find((c) => c.id === course.id) ?? null;
   const [prerequisites, drip] = await Promise.all([
     fullCourse ? getPrerequisiteStatus(fullCourse, viewer) : Promise.resolve<PrerequisiteStatus>({ items: [], missing: [], blocking: false }),
@@ -476,7 +484,7 @@ export async function EnrollCard(props: EnrollCardProps) {
             </div>
             {course.paidCertificate && certificationsEnabled && course.certificatePrice > 0 && (
               <Badge tone="neutral" size="sm">
-                Certificate {formatPrice(course.certificatePrice, course.currency)}
+                Certificate {formatPrice(course.certificatePrice, listedCourse.currency)}
               </Badge>
             )}
           </div>
@@ -496,7 +504,7 @@ export async function EnrollCard(props: EnrollCardProps) {
             <PrerequisitesBlock status={prerequisites} loggedIn={extras.loggedIn} manager={manager} />
           </div>
         )}
-        <CertificateLinks props={props} />
+        <CertificateLinks props={listedProps} />
         {giftable && (
           <div className="flex justify-center">
             <GiveGiftLink type="course" id={course.id} />
@@ -553,4 +561,15 @@ export async function EnrollCard(props: EnrollCardProps) {
       </div>
     </Card>
   );
+}
+
+/** `course` priced in the viewer's currency (cookie choice, else their country's) when it has a fixed price in it. */
+async function inViewerCurrency<C extends EnrollCardProps["course"]>(course: C, settings: Pick<Settings, "growth">): Promise<C> {
+  if (!settings.growth.multiCurrency) return course;
+  const item = await getBillingItem("course", course.id);
+  if (!item) return course;
+  const [chosen, country] = await Promise.all([viewerCurrency(), requestCountry()]);
+  const priced = priceItemIn(item, preferredCurrency(chosen, country, itemCurrencies(item, settings)), settings);
+  if (priced.currency === course.currency && priced.amount === course.price) return course;
+  return { ...course, price: priced.amount, currency: priced.currency };
 }
