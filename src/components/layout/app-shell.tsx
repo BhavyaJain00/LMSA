@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { buildNavigation, navContextFor, type NavContext } from "@/lib/nav";
 import { countUnreadMessages } from "@/lib/comms/messages";
 import { getNotifications, getUnreadCount } from "@/lib/services/notifications";
+import { getT } from "@/i18n/server";
 import { AccountSecurityBanner } from "@/components/security/account-security-banner";
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { Header } from "./header";
@@ -17,7 +18,7 @@ import { Sidebar, SidebarProvider } from "./sidebar";
  * player and the printable certificate.
  */
 export async function AppShell({ children, contained = true }: { children: ReactNode; contained?: boolean }) {
-  const [user, settings] = await Promise.all([getCurrentPublicUser(), getSettings()]);
+  const [user, settings, t] = await Promise.all([getCurrentPublicUser(), getSettings(), getT("shell")]);
   let notifications: Awaited<ReturnType<typeof getNotifications>> = [];
   let unread = 0;
   let grading = 0;
@@ -32,8 +33,8 @@ export async function AppShell({ children, contained = true }: { children: React
     context = { ...navContextFor(db, user.id), messages: countUnreadMessages(db, user.id) };
     membership = settings.growth.subscriptionsEnabled || db.subscriptions.some((s) => s.userId === user.id);
   }
-  const sections = buildNavigation(user, settings, { ...context, unread, grading });
-  const tabs = buildMobileTabs(user, settings, settings.features.notifications ? unread : 0);
+  const sections = buildNavigation(user, settings, { ...context, unread, grading }, t);
+  const tabs = buildMobileTabs(user, settings, settings.features.notifications ? unread : 0, t);
 
   return (
     <SidebarProvider>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { Settings } from "@/lib/types";
+import { DEFAULT_LOCALE, LOCALES, ogLocaleFor, type Locale } from "@/i18n/config";
 import { absoluteUrl, canonicalUrl, siteOrigin } from "./site";
 import { clampText, explicitDescription, metaDescription } from "./text";
 
@@ -30,13 +31,23 @@ export const OG_IMAGE_SIZE = { width: 1200, height: 630 } as const;
 /* ------------------------------------------------------------------ */
 
 /**
- * Languages the content is published in, with the URL builder for each. The
- * interface language is chosen by cookie and every URL serves the same
- * content, so today each language maps to the canonical URL. When per-language
- * URLs are introduced, add them here (e.g. `{ lang: "es", ogLocale: "es_ES", path: (p) => `/es${p}` }`)
- * and every page's hreflang tags and `og:locale:alternate` values follow.
+ * Languages the content is published in, with the URL builder for each.
+ *
+ * The interface language (menus, buttons, messages: `src/i18n`) is chosen per
+ * visitor by account preference, the `ll_locale` cookie or `Accept-Language`,
+ * and every URL serves the same content in every interface language. Course,
+ * lesson and blog content keeps the language it was written in. So today each
+ * page has a single language version: hreflang lists the content language and
+ * `x-default`, both pointing at the canonical URL (pointing several hreflang
+ * values at one URL would tell search engines nothing).
+ *
+ * Per-language URLs are the future step: add entries here (e.g.
+ * `{ lang: "es", ogLocale: ogLocaleFor("es"), path: (p) => `/es${p}` }`) and
+ * every page's hreflang tags and `og:locale:alternate` values follow.
  */
-export const CONTENT_LANGUAGES: { lang: string; ogLocale: string; path: (path: string) => string }[] = [{ lang: "en", ogLocale: "en_US", path: (p) => p }];
+export const CONTENT_LANGUAGES: { lang: string; ogLocale: string; path: (path: string) => string }[] = [
+  { lang: DEFAULT_LOCALE, ogLocale: ogLocaleFor(DEFAULT_LOCALE), path: (p) => p },
+];
 
 export function languageAlternates(path: string, origin: string = siteOrigin()): Record<string, string> {
   const out: Record<string, string> = {};
@@ -47,6 +58,20 @@ export function languageAlternates(path: string, origin: string = siteOrigin()):
 
 export const DEFAULT_OG_LOCALE = CONTENT_LANGUAGES[0]!.ogLocale;
 const ALTERNATE_OG_LOCALES = CONTENT_LANGUAGES.slice(1).map((l) => l.ogLocale);
+
+/**
+ * `og:locale` for a page rendered in an interface language. Content pages
+ * describe themselves in their content language unless the caller passes
+ * the active interface locale (e.g. a page whose text is fully translated).
+ */
+export function openGraphLocale(locale?: Locale | string): string {
+  return locale && (LOCALES as readonly string[]).includes(locale) ? ogLocaleFor(locale) : DEFAULT_OG_LOCALE;
+}
+
+/** `og:locale:alternate` values: the other content languages (none while every language shares one URL). */
+function alternateOgLocales(current: string): string[] {
+  return ALTERNATE_OG_LOCALES.filter((l) => l !== current);
+}
 
 /* ------------------------------------------------------------------ */
 /* Feeds and share images                                              */
@@ -119,6 +144,11 @@ export interface PageMetadataInput {
   /** Keep `follow` when noindexing (search/filter permutations). */
   follow?: boolean;
   keywords?: string[];
+  /**
+   * Interface language the page is rendered in (`await getLocale()`), for `og:locale`.
+   * Leave it out for pages whose main content is in the content language.
+   */
+  locale?: Locale;
   article?: { publishedTime?: string; modifiedTime?: string; authors?: string[]; section?: string; tags?: string[] };
 }
 
@@ -135,6 +165,7 @@ export function pageMetadata(input: PageMetadataInput, settings: Settings, origi
   const canonical = input.canonicalOverride || canonicalUrl(input.path, input.canonicalQuery, origin);
   const title = clampText(input.title, 120);
   const feeds = feedAlternates(settings, origin);
+  const ogLocale = openGraphLocale(input.locale);
 
   const openGraph: NonNullable<Metadata["openGraph"]> & Record<string, unknown> = {
     type: input.type ?? "website",
@@ -142,8 +173,8 @@ export function pageMetadata(input: PageMetadataInput, settings: Settings, origi
     title,
     description: finalDescription,
     siteName: settings.brand.name,
-    locale: DEFAULT_OG_LOCALE,
-    ...(ALTERNATE_OG_LOCALES.length ? { alternateLocale: ALTERNATE_OG_LOCALES } : {}),
+    locale: ogLocale,
+    ...(alternateOgLocales(ogLocale).length ? { alternateLocale: alternateOgLocales(ogLocale) } : {}),
   };
   const twitter: NonNullable<Metadata["twitter"]> & Record<string, unknown> = {
     card: "summary_large_image",
@@ -200,8 +231,11 @@ export function notFoundMetadata(title = "Page not found"): Metadata {
  * player, error pages…) unless it opts in by returning `pageMetadata()`,
  * which sets `index, follow` (or noindex for drafts and list permutations).
  * A public page that forgets its metadata therefore fails closed.
+ *
+ * `locale` is the visitor's interface language: it sets the default
+ * `og:locale` of pages that do not build their own Open Graph data.
  */
-export function rootMetadata(settings: Settings, origin: string = siteOrigin()): Metadata {
+export function rootMetadata(settings: Settings, origin: string = siteOrigin(), locale?: Locale): Metadata {
   const description = metaDescription(settings.seo.defaultDescription, settings.brand.metaDescription);
   const template = settings.seo.siteTitleTemplate?.includes("%s") ? settings.seo.siteTitleTemplate : `%s · ${settings.brand.name}`;
   const keywords = (settings.brand.metaKeywords ?? "")
@@ -235,7 +269,7 @@ export function rootMetadata(settings: Settings, origin: string = siteOrigin()):
     openGraph: {
       type: "website",
       siteName: settings.brand.name,
-      locale: DEFAULT_OG_LOCALE,
+      locale: openGraphLocale(locale),
       description: description || undefined,
       ...(imageUrl ? { images: [{ url: imageUrl, ...OG_IMAGE_SIZE, alt: settings.brand.name }] } : {}),
     },

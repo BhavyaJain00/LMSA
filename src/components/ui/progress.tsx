@@ -1,4 +1,5 @@
 import { clamp, cn } from "@/lib/utils";
+import { ProgressTrack } from "./progress-track";
 
 export function ProgressBar({
   value,
@@ -32,16 +33,12 @@ export function ProgressBar({
           {showLabel && <span className="font-medium text-ink">{v}%</span>}
         </div>
       )}
-      <div
-        className={cn("w-full overflow-hidden rounded-full bg-surface-3", heights[size])}
-        role="progressbar"
-        aria-valuenow={v}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={label ?? "Progress"}
-      >
-        <div className={cn("h-full rounded-full transition-[width] duration-500", colors[tone])} style={{ width: `${v}%` }} />
-      </div>
+      <ProgressTrack
+        value={v}
+        label={label}
+        trackClassName={cn("w-full overflow-hidden rounded-full bg-surface-3", heights[size])}
+        fillClassName={cn("h-full rounded-full transition-[width] duration-500", colors[tone])}
+      />
     </div>
   );
 }

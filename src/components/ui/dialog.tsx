@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "./icons";
 import { Button, IconButton } from "./button";
+import { useT } from "@/i18n/client";
 
 export interface DialogProps {
   open: boolean;
@@ -29,6 +30,7 @@ const sizes = {
 /** Accessible modal built on the native <dialog> element. */
 export function Dialog({ open, onClose, title, description, children, footer, size = "md", hideClose, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  const t = useT("common");
 
   useEffect(() => {
     const el = ref.current;
@@ -73,7 +75,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
               {description && <p className="mt-0.5 text-sm text-ink-muted">{description}</p>}
             </div>
             {!hideClose && (
-              <IconButton label="Close" size="icon-sm" onClick={onClose} className="-mr-1 -mt-1">
+              <IconButton label={t("actions.close")} size="icon-sm" onClick={onClose} className="-me-1 -mt-1">
                 <Icon.X className="size-4" />
               </IconButton>
             )}
@@ -104,11 +106,12 @@ export function ConfirmDialog({
   onConfirm,
   title,
   description,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmLabel,
+  cancelLabel,
   destructive,
   loading,
 }: ConfirmDialogProps) {
+  const t = useT("common");
   return (
     <Dialog
       open={open}
@@ -118,10 +121,10 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={loading}>
-            {cancelLabel}
+            {cancelLabel ?? t("actions.cancel")}
           </Button>
           <Button variant={destructive ? "danger" : "primary"} onClick={() => void onConfirm()} loading={loading}>
-            {confirmLabel}
+            {confirmLabel ?? t("actions.confirm")}
           </Button>
         </>
       }

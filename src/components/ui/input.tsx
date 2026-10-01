@@ -14,13 +14,13 @@ export function Input({ className, invalid, leftAddon, rightAddon, ...props }: I
   if (leftAddon || rightAddon) {
     return (
       <div className="relative flex items-center">
-        {leftAddon && <span className="pointer-events-none absolute left-3 text-ink-faint">{leftAddon}</span>}
+        {leftAddon && <span className="pointer-events-none absolute inset-s-3 text-ink-faint">{leftAddon}</span>}
         <input
-          className={cn(fieldBase, "h-9.5 px-3 text-sm", leftAddon && "pl-9", rightAddon && "pr-9", className)}
+          className={cn(fieldBase, "h-9.5 px-3 text-sm", leftAddon && "ps-9", rightAddon && "pe-9", className)}
           aria-invalid={invalid || undefined}
           {...props}
         />
-        {rightAddon && <span className="absolute right-3 text-ink-faint">{rightAddon}</span>}
+        {rightAddon && <span className="absolute inset-e-3 text-ink-faint">{rightAddon}</span>}
       </div>
     );
   }
@@ -45,7 +45,7 @@ export function Select({ className, invalid, options, placeholder, children, ...
   return (
     <div className="relative">
       <select
-        className={cn(fieldBase, "h-9.5 appearance-none pl-3 pr-9 text-sm", className)}
+        className={cn(fieldBase, "h-9.5 appearance-none ps-3 pe-9 text-sm", className)}
         aria-invalid={invalid || undefined}
         {...props}
       >
@@ -62,7 +62,7 @@ export function Select({ className, invalid, options, placeholder, children, ...
         {children}
       </select>
       <svg
-        className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint"
+        className="pointer-events-none absolute inset-e-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -123,7 +123,7 @@ export function Switch({ className, label, description, id, ...props }: SwitchPr
       <span className="relative inline-flex shrink-0">
         <input id={inputId} type="checkbox" className="peer sr-only" {...props} />
         <span className="h-5.5 w-10 rounded-full bg-surface-3 transition-colors peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-disabled:opacity-50" />
-        <span className="absolute left-0.5 top-0.5 size-4.5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4.5" />
+        <span className="absolute inset-s-0.5 top-0.5 size-4.5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4.5 rtl:peer-checked:-translate-x-4.5" />
       </span>
     </label>
   );
@@ -133,7 +133,7 @@ export function Label({ className, children, required, ...props }: LabelHTMLAttr
   return (
     <label className={cn("mb-1.5 block text-sm font-medium text-ink", className)} {...props}>
       {children}
-      {required && <span className="ml-0.5 text-danger">*</span>}
+      {required && <span className="ms-0.5 text-danger">*</span>}
     </label>
   );
 }

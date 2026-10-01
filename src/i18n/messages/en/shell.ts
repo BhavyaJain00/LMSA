@@ -71,7 +71,6 @@ const shell = {
   "notifications.empty": "You're all caught up.",
   "notifications.viewAll": "View all",
 
-  "menu.accountMenu": "Account menu",
   "menu.dashboard": "Dashboard",
   "menu.myProfile": "My profile",
   "menu.editProfile": "Edit profile",

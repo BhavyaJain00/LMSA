@@ -73,14 +73,14 @@ export function Dropdown({
           role="menu"
           className={cn(
             "absolute z-50 mt-1.5 min-w-48 overflow-hidden rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
-            align === "end" ? "right-0 origin-top-right" : "left-0 origin-top-left",
+            align === "end" ? "inset-e-0 origin-top-right rtl:origin-top-left" : "inset-s-0 origin-top-left rtl:origin-top-right",
             menuClassName,
           )}
         >
           {header && <div className="border-b border-border px-3 py-2">{header}</div>}
           {items.map((item, i) => {
             const classes = cn(
-              "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+              "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start text-sm transition-colors",
               item.destructive ? "text-danger hover:bg-danger/10" : "text-ink hover:bg-surface-2",
               item.disabled && "pointer-events-none opacity-50",
             );
@@ -139,8 +139,9 @@ export function Tooltip({ label, children, side = "top", className }: { label: R
   const pos = {
     top: "bottom-full left-1/2 mb-1.5 -translate-x-1/2",
     bottom: "top-full left-1/2 mt-1.5 -translate-x-1/2",
-    left: "right-full top-1/2 mr-1.5 -translate-y-1/2",
-    right: "left-full top-1/2 ml-1.5 -translate-y-1/2",
+    // "left"/"right" follow the reading direction (start/end) so tooltips flip in Arabic.
+    left: "inset-e-full top-1/2 me-1.5 -translate-y-1/2",
+    right: "inset-s-full top-1/2 ms-1.5 -translate-y-1/2",
   };
   return (
     <span className={cn("group/tt relative inline-flex", className)}>

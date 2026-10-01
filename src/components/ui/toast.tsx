@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "./icons";
+import { useT } from "@/i18n/client";
 
 export type ToastTone = "neutral" | "success" | "error" | "warning" | "info";
 
@@ -44,6 +45,7 @@ const toneIcon: Record<ToastTone, ReactNode> = {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastRecord[]>([]);
+  const translate = useT("common");
   const counter = useRef(0);
 
   const dismiss = useCallback((id: number) => {
@@ -100,7 +102,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 </button>
               )}
             </div>
-            <button type="button" aria-label="Dismiss" onClick={() => dismiss(t.id)} className="shrink-0 rounded p-0.5 text-ink-faint hover:text-ink">
+            <button type="button" aria-label={translate("actions.dismiss")} onClick={() => dismiss(t.id)} className="shrink-0 rounded p-0.5 text-ink-faint hover:text-ink">
               <Icon.X className="size-4" />
             </button>
           </div>

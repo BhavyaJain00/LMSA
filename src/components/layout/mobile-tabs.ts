@@ -1,5 +1,6 @@
 import type { IconName } from "@/components/ui/icons";
 import type { PublicUser, Settings } from "@/lib/types";
+import { englishShellLabel, type ShellLabel } from "@/lib/nav";
 
 /** One destination on the phone bottom tab bar. */
 export interface MobileTab {
@@ -28,23 +29,23 @@ const MAX_TABS = 4;
  * Courses, Batches, Jobs and Statistics followed by "Log in". The trailing tab
  * is rendered separately, so it is not part of this list.
  */
-export function buildMobileTabs(user: PublicUser | null, settings: Settings, unread = 0): MobileTab[] {
+export function buildMobileTabs(user: PublicUser | null, settings: Settings, unread = 0, l: ShellLabel = englishShellLabel): MobileTab[] {
   const f = settings.features;
   const candidates: (MobileTab | false)[] = user
     ? [
-        { key: "home", label: "Home", href: "/dashboard", icon: "Home", match: ["/dashboard"] },
-        f.courses && { key: "courses", label: "Courses", href: "/courses", icon: "BookOpen", match: ["/courses"] },
-        f.batches && { key: "batches", label: "Batches", href: "/batches", icon: "Users", match: ["/batches"] },
-        f.notifications && { key: "notifications", label: "Notifications", href: "/notifications", icon: "Bell", match: ["/notifications"], badge: unread },
-        f.programs && { key: "programs", label: "Programs", href: "/programs", icon: "Layers", match: ["/programs"] },
-        f.jobs && { key: "jobs", label: "Jobs", href: "/jobs", icon: "Briefcase", match: ["/jobs"] },
+        { key: "home", label: l("tabs.home"), href: "/dashboard", icon: "Home", match: ["/dashboard"] },
+        f.courses && { key: "courses", label: l("nav.courses"), href: "/courses", icon: "BookOpen", match: ["/courses"] },
+        f.batches && { key: "batches", label: l("nav.batches"), href: "/batches", icon: "Users", match: ["/batches"] },
+        f.notifications && { key: "notifications", label: l("nav.notifications"), href: "/notifications", icon: "Bell", match: ["/notifications"], badge: unread },
+        f.programs && { key: "programs", label: l("nav.programs"), href: "/programs", icon: "Layers", match: ["/programs"] },
+        f.jobs && { key: "jobs", label: l("nav.jobs"), href: "/jobs", icon: "Briefcase", match: ["/jobs"] },
       ]
     : [
-        f.courses && { key: "courses", label: "Courses", href: "/courses", icon: "BookOpen", match: ["/courses"] },
-        f.batches && { key: "batches", label: "Batches", href: "/batches", icon: "Users", match: ["/batches"] },
-        f.jobs && { key: "jobs", label: "Jobs", href: "/jobs", icon: "Briefcase", match: ["/jobs"] },
-        f.statistics && settings.learning.allowGuestAccess && { key: "statistics", label: "Statistics", href: "/statistics", icon: "BarChart", match: ["/statistics"] },
-        f.programs && { key: "programs", label: "Programs", href: "/programs", icon: "Layers", match: ["/programs"] },
+        f.courses && { key: "courses", label: l("nav.courses"), href: "/courses", icon: "BookOpen", match: ["/courses"] },
+        f.batches && { key: "batches", label: l("nav.batches"), href: "/batches", icon: "Users", match: ["/batches"] },
+        f.jobs && { key: "jobs", label: l("nav.jobs"), href: "/jobs", icon: "Briefcase", match: ["/jobs"] },
+        f.statistics && settings.learning.allowGuestAccess && { key: "statistics", label: l("nav.statistics"), href: "/statistics", icon: "BarChart", match: ["/statistics"] },
+        f.programs && { key: "programs", label: l("nav.programs"), href: "/programs", icon: "Layers", match: ["/programs"] },
       ];
   return candidates.filter((t): t is MobileTab => !!t).slice(0, MAX_TABS);
 }

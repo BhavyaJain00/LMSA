@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useState, useSyncExternalStore,
 import type { NavSection } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 interface SidebarState {
   mobileOpen: boolean;
@@ -62,12 +63,13 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
 export function Sidebar({ sections, brand }: { sections: NavSection[]; brand: { name: string; logoUrl?: string } }) {
   const { mobileOpen, setMobileOpen, collapsed, setCollapsed } = useSidebar();
   const pathname = usePathname();
+  const t = useT("shell");
   const close = () => setMobileOpen(false);
 
   const nav = (
-    <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-3 scrollbar-thin" aria-label="Main">
-      {sections.map((section, si) => (
-        <div key={si}>
+    <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-3 scrollbar-thin" aria-label={t("nav.main")}>
+      {sections.map((section) => (
+        <div key={section.key}>
           {section.title && !collapsed && <p className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">{section.title}</p>}
           {section.title && collapsed && <div className="mx-2 mb-2 border-t border-border" />}
           <ul className="space-y-0.5">
@@ -80,9 +82,9 @@ export function Sidebar({ sections, brand }: { sections: NavSection[]; brand: { 
                   <IconCmp className="size-[18px] shrink-0" />
                   {!collapsed && <span className="truncate">{item.label}</span>}
                   {!collapsed && item.badge ? (
-                    <span className="ml-auto rounded-full bg-accent px-1.5 py-px text-[10px] font-semibold text-accent-fg">{item.badge > 99 ? "99+" : item.badge}</span>
+                    <span className="ms-auto rounded-full bg-accent px-1.5 py-px text-[10px] font-semibold text-accent-fg">{item.badge > 99 ? "99+" : item.badge}</span>
                   ) : null}
-                  {collapsed && item.badge ? <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-accent" /> : null}
+                  {collapsed && item.badge ? <span className="absolute inset-e-1.5 top-1.5 size-2 rounded-full bg-accent" /> : null}
                 </>
               );
               const classes = cn(
@@ -129,7 +131,7 @@ export function Sidebar({ sections, brand }: { sections: NavSection[]; brand: { 
       {/* Desktop */}
       <aside
         className={cn(
-          "sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border bg-surface-1 transition-[width] duration-200 lg:flex",
+          "sticky top-0 hidden h-screen shrink-0 flex-col border-e border-border bg-surface-1 transition-[width] duration-200 lg:flex",
           collapsed ? "w-16" : "w-60",
         )}
       >
@@ -139,21 +141,21 @@ export function Sidebar({ sections, brand }: { sections: NavSection[]; brand: { 
           type="button"
           onClick={() => setCollapsed(!collapsed)}
           className="flex items-center justify-center gap-2 border-t border-border px-3 py-2.5 text-xs text-ink-faint hover:text-ink"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? t("sidebar.expand") : t("sidebar.collapse")}
         >
-          {collapsed ? <Icon.ChevronRight className="size-4" /> : <Icon.ChevronLeft className="size-4" />}
-          {!collapsed && "Collapse"}
+          {collapsed ? <Icon.ChevronRight className="size-4 rtl:rotate-180" /> : <Icon.ChevronLeft className="size-4 rtl:rotate-180" />}
+          {!collapsed && t("sidebar.collapseShort")}
         </button>
       </aside>
 
       {/* Mobile drawer */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={t("nav.main")}>
           <div className="absolute inset-0 bg-black/50" onClick={close} />
-          <aside className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-surface-1 shadow-pop animate-fade-in">
-            <div className="flex items-center justify-between pr-2">
+          <aside className="absolute inset-y-0 inset-s-0 flex w-72 max-w-[85vw] flex-col bg-surface-1 shadow-pop animate-fade-in">
+            <div className="flex items-center justify-between pe-2">
               {brandBlock}
-              <button type="button" onClick={close} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2" aria-label="Close menu">
+              <button type="button" onClick={close} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2" aria-label={t("sidebar.closeMenu")}>
                 <Icon.X className="size-5" />
               </button>
             </div>

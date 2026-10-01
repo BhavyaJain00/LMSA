@@ -66,7 +66,7 @@ const common = {
   "upload.dragHint": "or drag it here",
   "upload.remove": "Remove file",
   "upload.unfinished": "Unfinished uploads",
-  "upload.stoppedAt": "<name>{name}</name> stopped at {percent}% ({loaded} of {total}). Choose the same file to continue.",
+  "upload.stoppedAt": "<file>{name}</file> stopped at {percent}% ({loaded} of {total}). Choose the same file to continue.",
   "upload.discard": "Discard",
   "upload.preparing": "Preparing upload…",
   "upload.uploading": "Uploading",

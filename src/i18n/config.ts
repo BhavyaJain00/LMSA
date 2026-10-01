@@ -14,7 +14,7 @@ export const LOCALES = ["en", "hi", "es", "fr", "ar"] as const;
 export type Locale = (typeof LOCALES)[number];
 
 /** Source language: every key exists in English, other languages fall back to it. */
-export const DEFAULT_LOCALE: Locale = "en";
+export const DEFAULT_LOCALE = "en" satisfies Locale;
 
 /** Cookie holding the visitor's chosen interface language. */
 export const LOCALE_COOKIE = "ll_locale";

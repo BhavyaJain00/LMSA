@@ -2,6 +2,7 @@
 
 import { Icon } from "./icons";
 import { IconButton } from "./button";
+import { useT } from "@/i18n/client";
 
 export type Theme = "light" | "dark";
 
@@ -29,8 +30,9 @@ export function setTheme(t: Theme): void {
  * component needs no state and never mismatches during hydration.
  */
 export function ThemeToggle({ className }: { className?: string }) {
+  const t = useT("common");
   return (
-    <IconButton label="Toggle dark mode" onClick={() => setTheme(getTheme() === "dark" ? "light" : "dark")} className={className}>
+    <IconButton label={t("a11y.toggleTheme")} onClick={() => setTheme(getTheme() === "dark" ? "light" : "dark")} className={className}>
       <Icon.Moon className="size-5 dark:hidden" />
       <Icon.Sun className="hidden size-5 dark:block" />
     </IconButton>

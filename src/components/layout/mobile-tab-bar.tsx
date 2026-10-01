@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { isTabActive, youTabMatches, type MobileTab } from "./mobile-tabs";
 
 const tabClass =
@@ -29,12 +30,13 @@ function TabLink({ href, active, label, children }: { href: string; active: bool
  */
 export function MobileTabBar({ tabs, user }: { tabs: MobileTab[]; user: { name: string; username: string; avatarUrl?: string } | null }) {
   const pathname = usePathname() ?? "/";
+  const t = useT("shell");
   const youActive = user ? isTabActive(pathname, youTabMatches(user.username)) : pathname === "/login";
   const loginHref = pathname && pathname !== "/login" ? `/login?next=${encodeURIComponent(pathname)}` : "/login";
 
   return (
     <nav
-      aria-label="Primary"
+      aria-label={t("nav.primary")}
       className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-1/95 pb-[env(safe-area-inset-bottom)] shadow-pop backdrop-blur lg:hidden print:hidden"
     >
       <ul className="mx-auto flex h-16 max-w-xl items-stretch gap-1 px-2">
@@ -47,21 +49,21 @@ export function MobileTabBar({ tabs, user }: { tabs: MobileTab[]; user: { name: 
               <span className="relative">
                 <IconCmp className="size-5" aria-hidden="true" />
                 {count > 0 && (
-                  <span className="absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-semibold leading-4 text-accent-fg ring-2 ring-surface-1">
+                  <span className="absolute -inset-e-2.5 -top-1.5 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] font-semibold leading-4 text-accent-fg ring-2 ring-surface-1">
                     {count > 99 ? "99+" : count}
                   </span>
                 )}
               </span>
-              {count > 0 && <span className="sr-only">{`${count} unread`}</span>}
+              {count > 0 && <span className="sr-only">{t("tabs.unread", { count })}</span>}
             </TabLink>
           );
         })}
         {user ? (
-          <TabLink href="/you" active={youActive} label="You">
+          <TabLink href="/you" active={youActive} label={t("tabs.you")}>
             <Avatar name={user.name} src={user.avatarUrl} size="xs" className={cn("size-6 text-[10px]", youActive && "ring-2 ring-accent ring-offset-2 ring-offset-surface-1")} />
           </TabLink>
         ) : (
-          <TabLink href={loginHref} active={youActive} label="Log in">
+          <TabLink href={loginHref} active={youActive} label={t("tabs.logIn")}>
             <Icon.LogIn className="size-5" aria-hidden="true" />
           </TabLink>
         )}

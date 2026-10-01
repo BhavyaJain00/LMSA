@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface TabItem {
   label: ReactNode;
@@ -23,9 +24,10 @@ export function Tabs({ items, param = "tab", className, variant = "underline" }:
   const pathname = usePathname();
   const search = useSearchParams();
   const current = search.get(param);
+  const t = useT("common");
 
   return (
-    <nav className={cn("no-scrollbar flex gap-1 overflow-x-auto", variant === "underline" && "border-b border-border", className)} aria-label="Tabs">
+    <nav className={cn("no-scrollbar flex gap-1 overflow-x-auto", variant === "underline" && "border-b border-border", className)} aria-label={t("a11y.tabs")}>
       {items.map((item, i) => {
         let active = false;
         let href = item.href ?? "";

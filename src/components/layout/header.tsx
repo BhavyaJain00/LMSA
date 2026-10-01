@@ -9,6 +9,7 @@ import { UserMenu } from "./user-menu";
 import { NotificationsBell } from "./notifications-bell";
 import { CommandPaletteButton } from "@/components/command-palette/open-button";
 import { openCommandPalette } from "@/components/command-palette/events";
+import { useT } from "@/i18n/client";
 
 export function Header({
   user,
@@ -28,24 +29,25 @@ export function Header({
   gifts?: boolean;
 }) {
   const { setMobileOpen } = useSidebar();
+  const t = useT("shell");
 
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-border bg-surface-1/90 px-3 backdrop-blur sm:px-5">
-      <button type="button" onClick={() => setMobileOpen(true)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 lg:hidden" aria-label="Open menu">
+      <button type="button" onClick={() => setMobileOpen(true)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 lg:hidden" aria-label={t("sidebar.openMenu")}>
         <Icon.Menu className="size-5" />
       </button>
 
       {/* Opens the command palette (Ctrl K / ⌘K): search courses, batches, jobs, people and pages. */}
       <div className="hidden max-w-md flex-1 sm:block">
-        <CommandPaletteButton className="w-full" label="Search or jump to…" />
+        <CommandPaletteButton className="w-full" label={t("header.searchPlaceholder")} />
       </div>
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ms-auto flex items-center gap-1">
         <button
           type="button"
           onClick={openCommandPalette}
           className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 sm:hidden"
-          aria-label="Search"
+          aria-label={t("header.search")}
           aria-keyshortcuts="Control+K Meta+K"
         >
           <Icon.Search className="size-5" />
@@ -59,10 +61,10 @@ export function Header({
         ) : (
           <>
             <ButtonLink href="/login" variant="ghost" size="sm">
-              Log in
+              {t("header.logIn")}
             </ButtonLink>
             <ButtonLink href="/register" size="sm">
-              Sign up
+              {t("header.signUp")}
             </ButtonLink>
           </>
         )}

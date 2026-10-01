@@ -101,6 +101,10 @@ export interface User {
   emailPreferences?: EmailPreferences;
   /** Secret token for the personal calendar (ICS) feed. */
   calendarToken?: string;
+
+  /* ----- round 3 wave C: interface language ----- */
+  /** Preferred interface language (`en`, `hi`, `es`, `fr`, `ar`); unset follows the cookie/browser. */
+  locale?: string;
 }
 
 /** Which categories of email a user wants to receive (round 2). */
