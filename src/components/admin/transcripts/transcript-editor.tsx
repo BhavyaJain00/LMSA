@@ -629,7 +629,7 @@ export function TranscriptEditor({ lessonId, lessonTitle, video, initial, initia
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] xl:grid-cols-[minmax(0,30rem)_minmax(0,1fr)]">
         <aside className="space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto lg:pb-2">
-          <PreviewPlayer lessonId={lessonId} video={video} cues={cues} language={languageValid ? language.trim() : baseLanguage} seekRequest={seek} onTick={onTick} onJumpToCue={(i) => revealCue(i, true)} />
+          <PreviewPlayer lessonId={lessonId} video={video} cues={cues} language={languageValid ? language.trim() : baseLanguage} seekRequest={seek} time={playhead} onTick={onTick} onJumpToCue={(i) => revealCue(i, true)} />
 
           <section aria-label="Transcript details" className="rounded-card border border-border bg-surface-1 p-4">
             <div className="flex flex-wrap items-center gap-2">

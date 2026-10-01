@@ -28,7 +28,8 @@ const TICK_MS = 150;
 /**
  * The lesson video with the editor's unsaved captions as its caption track
  * (a WebVTT blob rebuilt shortly after each edit), and the line showing at
- * the playhead underneath. Reports the playhead through `onTick`.
+ * the playhead underneath. Reports the playhead through `onTick` (read
+ * from the video element, which survives the player swapping sources).
  */
 export function PreviewPlayer({
   lessonId,
@@ -36,6 +37,7 @@ export function PreviewPlayer({
   cues,
   language,
   seekRequest,
+  time,
   onTick,
   onJumpToCue,
 }: {
@@ -44,12 +46,13 @@ export function PreviewPlayer({
   cues: readonly TranscriptCue[];
   language: string;
   seekRequest?: { time: number; key: number; play?: boolean };
+  /** Playhead last reported through `onTick`. */
+  time: number;
   onTick: (time: number) => void;
   onJumpToCue: (index: number) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const mediaContext = useMemo(() => ({ lessonId }), [lessonId]);
-  const [time, setTime] = useState(0);
   const [captionsUrl, setCaptionsUrl] = useState<string | undefined>(undefined);
 
   // Rebuild the caption track from the current (unsaved) cues once edits settle.
@@ -83,7 +86,6 @@ export function PreviewPlayer({
       const t = el.currentTime;
       if (Math.abs(t - last) < 0.01) return;
       last = t;
-      setTime(t);
       onTickRef.current(t);
     }, TICK_MS);
     return () => window.clearInterval(id);
