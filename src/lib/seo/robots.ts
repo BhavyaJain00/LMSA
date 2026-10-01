@@ -27,6 +27,7 @@ export const DISALLOWED_PATHS = [
   "/offline",
   "/forbidden",
   "/free/confirm",
+  "/free/unsubscribe",
   "/quiz/",
   "/assignments/",
   "/exercises/",

@@ -1,10 +1,13 @@
 import "server-only";
-import type { Course, Lead } from "@/lib/types";
+import type { Course, CourseSummary, Lead } from "@/lib/types";
 import { getDb, getSettings, mutate } from "@/lib/db/store";
 import { enqueueEmail, getEmailBrand } from "@/lib/email";
 import { renderEmail, type EmailBlock, type RenderedEmail } from "@/lib/email/templates/layout";
 import { recordLead } from "@/lib/services/leads";
 import { legalLinks } from "@/lib/legal/links";
+import { lessonHref } from "@/lib/data/courses";
+import { catalogIsPublic, getPublicCourseSummaries } from "@/lib/data/seo";
+import { getLatestPosts, type PostListItem } from "@/lib/data/blog";
 import { siteConfig } from "@/lib/config";
 import { coursePath } from "./content-index";
 import { leadConfirmUrl, leadUnsubscribeUrl, isLeadId } from "./lead-tokens";
@@ -222,4 +225,55 @@ export async function courseTitleMap(): Promise<Map<string, string>> {
 /** The published privacy policy, linked next to the consent checkbox of lead forms. */
 export async function privacyPolicyHref(): Promise<string | undefined> {
   return (await legalLinks()).find((l) => l.slug === "privacy")?.href;
+}
+
+/* ------------------------------------------------------------------ */
+/* /free (lead magnet landing)                                         */
+/* ------------------------------------------------------------------ */
+
+export interface FreePreviewLesson {
+  id: string;
+  title: string;
+  href: string;
+  durationSeconds: number;
+  course: { title: string; slug: string };
+}
+
+export interface FreeResources {
+  /** Whether guests may open courses and preview lessons. */
+  catalogOpen: boolean;
+  freeCourses: CourseSummary[];
+  previews: FreePreviewLesson[];
+  posts: PostListItem[];
+}
+
+/** Free courses, free preview lessons of public courses and the latest articles. */
+export async function getFreeResources(limits: { courses?: number; previews?: number; posts?: number } = {}): Promise<FreeResources> {
+  const [db, settings] = await Promise.all([getDb(), getSettings()]);
+  const catalogOpen = catalogIsPublic(settings);
+  const posts = settings.seo.blogEnabled ? await getLatestPosts(limits.posts ?? 3) : [];
+  if (!catalogOpen) return { catalogOpen, freeCourses: [], previews: [], posts };
+
+  const courses = await getPublicCourseSummaries({ sort: "popular" });
+  const freeCourses = courses.filter((c) => !c.paidCourse || c.price <= 0).slice(0, limits.courses ?? 8);
+  const previews: FreePreviewLesson[] = [];
+  const max = limits.previews ?? 9;
+  for (const course of courses) {
+    if (previews.length >= max) break;
+    const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
+    chapters.forEach((chapter, ci) => {
+      const lessons = db.lessons.filter((l) => l.chapterId === chapter.id).sort((a, b) => a.order - b.order);
+      lessons.forEach((lesson, li) => {
+        if (!lesson.includeInPreview || previews.length >= max) return;
+        previews.push({
+          id: lesson.id,
+          title: lesson.title,
+          href: lessonHref(course.slug, { chapterNumber: ci + 1, lessonNumber: li + 1 }),
+          durationSeconds: lesson.durationSeconds,
+          course: { title: course.title, slug: course.slug },
+        });
+      });
+    });
+  }
+  return { catalogOpen, freeCourses, previews, posts };
 }
