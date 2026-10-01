@@ -59,6 +59,8 @@ export interface AdminCourseRow {
   lessonCount: number;
   enrollmentCount: number;
   updatedAt: string;
+  /** Scheduled publish time (ISO), when the course is set to go live later. */
+  publishAt?: string;
   workflow: WorkflowFlags;
 }
 

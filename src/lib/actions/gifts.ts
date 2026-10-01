@@ -20,6 +20,7 @@ import { parseGiftItemType, validateGiftInput } from "@/lib/commerce/gifts";
 import { normalizeCurrency } from "@/lib/commerce/currency";
 import { countryCode } from "@/lib/commerce/tax";
 import { fd } from "@/lib/utils";
+import { referralAffiliateIdForCheckout } from "@/lib/growth/attribution";
 
 function orderPath(orderId: string): string {
   return `/billing/success/${encodeURIComponent(orderId)}`;
@@ -82,7 +83,8 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
     return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
   }
 
-  const inserted = await insertGiftOrder({ buyer: user, item, summary, draft: gift.value, billing: billingFields(input, settings.commerce.applyTax), gateway });
+  const affiliateId = await referralAffiliateIdForCheckout(user.id);
+  const inserted = await insertGiftOrder({ buyer: user, item, summary, draft: gift.value, billing: billingFields(input, settings.commerce.applyTax), gateway, affiliateId });
   if (!inserted.ok) return { ok: false, error: inserted.error };
   const { payment, existing } = inserted;
   await audit(user, "gift.order", { type: "gift", id: inserted.gift.id }, { orderId: payment.orderId, itemType: type, itemId: item.id, scheduled: !!gift.value.sendAt });

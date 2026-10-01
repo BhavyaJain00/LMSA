@@ -113,6 +113,8 @@ export async function insertGiftOrder(input: {
   draft: GiftDraft;
   billing: Pick<Payment, "billingName" | "address" | "gstin" | "pan" | "source">;
   gateway: string;
+  /** Affiliate credited for the sale (referral cookie or linked click at checkout). */
+  affiliateId?: string;
 }): Promise<GiftOrderResult> {
   const { buyer, item, summary, draft } = input;
   const type = item.type as GiftItemType;
@@ -167,6 +169,7 @@ export async function insertGiftOrder(input: {
       currency: summary.currency,
       ...orderTaxFields(summary),
       ...input.billing,
+      ...(input.affiliateId ? { affiliateId: input.affiliateId } : {}),
       gateway: summary.total <= 0 ? "free" : input.gateway,
       status: "pending",
       createdAt: now,

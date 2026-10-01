@@ -8,6 +8,7 @@ import { notify } from "./notifications";
 import { awardCertificatePoints, awardPoints } from "./points";
 import { computeProgramProgress } from "@/lib/data/programs";
 import { emit } from "@/lib/events";
+import { peerReviewRequirements } from "@/lib/teaching/peer-shared";
 
 /**
  * Central place for everything that happens when a learner makes progress:
@@ -73,13 +74,23 @@ export async function getCompletionRequirements(user: User, lesson: Lesson, dwel
   const dwellTimeMet = dwellSeconds >= s.lessonDwellTimeSeconds || videoBlocks.length > 0 || quizBlocks.length > 0;
   if (!dwellTimeMet) missing.push(`Spend at least ${s.lessonDwellTimeSeconds} seconds on the lesson`);
 
+  // Peer review: when an assignment counts reviews toward completion, the learner must finish theirs
+  // (returns nothing unless that option is on; staff never review).
+  const peerMissing = peerReviewRequirements(
+    db,
+    user,
+    assignmentBlocks.map((b) => (b.type === "assignment" ? b.assignmentId : "")).filter(Boolean),
+    Date.now(),
+  );
+  missing.push(...peerMissing);
+
   return {
     videoWatched,
     quizPassed,
     assignmentSubmitted,
     exercisePassed,
     dwellTimeMet,
-    allMet: videoWatched && quizPassed && assignmentSubmitted && exercisePassed && dwellTimeMet,
+    allMet: videoWatched && quizPassed && assignmentSubmitted && exercisePassed && dwellTimeMet && peerMissing.length === 0,
     missing,
   };
 }

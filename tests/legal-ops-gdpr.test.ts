@@ -11,6 +11,12 @@ import { adminEraseAccountAction, deleteAccountAction } from "@/lib/actions/priv
 import { FIXED_NOW, makePayment, makeUser, resetDb, type Fixture } from "./helpers/db";
 import { captureRedirect, resetRequest } from "./helpers/request";
 
+/**
+ * A detached deep copy of the database. structuredClone() cannot copy the
+ * SQLite driver's proxied collections, while a JSON round trip works on both drivers.
+ */
+const plainCopy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 /** Round 3 legal-ops part 2: "Download my data" include/exclude rules, erasure, data requests. */
 
 const ada = makeUser({
@@ -86,7 +92,7 @@ function section(db: Database, key: string) {
 describe("personal data export", () => {
   let db: Database;
   beforeEach(async () => {
-    db = structuredClone(await resetDb(fixture()));
+    db = plainCopy(await resetDb(fixture()));
   });
 
   it("returns null for an unknown member", () => {
@@ -153,7 +159,7 @@ describe("personal data export", () => {
 describe("account erasure", () => {
   let db: Database;
   beforeEach(async () => {
-    db = structuredClone(await resetDb(fixture()));
+    db = plainCopy(await resetDb(fixture()));
   });
 
   it("anonymizes the account and removes what only served the person", () => {

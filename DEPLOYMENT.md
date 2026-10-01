@@ -201,7 +201,7 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `STORAGE_DRIVER`, `S3_*` | no | Object storage, see [section 9](#9-object-storage-s3--r2-and-a-cdn). |
 | `DB_DRIVER` | no | `sqlite` (default). `json` is for development only. |
 | `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | no | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source), `storage/uploads`. |
-| `MAX_VIDEO_UPLOAD_MB`, `MAX_FILE_UPLOAD_MB` | no | Upload limits (defaults 2048 and 25). |
+| `MAX_VIDEO_UPLOAD_MB`, `MAX_FILE_UPLOAD_MB` | no | Upload limits in MB (defaults 10240, i.e. 10 GB, and 25). Video uploads are chunked and resumable, so files over 5 GB work; a reverse proxy only needs to accept one chunk per request. |
 | `SESSION_DAYS`, `SESSION_COOKIE_NAME`, `COOKIE_SECURE` | no | Sign-in session length (30), cookie name, HTTPS-only cookie (on by default in production). |
 | `FFMPEG_PATH`, `FFPROBE_PATH` | no | When ffmpeg is not on the `PATH`. |
 | `TRANSCRIBE_API_URL`, `TRANSCRIBE_API_KEY`, `TRANSCRIBE_MODEL` | no | Automatic captions through a Whisper-compatible API. |
@@ -241,7 +241,9 @@ On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `A
 
 ## 6. Backups and restores
 
-The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & reset* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in `storage/backups/`, taken safely while the app runs.
+The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & restore* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in `storage/backups/`, taken safely while the app runs.
+
+The `storage/` folder must be writable by the app and persisted together with the database: besides the database and uploads it holds `storage/seo/` (the IndexNow key and generated SEO files) and `storage/backups/`.
 
 **Uploads are not inside the database backup.** Back up the whole `storage/` folder (or the `learnloop_storage` volume), or use object storage (section 9) for uploads.
 
@@ -334,7 +336,8 @@ S3_FORCE_PATH_STYLE=false                                    # true for MinIO
 
 - **Cloudflare R2**: create a bucket and an API token with *Object Read & Write*, then connect a custom domain to the bucket for `S3_PUBLIC_BASE_URL` (Cloudflare caches it). No egress fees, which matters for video.
 - **AWS S3 + CloudFront**: keep the bucket private, give CloudFront access through Origin Access Control, and use the CloudFront domain as `S3_PUBLIC_BASE_URL`.
-- Allow `GET` and `HEAD` from your `APP_URL` origin in the bucket's CORS rules (video players request byte ranges).
+- Allow `GET` and `HEAD` from your `APP_URL` origin in the bucket's (and the CDN's) CORS rules, and expose the `Content-Range`, `Content-Length` and `Accept-Ranges` headers. Video players request byte ranges, and when `S3_PUBLIC_BASE_URL` is set, unprotected HLS playlists and segments are redirected there and fetched by the player's streaming engine with `fetch()`, so a missing CORS rule stops those videos from playing.
+- Add a bucket lifecycle rule that **aborts incomplete multipart uploads after 1 day**. Large uploads are sent to the bucket in parts; a part upload interrupted by a crash or a cancelled upload otherwise keeps (billed) storage forever.
 - `S3_PUBLIC_BASE_URL` must be `https://` or browsers block the media.
 - Existing local files are moved to the bucket by `/api/cron/media` in the background.
 
@@ -360,7 +363,7 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 
 ## 12. Upgrading
 
-1. Make a backup (*Admin → Settings → Backup & reset*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`).
+1. Make a backup (*Admin → Settings → Backup & restore*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`).
 2. Get the new code: `git pull`.
 3. Rebuild and restart:
    - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).

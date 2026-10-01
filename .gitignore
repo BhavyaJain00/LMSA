@@ -43,3 +43,8 @@ next-env.d.ts
 
 # local data, uploads and build notes (root folder only; src/lib/storage is source code)
 /storage/
+# databases, backups and migrated JSON files hold user data, wherever SQLITE_PATH points
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+db.json.migrated-*

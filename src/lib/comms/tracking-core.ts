@@ -16,17 +16,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { EmailEvent } from "@/lib/types";
 
-declare module "@/lib/types" {
-  interface EmailEvent {
-    /**
-     * Round 3 comms: campaign of the email the event belongs to (copied from
-     * `EmailMessage.trackingId`), so campaign statistics survive the outbox
-     * clean-up that deletes old sent messages.
-     */
-    trackingId?: string;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /* Signatures                                                          */
 /* ------------------------------------------------------------------ */

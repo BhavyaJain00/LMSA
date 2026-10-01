@@ -24,41 +24,8 @@ import { uid } from "@/lib/utils";
 import { checkContent } from "./campaign-core";
 import type { DeliveryBlock } from "./segments";
 import { ratePercent } from "./tracking-core";
-
-export type SequenceGoal = "none" | "purchase" | "enrollment" | "completion" | "signup" | "return";
-export type SequenceStopReason = "goal" | "unsubscribed" | "undeliverable" | "manual";
-
-declare module "@/lib/types" {
-  interface EmailSequenceStep {
-    /** Round 3 comms: emails of this step handed to the outbox. */
-    sent?: number;
-  }
-  interface EmailSequence {
-    /** Internal note shown to staff. */
-    description?: string;
-    /** What ends the sequence early for a person (see `goalReached`). */
-    goal?: SequenceGoal;
-    /** When the sequence was last switched on; only triggers after this moment enroll people. */
-    activatedAt?: string;
-    updatedAt?: string;
-    createdById?: string;
-    /** Recipients who unsubscribed after an email of this sequence. */
-    unsubscribes?: number;
-  }
-  interface SequenceEnrollment {
-    /** Recipient name at enrollment (for `{{ first_name }}` when the person is a lead). */
-    name?: string;
-    /** Course that enrolled the person (fills `{{ course_title }}` / `{{ course_url }}`). */
-    courseId?: string;
-    /** What this enrollment was for ("" for one-off triggers): the same trigger never enrolls a person twice. */
-    contextKey?: string;
-    stopReason?: SequenceStopReason;
-    /** When the enrollment was completed or stopped. */
-    endedAt?: string;
-    lastSentAt?: string;
-    sentCount?: number;
-  }
-}
+import type { SequenceGoal, SequenceStopReason } from "@/lib/types";
+export type { SequenceGoal, SequenceStopReason };
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;

@@ -1508,6 +1508,11 @@ export interface EmailMessage {
   nextAttemptAt?: string;
   createdAt: string;
   sentAt?: string;
+  /**
+   * Round 3 comms: campaign of a tracked marketing email ("broadcast:<id>",
+   * "sequence:<id>:<stepId>"), used to attribute opens and clicks.
+   */
+  trackingId?: string;
 }
 
 export type AuthTokenPurpose = "password_reset" | "email_verification" | "two_factor_login";
@@ -1676,7 +1681,7 @@ export interface BlogPost {
   updatedAt: string;
 }
 
-/** Permanent (308) redirect kept when a course, post or page slug changes. */
+/** Permanent (301) redirect kept when a course, post or page slug changes. */
 export interface SlugRedirect {
   id: string;
   /** Absolute path, e.g. "/courses/old-slug". */
@@ -2055,6 +2060,31 @@ export interface Broadcast {
   createdById: string;
   createdAt: string;
   updatedAt: string;
+  /** Round 3 comms: inbox preview text shown after the subject. */
+  preheader?: string;
+  /** Emails handed to the outbox per minute while sending. */
+  ratePerMinute?: number;
+  /** When sending started. */
+  startedAt?: string;
+  /** Recipients still to be queued ("m:<userId>" / "l:<leadId>"), in send order. Removed once the send finishes. */
+  pending?: string[];
+  /** Emails handed to the outbox so far. */
+  queued?: number;
+  /** Recipients dropped at send time (unsubscribed, disabled or removed after the list was built). */
+  skipped?: number;
+  /** Emails accepted by the mail server. */
+  delivered?: number;
+  /** Emails that could not be delivered. */
+  failed?: number;
+  /** Recipients who unsubscribed after this broadcast. */
+  unsubscribes?: number;
+  /** Start of the current throttle minute and the emails queued in it. */
+  windowStartedAt?: string;
+  windowCount?: number;
+  /** Set while a send is paused (status stays "sending"). */
+  pausedAt?: string;
+  /** Set when a send was stopped before everyone was queued (status "sent"). */
+  canceledAt?: string;
 }
 
 export type SequenceTrigger = "signup" | "lead" | "enrollment" | "purchase" | "inactive";
@@ -2066,6 +2096,8 @@ export interface EmailSequenceStep {
   subject: string;
   /** Markdown */
   body: string;
+  /** Round 3 comms: emails of this step handed to the outbox. */
+  sent?: number;
 }
 
 /** Automated drip email series. */
@@ -2080,6 +2112,16 @@ export interface EmailSequence {
   steps: EmailSequenceStep[];
   active: boolean;
   createdAt: string;
+  /** Internal note shown to staff. */
+  description?: string;
+  /** What ends the sequence early for a person (see `goalReached`). */
+  goal?: SequenceGoal;
+  /** When the sequence was last switched on; only triggers after this moment enroll people. */
+  activatedAt?: string;
+  updatedAt?: string;
+  createdById?: string;
+  /** Recipients who unsubscribed after an email of this sequence. */
+  unsubscribes?: number;
 }
 
 export interface SequenceEnrollment {
@@ -2092,6 +2134,17 @@ export interface SequenceEnrollment {
   nextRunAt: string;
   status: "active" | "completed" | "stopped";
   createdAt: string;
+  /** Recipient name at enrollment (for `{{ first_name }}` when the person is a lead). */
+  name?: string;
+  /** Course that enrolled the person (fills `{{ course_title }}` / `{{ course_url }}`). */
+  courseId?: string;
+  /** What this enrollment was for ("" for one-off triggers): the same trigger never enrolls a person twice. */
+  contextKey?: string;
+  stopReason?: SequenceStopReason;
+  /** When the enrollment was completed or stopped. */
+  endedAt?: string;
+  lastSentAt?: string;
+  sentCount?: number;
 }
 
 /** Open/click recorded for a tracked email. */
@@ -2102,6 +2155,12 @@ export interface EmailEvent {
   type: "open" | "click";
   url?: string;
   createdAt: string;
+  /**
+   * Round 3 comms: campaign of the email the event belongs to (copied from
+   * `EmailMessage.trackingId`), so campaign statistics survive the outbox
+   * clean-up that deletes old sent messages.
+   */
+  trackingId?: string;
 }
 
 export interface Conversation {
@@ -2114,6 +2173,17 @@ export interface Conversation {
   /** A participant reported the conversation to moderators. */
   reported?: boolean;
   createdAt: string;
+  /** Round 3 comms: who reported the conversation, when and why. */
+  reportedBy?: string;
+  reportedAt?: string;
+  reportReason?: string;
+  /** The message the reporter pointed at (optional). */
+  reportedMessageId?: string;
+  /** A moderator closed the report. */
+  reportResolvedAt?: string;
+  reportResolvedBy?: string;
+  /** Total reports filed on this conversation (a re-report reopens it). */
+  reportCount?: number;
 }
 
 export interface DirectMessage {
@@ -2126,6 +2196,9 @@ export interface DirectMessage {
   readBy: string[];
   createdAt: string;
   editedAt?: string;
+  /** Round 3 comms: removed by its sender or by a moderator; the body is cleared. */
+  removedAt?: string;
+  removedBy?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2159,6 +2232,24 @@ export interface WebhookEndpoint {
   failureCount: number;
   createdAt: string;
   lastDeliveryAt?: string;
+  /** What the endpoint is for ("Zapier: new sales"), shown in the admin list. */
+  description?: string;
+  /** Administrator who created the endpoint (the key's creator for endpoints made through the API). */
+  createdById?: string;
+  /** "admin" (settings page) or "api" (POST /api/v1/webhooks). */
+  source?: "admin" | "api";
+  updatedAt?: string;
+  /** When the signing secret was last replaced. */
+  secretRotatedAt?: string;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  /** Why the latest attempt failed (cleared by a success). */
+  lastError?: string;
+  /** Start of the current run of failed attempts (cleared by a success). */
+  failingSince?: string;
+  /** Set when the endpoint was switched off automatically. */
+  disabledAt?: string;
+  disabledReason?: WebhookDisabledReason;
 }
 
 export interface WebhookDelivery {
@@ -2175,6 +2266,17 @@ export interface WebhookDelivery {
   nextAttemptAt?: string;
   createdAt: string;
   deliveredAt?: string;
+  /** `id` of the payload, shared by every endpoint (and every resend) of one event. */
+  eventId?: string;
+  /** Sent with "Send test event": example data, a single attempt. */
+  test?: boolean;
+  /** The delivery this one repeats ("Resend"): a single attempt. */
+  resentFromId?: string;
+  /** Why the latest attempt failed (network error, timeout, blocked address, non-2xx status). */
+  lastError?: string;
+  lastAttemptAt?: string;
+  /** Duration of the latest attempt. */
+  durationMs?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2442,3 +2544,9 @@ export interface BatchSummary extends Batch {
 export type ActionResult<T = undefined> =
   | { ok: true; data: T; message?: string }
   | { ok: false; error: string; fieldErrors?: Record<string, string> };
+
+/* Round 3 comms and webhooks: value types of the fields above. */
+export type SequenceGoal = "none" | "purchase" | "enrollment" | "completion" | "signup" | "return";
+export type SequenceStopReason = "goal" | "unsubscribed" | "undeliverable" | "manual";
+/** Why an endpoint was switched off automatically. */
+export type WebhookDisabledReason = "failures" | "gone";

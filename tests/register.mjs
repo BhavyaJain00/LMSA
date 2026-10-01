@@ -27,6 +27,9 @@ const env = {
   NODE_ENV: "test",
   DATA_FILE: dataFile,
   DB_DRIVER: "json",
+  // Never the real storage/lms.sqlite, even for a test that opts into SQLite.
+  SQLITE_PATH: path.join(dir, "lms.sqlite"),
+  STORAGE_DRIVER: "local",
   UPLOAD_DIR: path.join(dir, "uploads"),
   APP_URL: "http://localhost:3000",
   APP_SECRET: "test-app-secret-0123456789abcdef-0123456789abcdef",
@@ -49,6 +52,19 @@ for (const name of [
   "QUIZ_ATTEMPT_SECRET",
   "SESSION_COOKIE_NAME",
   "COOKIE_SECURE",
+  "S3_ENDPOINT",
+  "S3_REGION",
+  "S3_BUCKET",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+  "S3_PUBLIC_BASE_URL",
+  "S3_FORCE_PATH_STYLE",
+  "ANTHROPIC_API_KEY",
+  "TRANSCRIBE_API_URL",
+  "TRANSCRIBE_API_KEY",
+  "SEO_CANONICAL_HOST",
+  "DB_AUTO_BACKUP",
+  "DB_BACKUP_KEEP",
 ]) {
   delete process.env[name];
 }

@@ -84,7 +84,7 @@ export function EnrollPanel({ batch, loggedIn, isManager, enrolled, acceptsEnrol
 
   return (
     <aside className={cn("overflow-hidden rounded-card border-2 border-border bg-surface-1 shadow-card", className)} aria-label="Batch details and enrollment">
-      <BatchCover batch={batch} className="aspect-video w-full" />
+      <BatchCover batch={batch} className="aspect-video w-full" priority />
       <div className="space-y-4 p-5">
         <div className="flex items-start justify-between gap-3">
           <p className={cn("text-2xl font-semibold tracking-tight", price === "Free" ? "text-success" : "text-ink")}>{price}</p>

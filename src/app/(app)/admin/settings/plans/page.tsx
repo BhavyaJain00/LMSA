@@ -25,15 +25,18 @@ import { InstallmentCoursesTable, InstallmentPlansTable, InstallmentSalesSwitch,
 import { formatNumber } from "@/lib/utils";
 import { deliverDueGiftsQuietly, getAdminGifts, parseAdminGiftFilter } from "@/lib/commerce/gift-service";
 import { GiftSalesSwitch, GiftsManager, type GiftRowData } from "@/components/commerce/gifts-manager";
+import { getAdminCheckouts, parseCheckoutFilter, processAbandonedCheckoutsQuietly } from "@/lib/commerce/checkout-sessions";
+import { sessionStatus } from "@/lib/commerce/checkout-recovery";
+import { CheckoutsManager, RecoverySettingsForm, type CheckoutRowData } from "@/components/commerce/checkouts-manager";
 
-export const metadata = { title: "Plans, bundles, installments & gifts" };
+export const metadata = { title: "Plans, bundles, installments, gifts & checkouts" };
 
 const GATEWAY_NAMES: Record<string, string> = { stripe: "Stripe", razorpay: "Razorpay" };
 
 export default async function PlansSettingsPage(props: PageProps<"/admin/settings/plans">) {
   await requireRole(["admin"], "/admin/settings/plans");
   const sp = await props.searchParams;
-  const tab = sp.tab === "members" || sp.tab === "bundles" || sp.tab === "installments" || sp.tab === "gifts" ? sp.tab : "plans";
+  const tab = sp.tab === "members" || sp.tab === "bundles" || sp.tab === "installments" || sp.tab === "gifts" || sp.tab === "checkouts" ? sp.tab : "plans";
 
   // No scheduler needed: memberships paid by hand move to "payment due" / "ended", renewal orders are
   // opened and missed gateway webhooks are caught up whenever an administrator opens this page.
@@ -49,6 +52,8 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
 
   // Gifts scheduled for a date that has come are sent when an administrator opens the gifts tab.
   if (tab === "gifts") await deliverDueGiftsQuietly();
+  // Checkout reminders that fell due go out when an administrator opens the checkouts tab (the cron makes them timely).
+  if (tab === "checkouts") await processAbandonedCheckoutsQuietly();
 
   const [{ plans, stats, courses }, db] = await Promise.all([getAdminPlans(), getDb()]);
   const settings = db.settings;
@@ -188,6 +193,27 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
     createdAt: g.createdAt,
   }));
 
+  const checkoutFilter = parseCheckoutFilter(sp);
+  const checkouts = tab === "checkouts" ? await getAdminCheckouts(checkoutFilter) : null;
+  const checkoutRows: CheckoutRowData[] = (checkouts?.rows ?? []).map((r) => ({
+    id: r.id,
+    userName: r.userName,
+    email: r.email,
+    itemType: r.itemType,
+    itemTitle: r.itemTitle,
+    itemHref: r.itemHref,
+    status: r.status,
+    startedAt: r.startedAt,
+    lastStepAt: r.lastStepAt,
+    reminderCount: r.reminderCount,
+    lastReminderAt: r.lastReminderAt,
+    couponSent: r.couponSent,
+    orderId: r.orderId,
+    amount: r.amount,
+    currency: r.currency,
+  }));
+  const abandonedNow = db.checkoutSessions.filter((s) => sessionStatus(s, settings.growth.abandonedCheckoutDelaysHours) === "abandoned").length;
+
   const exportHref = (() => {
     if (tab === "members") return db.subscriptions.length ? membersExportHref : null;
     const qs = new URLSearchParams({ tab });
@@ -208,6 +234,13 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
       if (!db.gifts.length) return null;
       if (giftFilter.status !== "all") qs.set("gstatus", giftFilter.status);
       if (giftFilter.search) qs.set("gq", giftFilter.search);
+      return `/admin/settings/plans/export?${qs}`;
+    }
+    if (tab === "checkouts") {
+      if (!checkouts?.total) return null;
+      if (checkoutFilter.status !== "all") qs.set("cstatus", checkoutFilter.status);
+      if (checkoutFilter.days !== 30) qs.set("cdays", String(checkoutFilter.days));
+      if (checkoutFilter.search) qs.set("cq", checkoutFilter.search);
       return `/admin/settings/plans/export?${qs}`;
     }
     return null;
@@ -233,6 +266,10 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
       title: "Gifts",
       description: "Courses, bundles and memberships bought for someone else. The recipient gets an email with a single-use code on the date the buyer chose.",
     },
+    checkouts: {
+      title: "Abandoned checkouts",
+      description: "Checkouts that signed-in buyers started but didn't finish, the reminder emails they were sent, and the sales those reminders won back.",
+    },
   } as const;
   const amountsLabel = (rows: { currency: string; amount: number }[]) =>
     rows.length ? rows.map((o) => money(o.amount, o.currency)).join(" + ") : money(0, settings.commerce.defaultCurrency);
@@ -257,7 +294,34 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
         }
       />
 
-      {tab === "bundles" && bundles ? (
+      {tab === "checkouts" && checkouts ? (
+        <>
+          <div className="mb-5 rounded-card border border-border bg-surface-1 px-4 py-3.5 shadow-card sm:px-5">
+            <RecoverySettingsForm
+              enabled={settings.growth.abandonedCheckoutEnabled}
+              delaysHours={settings.growth.abandonedCheckoutDelaysHours}
+              couponPercent={settings.growth.abandonedCheckoutCouponPercent}
+              emailEnabled={settings.email.enabled}
+            />
+          </div>
+          <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <StatCard
+              label="Checkouts started"
+              value={formatNumber(checkouts.stats.started)}
+              hint={`${checkouts.stats.conversionRate}% bought · ${checkoutFilter.days ? `last ${checkoutFilter.days} days` : "all time"}`}
+              icon={<Icon.CreditCard className="size-4" />}
+            />
+            <StatCard label="Abandoned" value={formatNumber(checkouts.stats.abandoned)} hint={`${formatNumber(checkouts.stats.reminded)} sent a reminder`} icon={<Icon.Clock className="size-4" />} />
+            <StatCard
+              label="Recovered"
+              value={formatNumber(checkouts.stats.recovered)}
+              hint={checkouts.stats.reminded ? `${checkouts.stats.recoveryRate}% of reminded checkouts` : "Bought after a reminder"}
+              icon={<Icon.CheckCircle className="size-4" />}
+            />
+            <StatCard label="Recovered revenue" value={<span className="text-2xl">{amountsLabel(checkouts.stats.recoveredRevenue)}</span>} hint="Paid, less refunds" icon={<Icon.TrendingUp className="size-4" />} />
+          </div>
+        </>
+      ) : tab === "bundles" && bundles ? (
         <div className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard label="Bundles" value={formatNumber(bundles.stats.total)} hint={`${formatNumber(bundles.stats.published)} published`} icon={<Icon.Layers className="size-4" />} />
           <StatCard label="Bundles sold" value={formatNumber(bundles.stats.sold)} hint="Paid orders" icon={<Icon.Receipt className="size-4" />} />
@@ -352,10 +416,23 @@ export default async function PlansSettingsPage(props: PageProps<"/admin/setting
           { label: "Bundles", value: "bundles", count: db.bundles.length },
           { label: "Installments", value: "installments", count: runningPlans },
           { label: "Gifts", value: "gifts", count: db.gifts.length },
+          { label: "Checkouts", value: "checkouts", count: abandonedNow },
         ]}
       />
 
-      {tab === "gifts" ? (
+      {tab === "checkouts" ? (
+        checkouts && (
+          <CheckoutsManager
+            rows={checkoutRows}
+            total={checkouts.total}
+            page={checkouts.page}
+            pageCount={checkouts.pageCount}
+            filter={{ status: checkoutFilter.status, days: checkoutFilter.days, q: checkoutFilter.search ?? "" }}
+            sessionCount={db.checkoutSessions.length}
+            totalReminders={settings.growth.abandonedCheckoutDelaysHours.length}
+          />
+        )
+      ) : tab === "gifts" ? (
         gifts && (
           <GiftsManager
             rows={giftRows}

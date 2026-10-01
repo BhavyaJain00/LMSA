@@ -10,36 +10,6 @@
 import type { Broadcast } from "@/lib/types";
 import { ratePercent } from "./tracking-core";
 
-declare module "@/lib/types" {
-  interface Broadcast {
-    /** Round 3 comms: inbox preview text shown after the subject. */
-    preheader?: string;
-    /** Emails handed to the outbox per minute while sending. */
-    ratePerMinute?: number;
-    /** When sending started. */
-    startedAt?: string;
-    /** Recipients still to be queued ("m:<userId>" / "l:<leadId>"), in send order. Removed once the send finishes. */
-    pending?: string[];
-    /** Emails handed to the outbox so far. */
-    queued?: number;
-    /** Recipients dropped at send time (unsubscribed, disabled or removed after the list was built). */
-    skipped?: number;
-    /** Emails accepted by the mail server. */
-    delivered?: number;
-    /** Emails that could not be delivered. */
-    failed?: number;
-    /** Recipients who unsubscribed after this broadcast. */
-    unsubscribes?: number;
-    /** Start of the current throttle minute and the emails queued in it. */
-    windowStartedAt?: string;
-    windowCount?: number;
-    /** Set while a send is paused (status stays "sending"). */
-    pausedAt?: string;
-    /** Set when a send was stopped before everyone was queued (status "sent"). */
-    canceledAt?: string;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /* Throttle                                                            */
 /* ------------------------------------------------------------------ */

@@ -1,5 +1,8 @@
 import { cn, initials } from "@/lib/utils";
 
+/** Rendered size in CSS pixels of each avatar size (for the img width/height attributes). */
+const pixels = { xs: 24, sm: 32, md: 40, lg: 56, xl: 80, "2xl": 112 } as const;
+
 const sizes = {
   xs: "size-6 text-[10px]",
   sm: "size-8 text-xs",
@@ -38,7 +41,7 @@ export function Avatar({
   );
   if (src) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt={name} className={cn(classes, "object-cover")} />;
+    return <img src={src} alt={name} width={pixels[size]} height={pixels[size]} loading="lazy" decoding="async" className={cn(classes, "object-cover")} />;
   }
   return (
     <span className={classes} style={{ background: colorFor(name) }} aria-label={name} title={name}>

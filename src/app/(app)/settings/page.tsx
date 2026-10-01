@@ -63,7 +63,8 @@ export default async function AccountSettingsPage() {
   const store = await cookies();
   const token = store.get(siteConfig.sessionCookie)?.value;
   const currentHash = token ? createHash("sha256").update(token).digest("hex") : null;
-  const [sessions, settings] = await Promise.all([activeSessions(user.id), getSettings()]);
+  const [sessions, settings, subscriptions] = await Promise.all([activeSessions(user.id), getSettings(), filter("subscriptions", (s) => s.userId === user.id)]);
+  const showMembership = settings.growth.subscriptionsEnabled || subscriptions.length > 0;
   const minPasswordLength = clampMinLength(settings.security.passwordMinLength);
   const rows: SessionRow[] = sessions
     .map((s) => {
@@ -175,6 +176,22 @@ export default async function AccountSettingsPage() {
                 icon: <Icon.Receipt className="size-4" />,
                 title: "Orders & invoices",
                 description: "Your purchases, payment status and downloadable invoices.",
+              },
+              ...(showMembership
+                ? [
+                    {
+                      href: "/settings/subscription",
+                      icon: <Icon.Star className="size-4" />,
+                      title: "Membership",
+                      description: "Your plan, billing dates and membership invoices.",
+                    },
+                  ]
+                : []),
+              {
+                href: "/settings/privacy",
+                icon: <Icon.Shield className="size-4" />,
+                title: "Privacy & data",
+                description: "Download your data, manage cookies or delete your account.",
               },
             ].map((item) => (
               <li key={item.href}>

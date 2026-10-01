@@ -14,6 +14,7 @@ import {
   programPath,
   tagPath,
 } from "./content-index";
+import { isBundleOnSale } from "@/lib/commerce/bundles";
 import { isTagIndexable } from "./landing";
 import { defaultShareImage } from "./metadata";
 import { absoluteUrl } from "./site";
@@ -31,7 +32,8 @@ import { guestsCanBrowse, isBatchPublic, isCoursePublic, isJobPublic, isLegalPag
  */
 
 export type SitemapEntry = MetadataRoute.Sitemap[number];
-type SitemapDb = Pick<Database, "courses" | "batches" | "programs" | "jobs" | "blogPosts" | "categories" | "users" | "legalPages" | "settings">;
+type SitemapDb = Pick<Database, "courses" | "batches" | "programs" | "jobs" | "blogPosts" | "categories" | "users" | "legalPages" | "settings"> &
+  Partial<Pick<Database, "plans" | "bundles">>;
 
 /** Google's per-file limit; larger sitemaps are split behind a sitemap index (see sitemap-xml.ts). */
 export const SITEMAP_MAX_URLS = 50_000;
@@ -205,6 +207,19 @@ export function buildSitemap(db: SitemapDb, origin: string, now: number = Date.n
     if (jobs.length) {
       entries.push({ url: url("/jobs"), lastModified: latest(jobs.map((j) => j.updatedAt)), changeFrequency: "daily", priority: 0.6 });
       for (const j of jobs) entries.push({ url: url(jobPath(j.slug)), lastModified: j.updatedAt, changeFrequency: "weekly", priority: 0.5 });
+    }
+  }
+
+  /* Membership pricing and course bundles (gift and redeem pages are personal and never listed) */
+  if (settings.growth.subscriptionsEnabled && (db.plans ?? []).some((p) => p.active)) {
+    entries.push({ url: url("/pricing"), changeFrequency: "weekly", priority: 0.7 });
+  }
+  if (guests && settings.growth.bundlesEnabled && settings.features.courses) {
+    const liveCourses = db.courses.filter((c) => isCoursePublic(c, now));
+    const bundles = (db.bundles ?? []).filter((b) => isBundleOnSale(b, liveCourses));
+    if (bundles.length) {
+      entries.push({ url: url("/bundles"), lastModified: latest(bundles.map((b) => b.updatedAt)), changeFrequency: "weekly", priority: 0.6 });
+      for (const b of bundles) entries.push({ url: url(`/bundles/${b.slug}`), lastModified: b.updatedAt, changeFrequency: "weekly", priority: 0.6 });
     }
   }
 

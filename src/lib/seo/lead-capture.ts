@@ -4,6 +4,7 @@ import { getDb, getSettings, mutate } from "@/lib/db/store";
 import { enqueueEmail, getEmailBrand } from "@/lib/email";
 import { renderEmail, type EmailBlock, type RenderedEmail } from "@/lib/email/templates/layout";
 import { recordLead } from "@/lib/services/leads";
+import { kickComms } from "@/lib/comms/runner";
 import { legalLinks } from "@/lib/legal/links";
 import { lessonHref } from "@/lib/data/courses";
 import { catalogIsPublic, getPublicCourseSummaries } from "@/lib/data/seo";
@@ -163,7 +164,11 @@ export async function confirmLead(leadId: string): Promise<ConfirmResult | null>
   });
   if (!result) return null;
   const course = await publicCourse(result.lead.courseId);
-  if (result.firstTime) await send(result.lead, course ? await renderSyllabusEmail(result.lead, course) : await renderWelcomeLeadEmail(result.lead));
+  if (result.firstTime) {
+    await send(result.lead, course ? await renderSyllabusEmail(result.lead, course) : await renderWelcomeLeadEmail(result.lead));
+    // A lead sequence waits for the confirmation: send its first email now instead of on the next sweep.
+    kickComms();
+  }
   return { ...result, course };
 }
 

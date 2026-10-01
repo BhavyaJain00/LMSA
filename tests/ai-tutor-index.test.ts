@@ -6,6 +6,12 @@ import { courseIndexStats, fitExcerpts, getCourseIndex, readableLessonIds, retri
 import { collectCourseSources, type CourseChunk } from "@/lib/ai/sources";
 import { makeCourseTree, makeEnrollment, makeUser, resetDb } from "./helpers/db";
 
+/**
+ * A detached deep copy of the database. structuredClone() cannot copy the
+ * SQLite driver's proxied collections, while a JSON round trip works on both drivers.
+ */
+const plainCopy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 const learner = makeUser({ id: "usr_ai_learner" });
 const instructor = makeUser({ id: "usr_ai_teacher", roles: ["student", "course_creator"] });
 
@@ -52,11 +58,11 @@ describe("ai tutor course index cache", () => {
   it("changes the hash for transcript cue edits and outline renames", async () => {
     const db = await getDb();
     const base = sourcesHash(collectCourseSources(db, course.id));
-    const renamed = structuredClone(db);
+    const renamed = plainCopy(db);
     renamed.lessons[1]!.title = "Promises and async/await";
     assert.notEqual(sourcesHash(collectCourseSources(renamed, course.id)), base);
 
-    const withVideo = structuredClone(db);
+    const withVideo = plainCopy(db);
     withVideo.lessons[0]!.blocks.push({ id: "v1", type: "video", src: "/v.mp4", transcriptId: "t1" });
     withVideo.transcripts.push({
       id: "t1",

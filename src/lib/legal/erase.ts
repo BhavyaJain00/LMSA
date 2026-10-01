@@ -9,7 +9,8 @@ import type { Database, User } from "@/lib/types";
  * orders keep their amounts and invoice numbers for the books (the billing
  * name, address and tax ids are removed). Everything that only serves the
  * person — sessions, tokens, notes, preferences, notifications, emails,
- * sign-in history, AI chats, leads and job applications — is removed.
+ * sign-in history, AI chats, direct messages they sent, leads and job
+ * applications — is removed.
  *
  * Pure (mutates the database object it is given) so it runs inside one
  * `mutate()` transaction and is unit tested directly.
@@ -100,6 +101,18 @@ export function eraseAccountInDb(db: Database, userId: string, opts: { now: Date
   const aiConversationIds = new Set(db.aiConversations.filter((c) => c.userId === userId).map((c) => c.id));
   db.aiMessages = drop("aiMessages", db.aiMessages, (m) => aiConversationIds.has(m.conversationId));
   db.aiConversations = drop("aiConversations", db.aiConversations, (c) => c.userId === userId);
+  // Direct messages the person sent are removed, except in a conversation with an open report
+  // (moderators still need the evidence). A conversation left without messages, or without anyone
+  // else who can read it, is removed as well.
+  const openReport = new Set(db.conversations.filter((c) => c.participantIds.includes(userId) && c.reported && !c.reportResolvedAt).map((c) => c.id));
+  db.directMessages = drop("directMessages", db.directMessages, (m) => m.senderId === userId && !openReport.has(m.conversationId));
+  const withMessages = new Set(db.directMessages.map((m) => m.conversationId));
+  const readers = new Set(db.users.filter((u) => u.id !== userId && !isDeletedAccount(u)).map((u) => u.id));
+  db.conversations = drop(
+    "conversations",
+    db.conversations,
+    (c) => c.participantIds.includes(userId) && !openReport.has(c.id) && (!withMessages.has(c.id) || !c.participantIds.some((id) => id !== userId && readers.has(id))),
+  );
   db.evaluatorSlots = drop("evaluatorSlots", db.evaluatorSlots, (s) => s.evaluatorId === userId);
   // Logs of finished webhook deliveries whose payload carried the address (pending ones still have to be sent).
   const quotedEmail = JSON.stringify(email);

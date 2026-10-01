@@ -71,7 +71,7 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
       { label: "Payments", href: "/admin/settings/payments", icon: "CreditCard" },
       { label: "Transactions", href: "/admin/settings/transactions", icon: "Receipt" },
       { label: "Coupons", href: "/admin/settings/coupons", icon: "Ticket" },
-      { label: "Plans & bundles", href: "/admin/settings/plans", icon: "Layers" },
+      { label: "Plans, bundles & installments", href: "/admin/settings/plans", icon: "Layers" },
       { label: "Taxes & currencies", href: "/admin/settings/taxes", icon: "Percent" },
       { label: "Upsells", href: "/admin/upsells", icon: "TrendingUp" },
     ],
@@ -90,7 +90,7 @@ export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
   },
   {
     group: "Data",
-    items: [{ label: "Backup & reset", href: "/admin/settings/data", icon: "Database" }],
+    items: [{ label: "Backup & restore", href: "/admin/settings/data", icon: "Database" }],
   },
 ];
 

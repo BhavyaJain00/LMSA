@@ -31,6 +31,7 @@ interface Group {
 
 const scopeIcon: Record<SearchScope, IconName> = {
   courses: "BookOpen",
+  transcripts: "Captions",
   batches: "Users",
   programs: "Layers",
   jobs: "Briefcase",

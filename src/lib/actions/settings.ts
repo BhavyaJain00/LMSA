@@ -108,31 +108,7 @@ export async function saveBrandingSettingsAction(_prev: ActionResult | null, for
   }, "Branding saved", "branding");
 }
 
-/* ------------------------------------------------------------------ */
-/* SEO                                                                 */
-/* ------------------------------------------------------------------ */
-
-export async function saveSeoSettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  if (!(await requireAdmin())) return DENIED;
-  const metaDescription = fd(formData, "metaDescription");
-  const keywords = fd(formData, "metaKeywords")
-    .split(/[,\n]/)
-    .map((k) => k.trim())
-    .filter(Boolean);
-  const metaImageUrl = fd(formData, "metaImageUrl");
-
-  const errors: Errors = {};
-  if (metaDescription.length > 300) errors.metaDescription = "Search engines truncate descriptions — keep it under 300 characters.";
-  if (keywords.join(", ").length > 500) errors.metaKeywords = "Keep keywords under 500 characters.";
-  if (metaImageUrl && !isAssetUrl(metaImageUrl)) errors.metaImageUrl = "Upload an image or enter a valid URL.";
-  if (Object.keys(errors).length) return fail(errors);
-
-  return commit((s) => {
-    s.brand.metaDescription = metaDescription || undefined;
-    s.brand.metaKeywords = keywords.length ? Array.from(new Set(keywords)).join(", ") : undefined;
-    s.brand.metaImageUrl = metaImageUrl || undefined;
-  }, "SEO settings saved", "seo");
-}
+// SEO settings are saved by saveSeoSettingsAction in ./seo-settings.ts.
 
 /* ------------------------------------------------------------------ */
 /* Features                                                            */

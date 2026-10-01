@@ -19,6 +19,7 @@ import { Tag } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { formatNumber, pluralize } from "@/lib/utils";
+import { MessageUserButton } from "@/components/messages/message-button";
 
 export async function generateMetadata(props: PageProps<"/instructors/[username]">): Promise<Metadata> {
   const [{ username }, settings] = await Promise.all([props.params, getSettings()]);
@@ -96,6 +97,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
             <ButtonLink href={profilePath(instructor.username)} size="sm" variant="outline">
               Full profile
             </ButtonLink>
+            <MessageUserButton userId={instructor.id} label="Message instructor" />
           </div>
         </div>
       </header>

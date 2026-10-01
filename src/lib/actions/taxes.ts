@@ -47,7 +47,7 @@ export async function saveTaxSettingsAction(_prev: ActionResult | null, formData
     await audit(actor, "settings.taxes", { type: "settings", id: "growth" }, { taxMode, multiCurrency });
   }
   revalidatePricing();
-  return { ok: true, message: "Tax and currency settings saved." };
+  return { ok: true, data: undefined, message: "Tax and currency settings saved." };
 }
 
 /** Create or edit the tax rule of one country. */
@@ -136,7 +136,7 @@ export async function saveCurrencyPricesAction(_prev: ActionResult | null, formD
   if (!ok) return { ok: false, error: "This item no longer exists." };
   await audit(actor, "item.prices", { type: itemType, id: itemId }, { currencies: (prices ?? []).map((p) => p.currency).join(",") || "none" });
   revalidatePricing();
-  return { ok: true, message: prices ? `Saved ${prices.length} fixed price${prices.length === 1 ? "" : "s"}.` : "Fixed prices removed." };
+  return { ok: true, data: undefined, message: prices ? `Saved ${prices.length} fixed price${prices.length === 1 ? "" : "s"}.` : "Fixed prices removed." };
 }
 
 /** The buyer picks the currency they pay in at checkout (remembered for a year). */
@@ -147,5 +147,5 @@ export async function setCurrencyAction(code: string): Promise<ActionResult> {
   const jar = await cookies();
   jar.set({ name: CURRENCY_COOKIE, value: currency, httpOnly: true, sameSite: "lax", secure: siteConfig.cookieSecure, path: "/", maxAge: CURRENCY_COOKIE_MAX_AGE });
   revalidatePath("/billing/[type]/[id]", "page");
-  return { ok: true, message: `Prices are now shown in ${currency} where available.` };
+  return { ok: true, data: undefined, message: `Prices are now shown in ${currency} where available.` };
 }

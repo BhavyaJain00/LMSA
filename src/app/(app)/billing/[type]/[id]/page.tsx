@@ -14,7 +14,8 @@ import {
   priceItemIn,
   validateCouponForBuyer,
 } from "@/lib/data/commerce";
-import { buyerTaxContext, viewerCurrency } from "@/lib/commerce/buyer";
+import { buyerTaxContext, requestCountry, viewerCurrency } from "@/lib/commerce/buyer";
+import { preferredCurrency } from "@/lib/commerce/currency";
 import { countryName } from "@/lib/commerce/tax";
 import { trackCheckoutView } from "@/lib/commerce/checkout-sessions";
 import { isKnownCountry } from "@/components/commerce/countries";
@@ -42,11 +43,12 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   const [{ type: rawType, id }, sp] = await Promise.all([props.params, props.searchParams]);
   const type = parseItemType(rawType);
   if (!type) notFound();
-  const [listed, db, wantedCurrency] = await Promise.all([getBillingItem(type, id), getDb(), viewerCurrency()]);
+  const [listed, db, chosenCurrency, visitorCountry] = await Promise.all([getBillingItem(type, id), getDb(), viewerCurrency(), requestCountry()]);
   if (!listed) notFound();
-  // Priced in the viewer's currency when the item has a fixed price in it (multi-currency), else its default price.
-  const item = priceItemIn(listed, wantedCurrency, db.settings);
   const currencies = itemCurrencies(listed, db.settings);
+  // Priced in the viewer's currency (their remembered choice, else the usual one of their country) when the
+  // item has a fixed price in it (multi-currency), else its default price.
+  const item = priceItemIn(listed, preferredCurrency(chosenCurrency, visitorCountry, currencies), db.settings);
 
   const basePath = `/billing/${type}/${id}`;
   const header = <PageHeader title="Billing Details" breadcrumbs={<Breadcrumbs items={[{ label: item.plan ? "Membership" : item.name, href: item.href }, { label: "Billing Details" }]} />} />;

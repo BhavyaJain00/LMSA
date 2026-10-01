@@ -79,14 +79,16 @@ describe("event bus", () => {
 
   it("replaces a keyed registration and removes handlers on unsubscribe", async () => {
     const calls: string[] = [];
+    // Feature modules may already listen to lesson.completed, so count relative to them.
+    const baseline = listenerCount("lesson.completed");
     on("lesson.completed", () => void calls.push("first"), { key: "test:lesson" });
     const off = on("lesson.completed", () => void calls.push("second"), { key: "test:lesson" });
-    assert.equal(listenerCount("lesson.completed"), 1);
+    assert.equal(listenerCount("lesson.completed"), baseline + 1);
     emit("lesson.completed", { userId: "u", courseId: "c", chapterId: "ch", lessonId: "l" });
     await settleEvents();
     assert.deepEqual(calls, ["second"]);
     off();
-    assert.equal(listenerCount("lesson.completed"), 0);
+    assert.equal(listenerCount("lesson.completed"), baseline);
     emit("lesson.completed", { userId: "u", courseId: "c", chapterId: "ch", lessonId: "l" });
     await settleEvents();
     assert.deepEqual(calls, ["second"]);

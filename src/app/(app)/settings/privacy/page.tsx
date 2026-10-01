@@ -188,7 +188,7 @@ export default async function PrivacySettingsPage(props: PageProps<"/settings/pr
                 <ul className="list-disc space-y-1 pl-5 text-ink-muted">
                   <li>Your name, email, photo and profile</li>
                   <li>Notes, notifications, emails and sign-in history</li>
-                  <li>AI tutor chats, job applications and newsletter sign-ups</li>
+                  <li>AI tutor chats, direct messages you sent, job applications and newsletter sign-ups</li>
                   <li>Every signed-in device</li>
                 </ul>
               </div>
@@ -196,7 +196,7 @@ export default async function PrivacySettingsPage(props: PageProps<"/settings/pr
                 <p className="mb-1.5 font-medium text-ink">Kept without your name</p>
                 <ul className="list-disc space-y-1 pl-5 text-ink-muted">
                   <li>Orders and invoices (amounts and numbers the law requires us to keep)</li>
-                  <li>Discussion posts, reviews and messages you sent, shown as &quot;Deleted user&quot;</li>
+                  <li>Discussion posts and reviews you wrote, shown as &quot;Deleted user&quot;</li>
                   <li>Coursework and progress, as anonymous course statistics</li>
                 </ul>
               </div>

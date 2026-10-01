@@ -14,7 +14,8 @@ import { SocialLinks } from "@/components/profile/social-icons";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
 import { guestsCanBrowse } from "@/lib/seo/visibility";
-import { profilePath } from "@/lib/seo/content-index";
+import { instructorPath, profilePath } from "@/lib/seo/content-index";
+import { canonicalUrl } from "@/lib/seo/site";
 import { getProfileJsonLd } from "@/lib/data/seo";
 import { JsonLd } from "@/components/seo/json-ld";
 
@@ -44,6 +45,7 @@ export async function generateMetadata(props: PageProps<"/user/[username]">): Pr
   const [view, settings] = await Promise.all([getProfileView(decodeURIComponent(username)), getSettings()]);
   if (!view) return notFoundMetadata("Profile not found");
   const { user } = view;
+  const indexable = isIndexableProfile(view, guestsCanBrowse(settings));
   return pageMetadata(
     {
       title: user.headline ? `${user.name} — ${user.headline}` : user.name,
@@ -51,8 +53,10 @@ export async function generateMetadata(props: PageProps<"/user/[username]">): Pr
       path: profilePath(user.username),
       type: "profile",
       image: user.avatarUrl ? { url: user.avatarUrl, alt: user.name } : undefined,
-      noindex: !isIndexableProfile(view, guestsCanBrowse(settings)),
+      noindex: !indexable,
       follow: true,
+      // Teachers also have an instructor page with the same person: that one is the canonical address.
+      canonicalOverride: indexable && settings.features.courses ? canonicalUrl(instructorPath(user.username)) : undefined,
     },
     settings,
   );

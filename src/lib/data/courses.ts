@@ -19,6 +19,7 @@ import { hasRole, isModerator } from "@/lib/auth/session";
 import { getUserMap } from "./users";
 import { isLessonPublishedNow, isPublishedNow } from "@/lib/teaching/scheduling";
 import { percent } from "@/lib/utils";
+import { enrollmentGrantsAccess } from "@/lib/commerce/access";
 import {
   computeLessonLocks,
   dripAnchor,
@@ -238,7 +239,8 @@ export function getViewerCourseState(db: Database, course: Course, viewer: Pick<
   return {
     enrollment,
     manager,
-    enrolled: !!enrollment,
+    // A membership enrollment whose plan has lapsed keeps its row (progress is kept) but no longer gives access.
+    enrolled: !!enrollment && enrollmentGrantsAccess(db, enrollment),
     previewAllowed: course.published && db.settings.learning.allowGuestAccess,
     anchor: anchor !== null && Number.isFinite(anchor) ? anchor : null,
     prerequisites,

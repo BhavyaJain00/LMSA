@@ -96,8 +96,12 @@ function nameIndex(): Map<string, string> {
 }
 
 const CODE_RE = /^[A-Z]{2}$/;
-/** Region codes that are not countries (unknown, unions, macro-regions). */
-const NOT_COUNTRIES = new Set(["ZZ", "EU", "EZ", "UN", "QO", "XA", "XB"]);
+/**
+ * Region codes that are not countries today: unknown, unions, macro-regions,
+ * pseudo-locales, and withdrawn codes whose English name some ICU builds still
+ * share with the current country ("DD" is named "Germany", "YU", "CS", "SU", …).
+ */
+const NOT_COUNTRIES = new Set(["ZZ", "EU", "EZ", "UN", "QO", "XA", "XB", "AN", "BU", "CS", "DD", "FX", "NT", "SU", "TP", "YD", "YU", "ZR"]);
 
 /** ISO 3166-1 alpha-2 code for a country name (as stored on billing addresses) or code; null when unknown. */
 export function countryCode(value: string | null | undefined): string | null {

@@ -15,6 +15,7 @@ import type { CourseFormOptions, CourseFormValues, PickerOption } from "./types"
 import { MarkdownEditor } from "./markdown-editor";
 import { GradientPicker, ListEditor, MediaField, MultiSelect, TagsInput } from "./form-controls";
 import { UnsavedChangesGuard } from "./unsaved-changes-guard";
+import { SlugSuggestion } from "@/components/seo/slug-suggestion";
 import { CREATE_MEMBER_OPTION, CreateMemberDialog, memberQualifies, type MemberPurpose } from "./create-member-dialog";
 
 export interface CourseFormProps {
@@ -137,8 +138,9 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
   const slugTaken = options.takenSlugs.includes(effectiveSlug);
   const slugError = errors.slug ?? (slugTouched && slugTaken ? "This slug is already used by another course." : undefined);
   const slugChanged = mode === "edit" && effectiveSlug !== initial.slug;
+  // A changed slug is explained by the slug suggestion below the field (the old address redirects).
   const slugHint = slugChanged
-    ? `Changing the slug breaks existing links to /courses/${initial.slug}.`
+    ? undefined
     : !slugTouched && slugTaken
       ? "A course already uses this slug, so a number will be added when you save."
       : "Used in the course URL. Generated from the title until you edit it.";
@@ -222,6 +224,16 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
                 maxLength={80}
               />
             </div>
+            <SlugSuggestion
+              title={title}
+              slug={effectiveSlug}
+              onApply={(next) => {
+                setSlugTouched(true);
+                setSlug(next);
+              }}
+              basePath="/courses/"
+              originalSlug={mode === "edit" ? initial.slug : undefined}
+            />
           </Field>
           <Field
             label="Short introduction"

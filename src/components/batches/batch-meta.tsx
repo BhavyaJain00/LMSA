@@ -19,16 +19,26 @@ export function BatchCover({
   batch,
   className,
   children,
+  priority = false,
 }: {
   batch: Pick<BatchSummary, "id" | "title" | "imageUrl">;
   className?: string;
   children?: ReactNode;
+  /** The cover is the page's main image (largest contentful paint): load it eagerly and first. */
+  priority?: boolean;
 }) {
   return (
     <div className={cn("relative overflow-hidden", className)}>
       {batch.imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={batch.imageUrl} alt="" className="absolute inset-0 size-full object-cover" loading="lazy" />
+        <img
+          src={batch.imageUrl}
+          alt=""
+          className="absolute inset-0 size-full object-cover"
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority ? "high" : undefined}
+          decoding="async"
+        />
       ) : (
         <div className={cn("absolute inset-0 bg-gradient-to-br", batchGradient(batch.id))} aria-hidden="true">
           <Icon.Users className="absolute -bottom-4 -right-4 size-28 text-white/15" />

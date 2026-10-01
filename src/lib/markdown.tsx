@@ -34,7 +34,7 @@ function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
       const m = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/.exec(token);
       if (m) {
         // eslint-disable-next-line @next/next/no-img-element
-        nodes.push(<img key={key} src={safeUrl(m[2]!)} alt={m[1] ?? ""} title={m[3]} loading="lazy" />);
+        nodes.push(<img key={key} src={safeUrl(m[2]!)} alt={m[1] ?? ""} title={m[3]} loading="lazy" decoding="async" />);
       }
     } else if (match[3]) {
       const m = /^\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/.exec(token);

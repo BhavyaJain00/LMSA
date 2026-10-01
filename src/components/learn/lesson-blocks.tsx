@@ -84,6 +84,8 @@ export async function LessonBlocks({
             blockId={block.id}
             src={videos.media[block.id]?.src ?? block.src}
             sources={videos.media[block.id]?.sources}
+            hlsUrl={videos.media[block.id]?.hlsUrl}
+            transcriptId={block.transcriptId}
             player={videos.player}
             lastVideo={block.id === lastVideoId}
             posterUrl={block.posterUrl}

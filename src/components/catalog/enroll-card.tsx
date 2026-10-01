@@ -73,6 +73,8 @@ export interface EnrollCardProps {
   batches: { slug: string; title: string; startDate: string }[];
   includes: CourseIncludes;
   certificationsEnabled: boolean;
+  /** The AI tutor's full page for this course, when the viewer may use it. */
+  askAiHref?: string | null;
   className?: string;
 }
 
@@ -232,6 +234,15 @@ function PrerequisitesBlock({ status, loggedIn, manager }: { status: Prerequisit
   );
 }
 
+/** Opens the course's AI tutor (full page). */
+function AskAiLink({ href }: { href: string }) {
+  return (
+    <ButtonLink href={href} variant="outline" className="w-full" leftIcon={<Icon.Sparkles className="size-4" />}>
+      Ask AI about this course
+    </ButtonLink>
+  );
+}
+
 function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExtras }) {
   const { course, manager, enrollment, nextLesson, firstLessonHref, alreadyPaid, batches } = props;
 
@@ -246,6 +257,7 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
             {enrollment ? "Continue learning" : "View lessons"}
           </ButtonLink>
         )}
+        {props.askAiHref && <AskAiLink href={props.askAiHref} />}
         <p className="text-center text-xs text-ink-muted">You can manage this course, so every lesson is unlocked for you.</p>
       </div>
     );
@@ -337,6 +349,7 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
           </Button>
         )}
         {nextLesson && !enrollment.completed && <NextUnlockNote drip={extras.drip} />}
+        {props.askAiHref && <AskAiLink href={props.askAiHref} />}
         {extras.paymentPlan && <InstallmentNotice plan={extras.paymentPlan} compact />}
         {extras.paymentPlan?.status === "on_track" && extras.paymentPlan.next?.dueAt && (
           <p className="text-center text-xs text-ink-muted">

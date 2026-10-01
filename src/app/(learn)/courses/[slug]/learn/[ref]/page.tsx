@@ -152,6 +152,8 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
             loginHref={`/login?next=${next}`}
             signupHref={ctx.settings.learning.disableSignup ? null : `/register?next=${next}`}
             guestAccessDisabled={!ctx.settings.learning.allowGuestAccess}
+            membershipEnded={!!ctx.enrollment && !ctx.enrolled}
+            plansAvailable={ctx.settings.growth.subscriptionsEnabled && db.plans.some((p) => p.active)}
           />
         </main>
       </LessonFrame>

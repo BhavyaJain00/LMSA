@@ -183,6 +183,7 @@ export async function getAdminCourseList(viewer: User, opts: { tab: AdminCourseT
       lessonCount: lessonCounts.get(c.id) ?? 0,
       enrollmentCount: enrollmentCounts.get(c.id) ?? 0,
       updatedAt: c.updatedAt,
+      publishAt: c.publishAt,
       workflow: getWorkflowFlags(viewer, c),
     }));
 

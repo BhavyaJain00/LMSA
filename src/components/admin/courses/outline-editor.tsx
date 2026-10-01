@@ -23,6 +23,7 @@ import { ChapterDialog, type ChapterDialogState } from "./chapter-dialog";
 import { EditorIcon } from "./editor-icons";
 import { LessonReleaseDialog, type LessonReleaseTarget } from "./lesson-release-dialog";
 import { ReleaseTimeline } from "./release-timeline";
+import { ScheduleBadge as PublishScheduleBadge } from "@/components/teaching/publish-at-picker";
 
 type Result = { ok: boolean; message?: string; error?: string };
 
@@ -321,6 +322,8 @@ function LessonRow({
           <span className="ml-1.5 flex">
             <ScheduleBadge rule={cleanReleaseRule(lesson)} subject="lesson" onClick={onSchedule} />
           </span>
+          {/* Scheduled publication (the publish sweep clears publishAt once the lesson is live). */}
+          <PublishScheduleBadge publishAt={lesson.publishAt} className="ml-1.5" />
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">

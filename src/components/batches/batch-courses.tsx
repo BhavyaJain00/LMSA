@@ -12,7 +12,7 @@ function CourseCover({ course }: { course: BatchCourseItem }) {
     <div className="relative aspect-video w-full overflow-hidden bg-surface-2">
       {course.imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={course.imageUrl} alt="" className="absolute inset-0 size-full object-cover" loading="lazy" />
+        <img src={course.imageUrl} alt="" className="absolute inset-0 size-full object-cover" loading="lazy" decoding="async" />
       ) : (
         <div className={cn("absolute inset-0 flex items-end bg-gradient-to-br p-4", gradientFor(course.cardGradient))} aria-hidden="true">
           <span className="line-clamp-2 text-lg font-semibold leading-tight text-white">{course.title}</span>

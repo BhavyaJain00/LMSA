@@ -31,8 +31,8 @@ export const siteConfig = {
   name: "LearnLoop",
   /** Public base URL (no trailing slash), used for absolute links and metadata. */
   appUrl: envString("APP_URL", "http://localhost:3000").replace(/\/+$/, ""),
-  /** Max upload size in bytes for videos (default 2 GB). */
-  maxUploadBytes: envNumber("MAX_VIDEO_UPLOAD_MB", 2048) * MB,
+  /** Max upload size in bytes for videos (default 10 GB; uploads are resumable and chunked). */
+  maxUploadBytes: envNumber("MAX_VIDEO_UPLOAD_MB", 10240) * MB,
   /** Max upload size in bytes for images/documents/audio (default 25 MB). */
   maxAssetBytes: envNumber("MAX_FILE_UPLOAD_MB", 25) * MB,
   /** Session lifetime in days. */

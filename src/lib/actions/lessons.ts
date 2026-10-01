@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import type { ActionResult, Course, Lesson, LessonBlock, User } from "@/lib/types";
 import { findById, getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -10,6 +11,9 @@ import { computeLessonDuration, createBlock, sanitizeBlocks } from "@/components
 import { fd, fdBool, uid, uniqueSlug } from "@/lib/utils";
 import { cleanReleaseRule, hasReleaseRule, validateReleaseInput, type ReleaseRule } from "@/components/learn/drip-shared";
 import { recordLessonVersion } from "@/lib/teaching/versions";
+import { siteOrigins } from "@/lib/media/access";
+import { preserveManagedVideoFields } from "@/lib/media/transcode/lesson-fields";
+import { syncLessonTranscodes } from "@/lib/media/transcode/queue";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -306,19 +310,25 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
     };
   }
 
-  const durationSeconds = computeLessonDuration(blocks);
+  let durationSeconds = computeLessonDuration(blocks);
   const updatedAt = new Date().toISOString();
   let reviewReset = false;
   let schedule: ReleaseRule = { dripDays: lesson.dripDays, availableFrom: lesson.availableFrom };
+  let savedBlocks = blocks;
+  const origins = siteOrigins();
   await mutate((d) => {
     const row = d.lessons.find((l) => l.id === lesson.id);
     if (!row) return;
+    // Server-managed video fields (HLS output, conversion status, storage key,
+    // transcript) come from the stored lesson, never from the editor.
+    savedBlocks = preserveManagedVideoFields(row.blocks, blocks, origins);
+    durationSeconds = computeLessonDuration(savedBlocks);
     // Lesson history: keep the lesson as it was before this save (nothing is stored when the content is unchanged).
-    recordLessonVersion(d, row, user.id, { next: { title, blocks, instructorNotes }, at: updatedAt });
+    recordLessonVersion(d, row, user.id, { next: { title, blocks: savedBlocks, instructorNotes }, at: updatedAt });
     row.title = title;
     row.slug = slug;
     row.includeInPreview = includeInPreview;
-    row.blocks = blocks;
+    row.blocks = savedBlocks;
     row.durationSeconds = durationSeconds;
     row.updatedAt = updatedAt;
     if (instructorNotes) row.instructorNotes = instructorNotes;
@@ -328,9 +338,14 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
     reviewReset = touchCourseContent(d, course.id, user);
   });
   revalidateLessonPaths(course, lesson.id);
+  // Queue new or replaced uploads for HLS conversion right away.
+  if (savedBlocks.some((b) => b.type === "video")) {
+    const lessonId = lesson.id;
+    after(() => syncLessonTranscodes(lessonId).catch((err) => console.error("[lessons] could not queue video conversion:", err instanceof Error ? err.message : err)));
+  }
   return {
     ok: true,
-    data: { slug, title, blocks, durationSeconds, updatedAt, ...cleanReleaseRule(schedule) },
+    data: { slug, title, blocks: savedBlocks, durationSeconds, updatedAt, ...cleanReleaseRule(schedule) },
     message: withReviewNote("Lesson saved", reviewReset),
   };
 }

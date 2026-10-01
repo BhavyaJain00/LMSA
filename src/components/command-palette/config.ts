@@ -2,7 +2,7 @@ import type { IconName } from "@/components/ui/icons";
 import type { PublicUser, Settings } from "@/lib/types";
 import { buildNavigation } from "@/lib/nav";
 
-export type SearchScope = "courses" | "batches" | "programs" | "jobs" | "quizzes" | "assignments" | "people";
+export type SearchScope = "courses" | "transcripts" | "batches" | "programs" | "jobs" | "quizzes" | "assignments" | "people";
 
 export interface SearchResultItem {
   id: string;
@@ -95,6 +95,7 @@ export function buildPaletteConfig(user: PublicUser | null, settings: Settings):
 
   const scopes: PaletteScope[] = [];
   if (f.courses) scopes.push({ key: "courses", label: "Courses", icon: "BookOpen", viewAllHref: "/courses" });
+  if (f.courses) scopes.push({ key: "transcripts", label: "Video transcripts", icon: "Captions", viewAllHref: "/courses" });
   if (f.batches) scopes.push({ key: "batches", label: "Batches", icon: "Users", viewAllHref: "/batches" });
   if (f.programs) scopes.push({ key: "programs", label: "Programs", icon: "Layers", viewAllHref: "/programs" });
   if (f.jobs) scopes.push({ key: "jobs", label: "Jobs", icon: "Briefcase", viewAllHref: "/jobs" });

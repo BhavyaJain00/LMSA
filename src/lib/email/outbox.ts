@@ -15,16 +15,6 @@ import { SENSITIVE_EMAIL_CATEGORIES, TRANSACTIONAL_EMAIL_CATEGORIES } from "./pr
 import { addEmailTracking } from "@/lib/comms/tracking";
 import { normalizeTrackingId, stripTracking } from "@/lib/comms/tracking-core";
 
-declare module "@/lib/types" {
-  interface EmailMessage {
-    /**
-     * Round 3 comms: campaign of a tracked marketing email ("broadcast:<id>",
-     * "sequence:<id>:<stepId>"), used to attribute opens and clicks.
-     */
-    trackingId?: string;
-  }
-}
-
 /**
  * The outbox: every email is an `EmailMessage` row in the JSON store.
  *

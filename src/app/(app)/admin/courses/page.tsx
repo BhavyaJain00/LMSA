@@ -14,6 +14,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Icon } from "@/components/ui/icons";
 import { CourseRowActions } from "@/components/admin/courses/course-row-actions";
 import { CourseThumb } from "@/components/admin/courses/course-thumb";
+import { ScheduleBadge } from "@/components/teaching/publish-at-picker";
 
 export const metadata = { title: "Manage Courses" };
 
@@ -46,6 +47,7 @@ function PublishState({ row }: { row: AdminCourseRow }) {
         </Badge>
       )}
       <StatusBadge status={row.status} />
+      <ScheduleBadge publishAt={row.publishAt} state={row.published ? "live" : row.status === "approved" ? "scheduled" : "held"} />
       {row.upcoming && <Badge tone="info">Upcoming</Badge>}
       {row.featured && (
         <Badge tone="warning">

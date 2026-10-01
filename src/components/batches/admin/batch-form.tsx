@@ -15,6 +15,7 @@ import { Icon } from "@/components/ui/icons";
 import { useActionForm } from "../hooks";
 import type { Option } from "../types";
 import { MarkdownField, PeoplePicker, TimezoneSelect } from "./form-fields";
+import { SlugSuggestion } from "@/components/seo/slug-suggestion";
 
 interface CoreValues {
   title: string;
@@ -281,8 +282,6 @@ export function BatchSettingsForm({
     submit(new FormData(e.currentTarget));
   };
 
-  const slugChanged = values.slug !== saved.slug;
-
   return (
     <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
       <input type="hidden" name="batchId" value={batch.id} />
@@ -318,7 +317,6 @@ export function BatchSettingsForm({
             label="URL"
             htmlFor="slug"
             error={fieldErrors.slug}
-            hint={slugChanged && batch.published ? "Changing the URL of a published batch breaks links people already have." : `Batch page: /batches/${values.slug || "…"}`}
             className="mt-4"
           >
             <Input
@@ -330,6 +328,16 @@ export function BatchSettingsForm({
                 set("slug", e.target.value.toLowerCase());
               }}
               invalid={!!fieldErrors.slug}
+            />
+            <SlugSuggestion
+              title={values.title}
+              slug={values.slug}
+              onApply={(next) => {
+                setSlugTouched(true);
+                set("slug", next);
+              }}
+              basePath="/batches/"
+              originalSlug={saved.slug}
             />
           </Field>
         </Section>

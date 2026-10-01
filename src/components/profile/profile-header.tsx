@@ -42,7 +42,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
         <div className="absolute inset-0 overflow-hidden rounded-card bg-surface-2">
           {user.coverImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={user.coverImageUrl} alt="" className="size-full object-cover" />
+            <img src={user.coverImageUrl} alt="" className="size-full object-cover" decoding="async" fetchPriority="high" />
           ) : (
             <div className={cn("size-full bg-linear-to-br opacity-90", coverGradient(user.id))} aria-hidden="true" />
           )}
@@ -69,6 +69,11 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pb-2">
             <SocialLinks socials={user.socials} name={user.name} />
+            {stats.teaching > 0 && (
+              <ButtonLink href={`/instructors/${user.username}`} variant="ghost" size="sm" leftIcon={<Icon.Presentation className="size-4" />}>
+                Instructor page
+              </ButtonLink>
+            )}
             {canEdit && (
               <ButtonLink href={`/user/${user.username}/edit`} variant={isSelf ? "primary" : "outline"} size="sm" leftIcon={<Icon.Edit className="size-4" />}>
                 Edit Profile

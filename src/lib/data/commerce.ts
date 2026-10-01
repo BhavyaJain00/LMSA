@@ -24,6 +24,7 @@ import {
   normalizeCouponCode,
   recordRejectedCoupon,
 } from "@/lib/payments/coupon-rules";
+import { resolveSeatsOrder, seatsPurchaseProblem, type SeatsOrder } from "@/lib/growth/teams";
 
 /**
  * Commerce domain logic: billing items, access checks, coupons, order
@@ -89,7 +90,7 @@ export function isScheduledPart(p: Pick<Payment, "status"> & Partial<Pick<Paymen
 }
 
 export function parseItemType(raw: string | undefined | null): PaymentItemType | null {
-  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" || raw === "bundle" || raw === "gift" ? raw : null;
+  return raw === "course" || raw === "batch" || raw === "certificate" || raw === "plan" || raw === "bundle" || raw === "gift" || raw === "seats" ? raw : null;
 }
 
 export interface BillingItem {
@@ -114,6 +115,8 @@ export interface BillingItem {
   plan?: MembershipPlan | null;
   /** Course bundle (itemType "bundle"). */
   bundle?: Bundle | null;
+  /** Team seats order (itemType "seats"), priced on the server from the team's courses. */
+  seats?: SeatsOrder | null;
 }
 
 /**
@@ -206,6 +209,24 @@ export function itemFromPlan(plan: MembershipPlan): BillingItem {
   };
 }
 
+export function itemFromSeats(order: SeatsOrder): BillingItem {
+  return {
+    type: "seats",
+    id: order.ref,
+    title: order.title,
+    name: order.org.name,
+    description: order.description,
+    gradient: "blue",
+    amount: order.quote.amount,
+    currency: order.quote.currency || "USD",
+    // A team's first order comes from the purchase page; later ones from the team page.
+    href: order.firstPurchase ? "/team/buy" : `/team?org=${encodeURIComponent(order.org.slug)}`,
+    course: null,
+    batch: null,
+    seats: order,
+  };
+}
+
 export function itemFromBundle(bundle: Bundle, courses: readonly Pick<Course, "id" | "title" | "imageUrl" | "cardGradient">[]): BillingItem {
   const included = bundleCourses(bundle, courses);
   return {
@@ -240,7 +261,12 @@ export async function getBillingItem(type: PaymentItemType, idOrSlug: string): P
     const bundle = db.bundles.find((b) => b.id === idOrSlug || b.slug === idOrSlug);
     return bundle ? itemFromBundle(bundle, db.courses) : null;
   }
-  // Other round 3 wave B item types (gifts, seats) are resolved by their own checkout flows.
+  if (type === "seats") {
+    // `<orgId>-<seats>`: the price is always recomputed from the team's courses.
+    const resolved = resolveSeatsOrder(db, idOrSlug);
+    return resolved.ok ? itemFromSeats(resolved.order) : null;
+  }
+  // Gifts are bought through their own checkout (/gift).
   if (type !== "course" && type !== "certificate") return null;
   const course = db.courses.find((c) => c.id === idOrSlug || c.slug === idOrSlug);
   return course ? itemFromCourse(course, type) : null;
@@ -341,6 +367,16 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     if (!isBundleOnSale(bundle, db.courses)) return { status: "denied", message: "This bundle is not available for purchase.", backHref: "/bundles", backLabel: "See all bundles" };
     const included = bundleCourses(bundle, db.courses).map((c) => c.id);
     if (ownedCourseIds(db, user.id, included).length === included.length) return { status: "owned", redirectTo: `/bundles/${bundle.slug}` };
+    if (pending) return { status: "pending", payment: pending };
+    return { status: "ok" };
+  }
+
+  if (item.type === "seats" && item.seats) {
+    const order = item.seats;
+    const back = { backHref: item.href, backLabel: "Back to your team" };
+    const problem = seatsPurchaseProblem(db, user, order);
+    if (problem) return { status: "denied", message: problem, ...back };
+    if (order.quote.amount <= 0) return { status: "denied", message: "This team order has nothing to pay. Contact us to add the seats.", ...back };
     if (pending) return { status: "pending", payment: pending };
     return { status: "ok" };
   }

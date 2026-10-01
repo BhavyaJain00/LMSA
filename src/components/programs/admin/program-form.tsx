@@ -12,6 +12,7 @@ import { Icon } from "@/components/ui/icons";
 import { useActionForm, useServerAction } from "@/components/batches/hooks";
 import type { ProgramEnrollmentReport, ProgramPaidCourse } from "../types";
 import { GrantPaidAccessField, useEnrollmentToast } from "./grant-paid-access";
+import { SlugSuggestion } from "@/components/seo/slug-suggestion";
 
 interface Values {
   title: string;
@@ -82,8 +83,9 @@ export function ProgramDetailsForm({ program, paidCourses = [], memberCount = 0 
               <Input id="program-title" name="title" value={values.title} onChange={(e) => set("title", e.target.value)} required maxLength={140} invalid={!!fieldErrors.title} placeholder="e.g. Full-Stack Developer Path" autoFocus={!program} />
             </Field>
             {program && (
-              <Field label="URL" htmlFor="program-slug" error={fieldErrors.slug} hint={`/programs/${values.slug || "…"}`}>
+              <Field label="URL" htmlFor="program-slug" error={fieldErrors.slug}>
                 <Input id="program-slug" name="slug" value={values.slug} onChange={(e) => set("slug", e.target.value.toLowerCase())} invalid={!!fieldErrors.slug} />
+                <SlugSuggestion title={values.title} slug={values.slug} onApply={(next) => set("slug", next)} basePath="/programs/" originalSlug={saved.slug || undefined} />
               </Field>
             )}
           </div>

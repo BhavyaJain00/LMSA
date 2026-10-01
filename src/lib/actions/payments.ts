@@ -81,7 +81,9 @@ import { orderBumpFor } from "@/lib/commerce/upsell-service";
 import { isOrderBump } from "@/lib/commerce/upsells";
 import { normalizeCurrency } from "@/lib/commerce/currency";
 import { validateRecoverySettings } from "@/lib/commerce/checkout-recovery";
+import { processAbandonedCheckouts } from "@/lib/commerce/checkout-sessions";
 import { countryCode, type TaxContext } from "@/lib/commerce/tax";
+import { referralAffiliateIdForCheckout } from "@/lib/growth/attribution";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
@@ -98,7 +100,8 @@ function revalidateOrder(orderId: string) {
 }
 
 /**
- * Place an order for a course, batch, certificate, membership plan or bundle.
+ * Place an order for a course, batch, certificate, membership plan, bundle or
+ * team seats.
  * The amount is computed here from the item price, the coupon and the tax
  * settings — never taken from the browser. A course sold in installments can
  * be ordered with `paymentOption=installments`: the order is then the first
@@ -199,6 +202,9 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   }
 
   const billing = billingFields(input, settings.commerce.applyTax);
+  // Referral attribution is stamped now, from the cookie, so the sale is credited even if the click was never linked.
+  const affiliateId = await referralAffiliateIdForCheckout(user.id);
+  const referral = affiliateId ? { affiliateId } : {};
   const orderGateway = total <= 0 ? "free" : gateway;
   const createdAt = new Date().toISOString();
   // The coupon's usage limit is enforced again inside this serialized insert (the use is reserved there).
@@ -210,6 +216,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     itemTitle: split ? installmentItemTitle(item.title, 1, split.plan.count) : item.title,
     ...(item.plan ? { planId: item.plan.id } : {}),
     ...(item.bundle ? { bundleId: item.bundle.id } : {}),
+    // Team seats: the team and the seat count (the seats are added by the growth `payment.paid` handler).
+    ...(item.seats ? { orgId: item.seats.org.id, seats: item.seats.seats } : {}),
     ...(split ? { installmentNumber: 1, installmentsTotal: split.plan.count } : {}),
     originalAmount: charge.originalAmount,
     discountAmount: charge.discountAmount,
@@ -220,6 +228,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     couponId: coupon?.id,
     couponCode: coupon?.code,
     ...billing,
+    ...referral,
     gateway: orderGateway,
     status: "pending",
     createdAt,
@@ -238,6 +247,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
         currency: bump.summary.currency,
         ...orderTaxFields(bump.summary),
         ...billing,
+        ...referral,
         gateway: orderGateway,
         status: "pending",
         createdAt,
@@ -1080,5 +1090,44 @@ export async function saveRecoverySettingsAction(_prev: ActionResult | null, for
   });
   await audit(user, "settings.checkout_recovery", { type: "settings", id: "growth" }, { enabled, delays: delaysHours.join(","), couponPercent });
   revalidatePath("/admin/settings/plans");
-  return { ok: true, message: enabled ? "Checkout reminders saved." : "Checkout reminders turned off." };
+  return { ok: true, data: undefined, message: enabled ? "Checkout reminders saved." : "Checkout reminders turned off." };
+}
+
+/** Send the checkout reminders that are due right now instead of waiting for the next scheduled run (admin). */
+export async function sendDueCheckoutRemindersAction(): Promise<ActionResult<{ sent: number }>> {
+  const user = await getCurrentUser();
+  if (!user || !isAdmin(user)) return { ok: false, error: "Only administrators can send checkout reminders." };
+  const db = await getDb();
+  if (!db.settings.growth.abandonedCheckoutEnabled) return { ok: false, error: "Checkout reminders are turned off. Turn them on first." };
+  if (!db.settings.email.enabled) return { ok: false, error: "Email sending is turned off in Settings → Email, so no reminder can go out." };
+  const run = await processAbandonedCheckouts({ force: true });
+  if (run.sent > 0) await audit(user, "checkout_recovery.run", { type: "settings", id: "growth" }, { sent: run.sent, coupons: run.coupons });
+  revalidatePath("/admin/settings/plans");
+  const closed = run.closed ? ` ${run.closed} checkout${run.closed === 1 ? " was" : "s were"} marked as purchased.` : "";
+  const message = run.sent
+    ? `Sent ${run.sent} reminder${run.sent === 1 ? "" : "s"}${run.coupons ? `, ${run.coupons} with a discount code` : ""}.${closed}`
+    : `No reminders are due right now.${closed}`;
+  return { ok: true, data: { sent: run.sent }, message };
+}
+
+/** Stop further reminders for abandoned checkouts (e.g. the buyer asked, or bought another way) (admin). */
+export async function stopCheckoutRemindersAction(ids: string[]): Promise<ActionResult<{ stopped: number }>> {
+  const user = await getCurrentUser();
+  if (!user || !isAdmin(user)) return { ok: false, error: "Only administrators can change checkout reminders." };
+  const wanted = new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string" && !!x && x.length <= 64).slice(0, 500) : []);
+  if (!wanted.size) return { ok: false, error: "Select at least one checkout." };
+  const stopped = await mutate((d) => {
+    const last = d.settings.growth.abandonedCheckoutDelaysHours.length;
+    let n = 0;
+    for (const s of d.checkoutSessions) {
+      if (!wanted.has(s.id) || s.completedPaymentId || s.reminderCount >= last) continue;
+      s.reminderCount = last;
+      n++;
+    }
+    return n;
+  });
+  if (!stopped) return { ok: false, error: "These checkouts have no reminders left to stop." };
+  await audit(user, "checkout_recovery.stop", { type: "checkout_session", id: [...wanted].join(",").slice(0, 200) }, { stopped });
+  revalidatePath("/admin/settings/plans");
+  return { ok: true, data: { stopped }, message: stopped === 1 ? "No more reminders will be sent for this checkout." : `No more reminders will be sent for ${stopped} checkouts.` };
 }

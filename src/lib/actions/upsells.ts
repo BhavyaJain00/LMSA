@@ -138,6 +138,8 @@ export async function acceptUpsellAction(orderId: string): Promise<ActionResult<
     gstin: main.gstin,
     pan: main.pan,
     source: main.source,
+    // The one-click add-on is credited to the affiliate of the order it follows.
+    ...(main.affiliateId ? { affiliateId: main.affiliateId } : {}),
     gateway: offer.summary.total <= 0 ? "free" : gateway,
     status: "pending",
     createdAt: new Date().toISOString(),

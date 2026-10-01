@@ -75,7 +75,7 @@ describe("round 3 settings", () => {
       dataRetentionDays: 365,
     });
     assert.equal(d.ai.enabled, false);
-    assert.equal(d.ai.model, "claude-sonnet-5");
+    assert.equal(d.ai.model, "claude-opus-5-5");
     assert.equal(d.ai.dailyMessageLimit, 30);
     assert.equal(d.ai.reviewQueue, true);
     assert.equal(d.storage.transcodeToHls, true);

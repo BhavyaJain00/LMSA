@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import type { ChapterWithLessons, Course, PublicUser, Review, User } from "@/lib/types";
 import { getCurrentUser, isModerator } from "@/lib/auth/session";
-import { getSettings } from "@/lib/db/store";
+import { getDb, getSettings } from "@/lib/db/store";
+import { courseTutorAccess } from "@/lib/ai/access";
 import {
   canManageCourse,
   canViewCourse,
@@ -222,6 +223,8 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const isInstructor = !!user && course.instructorIds.includes(user.id);
   const canWriteReview = settings.features.reviews && !!user && !!enrollment && !hasOwnReview && !isInstructor;
   const certificationsEnabled = settings.features.certifications;
+  // The AI tutor's full page: enrolled learners (with access) and course staff, once the tutor is set up.
+  const askAi = !!user && (manager || !!enrollmentView) && courseTutorAccess(await getDb(), course, user).ok;
 
   const enrollCard = (
     <EnrollCard
@@ -235,6 +238,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
       batches={batches.map((b) => ({ slug: b.slug, title: b.title, startDate: b.startDate }))}
       includes={includes}
       certificationsEnabled={certificationsEnabled}
+      askAiHref={askAi ? `/courses/${course.slug}/ask` : null}
     />
   );
 

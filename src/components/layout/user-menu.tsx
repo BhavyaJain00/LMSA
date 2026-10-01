@@ -7,7 +7,11 @@ import { Icon } from "@/components/ui/icons";
 import { logoutAction } from "@/lib/actions/auth";
 import { roleLabels } from "@/lib/config";
 
-export function UserMenu({ user }: { user: PublicUser }) {
+/**
+ * Account menu. `membership` shows the Membership link (subscriptions are on,
+ * or the member has one); `gifts` shows the gift purchases page.
+ */
+export function UserMenu({ user, membership = false, gifts = false }: { user: PublicUser; membership?: boolean; gifts?: boolean }) {
   const isStaff = user.roles.some((r) => r !== "student");
   return (
     <Dropdown
@@ -32,7 +36,10 @@ export function UserMenu({ user }: { user: PublicUser }) {
         { label: "Account settings", href: "/settings", icon: <Icon.Settings /> },
         { label: "Security", href: "/settings/security", icon: <Icon.ShieldCheck /> },
         { label: "Email notifications", href: "/settings/notifications", icon: <Icon.Mail /> },
+        { label: "Privacy & data", href: "/settings/privacy", icon: <Icon.Shield /> },
         { label: "Orders & invoices", href: "/billing/history", icon: <Icon.Receipt /> },
+        ...(membership ? [{ label: "Membership", href: "/settings/subscription", icon: <Icon.Star /> }] : []),
+        ...(gifts ? [{ label: "Gifts", href: "/gift", icon: <Icon.Gift /> }] : []),
         { label: "You", description: "Your account hub and shortcuts", href: "/you", icon: <Icon.Smartphone /> },
         { label: "Log out", action: logoutAction, icon: <Icon.LogOut />, separator: true, destructive: true },
       ]}

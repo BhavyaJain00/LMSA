@@ -218,6 +218,22 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
           </ButtonLink>,
         );
       }
+    } else if (payment.itemType === "seats") {
+      const team = db.organizations.find((o) => o.id === payment.orgId) ?? null;
+      message = team ? (
+        <>
+          {payment.seats ? `${payment.seats} ${payment.seats === 1 ? "seat" : "seats"}` : "The seats"} for <strong className="text-ink">{team.name}</strong> are ready. Invite your team members so they can start learning.
+        </>
+      ) : (
+        <>Thanks for your purchase of {payment.itemTitle}.</>
+      );
+      if (team && own) {
+        actions.push(
+          <ButtonLink key="team" href={`/team?org=${encodeURIComponent(team.slug)}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+            Invite your team
+          </ButtonLink>,
+        );
+      }
     } else if (gift) {
       heading = gift.status === "redeemed" ? "Your gift was redeemed" : gift.status === "scheduled" ? "Your gift is scheduled" : "Your gift is on its way";
       message = (

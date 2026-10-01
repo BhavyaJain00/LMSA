@@ -5,9 +5,10 @@ import { getDb } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { fuzzyMatch } from "@/components/command-palette/fuzzy";
 import type { SearchResultGroup, SearchResultItem, SearchScope } from "@/components/command-palette/config";
-import { formatDate, truncate } from "@/lib/utils";
+import { formatDate, formatTime, truncate } from "@/lib/utils";
+import { searchTranscripts } from "@/lib/transcripts/search";
 
-const SCOPES: SearchScope[] = ["courses", "batches", "programs", "jobs", "quizzes", "assignments", "people"];
+const SCOPES: SearchScope[] = ["courses", "transcripts", "batches", "programs", "jobs", "quizzes", "assignments", "people"];
 
 interface Candidate {
   id: string;
@@ -45,7 +46,7 @@ function canSeeAssessments(viewer: User | null): boolean {
 }
 
 /**
- * GET /api/search?q=<query>&scope=<courses|batches|programs|jobs|quizzes|assignments|people>
+ * GET /api/search?q=<query>&scope=<courses|transcripts|batches|programs|jobs|quizzes|assignments|people>
  * Grouped, permission-aware search used by the command palette.
  */
 export async function GET(req: NextRequest) {
@@ -84,6 +85,21 @@ export async function GET(req: NextRequest) {
       limit,
     );
     if (items.length) groups.push({ key: "courses", label: "Courses", items });
+  }
+
+  if (want("transcripts") && f.courses) {
+    // Spoken words in lesson videos the viewer may open; each result starts the video at the match.
+    const results = await searchTranscripts(query, viewer, { limit, matchesPerLesson: 1 });
+    const items: SearchResultItem[] = results
+      .filter((r) => r.matches.length > 0)
+      .map((r) => ({
+        id: `${r.lessonId}:${r.blockId}`,
+        title: r.lessonTitle,
+        subtitle: `${formatTime(r.matches[0]!.start)} · ${r.matches[0]!.snippet}`,
+        href: r.matches[0]!.href || r.href,
+        indices: [],
+      }));
+    if (items.length) groups.push({ key: "transcripts", label: "In video transcripts", items });
   }
 
   if (want("batches") && f.batches) {

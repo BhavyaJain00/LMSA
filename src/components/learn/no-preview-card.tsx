@@ -18,6 +18,10 @@ export interface NoPreviewCardProps {
   signupHref: string | null;
   /** Guest access to preview lessons is turned off in settings. */
   guestAccessDisabled: boolean;
+  /** The viewer was enrolled through a membership plan that has ended (lapsed, cancelled or expired). */
+  membershipEnded?: boolean;
+  /** Membership plans are on sale (the rejoin link goes to /pricing). */
+  plansAvailable?: boolean;
 }
 
 /**
@@ -25,11 +29,41 @@ export interface NoPreviewCardProps {
  * explains why and offers the right next step (enroll, buy, log in, or
  * contact the administrator).
  */
-export function NoPreviewCard({ course, lessonTitle, lessonHref, loggedIn, hasPaid, loginHref, signupHref, guestAccessDisabled }: NoPreviewCardProps) {
+export function NoPreviewCard({
+  course,
+  lessonTitle,
+  lessonHref,
+  loggedIn,
+  hasPaid,
+  loginHref,
+  signupHref,
+  guestAccessDisabled,
+  membershipEnded = false,
+  plansAvailable = true,
+}: NoPreviewCardProps) {
   const paid = course.paidCourse && course.price > 0;
+  const lapsed = loggedIn && membershipEnded;
 
   let action: ReactNode;
-  if (!loggedIn) {
+  if (lapsed) {
+    action = (
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {plansAvailable && (
+          <ButtonLink href="/pricing" size="lg" leftIcon={<Icon.Star className="size-4" />}>
+            Rejoin membership
+          </ButtonLink>
+        )}
+        {paid && !course.disableSelfLearning && (
+          <ButtonLink href={`/billing/course/${course.id}`} size="lg" variant={plansAvailable ? "outline" : "primary"} leftIcon={<Icon.CreditCard className="size-4" />}>
+            Buy this course · {formatPrice(course.price, course.currency)}
+          </ButtonLink>
+        )}
+        <ButtonLink href="/settings/subscription" size="lg" variant="ghost">
+          Membership details
+        </ButtonLink>
+      </div>
+    );
+  } else if (!loggedIn) {
     action = (
       <div className="flex flex-wrap items-center justify-center gap-2">
         <ButtonLink href={loginHref} size="lg" leftIcon={<Icon.LogIn className="size-4" />}>
@@ -75,9 +109,11 @@ export function NoPreviewCard({ course, lessonTitle, lessonHref, loggedIn, hasPa
         <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-surface-2 text-ink-muted">
           <Icon.Lock className="size-6" />
         </span>
-        <h1 className="mt-4 text-lg font-semibold text-ink">This lesson is locked</h1>
+        <h1 className="mt-4 text-lg font-semibold text-ink">{lapsed ? "Your membership has ended" : "This lesson is locked"}</h1>
         <p className="mx-auto mt-1 max-w-md text-sm text-ink-muted">
-          {!loggedIn && guestAccessDisabled
+          {lapsed
+            ? "This course was part of your membership. Rejoin or buy this course to continue where you left off; your progress is saved."
+            : !loggedIn && guestAccessDisabled
             ? "Log in to access the lessons of this course."
             : "This lesson is not available for preview. Please enroll in the course to access it."}
         </p>

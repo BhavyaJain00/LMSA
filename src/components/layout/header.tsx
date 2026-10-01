@@ -15,11 +15,17 @@ export function Header({
   notifications,
   unread,
   showNotifications,
+  membership = false,
+  gifts = false,
 }: {
   user: PublicUser | null;
   notifications: Notification[];
   unread: number;
   showNotifications: boolean;
+  /** Show the Membership link in the account menu. */
+  membership?: boolean;
+  /** Show the Gifts link in the account menu. */
+  gifts?: boolean;
 }) {
   const { setMobileOpen } = useSidebar();
 
@@ -48,7 +54,7 @@ export function Header({
         {user ? (
           <>
             {showNotifications && <NotificationsBell notifications={notifications} unread={unread} />}
-            <UserMenu user={user} />
+            <UserMenu user={user} membership={membership} gifts={gifts} />
           </>
         ) : (
           <>

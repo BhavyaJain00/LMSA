@@ -12,27 +12,6 @@ import type { Conversation, DirectMessage, Role } from "@/lib/types";
  *    rendered as React text, so no HTML from a message ever reaches the page.
  */
 
-declare module "@/lib/types" {
-  interface Conversation {
-    /** Round 3 comms: who reported the conversation, when and why. */
-    reportedBy?: string;
-    reportedAt?: string;
-    reportReason?: string;
-    /** The message the reporter pointed at (optional). */
-    reportedMessageId?: string;
-    /** A moderator closed the report. */
-    reportResolvedAt?: string;
-    reportResolvedBy?: string;
-    /** Total reports filed on this conversation (a re-report reopens it). */
-    reportCount?: number;
-  }
-  interface DirectMessage {
-    /** Round 3 comms: removed by its sender or by a moderator; the body is cleared. */
-    removedAt?: string;
-    removedBy?: string;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /* Limits                                                              */
 /* ------------------------------------------------------------------ */

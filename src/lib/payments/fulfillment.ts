@@ -87,6 +87,8 @@ export function hasOrderAccess(
 ): boolean {
   // A gift order buys the gift itself (its code); the recipient's access comes with their own order when it is redeemed.
   if (payment.itemType === "gift") return db.gifts.some((g) => g.id === payment.itemId);
+  // Seats are added by the growth handler when the order is paid (there is no enrollment to check).
+  if (payment.itemType === "seats") return true;
   if (payment.itemType === "course") {
     if (!db.enrollments.some((e) => e.userId === payment.userId && e.courseId === payment.itemId)) return false;
     // The first part of a payment plan also owes the buyer the schedule of the remaining parts.
@@ -375,6 +377,8 @@ async function grantAccess(payment: Payment): Promise<{ learnerExists: boolean; 
 
   // The gift email is sent by the `payment.paid` handler (or at the gift's send time); the code works from now on.
   if (payment.itemType === "gift") return { learnerExists: true };
+  // Team seats are added to the team by the growth `payment.paid` handler; nobody is enrolled here.
+  if (payment.itemType === "seats") return { learnerExists: true };
 
   if (payment.itemType === "batch") {
     const batch = db.batches.find((b) => b.id === payment.itemId);
@@ -793,6 +797,8 @@ export function revokeAccessIn(
     revokeGiftIn(d, payment, at);
     return;
   }
+  // Refunded team seats are taken back by the growth `payment.refunded` handler.
+  if (payment.itemType === "seats") return;
   if (payment.itemType === "plan") {
     revokeMembershipIn(d, payment);
     return;
