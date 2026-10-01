@@ -80,6 +80,7 @@ import { isGatewayManaged, isOngoing } from "@/lib/commerce/subscriptions";
 import { orderBumpFor } from "@/lib/commerce/upsell-service";
 import { isOrderBump } from "@/lib/commerce/upsells";
 import { normalizeCurrency } from "@/lib/commerce/currency";
+import { validateRecoverySettings } from "@/lib/commerce/checkout-recovery";
 import { countryCode, type TaxContext } from "@/lib/commerce/tax";
 
 /* ------------------------------------------------------------------ */
@@ -1058,4 +1059,26 @@ export async function testGatewayConnectionAction(gateway: string): Promise<Acti
   if (!isRealGateway(gateway)) return { ok: false, error: "Unknown payment gateway." };
   const res = await testGatewayConnection(gateway);
   return res.ok ? { ok: true, data: undefined, message: res.message } : { ok: false, error: res.error };
+}
+
+/* ------------------------------------------------------------------ */
+/* Abandoned-checkout recovery settings                                */
+/* ------------------------------------------------------------------ */
+
+/** Turn checkout reminders on/off, set when they go out and the discount of the last one (admin). */
+export async function saveRecoverySettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user || !isAdmin(user)) return { ok: false, error: "Only administrators can change checkout reminders." };
+  const parsed = validateRecoverySettings({ enabled: fdBool(formData, "enabled"), delays: fd(formData, "delays"), couponPercent: fd(formData, "couponPercent") });
+  if (!parsed.ok) return { ok: false, error: Object.values(parsed.errors)[0] ?? "Please fix the errors below.", fieldErrors: parsed.errors };
+  const { enabled, delaysHours, couponPercent } = parsed.value;
+  await mutate((d) => {
+    d.settings.growth.abandonedCheckoutEnabled = enabled;
+    d.settings.growth.abandonedCheckoutDelaysHours = delaysHours;
+    d.settings.growth.abandonedCheckoutCouponPercent = couponPercent;
+    d.settings.updatedAt = new Date().toISOString();
+  });
+  await audit(user, "settings.checkout_recovery", { type: "settings", id: "growth" }, { enabled, delays: delaysHours.join(","), couponPercent });
+  revalidatePath("/admin/settings/plans");
+  return { ok: true, message: enabled ? "Checkout reminders saved." : "Checkout reminders turned off." };
 }

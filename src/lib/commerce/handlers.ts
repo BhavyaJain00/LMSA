@@ -4,6 +4,7 @@ import { on } from "@/lib/events";
 import { sendMembershipMessage, type MembershipMessage } from "./emails";
 import { afterInstallmentPaid, afterInstallmentRefunded } from "./installment-gateway";
 import { deliverGift } from "./gift-service";
+import { completeCheckoutSessions } from "./checkout-sessions";
 
 /**
  * Commerce reactions to domain events (registered from `src/lib/handlers.ts`).
@@ -15,6 +16,10 @@ import { deliverGift } from "./gift-service";
  *
  * `payment.paid` of a gift order: email the recipient now, unless the buyer
  * chose a later send time (then the delivery run sends it).
+ *
+ * `payment.paid` of anything sold at checkout: the buyer's open checkout of
+ * that item is closed, so no "you left something in your checkout" reminder
+ * follows the purchase (counted as recovered when a reminder went out).
  *
  * `subscription.changed`: tell the member when their membership starts,
  * needs a payment, or ends. Period-only changes (a renewal) are covered by
@@ -72,4 +77,12 @@ on(
     if (event.data.itemType === "gift") await deliverGift(event.data.itemId);
   },
   { key: "commerce:gift-delivery" },
+);
+
+on(
+  "payment.paid",
+  async (event) => {
+    await completeCheckoutSessions(event.data.paymentId);
+  },
+  { key: "commerce:checkout-recovery" },
 );
