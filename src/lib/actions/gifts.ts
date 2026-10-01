@@ -12,7 +12,7 @@ import { audit } from "@/lib/audit";
 import { setFlash } from "@/lib/flash";
 import { notifyAdminsOfPendingOrder } from "@/lib/data/commerce";
 import { fulfillPayment } from "@/lib/payments/fulfillment";
-import { GATEWAY_NAMES, checkoutUrls, createCheckout, gatewayErrorMessage, isConfigured, isRealGateway } from "@/lib/payments/gateway";
+import { GATEWAY_NAMES, checkoutUrls, createCheckout, gatewayErrorMessage, isConfigured, isRealGateway, resumeCheckout } from "@/lib/payments/gateway";
 import { billingFields, readBilling, validateBilling } from "@/lib/payments/billing-input";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { deliverGift, giftSummary, insertGiftOrder, redeemGift, resolveGiftItem, updateScheduledGift } from "@/lib/commerce/gift-service";
@@ -100,20 +100,25 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
     redirect(orderPath(payment.orderId));
   }
 
+  if (existing) {
+    // The same gift is already being paid: continue that checkout instead of opening a second one.
+    const resumed = await resumeCheckout(payment);
+    revalidateGifts(payment.orderId);
+    return resumed.ok ? { ok: true, data: resumed.next, message: resumed.message } : { ok: false, error: resumed.error };
+  }
+
   try {
     const next = await createCheckout(payment, checkoutUrls(payment));
     revalidateGifts(payment.orderId);
     return { ok: true, data: next, message: next.kind === "redirect" ? `Redirecting to ${GATEWAY_NAMES[gateway as keyof typeof GATEWAY_NAMES] ?? "payment"}…` : undefined };
   } catch (error) {
     // Nothing reached the gateway: drop the order (and its gift) so the buyer can simply try again.
-    if (!existing) {
-      await mutate((d) => {
-        const dropped = d.payments.some((p) => p.id === payment.id && p.status === "pending" && !p.gatewayOrderId);
-        if (!dropped) return;
-        d.payments = d.payments.filter((p) => p.id !== payment.id);
-        d.gifts = d.gifts.filter((g) => g.id !== inserted.gift.id);
-      });
-    }
+    await mutate((d) => {
+      const dropped = d.payments.some((p) => p.id === payment.id && p.status === "pending" && !p.gatewayOrderId);
+      if (!dropped) return;
+      d.payments = d.payments.filter((p) => p.id !== payment.id);
+      d.gifts = d.gifts.filter((g) => g.id !== inserted.gift.id);
+    });
     return { ok: false, error: gatewayErrorMessage(error) };
   }
 }

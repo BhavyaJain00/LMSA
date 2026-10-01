@@ -168,7 +168,7 @@ function UpsellForm({ upsell, choices, onDone }: { upsell: UpsellRowData | null;
       {mismatch && (
         <p role="alert" className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-ink">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-          These two items are priced in different currencies, so the offer can't be added to the same payment and won&apos;t be shown.
+          These two items are priced in different currencies, so the offer can&apos;t be added to the same payment and won&apos;t be shown.
         </p>
       )}
       <div className="rounded-lg border border-border px-4 py-3">

@@ -4,6 +4,7 @@ import { socialLabel } from "@/lib/seo/footer";
 import { CookieSettingsLink } from "@/components/legal/cookie-settings-link";
 import { Icon } from "@/components/ui/icons";
 import { FooterGate } from "./footer-gate";
+import { LeadForm } from "./lead-form";
 
 const linkClass = "rounded-sm text-ink-muted transition-colors hover:text-ink hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
@@ -71,6 +72,13 @@ function FullFooter({ data }: { data: FooterData }) {
   return (
     <footer className="border-t border-border bg-surface-1">
       <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <div className="mb-10 flex flex-col gap-4 rounded-card border border-border bg-surface-2/50 p-5 lg:flex-row lg:items-center lg:justify-between lg:gap-10">
+          <div className="min-w-0 max-w-md">
+            <h2 className="text-base font-semibold text-ink">Free lessons in your inbox</h2>
+            <p className="mt-1 text-sm leading-relaxed text-ink-muted">New free lessons, practical guides and course launches from {data.brandName}. A few emails a month.</p>
+          </div>
+          <LeadForm source="footer" variant="compact" privacyHref={data.legal.find((l) => l.slug === "privacy")?.href} className="w-full lg:max-w-xl" />
+        </div>
         <div className="grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.3fr)_repeat(4,minmax(0,1fr))]">
           <div className="min-w-0 sm:col-span-2 lg:col-span-1">
             <Link href="/" className="inline-flex max-w-full items-center gap-2.5 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">

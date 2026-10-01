@@ -52,9 +52,14 @@ export default async function OrderHistoryPage(props: PageProps<"/billing/histor
         title="Orders & invoices"
         description="Everything you bought, with receipts and printable invoices. Unpaid orders can be completed or cancelled here."
         actions={
-          <ButtonLink href="/courses" variant="outline" size="sm" leftIcon={<Icon.BookOpen className="size-4" />}>
-            Browse courses
-          </ButtonLink>
+          <>
+            <ButtonLink href="/gift" variant="ghost" size="sm" leftIcon={<Icon.Gift className="size-4" />}>
+              Gifts
+            </ButtonLink>
+            <ButtonLink href="/courses" variant="outline" size="sm" leftIcon={<Icon.BookOpen className="size-4" />}>
+              Browse courses
+            </ButtonLink>
+          </>
         }
       />
 

@@ -60,6 +60,7 @@ import { SalesHero } from "@/components/marketing/sales/sales-hero";
 import { ENROLL_ANCHOR, SalesSections } from "@/components/marketing/sales/sales-sections";
 import { isPaidCourse } from "@/components/catalog/price-tag";
 import { hasSalesPage } from "@/lib/seo/sales-page";
+import { privacyPolicyHref } from "@/lib/seo/lead-capture";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -264,6 +265,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
       title="Get the syllabus by email"
       description={`The full outline of ${course.title}, chapter by chapter, straight to your inbox. Confirm your address and it is on its way.`}
       submitLabel="Email me the syllabus"
+      privacyHref={await privacyPolicyHref()}
     />
   ) : null;
 

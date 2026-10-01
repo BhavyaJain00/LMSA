@@ -172,7 +172,7 @@ const form = (fields: Record<string, string>) => {
   return fd;
 };
 
-const billing = { billingName: "Bea Buyer", line1: "1 Main Street", city: "Lisbon", country: "Portugal", source: "Google", consent: "on" };
+const billing = { billingName: "Bea Buyer", line1: "1 Main Street", city: "Lisbon", country: "Portugal", source: "Search engine", consent: "on" };
 
 before(() => {
   mock.method(console, "info", () => undefined);

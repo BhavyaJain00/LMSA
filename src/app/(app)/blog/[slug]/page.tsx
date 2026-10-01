@@ -21,6 +21,8 @@ import { PostToc } from "@/components/blog/post-toc";
 import { RelatedCourseCta } from "@/components/blog/related-course-cta";
 import { ShareBar } from "@/components/blog/share-bar";
 import { ArticleTeasers } from "@/components/marketing/article-teasers";
+import { LeadForm } from "@/components/marketing/lead-form";
+import { privacyPolicyHref } from "@/lib/seo/lead-capture";
 import { ChipLinks } from "@/components/marketing/chip-links";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -221,6 +223,15 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
 
           <div className="mt-6 border-t border-border pt-5">
             <ShareBar url={url} title={post.title} />
+          </div>
+
+          <div className="mt-10">
+            <LeadForm
+              source="blog"
+              title="Liked this article? Get the next one by email"
+              description="New articles, free lessons and course launches. A few emails a month, unsubscribe any time."
+              privacyHref={await privacyPolicyHref()}
+            />
           </div>
 
           {courses.length > 0 && (

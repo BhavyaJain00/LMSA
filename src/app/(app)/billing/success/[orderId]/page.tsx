@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { isAdmin, requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { gatewayLabel, getBillingItem, getPaymentByOrderId, ITEM_TYPE_LABELS } from "@/lib/data/commerce";
+import { gatewayLabel, getBillingItem, getPaymentByOrderId, isScheduledPart, ITEM_TYPE_LABELS } from "@/lib/data/commerce";
 import { getNextLesson, lessonHref } from "@/lib/data/courses";
 import { backfillInvoiceNumbers, formatAddressLines, hasInvoice, needsInvoiceNumber } from "@/lib/payments/invoice";
 import { isRealGateway, syncPaymentStatus } from "@/lib/payments/gateway";
@@ -27,6 +27,8 @@ import { bumpsOf, chargeAmount, isOrderBump } from "@/lib/commerce/upsells";
 import { postPurchaseOfferFor } from "@/lib/commerce/upsell-service";
 import { PostPurchaseOffer } from "@/components/commerce/post-purchase-offer";
 import { formatDate, formatDateTime } from "@/lib/utils";
+import { purchaseEventParams } from "@/lib/seo/tracking";
+import { TrackEvent } from "@/components/seo/track-event";
 
 export const metadata = { title: "Order" };
 
@@ -57,7 +59,8 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
   const plan = await getPlanViewForOrder(payment);
   const laterPart = isInstallmentOrder(payment) && payment.installmentNumber! > 1;
   const partLabel = plan ? `Payment ${payment.installmentNumber} of ${plan.total}` : "";
-  const dueInFuture = laterPart && Date.parse(payment.createdAt) > Date.now();
+  // A later part of a plan that is not due yet.
+  const dueInFuture = isScheduledPart(payment);
   // Gift orders: the gift they bought (recipient, delivery, code).
   const gift = await getGiftForOrder(payment);
   const giftRow = gift ? db.gifts.find((g) => g.id === gift.id) : undefined;
@@ -394,6 +397,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
 
   return (
     <>
+      {own && payment.status === "paid" && payment.amount > 0 && <TrackEvent event="purchase" params={purchaseEventParams(payment)} onceKey={`purchase:${payment.orderId}`} />}
       <PageHeader
         title="Order"
         breadcrumbs={<Breadcrumbs items={[own ? { label: "Orders", href: "/billing/history" } : { label: "Transactions", href: "/admin/settings/transactions" }, { label: payment.orderId }]} />}
