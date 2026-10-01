@@ -6,7 +6,7 @@ import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
 import { getDb, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
-import { getPaymentByOrderId, insertPendingOrder, notifyAdminsOfPendingOrder } from "@/lib/data/commerce";
+import { getPaymentByOrderId, insertPendingOrder, notifyAdminsOfPendingOrder, orderTaxFields } from "@/lib/data/commerce";
 import { fulfillPayment } from "@/lib/payments/fulfillment";
 import { GATEWAY_NAMES, checkoutUrls, createCheckout, gatewayErrorMessage, isConfigured, isRealGateway } from "@/lib/payments/gateway";
 import type { CheckoutNext } from "@/lib/payments/types";
@@ -132,6 +132,7 @@ export async function acceptUpsellAction(orderId: string): Promise<ActionResult<
     taxAmount: offer.summary.taxAmount,
     amount: offer.summary.total,
     currency: offer.summary.currency,
+    ...orderTaxFields(offer.summary),
     billingName: main.billingName,
     address: main.address,
     gstin: main.gstin,

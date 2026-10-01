@@ -31,7 +31,7 @@ export default async function InvoicePage(props: PageProps<"/billing/invoice/[or
   const db = await getDb();
   const own = payment.userId === user.id;
   const buyer = db.users.find((u) => u.id === payment.userId) ?? null;
-  const invoice = buildInvoiceView(payment, { settings: db.settings, buyer, gatewayLabel: gatewayLabel(payment.gateway) });
+  const invoice = buildInvoiceView(payment, { settings: db.settings, buyer, gatewayLabel: gatewayLabel(payment.gateway), taxRules: db.taxRules });
   const orderHref = `/billing/success/${encodeURIComponent(payment.orderId)}`;
   const dashboardUrl = !own && isAdmin(user) ? paymentDashboardUrl(payment) : null;
 

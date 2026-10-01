@@ -9,7 +9,8 @@ import { renderEmail, type EmailBlock } from "@/lib/email/templates";
 import { notify } from "@/lib/services/notifications";
 import { SlidingWindowRateLimiter, perIpLimit, type RateLimitRule } from "@/lib/auth/rate-limit";
 import { fulfillPayment } from "@/lib/payments/fulfillment";
-import { computeOrderSummary, getBillingItem, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import { computeOrderSummary, getBillingItem, orderTaxFields, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import type { TaxContext } from "./tax";
 import { formatDate, formatPrice, shortCode, uid } from "@/lib/utils";
 import { currentSubscription, ownedCourseIds, resolveCourseAccess } from "./access";
 import { bundleCourses, isBundleOnSale } from "./bundles";
@@ -58,8 +59,8 @@ export async function resolveGiftItem(type: GiftItemType, idOrSlug: string): Pro
 }
 
 /** The gift as one order: the item's price and tax (gifts take no coupons). */
-export function giftSummary(item: BillingItem, settings: Database["settings"]): OrderSummary {
-  return computeOrderSummary({ ...item, type: "gift", title: giftOrderTitle(item.title) }, null, settings);
+export function giftSummary(item: BillingItem, settings: Database["settings"], tax?: TaxContext | null): OrderSummary {
+  return computeOrderSummary({ ...item, type: "gift", title: giftOrderTitle(item.title) }, null, settings, tax);
 }
 
 /** "Lifetime access to …", "3 courses: …", "1 month of …" — what the recipient gets. */
@@ -164,6 +165,7 @@ export async function insertGiftOrder(input: {
       taxAmount: summary.taxAmount,
       amount: summary.total,
       currency: summary.currency,
+      ...orderTaxFields(summary),
       ...input.billing,
       gateway: summary.total <= 0 ? "free" : input.gateway,
       status: "pending",

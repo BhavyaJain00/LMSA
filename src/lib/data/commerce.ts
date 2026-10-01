@@ -1,5 +1,5 @@
 import "server-only";
-import type { Batch, Bundle, Coupon, Course, CourseInstallmentPlan, Database, MembershipPlan, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
+import type { Batch, Bundle, Coupon, Course, CourseInstallmentPlan, CurrencyPrice, Database, MembershipPlan, Notification, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { hasRole } from "@/lib/auth/session";
@@ -14,6 +14,8 @@ import { installmentPlanPrice, isInstallmentOrder, offeredInstallmentPlan, split
 import { intervalNoun, isRecurringInterval, planAccessLabel } from "@/lib/commerce/plans";
 import { isOngoing, trialEligible, trialEnd } from "@/lib/commerce/subscriptions";
 import { bumpOrderId, isOrderBump } from "@/lib/commerce/upsells";
+import { applyTax, resolveTax, type TaxContext } from "@/lib/commerce/tax";
+import { pickPrice, selectableCurrencies } from "@/lib/commerce/currency";
 import {
   couponAppliesTo,
   couponAttemptsBlocked,
@@ -112,6 +114,44 @@ export interface BillingItem {
   plan?: MembershipPlan | null;
   /** Course bundle (itemType "bundle"). */
   bundle?: Bundle | null;
+}
+
+/**
+ * Fixed prices in other currencies an item can be sold at: courses (not
+ * their certificates), bundles and lifetime plans. Plans that renew are
+ * always billed in their own currency, because the gateway's recurring
+ * price is created in it.
+ */
+function currencyPricesOf(item: BillingItem): readonly CurrencyPrice[] | undefined {
+  if (item.type === "course") return item.course?.prices;
+  if (item.type === "bundle") return item.bundle?.prices;
+  if (item.type === "plan" && item.plan && !isRecurringInterval(item.plan.interval)) return item.plan.prices;
+  return undefined;
+}
+
+/** The item's own price, before any currency choice. */
+function defaultPriceOf(item: BillingItem): { amount: number; currency: string } {
+  if (item.type === "course" && item.course) return { amount: item.course.price, currency: item.course.currency || "USD" };
+  if (item.type === "bundle" && item.bundle) return { amount: item.bundle.price, currency: item.bundle.currency || "USD" };
+  if (item.type === "plan" && item.plan) return { amount: item.plan.price, currency: item.plan.currency || "USD" };
+  return { amount: item.amount, currency: item.currency };
+}
+
+/** Currencies a buyer can pay this item in (the default first). */
+export function itemCurrencies(item: BillingItem, settings: Pick<Settings, "growth">): string[] {
+  return selectableCurrencies(defaultPriceOf(item), currencyPricesOf(item), settings.growth.multiCurrency);
+}
+
+/**
+ * The item priced in the buyer's currency: its fixed price in `currency`
+ * when multi-currency is on and one is defined, else its default price.
+ * Every order, bump, gift and summary is priced from the result, so the
+ * page and the server action always agree.
+ */
+export function priceItemIn(item: BillingItem, currency: string | null | undefined, settings: Pick<Settings, "growth">): BillingItem {
+  const picked = pickPrice(defaultPriceOf(item), currencyPricesOf(item), currency, settings.growth.multiCurrency);
+  if (picked.isDefault) return item;
+  return { ...item, amount: picked.amount, currency: picked.currency };
 }
 
 function itemFromCourse(course: Course, type: "course" | "certificate"): BillingItem {
@@ -363,11 +403,11 @@ export interface InstallmentCheckout {
  * as one order first, so a coupon and the tax apply to it exactly once, and
  * is then split into equal payments.
  */
-export function installmentCheckout(item: BillingItem, coupon: Coupon | null, settings: Settings): InstallmentCheckout | null {
+export function installmentCheckout(item: BillingItem, coupon: Coupon | null, settings: Settings, tax?: TaxContext | null): InstallmentCheckout | null {
   if (item.type !== "course" || !item.course) return null;
   const plan = offeredInstallmentPlan(item.course, { enabled: settings.growth.installmentsEnabled, gateway: settings.commerce.paymentGateway });
   if (!plan) return null;
-  const full = computeOrderSummary({ ...item, amount: installmentPlanPrice(item.amount, plan) }, coupon, settings);
+  const full = computeOrderSummary({ ...item, amount: installmentPlanPrice(item.amount, plan) }, coupon, settings, tax);
   const part = splitOrder({ originalAmount: full.originalAmount, discountAmount: full.discountAmount, taxAmount: full.taxAmount, amount: full.total }, plan.count, full.currency);
   if (part.amount <= 0) return null;
   return { plan, full, part, total: part.amount * plan.count };
@@ -455,12 +495,22 @@ export interface OrderSummary {
   taxAmount: number;
   taxLabel: string;
   taxPercentage: number;
+  /** The tax is part of the price (carved out) instead of added on top. */
+  taxInclusive: boolean;
+  /** Buyer country the tax was resolved for (by-country tax only). */
+  taxCountry: string | null;
   total: number;
   coupon: { id: string; code: string; discountType: Coupon["discountType"]; value: number } | null;
   usdEquivalent: number | null;
 }
 
-export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, settings: Settings): OrderSummary {
+/**
+ * Price one order: the coupon comes off the price, then the buyer's tax is
+ * added (exclusive) or carved out (inclusive). `tax` carries the tax rules
+ * and the buyer's country for by-country tax; without it the default single
+ * rate applies.
+ */
+export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, settings: Settings, tax?: TaxContext | null): OrderSummary {
   const original = Math.max(0, Math.round(item.amount));
   let discount = 0;
   if (coupon) {
@@ -471,9 +521,8 @@ export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, se
   }
   const subtotal = Math.max(0, original - discount);
   const c = settings.commerce;
-  const taxPercentage = c.applyTax ? Math.max(0, c.taxPercentage) : 0;
-  const taxAmount = taxPercentage > 0 ? Math.round((subtotal * taxPercentage) / 100) : 0;
-  const total = subtotal + taxAmount;
+  const applied = resolveTax(settings, tax);
+  const { taxAmount, total } = applyTax(subtotal, applied, item.currency);
   return {
     itemType: item.type,
     itemId: item.id,
@@ -483,12 +532,20 @@ export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, se
     discountAmount: discount,
     subtotal,
     taxAmount,
-    taxLabel: c.taxLabel || "Tax",
-    taxPercentage,
+    taxLabel: applied.name,
+    taxPercentage: taxAmount > 0 ? applied.rate : 0,
+    taxInclusive: taxAmount > 0 && applied.inclusive,
+    taxCountry: applied.country,
     total,
     coupon: coupon ? { id: coupon.id, code: coupon.code, discountType: coupon.discountType, value: coupon.value } : null,
     usdEquivalent: c.showUsdEquivalent ? toUsdEquivalent(total, item.currency, c.applyRounding) : null,
   };
+}
+
+/** The tax facts an order row keeps for its invoice (country and rate of a by-country tax, the rate of any tax). */
+export function orderTaxFields(summary: Pick<OrderSummary, "taxAmount" | "taxPercentage" | "taxCountry">): Pick<Payment, "taxCountry" | "taxRate"> {
+  if (summary.taxAmount <= 0) return summary.taxCountry ? { taxCountry: summary.taxCountry } : {};
+  return { ...(summary.taxCountry ? { taxCountry: summary.taxCountry } : {}), taxRate: summary.taxPercentage };
 }
 
 /* ------------------------------------------------------------------ */
@@ -951,7 +1008,8 @@ export function summarizeTransactions(rows: Payment[]): TransactionStats {
   return { paidCount, pendingCount, refundedCount, failedCount, revenue: list(revenue).filter((r) => r.amount > 0), refunded: list(refunded) };
 }
 
-function csvCell(value: string | number | undefined | null): string {
+/** One CSV cell: quoted when needed, spreadsheet formulas neutralised. */
+export function csvCell(value: string | number | undefined | null): string {
   let s = value === undefined || value === null ? "" : String(value);
   // Neutralise spreadsheet formula injection.
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

@@ -10,13 +10,15 @@ import { safeRedirectPath } from "@/lib/auth/redirects";
 import { getDb, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
 import { setFlash } from "@/lib/flash";
-import { notifyAdminsOfPendingOrder } from "@/lib/data/commerce";
+import { notifyAdminsOfPendingOrder, priceItemIn } from "@/lib/data/commerce";
 import { fulfillPayment } from "@/lib/payments/fulfillment";
 import { GATEWAY_NAMES, checkoutUrls, createCheckout, gatewayErrorMessage, isConfigured, isRealGateway, resumeCheckout } from "@/lib/payments/gateway";
 import { billingFields, readBilling, validateBilling } from "@/lib/payments/billing-input";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { deliverGift, giftSummary, insertGiftOrder, redeemGift, resolveGiftItem, updateScheduledGift } from "@/lib/commerce/gift-service";
 import { parseGiftItemType, validateGiftInput } from "@/lib/commerce/gifts";
+import { normalizeCurrency } from "@/lib/commerce/currency";
+import { countryCode } from "@/lib/commerce/tax";
 import { fd } from "@/lib/utils";
 
 function orderPath(orderId: string): string {
@@ -49,7 +51,12 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
   if (!type || !itemId) return { ok: false, error: "Choose what you'd like to give." };
   const check = await resolveGiftItem(type, itemId);
   if (!check.ok) return { ok: false, error: check.error };
-  const item = check.item;
+  // Priced in the currency the buyer saw (a fixed price in it, else the default).
+  const postedCurrency = normalizeCurrency(fd(formData, "currency"));
+  const item = priceItemIn(check.item, postedCurrency, (await getDb()).settings);
+  if (postedCurrency && postedCurrency !== item.currency.toUpperCase()) {
+    return { ok: false, error: "This item is no longer sold in the currency you chose. Reload the page to see the current price." };
+  }
 
   const blocked = await verificationError(user);
   if (blocked) return { ok: false, error: blocked };
@@ -64,7 +71,7 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
   const fieldErrors = { ...(gift.ok ? {} : gift.errors), ...validateBilling(input, settings.commerce.applyTax) };
   if (Object.keys(fieldErrors).length || !gift.ok) return { ok: false, error: Object.values(fieldErrors)[0] ?? "Please fix the errors below.", fieldErrors };
 
-  const summary = giftSummary(item, settings);
+  const summary = giftSummary(item, settings, { rules: db.taxRules, country: countryCode(input.country) });
   const expected = fd(formData, "expectedTotal");
   if (expected !== "" && Number(expected) !== summary.total) {
     return { ok: false, error: "The price changed while you were checking out. Please review the updated order summary and try again." };

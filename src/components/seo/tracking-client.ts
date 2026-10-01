@@ -139,10 +139,10 @@ export function installMetaPixel(id: string): void {
   const w = win();
   if (!w) return;
   if (!w.fbq) {
-    const fbq: CommandFn = function fbq(...args: unknown[]) {
+    const fbq = ((...args: unknown[]) => {
       if (fbq.callMethod) fbq.callMethod(...args);
       else fbq.queue!.push(args);
-    };
+    }) as CommandFn;
     fbq.push = fbq;
     fbq.loaded = true;
     fbq.version = "2.0";

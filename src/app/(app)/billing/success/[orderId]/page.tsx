@@ -29,6 +29,7 @@ import { PostPurchaseOffer } from "@/components/commerce/post-purchase-offer";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import { purchaseEventParams } from "@/lib/seo/tracking";
 import { TrackEvent } from "@/components/seo/track-event";
+import { isTaxInclusive } from "@/lib/commerce/tax";
 
 export const metadata = { title: "Order" };
 
@@ -607,7 +608,9 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
               originalAmount: payment.originalAmount,
               discountAmount: payment.discountAmount,
               taxAmount: payment.taxAmount,
-              taxLabel: settings.commerce.taxLabel,
+              taxLabel: (payment.taxCountry && db.taxRules.find((r) => r.country.toUpperCase() === payment.taxCountry?.toUpperCase())?.name) || settings.commerce.taxLabel,
+              taxPercentage: payment.taxRate,
+              taxInclusive: isTaxInclusive(payment),
               total: payment.amount,
               couponCode: payment.couponCode,
             }}

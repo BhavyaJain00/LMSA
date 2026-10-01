@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { InvoiceView } from "@/lib/payments/invoice";
 import { cn, formatDate, initials } from "@/lib/utils";
+import { taxLineLabel } from "@/lib/commerce/tax";
 import { money } from "./order-summary";
 
 /**
@@ -140,7 +141,9 @@ export function InvoiceSheet({ invoice, className }: { invoice: InvoiceView; cla
           )}
           {(invoice.discountAmount > 0 || invoice.taxAmount > 0) && <Total label="Taxable amount">{money(invoice.taxableAmount, invoice.currency)}</Total>}
           {invoice.taxAmount > 0 && (
-            <Total label={`${invoice.taxLabel}${invoice.taxRate !== null ? ` (${invoice.taxRate}%)` : ""}`}>{money(invoice.taxAmount, invoice.currency)}</Total>
+            <Total label={taxLineLabel({ name: invoice.taxCountryName ? `${invoice.taxLabel} · ${invoice.taxCountryName}` : invoice.taxLabel, rate: invoice.taxRate, inclusive: invoice.taxInclusive })}>
+              {money(invoice.taxAmount, invoice.currency)}
+            </Total>
           )}
           <div className="flex items-baseline justify-between gap-4 border-t border-border-strong pt-2 text-base font-bold">
             <dt>Total</dt>

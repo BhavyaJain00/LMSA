@@ -17,7 +17,9 @@ import {
   installmentCheckout,
   membershipTerms,
   notifyAdminsOfPendingOrder,
+  orderTaxFields,
   parseItemType,
+  priceItemIn,
   sendPaymentReminder,
   sendPendingPaymentReminders,
   validateCouponForBuyer,
@@ -77,6 +79,8 @@ import { isRecurringInterval } from "@/lib/commerce/plans";
 import { isGatewayManaged, isOngoing } from "@/lib/commerce/subscriptions";
 import { orderBumpFor } from "@/lib/commerce/upsell-service";
 import { isOrderBump } from "@/lib/commerce/upsells";
+import { normalizeCurrency } from "@/lib/commerce/currency";
+import { countryCode, type TaxContext } from "@/lib/commerce/tax";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
@@ -115,8 +119,14 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   }
   if (!type || !itemId) return { ok: false, error: "Module is incorrect." };
 
-  const item = await getBillingItem(type, itemId);
-  if (!item) return { ok: false, error: "Module Name is incorrect or does not exist." };
+  const listed = await getBillingItem(type, itemId);
+  if (!listed) return { ok: false, error: "Module Name is incorrect or does not exist." };
+  // Priced in the currency the buyer saw at checkout (a fixed price in that currency, else the default).
+  const postedCurrency = normalizeCurrency(fd(formData, "currency"));
+  const item = priceItemIn(listed, postedCurrency, (await getDb()).settings);
+  if (postedCurrency && postedCurrency !== item.currency.toUpperCase()) {
+    return { ok: false, error: "This item is no longer sold in the currency you chose. Reload the page to see the current price." };
+  }
 
   const access = await checkBillingAccess(user, item);
   if (access.status === "owned" || access.status === "free") redirect(access.redirectTo);
@@ -150,11 +160,13 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
 
   // Paying in parts: the plan is priced as one order (surcharge, coupon, tax) and split into equal payments.
   const wantsInstallments = fd(formData, "paymentOption") === "installments";
-  const split = wantsInstallments ? installmentCheckout(item, coupon, settings) : null;
+  // Tax for the country of the billing address (by-country tax), computed here, never taken from the browser.
+  const tax: TaxContext = { rules: db.taxRules, country: countryCode(input.country) };
+  const split = wantsInstallments ? installmentCheckout(item, coupon, settings, tax) : null;
   if (wantsInstallments && !split) {
     return { ok: false, error: "This course can no longer be paid in installments. Reload the page to see the current payment options." };
   }
-  const summary = split ? split.full : computeOrderSummary(item, coupon, settings);
+  const summary = split ? split.full : computeOrderSummary(item, coupon, settings, tax);
   // What this order charges: the first payment of a plan, or the whole summary.
   const charge = split ? split.part : { originalAmount: summary.originalAmount, discountAmount: summary.discountAmount, taxAmount: summary.taxAmount, amount: summary.total };
   const expected = fd(formData, "expectedTotal");
@@ -170,7 +182,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
 
   // Order bump ticked at checkout: offered again on the server (still active, still buyable, same price).
   const bumpId = fd(formData, "bump");
-  const bump = bumpId && !split ? await orderBumpFor(user, item) : null;
+  const bump = bumpId && !split ? await orderBumpFor(user, item, tax) : null;
   if (bumpId && (!bump || bump.upsell.id !== bumpId)) {
     return { ok: false, error: "The add-on offer is no longer available. Reload the page to see your order without it." };
   }
@@ -203,6 +215,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     taxAmount: charge.taxAmount,
     amount: charge.amount,
     currency: summary.currency,
+    ...orderTaxFields(summary),
     couponId: coupon?.id,
     couponCode: coupon?.code,
     ...billing,
@@ -222,6 +235,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
         taxAmount: bump.summary.taxAmount,
         amount: bump.summary.total,
         currency: bump.summary.currency,
+        ...orderTaxFields(bump.summary),
         ...billing,
         gateway: orderGateway,
         status: "pending",

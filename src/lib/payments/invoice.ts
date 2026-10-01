@@ -1,6 +1,7 @@
 import "server-only";
-import type { Database, Payment, PaymentItemType, PaymentStatus, Settings, User } from "@/lib/types";
+import type { Database, Payment, PaymentItemType, PaymentStatus, Settings, TaxRule, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
+import { countryName, isTaxInclusive } from "@/lib/commerce/tax";
 
 /**
  * Invoice numbering and the printable invoice view model.
@@ -117,9 +118,13 @@ export interface InvoiceView {
   originalAmount: number;
   discountAmount: number;
   couponCode?: string;
-  /** Amount after discount, before tax. */
+  /** Amount the tax applies to: after discount, before tax (for tax-inclusive prices, the price less the tax). */
   taxableAmount: number;
   taxLabel: string;
+  /** The tax was part of the price instead of added to it. */
+  taxInclusive: boolean;
+  /** Country the tax was charged for (by-country tax), e.g. "Germany". */
+  taxCountryName?: string;
   /** Tax rate in percent, derived from the stored amounts (null when no tax was charged). */
   taxRate: number | null;
   taxAmount: number;
@@ -163,11 +168,15 @@ export function formatAddressLines(address: Payment["address"]): string[] {
 
 export function buildInvoiceView(
   payment: Payment,
-  opts: { settings: Settings; buyer: Pick<User, "email"> | null; gatewayLabel: string },
+  opts: { settings: Settings; buyer: Pick<User, "email"> | null; gatewayLabel: string; taxRules?: readonly TaxRule[] },
 ): InvoiceView | null {
   if (!hasInvoice(payment) || !payment.invoiceNumber) return null;
   const { settings } = opts;
-  const taxableAmount = Math.max(0, payment.originalAmount - payment.discountAmount);
+  const taxInclusive = isTaxInclusive(payment);
+  const discounted = Math.max(0, payment.originalAmount - payment.discountAmount);
+  const taxableAmount = taxInclusive ? Math.max(0, payment.amount - payment.taxAmount) : discounted;
+  // By-country tax: the rule of the order's country names the tax (VAT, GST…); the stored rate is the one charged.
+  const rule = payment.taxCountry ? opts.taxRules?.find((r) => r.country.toUpperCase() === payment.taxCountry?.toUpperCase()) : undefined;
   const refundedAmount = payment.status === "refunded" ? (payment.refundedAmount ?? payment.amount) : (payment.refundedAmount ?? 0);
   const statusLabel =
     payment.status === "refunded"
@@ -204,8 +213,10 @@ export function buildInvoiceView(
     discountAmount: payment.discountAmount,
     couponCode: payment.couponCode,
     taxableAmount,
-    taxLabel: settings.commerce.taxLabel || "Tax",
-    taxRate: deriveTaxRate(taxableAmount, payment.taxAmount, settings.commerce.taxPercentage),
+    taxLabel: rule?.name || settings.commerce.taxLabel || "Tax",
+    taxInclusive,
+    taxCountryName: payment.taxCountry ? countryName(payment.taxCountry) : undefined,
+    taxRate: payment.taxAmount > 0 && payment.taxRate !== undefined ? payment.taxRate : deriveTaxRate(taxableAmount, payment.taxAmount, settings.commerce.taxPercentage),
     taxAmount: payment.taxAmount,
     total: payment.amount,
     refundedAmount,

@@ -15,7 +15,7 @@ import {
   setStripeCancelAtPeriodEnd,
 } from "@/lib/payments/stripe";
 import { cancelRazorpaySubscription, changeRazorpaySubscriptionPlan } from "@/lib/payments/razorpay";
-import { computeOrderSummary, insertPendingOrder, itemFromPlan } from "@/lib/data/commerce";
+import { computeOrderSummary, insertPendingOrder, itemFromPlan, orderTaxFields } from "@/lib/data/commerce";
 import { membershipOrderFor, resolveCourseAccess } from "./access";
 import { sendMembershipMessage } from "./emails";
 import { patchSubscription } from "./membership-store";
@@ -131,7 +131,11 @@ export async function changeMembershipPlan(sub: Subscription, target: Membership
   const current = await planOf(sub);
   if (!changeTargets([target], current).length) return { ok: false, error: "You can't switch to this plan." };
   const db = await getDb();
-  const summary = computeOrderSummary(itemFromPlan(target), null, db.settings);
+  // Taxed for the member's billing country (their latest membership order), like their renewals.
+  const lastOrder = db.payments
+    .filter((p) => p.subscriptionId === sub.id && p.itemType === "plan" && p.status === "paid")
+    .sort((a, b) => (b.paidAt ?? b.createdAt).localeCompare(a.paidAt ?? a.createdAt))[0];
+  const summary = computeOrderSummary(itemFromPlan(target), null, db.settings, { rules: db.taxRules, country: lastOrder?.taxCountry ?? lastOrder?.address?.country ?? null });
   const amount = toGatewayAmount(summary.total, summary.currency);
   try {
     if (isGatewayManaged(sub) && sub.gateway === "stripe") {
@@ -192,10 +196,11 @@ export async function openRenewalOrder(sub: Subscription, opts: { notifyMember?:
   }
 
   const settings = db.settings;
-  const summary = computeOrderSummary(itemFromPlan(plan), null, settings);
   const template = db.payments
     .filter((p) => p.subscriptionId === sub.id && p.itemType === "plan" && p.status === "paid")
     .sort((a, b) => (b.paidAt ?? b.createdAt).localeCompare(a.paidAt ?? a.createdAt))[0];
+  // Renewals are taxed for the member's billing country, as their first order was.
+  const summary = computeOrderSummary(itemFromPlan(plan), null, settings, { rules: db.taxRules, country: template?.taxCountry ?? template?.address?.country ?? null });
   const gateway = settings.commerce.paymentGateway;
   const free = summary.total <= 0 || gateway === "none";
   const inserted = await insertPendingOrder({
@@ -211,6 +216,7 @@ export async function openRenewalOrder(sub: Subscription, opts: { notifyMember?:
     taxAmount: summary.taxAmount,
     amount: summary.total,
     currency: summary.currency,
+    ...orderTaxFields(summary),
     billingName: template?.billingName ?? user.name,
     address: template?.address,
     gstin: template?.gstin,

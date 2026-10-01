@@ -31,6 +31,8 @@ export interface SummaryLines {
   taxAmount: number;
   taxLabel?: string;
   taxPercentage?: number;
+  /** The tax is part of the price (shown as "included", not added). */
+  taxInclusive?: boolean;
   total: number;
   couponCode?: string | null;
   usdEquivalent?: number | null;
@@ -93,7 +95,7 @@ export function OrderSummary({
           <div className="flex items-center justify-between gap-3">
             <dt className="text-xs font-medium uppercase tracking-wide text-ink-muted">
               {lines.taxLabel ?? "Tax"}
-              {lines.taxPercentage ? ` (${lines.taxPercentage}%)` : ""} amount:
+              {lines.taxPercentage ? ` (${lines.taxPercentage}%)` : ""} {lines.taxInclusive ? "included:" : "amount:"}
             </dt>
             <dd className="tabular-nums text-ink">{money(lines.taxAmount, lines.currency)}</dd>
           </div>

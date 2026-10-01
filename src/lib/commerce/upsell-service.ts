@@ -1,7 +1,8 @@
 import "server-only";
 import type { Database, Payment, Settings, Upsell, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
-import { checkBillingAccess, computeOrderSummary, getBillingItem, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import { checkBillingAccess, computeOrderSummary, getBillingItem, priceItemIn, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import type { TaxContext } from "./tax";
 import { formatPrice } from "@/lib/utils";
 import { bundleCourses } from "./bundles";
 import { discountedPrice, itemRef, upsellFor, upsellPerformance, type UpsellItemType, type UpsellPerformance } from "./upsells";
@@ -24,34 +25,45 @@ export interface UpsellOffer {
  * The offer priced for checkout: the upsell discount comes off the list
  * price first, then tax applies, exactly as for a coupon.
  */
-export function offerSummary(item: BillingItem, discountPercent: number, settings: Settings): OrderSummary {
+export function offerSummary(item: BillingItem, discountPercent: number, settings: Settings, tax?: TaxContext | null): OrderSummary {
   const price = discountedPrice(item.amount, discountPercent);
-  const s = computeOrderSummary({ ...item, amount: price }, null, settings);
+  const s = computeOrderSummary({ ...item, amount: price }, null, settings, tax);
   return { ...s, originalAmount: item.amount, discountAmount: item.amount - price };
 }
 
 /**
  * The offer `user` can take for `trigger` right now: an active upsell whose
  * offer item they can buy (not owned, no open order, on sale), priced in the
- * trigger's currency and costing something after the discount.
+ * trigger's currency (its fixed price in that currency when multi-currency
+ * is on), taxed like the main order and costing something after the discount.
  */
-async function offerFor(user: User, trigger: { type: string; id: string; currency: string }, settings: Settings, upsells: readonly Upsell[]): Promise<UpsellOffer | null> {
+async function offerFor(
+  user: User,
+  trigger: { type: string; id: string; currency: string },
+  settings: Settings,
+  upsells: readonly Upsell[],
+  tax: TaxContext | null,
+): Promise<UpsellOffer | null> {
   const upsell = upsellFor(upsells, trigger);
   if (!upsell) return null;
-  const item = await getBillingItem(upsell.offerItemType, upsell.offerItemId);
+  const listed = await getBillingItem(upsell.offerItemType, upsell.offerItemId);
+  const item = listed ? priceItemIn(listed, trigger.currency, settings) : null;
   if (!item || item.currency.toUpperCase() !== trigger.currency.toUpperCase()) return null;
   const access = await checkBillingAccess(user, item);
   if (access.status !== "ok") return null;
-  const summary = offerSummary(item, upsell.discountPercent, settings);
+  const summary = offerSummary(item, upsell.discountPercent, settings, tax);
   if (summary.total <= 0) return null;
-  return { upsell, item, summary, listTotal: computeOrderSummary(item, null, settings).total };
+  return { upsell, item, summary, listTotal: computeOrderSummary(item, null, settings, tax).total };
 }
 
-/** The order bump for a checkout of `item` (courses and bundles paid in one payment). */
-export async function orderBumpFor(user: User, item: BillingItem): Promise<UpsellOffer | null> {
+/**
+ * The order bump for a checkout of `item` (courses and bundles paid in one
+ * payment), with the main order's tax context so both rows are taxed alike.
+ */
+export async function orderBumpFor(user: User, item: BillingItem, tax: TaxContext | null = null): Promise<UpsellOffer | null> {
   if (item.type !== "course" && item.type !== "bundle") return null;
   const db = await getDb();
-  return offerFor(user, item, db.settings, db.upsells);
+  return offerFor(user, item, db.settings, db.upsells, tax);
 }
 
 /** The one-click offer shown on the order page of a paid course/bundle order, unless it was taken already. */
@@ -60,7 +72,8 @@ export async function postPurchaseOfferFor(user: User, payment: Payment): Promis
   if (payment.itemType !== "course" && payment.itemType !== "bundle") return null;
   if (payment.installmentNumber) return null;
   const db = await getDb();
-  const offer = await offerFor(user, { type: payment.itemType, id: payment.itemId, currency: payment.currency }, db.settings, db.upsells);
+  const tax: TaxContext = { rules: db.taxRules, country: payment.taxCountry ?? payment.address?.country ?? null };
+  const offer = await offerFor(user, { type: payment.itemType, id: payment.itemId, currency: payment.currency }, db.settings, db.upsells, tax);
   if (!offer) return null;
   // Already accepted (bump or one-click) from this order.
   const taken = db.payments.some((p) => p.upsellOfPaymentId === payment.id && p.itemType === offer.upsell.offerItemType && p.itemId === offer.upsell.offerItemId && p.status !== "failed");

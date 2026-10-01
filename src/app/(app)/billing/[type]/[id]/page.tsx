@@ -2,7 +2,23 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
 import { getDb } from "@/lib/db/store";
-import { checkBillingAccess, computeOrderSummary, getBillingItem, getSavedBillingDetails, installmentCheckout, membershipTerms, parseItemType, validateCouponForBuyer } from "@/lib/data/commerce";
+import {
+  checkBillingAccess,
+  computeOrderSummary,
+  getBillingItem,
+  getSavedBillingDetails,
+  installmentCheckout,
+  itemCurrencies,
+  membershipTerms,
+  parseItemType,
+  priceItemIn,
+  validateCouponForBuyer,
+} from "@/lib/data/commerce";
+import { buyerTaxContext, viewerCurrency } from "@/lib/commerce/buyer";
+import { countryName } from "@/lib/commerce/tax";
+import { trackCheckoutView } from "@/lib/commerce/checkout-sessions";
+import { isKnownCountry } from "@/components/commerce/countries";
+import { CurrencySwitcher } from "@/components/commerce/currency-switcher";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
 import { intervalNoun, intervalSuffix } from "@/lib/commerce/plans";
 import { INSTALLMENT_GRACE_DAYS, intervalPhrase, scheduleDates } from "@/lib/commerce/installments";
@@ -26,8 +42,11 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   const [{ type: rawType, id }, sp] = await Promise.all([props.params, props.searchParams]);
   const type = parseItemType(rawType);
   if (!type) notFound();
-  const item = await getBillingItem(type, id);
-  if (!item) notFound();
+  const [listed, db, wantedCurrency] = await Promise.all([getBillingItem(type, id), getDb(), viewerCurrency()]);
+  if (!listed) notFound();
+  // Priced in the viewer's currency when the item has a fixed price in it (multi-currency), else its default price.
+  const item = priceItemIn(listed, wantedCurrency, db.settings);
+  const currencies = itemCurrencies(listed, db.settings);
 
   const basePath = `/billing/${type}/${id}`;
   const header = <PageHeader title="Billing Details" breadcrumbs={<Breadcrumbs items={[{ label: item.plan ? "Membership" : item.name, href: item.href }, { label: "Billing Details" }]} />} />;
@@ -81,8 +100,15 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     );
   }
 
-  const [db, links] = await Promise.all([getDb(), legalLinks()]);
+  const [links, saved] = await Promise.all([legalLinks(), getSavedBillingDetails(user.id)]);
   const settings = db.settings;
+  // Abandoned-checkout recovery: this visit starts (or refreshes) the buyer's checkout session.
+  await trackCheckoutView(user, item);
+  // By-country tax: the country picked in the form (`?country=`), else the last billing address, else a guess from the request.
+  const pickedCountry = typeof sp.country === "string" && isKnownCountry(sp.country) ? sp.country : null;
+  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country);
+  const guessedCountry = !pickedCountry && !saved?.address?.country && tax.country ? countryName(tax.country) : "";
+  const formCountry = pickedCountry ?? saved?.address?.country ?? (isKnownCountry(guessedCountry) ? guessedCountry : "");
   // Memberships that renew are billed at the plan's price every period, so coupons don't apply to them.
   const terms = item.plan ? membershipTerms(db, user.id, item.plan) : null;
   const couponsAllowed = !terms?.recurring;
@@ -95,12 +121,11 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     if (check.ok) coupon = check.coupon;
     else couponError = check.error;
   }
-  const summary = computeOrderSummary(item, coupon, settings);
-  const saved = await getSavedBillingDetails(user.id);
+  const summary = computeOrderSummary(item, coupon, settings, tax);
 
   const gateway = settings.commerce.paymentGateway;
   // Courses sold in installments: the buyer picks "in full" or "in N payments" (`?pay=installments`).
-  const split = installmentCheckout(item, coupon, settings);
+  const split = installmentCheckout(item, coupon, settings, tax);
   const inParts = split && sp.pay === "installments" ? split : null;
   // What this order charges today: one payment of the plan, or the whole summary.
   const charge = inParts ? inParts.part : { originalAmount: summary.originalAmount, discountAmount: summary.discountAmount, taxAmount: summary.taxAmount, amount: summary.total };
@@ -112,10 +137,14 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     const query = new URLSearchParams();
     if (summary.coupon) query.set("coupon", summary.coupon.code);
     if (parts) query.set("pay", "installments");
+    if (pickedCountry) query.set("country", pickedCountry);
     return query.size ? `${basePath}?${query}` : basePath;
   };
+  const keepQuery = new URLSearchParams();
+  if (inParts) keepQuery.set("pay", "installments");
+  if (pickedCountry) keepQuery.set("country", pickedCountry);
   // Order bump: an upsell offered for this item, charged in the same payment (not with installments).
-  const offer = !inParts ? await orderBumpFor(user, item) : null;
+  const offer = !inParts ? await orderBumpFor(user, item, tax) : null;
   const bump: OrderBumpView | null = offer
     ? {
         upsellId: offer.upsell.id,
@@ -161,6 +190,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               taxAmount: charge.taxAmount,
               taxLabel: summary.taxLabel,
               taxPercentage: summary.taxPercentage,
+              taxInclusive: summary.taxInclusive,
               total: charge.amount,
               couponCode: summary.coupon?.code,
               usdEquivalent: inParts ? null : summary.usdEquivalent,
@@ -227,8 +257,9 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               ) : undefined
             }
           />
+          {currencies.length > 1 && <CurrencySwitcher currencies={currencies} current={summary.currency} />}
           {couponsAllowed && (
-            <CouponForm basePath={basePath} appliedCode={summary.coupon?.code ?? null} error={couponError} submittedCode={submittedCode} keep={inParts ? "pay=installments" : ""} />
+            <CouponForm basePath={basePath} appliedCode={summary.coupon?.code ?? null} error={couponError} submittedCode={submittedCode} keep={keepQuery.toString()} />
           )}
           <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
             <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
@@ -263,6 +294,8 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
             itemType={item.type}
             itemId={item.id}
             couponCode={summary.coupon?.code ?? ""}
+            currency={summary.currency}
+            repriceOnCountry={settings.growth.taxMode === "by_country"}
             expectedTotal={charge.amount}
             totalLabel={priceLabel}
             gateway={gateway}
@@ -281,7 +314,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               line2: saved?.address?.line2 ?? "",
               city: saved?.address?.city ?? "",
               state: saved?.address?.state ?? "",
-              country: saved?.address?.country ?? "",
+              country: formCountry,
               pincode: saved?.address?.pincode ?? "",
               gstin: saved?.gstin ?? "",
               pan: saved?.pan ?? "",

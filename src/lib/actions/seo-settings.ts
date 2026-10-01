@@ -14,6 +14,7 @@ import { submitToIndexNow } from "@/lib/seo/indexnow-client";
 import { addRedirect, redirectKey, validateManualRedirect } from "@/lib/seo/redirects";
 import { siteOrigin } from "@/lib/seo/site";
 import { buildSitemap } from "@/lib/seo/sitemap";
+import { parseTrackingSettings } from "@/lib/seo/tracking";
 
 const ADMIN_ONLY = "Only administrators can change SEO settings.";
 
@@ -181,4 +182,32 @@ export async function saveCategorySeoAction(_prev: ActionResult | null, formData
   revalidatePath("/admin/settings/categories");
   revalidatePath(categoryPath(saved.slug));
   return { ok: true, data: undefined, message: "Landing page saved" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Tracking tags                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * GA4 measurement ID and Meta Pixel ID. The tags load in visitors' browsers
+ * only after they accept analytics (GA4) or marketing (Pixel) cookies.
+ */
+export async function saveTrackingSettingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const user = await requireAdmin();
+  if (!user) return { ok: false, error: ADMIN_ONLY };
+  const { patch, errors } = parseTrackingSettings({ ga4Id: fd(formData, "ga4Id"), metaPixelId: fd(formData, "metaPixelId") });
+  if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0]!, fieldErrors: errors };
+  const before = (await getSettings()).seo;
+  await mutate((db) => {
+    db.settings.seo.ga4Id = patch.ga4Id;
+    db.settings.seo.metaPixelId = patch.metaPixelId;
+    db.settings.updatedAt = new Date().toISOString();
+  });
+  await audit(user, "settings.update", { type: "settings", id: "seo" }, {
+    section: "tracking",
+    ga4: patch.ga4Id ? (before.ga4Id === patch.ga4Id ? "unchanged" : "set") : before.ga4Id ? "removed" : "off",
+    metaPixel: patch.metaPixelId ? (before.metaPixelId === patch.metaPixelId ? "unchanged" : "set") : before.metaPixelId ? "removed" : "off",
+  });
+  revalidatePath("/", "layout");
+  return { ok: true, data: undefined, message: "Tracking settings saved" };
 }

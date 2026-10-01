@@ -2,7 +2,11 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
 import { getDb } from "@/lib/db/store";
-import { getSavedBillingDetails } from "@/lib/data/commerce";
+import { getSavedBillingDetails, itemCurrencies, priceItemIn } from "@/lib/data/commerce";
+import { buyerTaxContext, viewerCurrency } from "@/lib/commerce/buyer";
+import { countryName } from "@/lib/commerce/tax";
+import { isKnownCountry } from "@/components/commerce/countries";
+import { CurrencySwitcher } from "@/components/commerce/currency-switcher";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
 import { legalLinks } from "@/lib/legal/links";
 import { agreementDocuments } from "@/lib/legal/agreement";
@@ -133,20 +137,26 @@ export default async function GiftPage(props: PageProps<"/gift">) {
       </>
     );
   }
-  const item = check.item;
   const blocked = await verificationError(user);
   if (blocked) {
     return (
       <>
-        {header(item.name, item.href)}
+        {header(check.item.name, check.item.href)}
         <NotPermitted message={blocked} actionHref="/settings/security" actionLabel="Go to security settings" />
       </>
     );
   }
 
-  const [db, links, saved] = await Promise.all([getDb(), legalLinks(), getSavedBillingDetails(user.id)]);
+  const [db, links, saved, wantedCurrency] = await Promise.all([getDb(), legalLinks(), getSavedBillingDetails(user.id), viewerCurrency()]);
   const settings = db.settings;
-  const summary = giftSummary(item, settings);
+  // Priced in the viewer's currency when the item has a fixed price in it; taxed for the billing country.
+  const item = priceItemIn(check.item, wantedCurrency, settings);
+  const currencies = itemCurrencies(check.item, settings);
+  const pickedCountry = typeof sp.country === "string" && isKnownCountry(sp.country) ? sp.country : null;
+  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country);
+  const guessedCountry = !pickedCountry && !saved?.address?.country && tax.country ? countryName(tax.country) : "";
+  const formCountry = pickedCountry ?? saved?.address?.country ?? (isKnownCountry(guessedCountry) ? guessedCountry : "");
+  const summary = giftSummary(item, settings, tax);
   const gateway = settings.commerce.paymentGateway;
   const what =
     item.plan && item.plan.interval !== "one_time"
@@ -175,6 +185,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
               taxAmount: summary.taxAmount,
               taxLabel: summary.taxLabel,
               taxPercentage: summary.taxPercentage,
+              taxInclusive: summary.taxInclusive,
               total: summary.total,
               usdEquivalent: summary.usdEquivalent,
             }}
@@ -195,6 +206,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
               </ul>
             }
           />
+          {currencies.length > 1 && <CurrencySwitcher currencies={currencies} current={summary.currency} />}
           <p className="text-xs text-ink-muted">
             Already have a code?{" "}
             <Link href="/redeem" className="font-medium text-accent hover:underline">
@@ -208,6 +220,8 @@ export default async function GiftPage(props: PageProps<"/gift">) {
             giftType={type}
             itemId={item.id}
             expectedTotal={summary.total}
+            currency={summary.currency}
+            repriceOnCountry={settings.growth.taxMode === "by_country"}
             totalLabel={money(summary.total, summary.currency)}
             gateway={gateway}
             gatewayReady={isConfigured(gateway)}
@@ -222,7 +236,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
               line2: saved?.address?.line2 ?? "",
               city: saved?.address?.city ?? "",
               state: saved?.address?.state ?? "",
-              country: saved?.address?.country ?? "",
+              country: formCountry,
               pincode: saved?.address?.pincode ?? "",
               gstin: saved?.gstin ?? "",
               pan: saved?.pan ?? "",

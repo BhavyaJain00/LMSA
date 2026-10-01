@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db/store";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { Tabs } from "@/components/ui/tabs";
 
-/** SEO settings: search appearance, indexing (sitemap, feeds, IndexNow) and redirects. */
+/** SEO settings: search appearance, indexing (sitemap, feeds, IndexNow), redirects and consent-gated tracking tags. */
 export default async function SeoSettingsLayout({ children }: LayoutProps<"/admin/settings/seo">) {
   await requireRole(["admin"], "/admin/settings/seo");
   const db = await getDb();
@@ -16,6 +16,7 @@ export default async function SeoSettingsLayout({ children }: LayoutProps<"/admi
           { label: "Search appearance", href: "/admin/settings/seo" },
           { label: "Indexing", href: "/admin/settings/seo/indexing" },
           { label: "Redirects", href: "/admin/settings/seo/redirects", count: db.slugRedirects.length },
+          { label: "Tracking", href: "/admin/settings/seo/tracking" },
         ]}
       />
       {children}

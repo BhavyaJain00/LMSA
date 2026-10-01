@@ -89,6 +89,11 @@ function toOutlineView(course: Course, outline: ChapterWithLessons[]): OutlineCh
   }));
 }
 
+/** The time this request is rendered at (the first frame of the sales-page countdown). */
+function requestTime(): number {
+  return Date.now();
+}
+
 type ReviewWithUser = Review & { user: PublicUser | null };
 
 function toReviewViews(reviews: ReviewWithUser[], viewerId: string | null): ReviewView[] {
@@ -237,7 +242,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const salesPage = hasSalesPage(course.salesPage) ? course.salesPage : null;
   // "Get the syllabus by email" for visitors who are not learners of a public course yet.
   const offerSyllabus = isCoursePublic(course) && !enrollment && !manager && lessonCount > 0;
-  const serverNow = Date.now();
+  const serverNow = requestTime();
 
   const curriculumBody = (
     <>

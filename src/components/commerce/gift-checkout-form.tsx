@@ -93,6 +93,8 @@ export function GiftCheckoutForm({
   giftType,
   itemId,
   expectedTotal,
+  currency,
+  repriceOnCountry,
   totalLabel,
   gateway,
   gatewayReady,
@@ -106,6 +108,10 @@ export function GiftCheckoutForm({
   giftType: GiftItemType;
   itemId: string;
   expectedTotal: number;
+  /** Currency the gift was priced in. */
+  currency: string;
+  /** By-country tax: picking another country re-prices the summary. */
+  repriceOnCountry: boolean;
   totalLabel: string;
   gateway: Settings["commerce"]["paymentGateway"];
   gatewayReady: boolean;
@@ -121,6 +127,8 @@ export function GiftCheckoutForm({
       itemType="gift"
       itemId={itemId}
       couponCode=""
+      currency={currency}
+      repriceOnCountry={repriceOnCountry}
       expectedTotal={expectedTotal}
       totalLabel={totalLabel}
       gateway={gateway}

@@ -36,17 +36,17 @@ function afterChange(slug: string, courseId: string): void {
 
 async function manageableCourse(courseId: string) {
   const user = await getCurrentUser();
-  if (!user) return { error: NOT_ALLOWED } as const;
+  if (!user) return { ok: false, error: NOT_ALLOWED } as const;
   const course = (await getDb()).courses.find((c) => c.id === courseId);
-  if (!course) return { error: "This course no longer exists." } as const;
-  if (!canManageCourse(user, course)) return { error: NOT_ALLOWED } as const;
-  return { user, course } as const;
+  if (!course) return { ok: false, error: "This course no longer exists." } as const;
+  if (!canManageCourse(user, course)) return { ok: false, error: NOT_ALLOWED } as const;
+  return { ok: true, user, course } as const;
 }
 
 /** Save the builder: `courseId`, `page` (JSON of the sales page), `seoTitle`, `metaDescription`, `ogImageUrl`. */
 export async function saveSalesPageAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const found = await manageableCourse(fd(formData, "courseId"));
-  if ("error" in found) return { ok: false, error: found.error };
+  if (!found.ok) return { ok: false, error: found.error };
   const { user, course } = found;
 
   const json = formData.get("page");
@@ -84,7 +84,7 @@ export async function saveSalesPageAction(_prev: ActionResult | null, formData: 
 /** Remove the sales page: the course page goes back to the standard layout (SEO fields are kept). */
 export async function removeSalesPageAction(courseId: string): Promise<ActionResult> {
   const found = await manageableCourse(courseId);
-  if ("error" in found) return { ok: false, error: found.error };
+  if (!found.ok) return { ok: false, error: found.error };
   const { user, course } = found;
   if (!course.salesPage) return { ok: true, data: undefined, message: "This course has no sales page." };
   await mutate((db) => {

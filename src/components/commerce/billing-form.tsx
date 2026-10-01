@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useTransition, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import type { ActionResult, PaymentItemType, Settings } from "@/lib/types";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { placeOrderAction } from "@/lib/actions/payments";
@@ -87,6 +88,8 @@ export function BillingForm({
   itemType,
   itemId,
   couponCode,
+  currency,
+  repriceOnCountry = false,
   expectedTotal,
   totalLabel,
   gateway,
@@ -107,6 +110,10 @@ export function BillingForm({
   itemType: PaymentItemType;
   itemId: string;
   couponCode: string;
+  /** Currency the summary was priced in (the buyer's choice when the item has a fixed price in it). */
+  currency?: string;
+  /** Tax depends on the buyer's country: picking another country re-prices the summary (`?country=`). */
+  repriceOnCountry?: boolean;
   expectedTotal: number;
   totalLabel: string;
   gateway: Gateway;
@@ -133,6 +140,17 @@ export function BillingForm({
   gift?: boolean;
 }) {
   const [country, setCountry] = useState(defaults.country);
+  const router = useRouter();
+  const pathname = usePathname();
+  const [repricing, startRepricing] = useTransition();
+  const changeCountry = (value: string) => {
+    setCountry(value);
+    if (!repriceOnCountry) return;
+    const query = new URLSearchParams(window.location.search);
+    if (value) query.set("country", value);
+    else query.delete("country");
+    startRepricing(() => router.replace(`${pathname}?${query}`, { scroll: false }));
+  };
   const [withBump, setWithBump] = useState(false);
   const launcher = useCheckoutLauncher();
   const { onSubmit, pending, errors, formError } = useFormAction(action, {
@@ -146,7 +164,7 @@ export function BillingForm({
   const unavailable = online && !gatewayReady;
   usePreloadRazorpay(!free && gateway === "razorpay" && gatewayReady);
   const india = country === "India";
-  const busy = pending || launcher.busy;
+  const busy = pending || launcher.busy || repricing;
   const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] || "payment");
   // What the order charges today, with the order bump when it is ticked.
   const payLabel = bumped ? bump.totalWithBumpLabel : totalLabel;
@@ -201,6 +219,7 @@ export function BillingForm({
       <input type="hidden" name="itemType" value={itemType} />
       <input type="hidden" name="itemId" value={itemId} />
       <input type="hidden" name="coupon" value={couponCode} />
+      {currency && <input type="hidden" name="currency" value={currency} />}
       <input type="hidden" name="expectedTotal" value={expectedTotal} />
       {installments && <input type="hidden" name="paymentOption" value="installments" />}
       {bumped && (
@@ -257,13 +276,20 @@ export function BillingForm({
                 id="country"
                 name="country"
                 value={country}
-                onChange={(e) => setCountry(e.target.value)}
+                onChange={(e) => changeCountry(e.target.value)}
                 placeholder="Select your country"
                 options={COUNTRIES.map((c) => ({ value: c, label: c }))}
                 autoComplete="country-name"
                 invalid={!!errors.country}
+                aria-describedby={repriceOnCountry ? "country-tax-note" : undefined}
               />
             </Field>
+            {repriceOnCountry && (
+              <p id="country-tax-note" className="-mt-2 flex items-center gap-1.5 text-xs text-ink-muted" aria-live="polite">
+                {repricing ? <Icon.Refresh className="size-3.5 animate-spin" aria-hidden="true" /> : <Icon.Info className="size-3.5" aria-hidden="true" />}
+                {repricing ? "Updating the tax for this country…" : "Tax is calculated for the country of your billing address."}
+              </p>
+            )}
             <Field label="Postal Code" htmlFor="pincode" error={errors.pincode}>
               <Input id="pincode" name="pincode" defaultValue={defaults.pincode} autoComplete="postal-code" maxLength={12} invalid={!!errors.pincode} />
             </Field>
