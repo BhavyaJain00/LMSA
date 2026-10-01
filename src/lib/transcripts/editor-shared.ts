@@ -27,6 +27,9 @@ export function cuesToTuples(cues: readonly TranscriptCue[]): CueTuple[] {
   return cues.map((c) => [c.start, c.end, c.text]);
 }
 
+/** BCP 47 tag accepted for a transcript language ("en", "pt-BR", "zh-Hant-TW"). */
+export const LANGUAGE_PATTERN = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
+
 /** Server Actions accept request bodies up to 1 MB by default; leave room for the rest of the payload. */
 export const MAX_SAVE_BYTES = 950_000;
 

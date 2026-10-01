@@ -19,8 +19,7 @@ import type { TranscriptView } from "./panel";
 
 export type VideoBlock = Extract<LessonBlock, { type: "video" }>;
 
-/** BCP 47 tag accepted for a transcript language. */
-export const LANGUAGE_PATTERN = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
+export { LANGUAGE_PATTERN } from "./editor-shared";
 
 export function findVideoBlock(lesson: Pick<Lesson, "blocks"> | null | undefined, blockId: string): VideoBlock | null {
   const block = lesson?.blocks.find((b) => b.id === blockId);

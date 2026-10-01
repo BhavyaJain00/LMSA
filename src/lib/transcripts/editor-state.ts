@@ -141,6 +141,23 @@ export function setCueTimes(cues: readonly TranscriptCue[], index: number, times
   return { ok: true, cues: sorted, index: sorted.indexOf(updated) };
 }
 
+/**
+ * Insert a caption starting at `time` (the playhead), lasting `duration`
+ * seconds or until the next caption starts. Returns the list and the new
+ * caption's index.
+ */
+export function insertCueAt(cues: readonly TranscriptCue[], time: number, text = "", duration = 2): { cues: TranscriptCue[]; index: number } {
+  const start = roundMs(Math.min(Math.max(0, Number.isFinite(time) ? time : 0), MAX_CUE_TIME));
+  let index = 0;
+  while (index < cues.length && cues[index]!.start <= start) index++;
+  const next = cues[index];
+  let end = start + duration;
+  if (next && next.start > start + MIN_CUE_DURATION) end = Math.min(end, next.start);
+  const out = [...cues];
+  out.splice(index, 0, { start, end: roundMs(Math.max(end, start + MIN_CUE_DURATION)), text });
+  return { cues: out, index };
+}
+
 /** Remove the cues at the given indices. */
 export function removeCues(cues: readonly TranscriptCue[], indices: Iterable<number>): TranscriptCue[] {
   const drop = new Set(indices);
