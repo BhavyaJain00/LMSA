@@ -14,6 +14,7 @@ import type { AgreementLink } from "@/lib/legal/agreement";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { BILLING_SOURCES, COUNTRIES, INDIAN_STATES } from "./countries";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
+import { setOrderBumpTicked } from "./order-bump-summary";
 
 export interface BillingDefaults {
   billingName: string;
@@ -438,7 +439,10 @@ export function BillingForm({
                 type="checkbox"
                 className="mt-1 size-5 shrink-0 cursor-pointer rounded border-border-strong accent-accent"
                 checked={withBump}
-                onChange={(e) => setWithBump(e.target.checked)}
+                onChange={(e) => {
+                  setWithBump(e.target.checked);
+                  setOrderBumpTicked(e.target.checked);
+                }}
                 aria-describedby="order-bump-details"
               />
               <span className="min-w-0">

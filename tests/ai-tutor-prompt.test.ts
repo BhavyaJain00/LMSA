@@ -227,7 +227,7 @@ describe("ai tutor grounded prompt end to end", () => {
     assert.equal(citations.length, excerpts.length);
     const views = citationViews(citations, lessonLinks(db, tree.course));
     const video = views.find((v) => v.seconds === 95)!;
-    assert.equal(video.href, "/courses/js/learn/2-1?t=95");
+    assert.equal(video.href, "/courses/js/learn/2-1?t=95&block=vid", "seeks the video the transcript belongs to");
     assert.equal(video.detail, "video at 1:35");
     const lesson = views.find((v) => v.title === "Variables")!;
     assert.equal(lesson.href, "/courses/js/learn/1-1");

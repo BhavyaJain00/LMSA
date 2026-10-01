@@ -31,6 +31,7 @@ import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { OrderSummary, money } from "@/components/commerce/order-summary";
 import { CouponForm } from "@/components/commerce/coupon-form";
 import { BillingForm, type InstallmentCheckoutTerms, type MembershipCheckoutTerms, type OrderBumpView } from "@/components/commerce/billing-form";
+import { OrderBumpSummary } from "@/components/commerce/order-bump-summary";
 import { orderBumpFor } from "@/lib/commerce/upsell-service";
 import { PaymentOptionPicker } from "@/components/commerce/payment-option-picker";
 import { NotPermitted } from "@/components/commerce/not-permitted";
@@ -259,6 +260,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               ) : undefined
             }
           />
+          {bump && <OrderBumpSummary title={bump.title} priceLabel={bump.priceLabel} totalWithBumpLabel={bump.totalWithBumpLabel} />}
           {currencies.length > 1 && <CurrencySwitcher currencies={currencies} current={summary.currency} />}
           {couponsAllowed && (
             <CouponForm basePath={basePath} appliedCode={summary.coupon?.code ?? null} error={couponError} submittedCode={submittedCode} keep={keepQuery.toString()} />

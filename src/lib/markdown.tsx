@@ -233,14 +233,30 @@ function splitRow(line: string): string[] {
 
 /* -------------------------------- Rendering -------------------------------- */
 
-function renderBlocks(blocks: Block[], keyPrefix = "b"): ReactNode[] {
+/**
+ * Heading ids for one document, unique like GitHub's: the second "Setup"
+ * heading becomes `setup-1`, so table-of-contents links reach each one.
+ */
+type HeadingIds = (text: string) => string;
+
+function headingIdAllocator(): HeadingIds {
+  const seen = new Map<string, number>();
+  return (text) => {
+    const base = slugHeading(text) || "section";
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n ? `${base}-${n}` : base;
+  };
+}
+
+function renderBlocks(blocks: Block[], ids: HeadingIds, keyPrefix = "b"): ReactNode[] {
   return blocks.map((block, idx) => {
     const key = `${keyPrefix}-${idx}`;
     switch (block.type) {
       case "heading": {
         const Tag = `h${Math.min(6, block.level)}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
         return (
-          <Tag key={key} id={slugHeading(block.text)}>
+          <Tag key={key} id={ids(block.text)}>
             {renderInline(block.text, key)}
           </Tag>
         );
@@ -254,7 +270,7 @@ function renderBlocks(blocks: Block[], keyPrefix = "b"): ReactNode[] {
           </pre>
         );
       case "quote":
-        return <blockquote key={key}>{renderBlocks(parseBlocks(block.lines), key)}</blockquote>;
+        return <blockquote key={key}>{renderBlocks(parseBlocks(block.lines), ids, key)}</blockquote>;
       case "hr":
         return <hr key={key} />;
       case "list": {
@@ -265,7 +281,7 @@ function renderBlocks(blocks: Block[], keyPrefix = "b"): ReactNode[] {
               <li key={`${key}-${j}`}>
                 {item.checked !== null && <input type="checkbox" checked={item.checked} readOnly aria-label="task" />}
                 {renderInline(item.text, `${key}-${j}`)}
-                {item.children.length > 0 && renderBlocks(item.children, `${key}-${j}-c`)}
+                {item.children.length > 0 && renderBlocks(item.children, ids, `${key}-${j}-c`)}
               </li>
             ))}
           </Tag>
@@ -313,7 +329,7 @@ function slugHeading(text: string): string {
 /** Render markdown to React nodes. Safe for untrusted input. */
 export function renderMarkdown(markdown: string): ReactNode[] {
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  return renderBlocks(parseBlocks(lines));
+  return renderBlocks(parseBlocks(lines), headingIdAllocator());
 }
 
 export function Markdown({ content, className = "" }: { content: string; className?: string }) {
@@ -321,12 +337,21 @@ export function Markdown({ content, className = "" }: { content: string; classNa
   return <div className={`prose-ll ${className}`}>{renderMarkdown(content)}</div>;
 }
 
-/** Extract headings for a table of contents. */
+/**
+ * Extract headings for a table of contents, with the ids `renderMarkdown`
+ * gives them (same parser and order, so `#` lines inside code blocks are not
+ * headings and repeated titles get distinct ids).
+ */
 export function extractHeadings(markdown: string): { level: number; text: string; id: string }[] {
   const out: { level: number; text: string; id: string }[] = [];
-  for (const line of markdown.split("\n")) {
-    const m = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line);
-    if (m) out.push({ level: m[1]!.length, text: m[2]!, id: slugHeading(m[2]!) });
-  }
+  const ids = headingIdAllocator();
+  const walk = (blocks: Block[]) => {
+    for (const block of blocks) {
+      if (block.type === "heading") out.push({ level: block.level, text: block.text, id: ids(block.text) });
+      else if (block.type === "quote") walk(parseBlocks(block.lines));
+      else if (block.type === "list") for (const item of block.items) walk(item.children);
+    }
+  };
+  walk(parseBlocks(markdown.replace(/\r\n?/g, "\n").split("\n")));
   return out;
 }
