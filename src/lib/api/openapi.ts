@@ -1,6 +1,12 @@
 import { siteConfig } from "@/lib/config";
+import { WEBHOOK_EVENTS, WEBHOOK_EXPANSIONS, type WebhookEventDoc, type WebhookFieldDoc } from "@/lib/webhooks/events";
+import { buildTestPayload } from "@/lib/webhooks/payload";
+import { MAX_DELIVERY_ATTEMPTS } from "@/lib/webhooks/policy";
+import { SIGNATURE_HEADER, SIGNATURE_SCHEME, SIGNATURE_TOLERANCE_SECONDS } from "@/lib/webhooks/signature";
+import { responseExample } from "./examples";
 import { API_TAGS, ENDPOINT_LIST, type EndpointDef } from "./endpoints";
 import { API_KEY_RATE_LIMIT } from "./rate-limit";
+import { RESOURCE_SCHEMAS } from "./resources";
 import { toJsonSchema, type JsonSchema } from "./schema";
 import { API_SCOPE_IDS, describeScope } from "./scopes";
 
@@ -82,8 +88,8 @@ function successSchema(def: EndpointDef): JsonSchema {
   };
 }
 
-function responsesFor(def: EndpointDef): JsonSchema {
-  const content = { "application/json": { schema: successSchema(def) } };
+function responsesFor(def: EndpointDef, baseUrl: string): JsonSchema {
+  const content = { "application/json": { schema: successSchema(def), example: responseExample(def.response, baseUrl) } };
   const responses: Record<string, JsonSchema> = {
     [String(def.response.status)]: { description: def.response.description, headers: RATE_LIMIT_HEADERS, content },
   };
@@ -100,7 +106,7 @@ function responsesFor(def: EndpointDef): JsonSchema {
   return responses;
 }
 
-function operationFor(def: EndpointDef): JsonSchema {
+function operationFor(def: EndpointDef, baseUrl: string): JsonSchema {
   const parameters = parametersFor(def);
   const body = def.examples?.body;
   return {
@@ -119,23 +125,94 @@ function operationFor(def: EndpointDef): JsonSchema {
           },
         }
       : {}),
-    responses: responsesFor(def),
+    responses: responsesFor(def, baseUrl),
   };
 }
 
-/** Response payloads are described on /developers; the document names each one so clients can group them. */
-function resourceSchemas(defs: readonly EndpointDef[]): Record<string, JsonSchema> {
-  const schemas: Record<string, JsonSchema> = {};
-  for (const name of [...new Set(defs.map((def) => def.response.resource))].sort()) {
-    schemas[name] = { type: "object", title: name, additionalProperties: true };
+/* ------------------------------------------------------------------ */
+/* Webhooks (outgoing requests)                                        */
+/* ------------------------------------------------------------------ */
+
+/** Headers sent with every webhook request, in the order they are documented. */
+export const WEBHOOK_HEADERS: readonly { name: string; description: string; example: string }[] = [
+  {
+    name: SIGNATURE_HEADER,
+    description: `\`t=<unix seconds>,${SIGNATURE_SCHEME}=<hex HMAC-SHA256(secret, t + "." + raw body)>\`. Refuse requests older than ${SIGNATURE_TOLERANCE_SECONDS / 60} minutes.`,
+    example: "t=1768469400,v1=5f2b0c9e8d7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c",
+  },
+  { name: "LL-Event", description: "Event name, the same as `type` in the body.", example: "enrollment.created" },
+  { name: "LL-Event-Id", description: "Event id, the same as `id` in the body. Use it to ignore events you already handled.", example: "evt_9f3k2m7q" },
+  { name: "LL-Delivery", description: "Id of this delivery in the endpoint's log (a resend gets a new one).", example: "whd_91c4e7" },
+  { name: "LL-Attempt", description: `Attempt number, from 1 to ${MAX_DELIVERY_ATTEMPTS}.`, example: "1" },
+];
+
+function fieldSchema(field: WebhookFieldDoc): JsonSchema {
+  const schema: JsonSchema = { type: field.nullable ? [field.type, "null"] : field.type, description: field.description };
+  if (field.enum) schema.enum = field.nullable ? [...field.enum, null] : [...field.enum];
+  return schema;
+}
+
+/** JSON Schema of an event's `data`: its own fields plus the related records added next to their ids. */
+export function eventDataSchema(event: WebhookEventDoc): JsonSchema {
+  const properties: Record<string, JsonSchema> = {};
+  const required: string[] = [];
+  for (const field of event.fields) {
+    properties[field.name] = fieldSchema(field);
+    if (!field.optional) required.push(field.name);
   }
-  return schemas;
+  for (const expansion of WEBHOOK_EXPANSIONS) {
+    const idField = event.fields.find((field) => field.name === expansion.idField);
+    if (!idField) continue;
+    properties[expansion.field] = {
+      type: ["object", "null"],
+      description: `${expansion.description} null when the record no longer exists.`,
+      required: expansion.fields.map((field) => field.name),
+      properties: Object.fromEntries(expansion.fields.map((field) => [field.name, fieldSchema(field)])),
+    };
+    if (!idField.optional) required.push(expansion.field);
+  }
+  return { type: "object", required, properties };
+}
+
+function webhookOperation(event: WebhookEventDoc, baseUrl: string): JsonSchema {
+  return {
+    post: {
+      operationId: `webhook_${event.name.replace(/\W/g, "_")}`,
+      summary: event.label,
+      description: event.description,
+      tags: ["Webhooks"],
+      parameters: WEBHOOK_HEADERS.map((header) => ({ name: header.name, in: "header", required: true, description: header.description, schema: { type: "string" }, example: header.example })),
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["id", "type", "createdAt", "data"],
+              properties: {
+                id: { type: "string", description: "Event id: the same for every retry and resend." },
+                type: { type: "string", const: event.name },
+                createdAt: { type: "string", format: "date-time" },
+                data: eventDataSchema(event),
+              },
+            },
+            example: buildTestPayload(event.name, baseUrl, "evt_9f3k2m7q", new Date("2026-01-15T09:30:00.000Z")),
+          },
+        },
+      },
+      responses: {
+        "2XX": { description: "Received. Any 2xx status within 10 seconds counts as delivered; the body is ignored." },
+        "410": { description: "Gone: switches the endpoint off (unsubscribe)." },
+        default: { description: `Anything else, a timeout or a connection error is retried with growing delays, up to ${MAX_DELIVERY_ATTEMPTS} attempts.` },
+      },
+    },
+  };
 }
 
 export function buildOpenApiDocument(defs: readonly EndpointDef[] = ENDPOINT_LIST, baseUrl: string = siteConfig.appUrl): JsonSchema {
   const paths: Record<string, Record<string, JsonSchema>> = {};
   for (const def of defs) {
-    (paths[def.path] ??= {})[def.method.toLowerCase()] = operationFor(def);
+    (paths[def.path] ??= {})[def.method.toLowerCase()] = operationFor(def, baseUrl);
   }
   const usedTags = new Set(defs.map((def) => def.tag));
   const perMinute = Math.round((API_KEY_RATE_LIMIT.limit * 60_000) / API_KEY_RATE_LIMIT.windowMs);
@@ -149,12 +226,14 @@ export function buildOpenApiDocument(defs: readonly EndpointDef[] = ENDPOINT_LIS
         "Send the API key as `Authorization: Bearer <key>`. Each key carries scopes; a write scope includes the matching read scope.",
         `Every key may make ${perMinute} requests per minute. Responses carry X-RateLimit-* headers, and 429 answers carry Retry-After.`,
         "Successful responses use the envelope `{ data, meta }`; errors use `{ error: { code, message, details } }`. Dates are ISO 8601 in UTC.",
+        `Webhooks: the site POSTs signed JSON events to your endpoints (see \`webhooks\`). Verify the \`${SIGNATURE_HEADER}\` header before trusting a request.`,
       ].join("\n\n"),
     },
     servers: [{ url: `${baseUrl}/api/v1` }],
     tags: API_TAGS.filter((tag) => usedTags.has(tag)).map((name) => ({ name })),
     security: [{ apiKey: [] }],
     paths,
+    webhooks: Object.fromEntries(WEBHOOK_EVENTS.map((event) => [event.name, webhookOperation(event, baseUrl)])),
     components: {
       securitySchemes: {
         apiKey: {
@@ -165,11 +244,17 @@ export function buildOpenApiDocument(defs: readonly EndpointDef[] = ENDPOINT_LIS
         },
       },
       schemas: {
-        ...resourceSchemas(defs),
+        ...RESOURCE_SCHEMAS,
         PageMeta: {
           type: "object",
-          required: ["page", "perPage", "total"],
-          properties: { page: { type: "integer", minimum: 1 }, perPage: { type: "integer", minimum: 1 }, total: { type: "integer", minimum: 0 } },
+          required: ["page", "perPage", "total", "totalPages", "hasMore"],
+          properties: {
+            page: { type: "integer", minimum: 1 },
+            perPage: { type: "integer", minimum: 1 },
+            total: { type: "integer", minimum: 0, description: "Rows matching the filters, on every page." },
+            totalPages: { type: "integer", minimum: 1 },
+            hasMore: { type: "boolean", description: "Another page follows. The `Link` header carries its URL." },
+          },
         },
         Error: {
           type: "object",

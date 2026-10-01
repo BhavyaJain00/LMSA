@@ -117,7 +117,7 @@ export async function runInstallmentMaintenance(opts: { now?: Date; force?: bool
         type: "system",
         subject: `Access paused: ${part.itemTitle}`,
         message: `${part.billingName} is ${plan.overdueDays} days late with ${formatPrice(part.amount, part.currency)} (order ${part.orderId}), so the course is locked until it is paid.`,
-        link: `/admin/settings/plans?tab=installments&status=paused`,
+        link: `/admin/settings/plans?tab=installments&istatus=paused`,
         dedupeKey: `installment-paused:${part.id}`,
       });
     }

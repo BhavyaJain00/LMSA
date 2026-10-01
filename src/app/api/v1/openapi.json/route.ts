@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { methodNotAllowed } from "@/lib/api/handler";
 import { buildOpenApiDocument } from "@/lib/api/openapi";
 
 /**
@@ -11,3 +12,10 @@ export function GET(): Response {
     headers: { "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
   });
 }
+
+/** Other methods answer 405 with the JSON error envelope. */
+const unsupported = methodNotAllowed("GET");
+export const POST = unsupported;
+export const PUT = unsupported;
+export const PATCH = unsupported;
+export const DELETE = unsupported;

@@ -21,6 +21,7 @@ import { UnsavedChangesGuard } from "./unsaved-changes-guard";
 import { VideoStatsDialog } from "./video-stats-dialog";
 import { LessonHelpDialog } from "./lesson-help-dialog";
 import { LessonReleaseSection, useLessonRelease } from "./lesson-release-section";
+import { LessonHistoryButton } from "@/components/teaching/version-history";
 
 export interface LessonEditorProps {
   courseId: string;
@@ -232,6 +233,20 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
                 Saved {relativeTime(savedAt)}
               </span>
             )}
+            <LessonHistoryButton
+              lessonId={lesson.id}
+              dirty={dirty}
+              onRestored={(restored) => {
+                // The restored content becomes the saved state of the editor (slug and preview are not versioned).
+                const saved: Draft = { title: restored.title, slug, includeInPreview, instructorNotes: restored.instructorNotes, blocks: restored.blocks };
+                setTitle(saved.title);
+                setInstructorNotes(saved.instructorNotes);
+                setBlocks(saved.blocks);
+                setRevision((r) => r + 1);
+                setBaselineDraft({ ...saved, slug: baselineDraft.slug, includeInPreview: baselineDraft.includeInPreview });
+                setSavedAt(restored.updatedAt);
+              }}
+            />
             {hasVideo && (
               <Button variant="ghost" size="sm" onClick={() => setStatsOpen(true)} leftIcon={<Icon.TrendingUp className="size-4" />} title="Video Statistics">
                 <span className="hidden sm:inline">Video Statistics</span>

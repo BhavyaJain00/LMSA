@@ -3,6 +3,7 @@ import { getCurrentUser, isStaff } from "@/lib/auth/session";
 import { siteConfig } from "@/lib/config";
 import { receiveUpload } from "@/lib/media/upload";
 import { offloadCompletedUpload } from "@/lib/media/resumable";
+import { onSourceUploaded } from "@/lib/media/transcode/queue";
 import { isRemoteStorage, storageKeyFromUrl, uploadRoot } from "@/lib/storage";
 
 /**
@@ -30,10 +31,16 @@ export async function POST(req: NextRequest) {
     maxVideoBytes: siteConfig.maxUploadBytes,
     maxAssetBytes: siteConfig.maxAssetBytes,
   });
-  if (result.body.ok && isRemoteStorage()) {
+  if (result.body.ok) {
     const key = storageKeyFromUrl(result.body.url);
     const type = result.body.type;
-    if (key) after(() => offloadCompletedUpload(key, type));
+    const video = type.startsWith("video/");
+    if (key && (isRemoteStorage() || video)) {
+      after(async () => {
+        if (isRemoteStorage()) await offloadCompletedUpload(key, type);
+        if (video) await onSourceUploaded(key);
+      });
+    }
   }
   return NextResponse.json(result.body, { status: result.status, headers: { "Cache-Control": "no-store" } });
 }

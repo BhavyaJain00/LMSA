@@ -10,7 +10,7 @@ import { authorizeBackupAdmin, backupActorLabel, describeBackupFailure } from "@
 import { audit } from "@/lib/audit";
 import { setFlash } from "@/lib/flash";
 import { notifyMany } from "@/lib/services/notifications";
-import { fd, formatNumber, pluralize } from "@/lib/utils";
+import { fd, pluralize } from "@/lib/utils";
 
 /**
  * Server Actions of Admin → Settings → Backup & reset. Admin only, rate
@@ -57,7 +57,7 @@ export async function deleteBackupsAction(_prev: ActionResult<{ deleted: string[
     if (!deleted.length) return { ok: false, error: "Those backups no longer exist. Reload the page to see the current list." };
     await audit(access.user, "backup.delete", AUDIT_TARGET, { count: deleted.length, names: deleted.join(", ") });
     revalidatePath(DATA_PAGE);
-    return { ok: true, data: { deleted }, message: `Deleted ${deleted.length} ${pluralize(deleted.length, "backup")}` };
+    return { ok: true, data: { deleted }, message: `Deleted ${pluralize(deleted.length, "backup")}` };
   } catch (err) {
     return { ok: false, error: describeBackupFailure(err, "The backups could not be deleted. Please try again.").error };
   }
@@ -98,7 +98,7 @@ export async function restoreBackupAction(_prev: ActionResult | null, formData: 
     const manager = await getBackupManager();
     const result = await manager.restore(name, { createdBy: backupActorLabel(actor) });
     safetyName = result.safety.name;
-    summary = `Restored ${formatNumber(result.records)} ${pluralize(result.records, "record")} from ${result.restored.name}`;
+    summary = `Restored ${pluralize(result.records, "record")} from ${result.restored.name}`;
     // Recorded in the restored database: its own audit log was replaced with the backup's.
     await audit(actor, "backup.restore", AUDIT_TARGET, { name: result.restored.name, kind: result.restored.kind, records: result.records, safetyBackup: safetyName });
   } catch (err) {

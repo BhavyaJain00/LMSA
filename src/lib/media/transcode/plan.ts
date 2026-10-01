@@ -144,7 +144,7 @@ function numberOf(value: unknown): number {
 /** Parse `ffprobe -print_format json -show_format -show_streams` output. */
 export function parseProbe(json: unknown): ProbeInfo {
   const root = (json && typeof json === "object" ? json : {}) as { streams?: unknown; format?: unknown };
-  const streams = Array.isArray(root.streams) ? (root.streams as Record<string, unknown>[]) : [];
+  const streams = Array.isArray(root.streams) ? (root.streams as unknown[]).filter((s): s is Record<string, unknown> => !!s && typeof s === "object") : [];
   const format = (root.format && typeof root.format === "object" ? root.format : {}) as Record<string, unknown>;
   const video = streams.find((s) => s.codec_type === "video" && (s.disposition as Record<string, unknown> | undefined)?.attached_pic !== 1);
   const audio = streams.find((s) => s.codec_type === "audio");

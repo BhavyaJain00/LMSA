@@ -35,6 +35,8 @@ const SOURCE_URL_TTL_SECONDS = 12 * 60 * 60;
 /** Finished jobs older than this are pruned (the newest job of each block is kept). */
 const JOB_RETENTION_DAYS = 30;
 const MAX_ERROR_CHARS = 4000;
+/** A job interrupted by this many server restarts is failed instead of started again. */
+export const MAX_JOB_ATTEMPTS = 3;
 
 interface WorkerState {
   running: boolean;
@@ -245,6 +247,36 @@ export async function syncAllTranscodes(): Promise<number> {
   return created;
 }
 
+/**
+ * A video finished uploading (`/api/upload`, `/api/uploads/:id/complete`):
+ * queue the saved blocks that already play this file, warm the ffmpeg
+ * check for the editor's first status poll and resume any waiting jobs.
+ * Blocks saved later are queued by the editor's status poll and the cron.
+ * Never throws; returns the number of new jobs.
+ */
+export async function onSourceUploaded(key: string): Promise<number> {
+  try {
+    const settings = await getSettings();
+    if (!settings.storage.transcodeToHls) return 0;
+    await detectFfmpeg();
+    const db = await getDb();
+    const origins = siteOrigins();
+    let created = 0;
+    for (const lesson of db.lessons) {
+      for (const block of lesson.blocks) {
+        if (block.type !== "video" || transcodeSourceKey(block.src, origins) !== key) continue;
+        const res = await enqueueTranscode(lesson.id, block.id);
+        if (res.ok && res.created) created++;
+      }
+    }
+    kickTranscodeWorker();
+    return created;
+  } catch (err) {
+    console.error("[transcode] could not queue an uploaded video:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 /** Retry a failed job (or re-run a finished one) as a new job for the block's current file. */
 export async function retryTranscodeJob(jobId: string): Promise<EnqueueResult> {
   const job = await findById("transcodeJobs", jobId);
@@ -385,17 +417,38 @@ async function runLoop(): Promise<void> {
   }
 }
 
-/** Requeue jobs orphaned by a restart and claim the oldest queued job. */
-async function claimNextJob(): Promise<TranscodeJob | null> {
-  return mutate((db) => {
-    for (const job of db.transcodeJobs) {
-      if (job.status === "running" && worker.current?.jobId !== job.id) Object.assign(job, { status: "queued", progress: 0 });
+/**
+ * Settle jobs marked running that this worker is not running (the process
+ * stopped mid-conversion): queue them again, or fail them once they were
+ * interrupted `MAX_JOB_ATTEMPTS` times — a video that keeps crashing the
+ * server must not be retried forever. Returns the failed jobs.
+ */
+export function recoverOrphanedJobs(db: Database, activeJobId: string | null, now = nowIso()): TranscodeJob[] {
+  const failed: TranscodeJob[] = [];
+  for (const job of db.transcodeJobs) {
+    if (job.status !== "running" || job.id === activeJobId) continue;
+    if (job.attempts < MAX_JOB_ATTEMPTS) {
+      Object.assign(job, { status: "queued", progress: 0 });
+      continue;
     }
+    const error = `The conversion was interrupted ${job.attempts} times (the server stopped while it ran), so it was not started again. Retry it once the server is stable, or upload a smaller or re-encoded file.`;
+    Object.assign(job, { status: "failed", error, finishedAt: now });
+    patchBlock(db, job.lessonId, job.blockId, (b) => (transcodeSourceKey(b.src, siteOrigins()) === job.sourceKey ? { ...b, transcode: settledState(b, error, now) } : null));
+    failed.push({ ...job });
+  }
+  return failed;
+}
+
+/** Settle jobs orphaned by a restart and claim the oldest queued job. */
+async function claimNextJob(): Promise<TranscodeJob | null> {
+  const { next, failed } = await mutate((db) => {
+    const failed = recoverOrphanedJobs(db, worker.current?.jobId ?? null);
     const next = db.transcodeJobs.filter((j) => j.status === "queued").sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-    if (!next) return null;
-    Object.assign(next, { status: "running", progress: 0, attempts: next.attempts + 1, startedAt: nowIso(), error: undefined, finishedAt: undefined });
-    return { ...next };
+    if (next) Object.assign(next, { status: "running", progress: 0, attempts: next.attempts + 1, startedAt: nowIso(), error: undefined, finishedAt: undefined });
+    return { next: next ? { ...next } : null, failed };
   });
+  for (const job of failed) await notifyInstructors(job, "failed", job.error ?? "The conversion was interrupted too often.");
+  return next;
 }
 
 async function listFiles(dir: string): Promise<string[]> {

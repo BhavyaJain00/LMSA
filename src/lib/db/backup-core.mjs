@@ -215,7 +215,8 @@ export function publishBackup(tmp, dir, kind, info) {
   }
   const name = path.basename(target);
   const keep = retentionFor(kind);
-  const pruned = keep === null ? [] : pruneBackups(dir, kind, keep, [name, ...(info.protect ?? [])]);
+  // The new backup counts towards `keep` and is never the one deleted.
+  const pruned = keep === null ? [] : pruneBackups(dir, kind, Math.max(0, keep - 1), [name, ...(info.protect ?? [])]);
   const entry = getBackupEntry(dir, name);
   if (!entry) throw new Error(`The backup ${name} disappeared while it was being saved.`);
   return { entry, created: true, pruned };

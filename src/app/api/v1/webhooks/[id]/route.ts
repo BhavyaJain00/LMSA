@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
-import { serializeWebhookEndpoint } from "@/lib/api/serializers";
+import { serializeDeleted, serializeWebhookEndpoint } from "@/lib/api/serializers";
 import { findWebhook, webhookFailure } from "@/lib/api/webhooks";
 import { endpointHost } from "@/lib/webhooks/delivery";
 import { deleteWebhookEndpoint, updateWebhookEndpoint } from "@/lib/webhooks/endpoints";
@@ -37,7 +37,7 @@ export const DELETE = apiRoute(endpoints.deleteWebhook, async (ctx) => {
   if (!result.ok) throw webhookFailure(result, id);
   await ctx.audit("api.webhook.delete", { type: "webhook", id }, { host: endpointHost(result.endpoint.url), deliveries: result.deliveriesRemoved });
   refresh(id);
-  return dataResponse({ id, object: "webhook_endpoint", deleted: true });
+  return dataResponse(serializeDeleted("webhook_endpoint", id));
 });
 
 /** Other methods answer 405 with the JSON error envelope. */

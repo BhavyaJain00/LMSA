@@ -149,7 +149,7 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
             </table>
             {changes.length > shown.length && (
               <p className="border-t border-border px-3 py-2 text-xs text-ink-muted">
-                and {changes.length - shown.length} more {pluralize(changes.length - shown.length, "collection")}
+                and {pluralize(changes.length - shown.length, "more collection", "more collections")}
               </p>
             )}
           </div>

@@ -164,13 +164,14 @@ function param(sp: SearchParamsRecord | URLSearchParams, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+/** Filters of the admin installments tab (`istatus`, `icourse`, `iq`, `ipage`: the page shares its URL with other tabs). */
 export function parseInstallmentFilter(sp: SearchParamsRecord | URLSearchParams): InstallmentFilter {
-  const status = param(sp, "status");
-  const page = Number(param(sp, "page"));
+  const status = param(sp, "istatus");
+  const page = Number(param(sp, "ipage"));
   return {
     status: status === "all" || (STATUSES as readonly string[]).includes(status) ? (status as InstallmentStatusFilter) : "open",
-    courseId: param(sp, "course") || undefined,
-    search: param(sp, "q").trim().slice(0, 100) || undefined,
+    courseId: param(sp, "icourse") || undefined,
+    search: param(sp, "iq").trim().slice(0, 100) || undefined,
     page: Number.isInteger(page) && page > 0 ? page : 1,
   };
 }
@@ -201,6 +202,8 @@ export interface AdminInstallmentRow {
 }
 
 export interface InstallmentStats {
+  /** Every plan, whatever its status. */
+  total: number;
   /** Plans still collecting payments. */
   open: number;
   overdue: number;
@@ -256,7 +259,7 @@ export function installmentStats(plans: readonly Pick<InstallmentPlan, "status" 
     if (plan.status === "paused") paused++;
     if (plan.outstandingAmount > 0) outstanding.set(plan.currency, (outstanding.get(plan.currency) ?? 0) + plan.outstandingAmount);
   }
-  return { open, overdue, paused, completed, outstanding: Array.from(outstanding, ([currency, amount]) => ({ currency, amount })).sort((a, b) => b.amount - a.amount) };
+  return { total: plans.length, open, overdue, paused, completed, outstanding: Array.from(outstanding, ([currency, amount]) => ({ currency, amount })).sort((a, b) => b.amount - a.amount) };
 }
 
 /** Payment plans for the admin tab: filtered, the most urgent first, paged; with overall stats. */

@@ -9,6 +9,7 @@ import { recomputeEnrollmentProgress, renumberOutline, touchCourseContent, withR
 import { computeLessonDuration, createBlock, sanitizeBlocks } from "@/components/admin/courses/blocks";
 import { fd, fdBool, uid, uniqueSlug } from "@/lib/utils";
 import { cleanReleaseRule, hasReleaseRule, validateReleaseInput, type ReleaseRule } from "@/components/learn/drip-shared";
+import { recordLessonVersion } from "@/lib/teaching/versions";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -92,8 +93,11 @@ export async function renameLessonAction(lessonId: string, title: string): Promi
   await mutate((db) => {
     const row = db.lessons.find((l) => l.id === lessonId);
     if (!row) return;
+    const at = new Date().toISOString();
+    // Lesson history: keep the lesson as it was before this save.
+    recordLessonVersion(db, row, loaded.user.id, { next: { title: clean, blocks: row.blocks, instructorNotes: row.instructorNotes }, at });
     row.title = clean;
-    row.updatedAt = new Date().toISOString();
+    row.updatedAt = at;
     reviewReset = touchCourseContent(db, loaded.course.id, loaded.user);
   });
   revalidateLessonPaths(loaded.course, lessonId);
@@ -309,6 +313,8 @@ export async function saveLessonAction(_prev: ActionResult<SavedLesson> | null, 
   await mutate((d) => {
     const row = d.lessons.find((l) => l.id === lesson.id);
     if (!row) return;
+    // Lesson history: keep the lesson as it was before this save (nothing is stored when the content is unchanged).
+    recordLessonVersion(d, row, user.id, { next: { title, blocks, instructorNotes }, at: updatedAt });
     row.title = title;
     row.slug = slug;
     row.includeInPreview = includeInPreview;

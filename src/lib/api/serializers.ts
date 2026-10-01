@@ -1,4 +1,5 @@
 import type {
+  ApiKey,
   Batch,
   BatchEnrollment,
   Category,
@@ -48,6 +49,43 @@ export function absoluteUrl(baseUrl: string, value: string | undefined | null): 
   if (/^https?:\/\//i.test(value)) return value;
   if (value.startsWith("/") && !value.startsWith("//")) return `${baseUrl}${value}`;
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Account                                                             */
+/* ------------------------------------------------------------------ */
+
+export interface ApiKeyInfo {
+  apiVersion: "v1";
+  /** The key used for the request (never the secret part). */
+  key: { id: string; name: string; prefix: string; scopes: string[]; createdAt: string; lastUsedAt: string | null };
+  rateLimit: { limit: number; windowSeconds: number };
+  site: { name: string; url: string };
+}
+
+export function serializeKeyInfo(
+  key: Pick<ApiKey, "id" | "name" | "prefix" | "scopes" | "createdAt" | "lastUsedAt">,
+  rateLimit: { limit: number; windowMs: number },
+  site: { name: string; url: string },
+): ApiKeyInfo {
+  return {
+    apiVersion: "v1",
+    key: { id: key.id, name: key.name, prefix: key.prefix, scopes: [...key.scopes], createdAt: key.createdAt, lastUsedAt: key.lastUsedAt ?? null },
+    rateLimit: { limit: rateLimit.limit, windowSeconds: rateLimit.windowMs / 1000 },
+    site: { name: site.name, url: site.url },
+  };
+}
+
+/** Answer of a DELETE endpoint. */
+export interface ApiDeleted {
+  id: string;
+  /** Kind of record removed, e.g. "enrollment". */
+  object: string;
+  deleted: true;
+}
+
+export function serializeDeleted(object: string, id: string): ApiDeleted {
+  return { id, object, deleted: true };
 }
 
 /* ------------------------------------------------------------------ */

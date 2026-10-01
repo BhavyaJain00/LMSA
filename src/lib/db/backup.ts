@@ -483,8 +483,11 @@ export class BackupManager {
         await vacuumOnWorker(driver.info().file, target);
         return;
       } catch (err) {
-        if (!(err instanceof WorkerUnavailableError)) throw err;
-        // No worker threads here: take the snapshot on this thread instead.
+        // No worker threads here, or the worker could not do it (it has its own connection and
+        // module loading): take the snapshot on this thread instead. A real problem (disk full,
+        // locked file) fails again there and is reported.
+        if (!(err instanceof WorkerUnavailableError)) console.warn(`[backup] the snapshot worker failed (${messageOf(err)}); retrying on the main thread.`);
+        fs.rmSync(target, { force: true });
       }
     }
     await driver.backupTo(target, this.engine.snapshot()!);

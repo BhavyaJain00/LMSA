@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import { apiRoute, dataResponse, methodNotAllowed } from "@/lib/api/handler";
 import { endpoints } from "@/lib/api/endpoints";
 import { notFound } from "@/lib/api/errors";
+import { serializeDeleted } from "@/lib/api/serializers";
 import { unenrollUserFromCourse } from "@/lib/services/enrollment";
 
 /** DELETE /api/v1/enrollments/{id} — remove the enrollment and the learner's progress in that course. */
@@ -15,7 +16,7 @@ export const DELETE = apiRoute(endpoints.deleteEnrollment, async (ctx) => {
   revalidatePath(`/admin/courses/${enrollment.courseId}`, "layout");
   if (course) revalidatePath(`/courses/${course.slug}`, "layout");
   revalidatePath("/dashboard");
-  return dataResponse({ id, object: "enrollment", deleted: true });
+  return dataResponse(serializeDeleted("enrollment", id));
 });
 
 /** Other methods answer 405 with the JSON error envelope. */

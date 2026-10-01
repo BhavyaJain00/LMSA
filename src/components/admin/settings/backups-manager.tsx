@@ -34,6 +34,17 @@ const MAX_NOTE_LENGTH = 200;
 
 const downloadUrl = (name: string) => `/api/admin/backup/${encodeURIComponent(name)}`;
 
+/** Start a file download from a route handler without leaving the page. */
+function startDownload(url: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "";
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 function KindBadge({ kind }: { kind: BackupKindName }) {
   return (
     <Badge tone={KIND_TONES[kind]} size="xs" title={BACKUP_KIND_HINTS[kind]}>
@@ -188,13 +199,13 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
               label: "SQLite file (.sqlite)",
               description: "A compact copy of the whole database.",
               icon: <Icon.Database />,
-              onClick: () => window.location.assign("/api/admin/backup?format=sqlite"),
+              onClick: () => startDownload("/api/admin/backup?format=sqlite"),
             },
             {
               label: "JSON export (.json)",
               description: "Readable text; works with any storage setting.",
               icon: <Icon.FileText />,
-              onClick: () => window.location.assign("/api/admin/backup?format=json"),
+              onClick: () => startDownload("/api/admin/backup?format=json"),
             },
           ]}
         />
@@ -255,7 +266,7 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
           {selectedNames.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm" role="status">
               <span className="font-medium text-ink">
-                {selectedNames.length} {pluralize(selectedNames.length, "backup")} selected
+                {pluralize(selectedNames.length, "backup")} selected
               </span>
               <span className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
@@ -310,7 +321,7 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
                           <span>{formatBytes(row.sizeBytes)}</span>
                           {row.records !== null && (
                             <span>
-                              {formatNumber(row.records)} {pluralize(row.records, "record")}
+                              {pluralize(row.records, "record")}
                             </span>
                           )}
                         </p>
@@ -391,7 +402,7 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
 
               <div className="flex flex-col gap-2 text-sm text-ink-muted sm:flex-row sm:items-center sm:justify-between">
                 <p aria-live="polite">
-                  Showing {view.from}–{view.to} of {matching.length} {pluralize(matching.length, "backup")}
+                  Showing {view.from}–{view.to} of {pluralize(matching.length, "backup")}
                   {filtered && ` (${backups.length} in total)`}
                 </p>
                 {view.pages > 1 && (
