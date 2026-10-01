@@ -304,10 +304,10 @@ describe("erasure rules for growth-era records", () => {
     assert.deepEqual(db.liveClasses[0]!.attendeeIds, [bob.id]);
   });
 
-  it("keeps messages and peer reviews for the people who received them", () => {
-    assert.equal(db.directMessages.length, 3);
+  it("removes the messages the person sent but keeps replies and peer reviews for the others", () => {
+    assert.deepEqual(db.directMessages.map((m) => m.id), ["dm_2", "dm_3"], "only the erased member's own messages go");
+    assert.deepEqual(db.conversations.map((c) => c.id), ["cnv_1", "cnv_2"], "Bob can still read his side of the conversation");
     assert.equal(db.peerReviews.length, 3);
-    assert.equal(db.users.find((u) => u.id === db.directMessages[0]!.senderId)!.name, DELETED_USER_NAME);
   });
 
   it("drops finished webhook logs that carried the address, and only those", () => {

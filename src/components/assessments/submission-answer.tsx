@@ -52,15 +52,8 @@ export function SubmissionAnswer({ type, answer, attachmentUrl }: { type: Assign
         <img src={attachmentUrl} alt="Submitted file" className="max-h-[32rem] w-auto rounded-xl border border-border object-contain" />
       )}
       {isPdfUrl(attachmentUrl) && (
-        <object data={attachmentUrl} type="application/pdf" className="h-[32rem] w-full rounded-xl border border-border bg-surface-2" aria-label="Submitted PDF">
-          <p className="p-4 text-sm text-ink-muted">
-            Your browser can&apos;t preview PDFs.{" "}
-            <a href={attachmentUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-              Open the file
-            </a>
-            .
-          </p>
-        </object>
+        // The browser's built-in PDF viewer; the "Open" and "Download" links above are the fallback.
+        <iframe src={attachmentUrl} title="Submitted PDF" loading="lazy" className="h-[32rem] w-full rounded-xl border border-border bg-surface-2" />
       )}
     </div>
   );

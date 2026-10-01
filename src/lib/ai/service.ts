@@ -36,7 +36,7 @@ export function citationViews(citations: AiCitation[] | undefined, links: Map<st
       n: i + 1,
       title: c.title,
       detail: c.seconds !== undefined ? `video at ${formatTimestamp(c.seconds)}` : undefined,
-      href: withTimestamp(link.href, c.seconds),
+      href: withTimestamp(link.href, c.seconds, c.blockId),
       snippet: c.snippet,
       seconds: c.seconds,
     };

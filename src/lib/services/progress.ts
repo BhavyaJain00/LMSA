@@ -30,8 +30,17 @@ export interface CompletionRequirements {
 /**
  * Check whether a learner has satisfied the lesson's completion requirements
  * according to the platform settings (mirrors Frappe's enforce_* settings).
+ *
+ * `opts.now` is the clock used for peer-review grace periods. The peer-review
+ * sweep passes `skipPeerReview` because it has already decided, with its own
+ * clock and release rules, that the reviews no longer hold the lesson back.
  */
-export async function getCompletionRequirements(user: User, lesson: Lesson, dwellSeconds: number): Promise<CompletionRequirements> {
+export async function getCompletionRequirements(
+  user: User,
+  lesson: Lesson,
+  dwellSeconds: number,
+  opts: { now?: number; skipPeerReview?: boolean } = {},
+): Promise<CompletionRequirements> {
   const db = await getDb();
   const s = db.settings.learning;
   const missing: string[] = [];
@@ -76,12 +85,14 @@ export async function getCompletionRequirements(user: User, lesson: Lesson, dwel
 
   // Peer review: when an assignment counts reviews toward completion, the learner must finish theirs
   // (returns nothing unless that option is on; staff never review).
-  const peerMissing = peerReviewRequirements(
-    db,
-    user,
-    assignmentBlocks.map((b) => (b.type === "assignment" ? b.assignmentId : "")).filter(Boolean),
-    Date.now(),
-  );
+  const peerMissing = opts.skipPeerReview
+    ? []
+    : peerReviewRequirements(
+        db,
+        user,
+        assignmentBlocks.map((b) => (b.type === "assignment" ? b.assignmentId : "")).filter(Boolean),
+        opts.now ?? Date.now(),
+      );
   missing.push(...peerMissing);
 
   return {

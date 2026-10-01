@@ -73,6 +73,9 @@ export default async function ManageCoursePage(props: PageProps<"/admin/courses/
             <ButtonLink href={`/courses/${course.slug}`} variant="outline" size="sm" leftIcon={<Icon.Eye className="size-4" />}>
               View course
             </ButtonLink>
+            <ButtonLink href={`/admin/courses/${course.id}/sales-page`} variant="outline" size="sm" leftIcon={<Icon.Layout className="size-4" />}>
+              Sales page
+            </ButtonLink>
             <CourseWorkflow courseId={course.id} status={course.status} published={course.published} publishedOn={course.publishedOn} flags={flags} lessonCount={lessonCount} variant="inline" />
           </>
         }

@@ -110,15 +110,8 @@ export function PdfBlock({ src, title }: { src: string; title?: string }) {
             </a>
           </div>
         </div>
-        <object data={src} type="application/pdf" aria-label={name} className="block h-[70vh] min-h-[420px] w-full bg-surface-2">
-          <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-2 p-6 text-center">
-            <Icon.FileText className="size-8 text-ink-faint" />
-            <p className="text-sm font-medium text-ink">This PDF could not be displayed.</p>
-            <a href={src} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-accent underline underline-offset-2">
-              Open the PDF in a new tab
-            </a>
-          </div>
-        </object>
+        {/* The browser's built-in PDF viewer; "Open in new tab" above is the fallback where it has none (most phones). */}
+        <iframe src={src} title={name} loading="lazy" className="block h-[70vh] min-h-[420px] w-full border-0 bg-surface-2" />
       </div>
     </BlockFrame>
   );

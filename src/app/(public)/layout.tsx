@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getSettings } from "@/lib/db/store";
+import { AnalyticsBeacon } from "@/components/analytics/analytics-beacon";
 import { Icon } from "@/components/ui/icons";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import "./certificate-print.css";
@@ -35,6 +36,7 @@ export default async function PublicLayout({ children }: LayoutProps<"/">) {
       <footer className="public-chrome border-t border-border px-6 py-4 text-center text-xs text-ink-faint">
         {settings.brand.footerText || `© ${settings.brand.name}`}
       </footer>
+      <AnalyticsBeacon />
     </div>
   );
 }

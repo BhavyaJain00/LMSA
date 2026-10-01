@@ -35,10 +35,15 @@ export function linkCitations(content: string, links: CitationLink[]): string {
   return parts.map((part, i) => (i % 2 === 1 ? part : replace(part))).join("");
 }
 
-/** `/courses/x/learn/1-2` + 135 → `/courses/x/learn/1-2?t=135`. */
-export function withTimestamp(href: string, seconds: number | undefined): string {
+/**
+ * `/courses/x/learn/1-2` + 135 → `/courses/x/learn/1-2?t=135`. With a video
+ * block id, `&block=<id>` makes the link seek that video instead of the
+ * lesson's first one.
+ */
+export function withTimestamp(href: string, seconds: number | undefined, blockId?: string): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return href;
   const [path, hash] = href.split("#");
   const sep = path!.includes("?") ? "&" : "?";
-  return `${path}${sep}t=${Math.floor(seconds)}${hash ? `#${hash}` : ""}`;
+  const block = blockId ? `&block=${encodeURIComponent(blockId)}` : "";
+  return `${path}${sep}t=${Math.floor(seconds)}${block}${hash ? `#${hash}` : ""}`;
 }

@@ -68,6 +68,7 @@ export function excerptCitations(excerpts: RetrievedExcerpt[], course: Course): 
           : chunk.lessonTitle;
     const citation: AiCitation = { lessonId: chunk.lessonId, title, snippet: truncateToTokens(text.replace(/\s+/g, " ").trim(), 55) };
     if (chunk.seconds !== undefined) citation.seconds = chunk.seconds;
+    if (chunk.seconds !== undefined && chunk.blockId) citation.blockId = chunk.blockId;
     return citation;
   });
 }

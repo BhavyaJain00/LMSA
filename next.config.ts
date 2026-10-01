@@ -98,9 +98,8 @@ const isDev = process.env.NODE_ENV === "development";
  * which inherit this policy (and React Refresh needs it in development).
  * Third-party scripts: Razorpay checkout, Google Analytics and the Meta Pixel
  * (both loaded only after cookie consent). Stripe Checkout is a redirect, so it
- * only needs `form-action`. `object-src` allows same-origin and HTTPS documents
- * because PDF lesson blocks and submitted PDFs are previewed with `<object>`
- * (browsers no longer run plugins, so this only admits the built-in PDF viewer).
+ * only needs `form-action`. PDF lesson blocks and submitted PDFs are previewed in
+ * an `<iframe>` (allowed by `frame-src`), so `object-src` stays `'none'`.
  */
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -113,7 +112,7 @@ const contentSecurityPolicy = [
   "font-src 'self' data:",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
-  "object-src 'self' https:",
+  "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self' https://checkout.stripe.com",
   "frame-ancestors 'self'",

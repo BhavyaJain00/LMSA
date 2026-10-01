@@ -492,6 +492,10 @@ export interface ApiPayment {
   installmentsTotal: number | null;
   subscriptionId: string | null;
   affiliateId: string | null;
+  /** Order bump: the payment of the main order it was added to. */
+  upsellOfPaymentId: string | null;
+  /** Gift purchase or redeemed gift order: the gift it belongs to. */
+  giftId: string | null;
   createdAt: string;
   paidAt: string | null;
   refundedAt: string | null;
@@ -524,6 +528,8 @@ export function serializePayment(payment: Payment): ApiPayment {
     installmentsTotal: payment.installmentsTotal ?? null,
     subscriptionId: payment.subscriptionId ?? null,
     affiliateId: payment.affiliateId ?? null,
+    upsellOfPaymentId: payment.upsellOfPaymentId ?? null,
+    giftId: payment.giftId ?? null,
     createdAt: payment.createdAt,
     paidAt: payment.paidAt ?? null,
     refundedAt: payment.refundedAt ?? null,

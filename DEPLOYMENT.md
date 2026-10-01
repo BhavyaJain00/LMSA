@@ -224,7 +224,7 @@ Every job also runs lazily while people use the site, but a schedule keeps queue
 | `/api/cron/webhooks` | every minute | Outgoing webhook deliveries and retries. |
 | `/api/cron/comms` | every 1–5 minutes | Scheduled broadcasts, email sequences, campaign statistics. |
 | `/api/cron/media` | every 10 minutes | Video conversions (HLS), expired resumable uploads, unused renditions, moving files to S3. |
-| `/api/cron/commerce` | hourly | Membership renewals and expiry, trial reminders, installment plans, missed gateway webhooks. |
+| `/api/cron/commerce` | hourly | Membership renewals and expiry, trial reminders, installment plans, scheduled gifts, abandoned-checkout reminders, missed gateway webhooks, analytics retention. |
 
 With Docker, `docker compose --profile cron up -d` runs exactly this schedule (it needs `CRON_KEY` in `.env`). Without Docker, add to the crontab of any user (`crontab -e`):
 

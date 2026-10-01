@@ -227,7 +227,8 @@ export async function completeLessonsAfterPeerReview(opts: { assignmentIds?: str
       if (!db.enrollments.some((e) => e.userId === user.id && e.courseId === lesson.courseId)) continue;
       const reviews = db.peerReviews.filter((r) => r.assignmentId === assignment.id && r.reviewerId === user.id);
       if (!released && peerCompletionBlock(assignment, { submittedAt: submission.submittedAt, reviews }, now)) continue;
-      const requirements = await getCompletionRequirements(user, lesson, Number.MAX_SAFE_INTEGER);
+      // Peer reviews were settled just above (with this sweep's clock and release rules).
+      const requirements = await getCompletionRequirements(user, lesson, Number.MAX_SAFE_INTEGER, { now, skipPeerReview: true });
       if (!requirements.allMet) continue;
       await setLessonStatus(user, lesson, "complete");
       completed++;

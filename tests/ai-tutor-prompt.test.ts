@@ -149,6 +149,8 @@ describe("ai tutor answers and citations", () => {
     assert.equal(withTimestamp("/courses/x/learn/1-2?tab=notes#top", 5), "/courses/x/learn/1-2?tab=notes&t=5#top");
     assert.equal(withTimestamp("/courses/x/learn/1-2", 0), "/courses/x/learn/1-2");
     assert.equal(withTimestamp("/courses/x/learn/1-2", undefined), "/courses/x/learn/1-2");
+    assert.equal(withTimestamp("/courses/x/learn/1-2", 42, "blk 2"), "/courses/x/learn/1-2?t=42&block=blk%202");
+    assert.equal(withTimestamp("/courses/x/learn/1-2", undefined, "blk_2"), "/courses/x/learn/1-2");
   });
 
   it("titles conversations from the first question", () => {

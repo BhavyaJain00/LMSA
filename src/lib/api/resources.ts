@@ -290,6 +290,8 @@ export const RESOURCE_SCHEMAS: Record<ApiResourceName | "UserRef" | "Lesson" | "
     installmentsTotal: nullable(int()),
     subscriptionId: nullable(str()),
     affiliateId: nullable(str()),
+    upsellOfPaymentId: nullable(str("For an order bump: the payment of the main order it was added to.")),
+    giftId: nullable(str("For a gift purchase or a redeemed gift: the gift it belongs to.")),
     createdAt: dateTime(),
     paidAt: nullable(dateTime()),
     refundedAt: nullable(dateTime()),

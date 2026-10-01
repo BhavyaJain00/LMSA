@@ -1,20 +1,12 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { guestLoginPath, isLoginOnlyPage } from "@/lib/auth/login-only-pages";
 import { siteConfig } from "@/lib/config";
 import { UNSUBSCRIBE_RECEIPT_COOKIE } from "@/lib/email/unsubscribe-cookie";
 import { trackVisitor } from "@/lib/growth/visitor-cookies";
 import { INDEXNOW_KEY_PATH, indexNowKeyFromPath } from "@/lib/seo/indexnow";
 import { seoRedirectTarget } from "@/lib/seo/proxy-canonical";
 import { isRedirectCandidate, slugRedirectFor } from "@/lib/seo/proxy-redirects";
-
-/**
- * Optimistic auth check: routes under these prefixes need a session cookie.
- * Real authorization happens server-side in each page/action; this only
- * avoids rendering protected pages for obviously anonymous visitors.
- * Pages that also serve guests (for example `/you`) are not listed here and
- * handle the signed-out state themselves.
- */
-const PROTECTED_PREFIXES = ["/dashboard", "/admin", "/settings", "/billing", "/notifications", "/persona"];
 
 /**
  * One-click unsubscribe links from emails (`/settings/notifications?unsubscribe=…&u=…&t=…`)
@@ -51,17 +43,19 @@ export function proxy(request: NextRequest) {
 
   // Growth: `?ref=CODE` referral cookie (last click) and the anonymous visitor id.
   const visitor = trackVisitor(request);
+
+  // Optimistic auth check for login-only pages (exact page patterns, see
+  // `login-only-pages.ts`): guests get a real 307 to the login page instead of
+  // a streamed page that redirects in the browser. Only page loads (GET/HEAD)
+  // are redirected; Server Action POSTs and route handlers check the session
+  // themselves, and every page still authorizes on the server.
   const { pathname, search, searchParams } = request.nextUrl;
-  const needsAuth = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  if (!needsAuth) return visitor.next();
+  if (request.method !== "GET" && request.method !== "HEAD") return visitor.next();
+  if (!isLoginOnlyPage(pathname)) return visitor.next();
   if (isSignedUnsubscribeLink(request, pathname, searchParams)) return visitor.next();
+  if (request.cookies.has(siteConfig.sessionCookie)) return visitor.next();
 
-  const hasSession = request.cookies.has(siteConfig.sessionCookie);
-  if (hasSession) return visitor.next();
-
-  const login = new URL("/login", request.url);
-  login.searchParams.set("next", `${pathname}${search}`);
-  return visitor.apply(NextResponse.redirect(login));
+  return visitor.apply(NextResponse.redirect(new URL(guestLoginPath(pathname, search), request.url)));
 }
 
 export const config = {

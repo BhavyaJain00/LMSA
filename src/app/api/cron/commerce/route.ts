@@ -4,6 +4,7 @@ import { runMembershipMaintenance } from "@/lib/commerce/membership-service";
 import { runInstallmentMaintenance } from "@/lib/commerce/installment-service";
 import { deliverDueGifts } from "@/lib/commerce/gift-service";
 import { processAbandonedCheckouts } from "@/lib/commerce/checkout-sessions";
+import { maybeCompactAnalytics } from "@/lib/growth/analytics";
 
 /**
  * Scheduled commerce upkeep.
@@ -23,7 +24,8 @@ import { processAbandonedCheckouts } from "@/lib/commerce/checkout-sessions";
  * Gifts scheduled for a later date are emailed to their recipients once
  * their send time has come. Checkouts that were started but not finished
  * get their reminder emails (the last one with a single-use coupon), and
- * checkouts whose purchase went through are closed.
+ * checkouts whose purchase went through are closed. Old analytics events are
+ * folded into daily rollups (at most every six hours per server process).
  * The same work also runs lazily when members or administrators open the
  * membership, order and plan pages, so the schedule (hourly is plenty) only
  * makes it timely.
@@ -44,6 +46,7 @@ async function handle(request: NextRequest) {
     const installments = await runInstallmentMaintenance({ force: true });
     const gifts = await deliverDueGifts({ force: true });
     const checkouts = await processAbandonedCheckouts({ force: true });
+    await maybeCompactAnalytics();
     return NextResponse.json({ ok: true, memberships, installments, gifts, checkouts }, { headers: NO_STORE });
   } catch (error) {
     console.error("[commerce] cron run failed:", error instanceof Error ? error.message : String(error));

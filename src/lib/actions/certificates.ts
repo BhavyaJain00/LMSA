@@ -12,6 +12,7 @@ import { evaluateBadges } from "@/lib/services/badges";
 import { awardCertificatePoints, revokeCertificatePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
 import { audit } from "@/lib/audit";
+import { emit } from "@/lib/events";
 import { fd, fdBool, shortCode, toDateKey, uid } from "@/lib/utils";
 import { isValidDateKey } from "@/components/certificates/time";
 import { DEFAULT_CERTIFICATE_TEMPLATE_ID, isCertificateTemplateId } from "@/components/certificates/templates";
@@ -132,6 +133,7 @@ async function issueBatchCertificate(learner: User, batch: Batch, opts: IssueOpt
     return null;
   });
   if (duplicate) return duplicate;
+  emit("certificate.issued", { certificateId: cert.id, code: cert.code, userId: learner.id, batchId: batch.id });
   await notify(learner.id, {
     type: "certificate",
     subject: "Your certificate is ready",

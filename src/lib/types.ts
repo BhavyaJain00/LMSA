@@ -1795,6 +1795,8 @@ export interface AiCitation {
   snippet: string;
   /** Video timestamp of the passage when it comes from a transcript. */
   seconds?: number;
+  /** Video block the transcript belongs to (links target it with `&block=`). */
+  blockId?: string;
 }
 
 export interface AiMessage {

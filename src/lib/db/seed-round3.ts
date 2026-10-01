@@ -372,7 +372,8 @@ export function buildSeedLegalPages(now: Date): LegalPage[] {
     title,
     content: content.trim(),
     updatedAt,
-    version: 1,
+    // Starter templates: never published yet (the first publish makes them v1).
+    version: 0,
     published: false,
   });
   return [

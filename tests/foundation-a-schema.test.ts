@@ -148,7 +148,7 @@ describe("round 3 demo content", () => {
     assert.deepEqual(pages.map((p) => p.slug), ["privacy", "terms", "refunds", "cookies"]);
     for (const page of pages) {
       assert.equal(page.published, false);
-      assert.equal(page.version, 1);
+      assert.equal(page.version, 0, "never published, so the first publish becomes v1");
       assert.equal(page.content.split("\n")[0], LEGAL_TEMPLATE_NOTICE);
       assert.equal(LEGAL_TEMPLATE_NOTICE, "Template — review with a lawyer before publishing.");
       assert.ok(words(page.content) > 120, `${page.slug} has real starter text`);

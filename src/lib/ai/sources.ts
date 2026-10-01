@@ -36,6 +36,8 @@ export interface CourseChunk {
   text: string;
   /** Video position for transcript chunks. */
   seconds?: number;
+  /** Video block of a transcript chunk. */
+  blockId?: string;
   /** Written or verified by course staff (instructor clarifications). */
   trusted?: boolean;
   /** Outline position, for stable ordering of equal scores. */
@@ -51,6 +53,8 @@ export interface CourseSource {
   /** Text to chunk (unused for transcripts, which carry `cues`). */
   text: string;
   cues?: TranscriptCue[];
+  /** Video block a transcript source belongs to. */
+  blockId?: string;
   trusted?: boolean;
 }
 
@@ -188,7 +192,7 @@ export function collectCourseSources(db: SourceDb, courseId: string): CourseSour
           const transcript = blockTranscript(db.transcripts, transcriptsById, lesson.id, block.id, block.transcriptId);
           if (!transcript) break;
           const videoTitle = block.title?.trim() || "Video";
-          sources.push({ ...base, title: `${lesson.title} › ${videoTitle} transcript`, kind: "transcript", text: "", cues: transcript.cues });
+          sources.push({ ...base, title: `${lesson.title} › ${videoTitle} transcript`, kind: "transcript", text: "", cues: transcript.cues, blockId: block.id });
           break;
         }
         default:
@@ -237,6 +241,7 @@ export function chunkCourseSources(sources: CourseSource[], options: Partial<Chu
       order: chunks.length,
     };
     if (seconds !== undefined) chunk.seconds = seconds;
+    if (source.blockId) chunk.blockId = source.blockId;
     if (source.trusted) chunk.trusted = true;
     chunks.push(chunk);
   };

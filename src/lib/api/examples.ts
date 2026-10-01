@@ -194,6 +194,8 @@ const PAYMENT: ApiPayment = {
   installmentsTotal: null,
   subscriptionId: null,
   affiliateId: null,
+  upsellOfPaymentId: null,
+  giftId: null,
   createdAt: CREATED,
   paidAt: "2026-01-12T08:31:10.000Z",
   refundedAt: null,
