@@ -7,11 +7,12 @@ import { canViewEvaluatorTabs, getEvaluatorSchedule, getEvaluatorSlots, isEvalua
 import { Icon } from "@/components/ui/icons";
 import { SlotsEditor } from "@/components/certificates/slots-editor";
 import { timeZoneLabel } from "@/components/certificates/time";
+import { getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/user/[username]/slots">): Promise<Metadata> {
   const { username } = await props.params;
-  const profile = await getUserByUsername(username);
-  return { title: profile ? `${profile.name} · Slots` : "Slots" };
+  const [profile, t] = await Promise.all([getUserByUsername(username), getT("account")]);
+  return { title: profile ? t("evaluator.slots.metaTitleNamed", { name: profile.name }) : t("profile.tabs.slots") };
 }
 
 export default async function EvaluatorSlotsPage(props: PageProps<"/user/[username]/slots">) {
@@ -23,7 +24,7 @@ export default async function EvaluatorSlotsPage(props: PageProps<"/user/[userna
   // Visible to evaluators/moderators looking at an evaluator's profile, or to the evaluator themselves.
   if (!isEvaluatorRole(profile) || (!owner && !canViewEvaluatorTabs(viewer, profile))) redirect(`/user/${profile.username}`);
 
-  const [slots, schedule] = await Promise.all([getEvaluatorSlots(profile.id), getEvaluatorSchedule(profile.id)]);
+  const [slots, schedule, t] = await Promise.all([getEvaluatorSlots(profile.id), getEvaluatorSchedule(profile.id), getT("account")]);
   const upcoming = schedule.filter((e) => e.status === "upcoming" && !e.awaitingResult).length;
 
   return (
@@ -33,15 +34,15 @@ export default async function EvaluatorSlotsPage(props: PageProps<"/user/[userna
         slots={slots}
         editable={owner}
         timeZoneLabel={timeZoneLabel(platformTimeZone())}
-        heading={owner ? "My availability" : `${profile.name}'s availability`}
+        heading={owner ? t("evaluator.slots.titleSelf") : t("evaluator.slots.titleOther", { name: profile.name })}
       />
       <div className="flex flex-col gap-3 rounded-card border border-border bg-surface-1 p-4 text-sm shadow-card sm:flex-row sm:items-center sm:justify-between">
         <p className="flex items-start gap-2 text-ink-muted">
           <Icon.Info className="mt-0.5 size-4 shrink-0" />
-          Learners book 30-minute evaluations inside these windows, up to 14 days ahead. Slots already booked are never offered twice.
+          {t("evaluator.slots.hint")}
         </p>
         <Link href={`/user/${profile.username}/schedule`} className="inline-flex shrink-0 items-center gap-1 font-medium text-accent hover:underline">
-          {upcoming} upcoming evaluation{upcoming === 1 ? "" : "s"} <Icon.ArrowRight className="size-4" />
+          {t("evaluator.slots.upcoming", { count: upcoming })} <Icon.ArrowRight className="size-4 rtl:rotate-180" />
         </Link>
       </div>
     </div>

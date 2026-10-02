@@ -9,21 +9,28 @@ import { Tooltip } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { AddToCalendar } from "@/components/pwa/add-to-calendar";
+import { intlLocale } from "@/i18n/config";
+import { useLocale, useT } from "@/i18n/client";
 import { formatInZone, sessionState, timeUntil } from "./time";
 import { useNow } from "./use-now";
 
-const providerLabel: Record<DashboardLiveClass["provider"], string> = {
+/** Product names stay as they are; only the generic label is translated. */
+const providerLabel: Record<Exclude<DashboardLiveClass["provider"], "custom">, string> = {
   zoom: "Zoom",
   google_meet: "Google Meet",
-  custom: "Online meeting",
 };
 
 /**
  * Live class card: shows the class in the viewer's local time and the join
  * state. Join/Start are offered only on the day of the class until it ends;
  * afterwards it shows "Ended" (and a recording link when available).
+ * Rendered on the dashboard and the admin overview, so its strings are `global.` keys.
  */
 export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLiveClass; className?: string }) {
+  const t = useT("account");
+  const locale = useLocale();
+  const tag = intlLocale(locale);
+  const provider = liveClass.provider === "custom" ? t("global.liveClass.onlineMeeting") : providerLabel[liveClass.provider];
   const now = useNow();
   const start = new Date(liveClass.startsAt);
   const end = new Date(liveClass.endsAt);
@@ -33,13 +40,13 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
   const zone = now === null ? liveClass.timezone : undefined;
   const dateLabel =
     zone !== undefined
-      ? formatInZone(start, zone, { weekday: "long", month: "long", day: "numeric", year: "numeric" })
-      : start.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      ? formatInZone(start, zone, { weekday: "long", month: "long", day: "numeric", year: "numeric" }, locale)
+      : start.toLocaleDateString(tag, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const timeOpts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
   const timeLabel =
     zone !== undefined
-      ? `${formatInZone(start, zone, timeOpts)} – ${formatInZone(end, zone, { ...timeOpts, timeZoneName: "short" })}`
-      : `${start.toLocaleTimeString("en-US", timeOpts)} – ${end.toLocaleTimeString("en-US", { ...timeOpts, timeZoneName: "short" })}`;
+      ? `${formatInZone(start, zone, timeOpts, locale)} – ${formatInZone(end, zone, { ...timeOpts, timeZoneName: "short" }, locale)}`
+      : `${start.toLocaleTimeString(tag, timeOpts)} – ${end.toLocaleTimeString(tag, { ...timeOpts, timeZoneName: "short" })}`;
 
   const canJoin = state === "live" || state === "today";
   // startUrl is only present for viewers allowed to start the meeting.
@@ -63,12 +70,12 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
         <div className="flex shrink-0 items-center gap-1">
           {state === "live" && (
             <Badge tone="success" dot className="shrink-0 animate-pulse">
-              Live now
+              {t("global.liveClass.liveNow")}
             </Badge>
           )}
           {state === "today" && (
             <Badge tone="info" className="shrink-0">
-              Today
+              {t("global.liveClass.today")}
             </Badge>
           )}
           {state !== "ended" && (
@@ -77,10 +84,14 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
               event={{
                 uid: `live-class-${liveClass.id}`,
                 title: liveClass.title,
-                description: [liveClass.description, liveClass.joinUrl ? `Join: ${liveClass.joinUrl}` : "", `Batch: ${liveClass.batch.title}`]
+                description: [
+                  liveClass.description,
+                  liveClass.joinUrl ? t("global.evaluation.calendarJoin", { link: liveClass.joinUrl }) : "",
+                  t("global.evaluation.calendarBatch", { title: liveClass.batch.title }),
+                ]
                   .filter(Boolean)
                   .join("\n\n"),
-                location: liveClass.joinUrl || providerLabel[liveClass.provider],
+                location: liveClass.joinUrl || provider,
                 url: `/batches/${liveClass.batch.slug}?tab=classes#class-${liveClass.id}`,
                 start: start.getTime(),
                 end: end.getTime(),
@@ -94,25 +105,25 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
 
       <dl className="mt-3 space-y-1.5 text-sm text-ink">
         <div className="flex items-center gap-2">
-          <dt className="sr-only">Date</dt>
+          <dt className="sr-only">{t("global.evaluation.date")}</dt>
           <Icon.Calendar className="size-4 shrink-0 text-ink-faint" />
           <dd className="min-w-0 truncate">{dateLabel}</dd>
         </div>
         <div className="flex items-center gap-2">
-          <dt className="sr-only">Time</dt>
+          <dt className="sr-only">{t("global.evaluation.time")}</dt>
           <Icon.Clock className="size-4 shrink-0 text-ink-faint" />
           <dd className="min-w-0 truncate">{timeLabel}</dd>
         </div>
         <div className="flex items-center gap-2">
-          <dt className="sr-only">Where</dt>
+          <dt className="sr-only">{t("global.liveClass.where")}</dt>
           <Icon.Video className="size-4 shrink-0 text-ink-faint" />
-          <dd className="min-w-0 truncate text-ink-muted">{providerLabel[liveClass.provider]}</dd>
+          <dd className="min-w-0 truncate text-ink-muted">{provider}</dd>
         </div>
         {liveClass.host && (
           <div className="flex items-center gap-2">
-            <dt className="sr-only">Host</dt>
+            <dt className="sr-only">{t("global.liveClass.host")}</dt>
             <Avatar name={liveClass.host.name} src={liveClass.host.avatarUrl} size="xs" />
-            <dd className="min-w-0 truncate text-ink-muted">Hosted by {liveClass.host.name}</dd>
+            <dd className="min-w-0 truncate text-ink-muted">{t("global.liveClass.hostedBy", { name: liveClass.host.name })}</dd>
           </div>
         )}
       </dl>
@@ -122,7 +133,7 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
         {state === "upcoming" && (
           <p className="flex items-center gap-1.5 text-xs font-medium text-ink-muted">
             <Icon.Timer className="size-3.5" />
-            Starts {timeUntil(start.getTime(), now!)}
+            {t("global.liveClass.starts", { when: timeUntil(start.getTime(), now!, locale) })}
           </p>
         )}
         {canJoin && (
@@ -135,25 +146,25 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
                 className={liveClass.joinUrl ? "flex-1" : "w-full"}
                 leftIcon={<Icon.Monitor className="size-4" />}
               >
-                Start
+                {t("global.liveClass.start")}
               </ButtonLink>
             )}
             {liveClass.joinUrl && (
               <ButtonLink href={liveClass.joinUrl} size="sm" className="flex-1" leftIcon={<Icon.Video className="size-4" />}>
-                Join
+                {t("global.liveClass.join")}
               </ButtonLink>
             )}
           </div>
         )}
         {state === "today" && (
-          <p className="mt-2 text-xs text-ink-muted">Starts {timeUntil(start.getTime(), now!)}</p>
+          <p className="mt-2 text-xs text-ink-muted">{t("global.liveClass.starts", { when: timeUntil(start.getTime(), now!, locale) })}</p>
         )}
         {state === "ended" && (
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Tooltip label="This class has ended">
+            <Tooltip label={t("global.liveClass.endedHint")}>
               <span className="inline-flex items-center gap-1.5 text-sm font-medium text-warning" tabIndex={0}>
                 <Icon.Info className="size-4" />
-                Ended
+                {t("global.liveClass.ended")}
               </span>
             </Tooltip>
             {liveClass.recordingUrl && (
@@ -162,7 +173,7 @@ export function LiveClassCard({ liveClass, className }: { liveClass: DashboardLi
                 className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
               >
                 <Icon.Play className="size-3" />
-                Watch recording
+                {t("global.liveClass.watchRecording")}
               </Link>
             )}
           </div>

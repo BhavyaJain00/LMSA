@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function DashboardLoading() {
+export default async function DashboardLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="space-y-8">
-      <span className="sr-only">Loading your dashboard…</span>
+      <span className="sr-only">{t("dashboard.loading")}</span>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="space-y-2">
           <div className="flex items-center gap-3">

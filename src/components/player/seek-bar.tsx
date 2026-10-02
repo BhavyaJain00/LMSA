@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { clamp, cn, formatTime } from "@/lib/utils";
 import type { BufferedRange } from "./use-video-player";
+import { useT } from "@/i18n/client";
 
 export interface SeekChapter {
   time: number;
@@ -59,6 +60,7 @@ export function SeekBar({
   className?: string;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const t = useT("learning");
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubTime, setScrubTime] = useState(0);
@@ -159,11 +161,11 @@ export function SeekBar({
         ref={trackRef}
         role="slider"
         tabIndex={0}
-        aria-label="Seek"
+        aria-label={t("global.player.seek")}
         aria-valuemin={0}
         aria-valuemax={Math.round(duration)}
         aria-valuenow={Math.round(shown)}
-        aria-valuetext={`${formatTime(shown)} of ${formatTime(duration)}`}
+        aria-valuetext={t("global.player.seekValue", { current: formatTime(shown), total: formatTime(duration) })}
         className="relative h-3 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/60"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -223,8 +225,8 @@ export function SeekBar({
                 m.kind === "note" ? "bg-yellow-300" : "bg-amber-400",
               )}
               style={{ left: `${pct}%` }}
-              title={m.label ?? (m.kind === "quiz" ? "Quiz" : "Marker")}
-              aria-label={m.label ?? "Marker"}
+              title={m.label ?? (m.kind === "quiz" ? t("global.player.markerQuiz") : t("global.player.marker"))}
+              aria-label={m.label ?? t("global.player.marker")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();

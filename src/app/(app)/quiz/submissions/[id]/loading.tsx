@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function SubmissionLoading() {
+export default async function SubmissionLoading() {
+  const t = await getT("learning");
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading submission…</span>
+      <span className="sr-only">{t("quiz.submission.loading")}</span>
       <Skeleton className="h-4 w-56" />
       <Skeleton className="mt-3 h-7 w-72 max-w-full" />
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">

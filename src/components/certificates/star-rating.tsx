@@ -3,12 +3,14 @@
 import { useRef, type KeyboardEvent } from "react";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 /** Read-only 0–5 stars. */
 export function StarRatingDisplay({ value, className }: { value: number; className?: string }) {
+  const t = useT("public");
   const v = Math.max(0, Math.min(5, Math.round(value)));
   return (
-    <span className={cn("inline-flex items-center gap-0.5", className)} role="img" aria-label={`${v} out of 5`}>
+    <span className={cn("inline-flex items-center gap-0.5", className)} role="img" aria-label={t("certificates.stars.outOf5", { value: v })}>
       {Array.from({ length: 5 }, (_, i) =>
         i < v ? <Icon.StarFilled key={i} className="size-4 text-warning" /> : <Icon.Star key={i} className="size-4 text-ink-faint" />,
       )}
@@ -22,7 +24,7 @@ export function StarRatingInput({
   value,
   onChange,
   disabled,
-  label = "Rating",
+  label,
 }: {
   name: string;
   value: number;
@@ -30,6 +32,7 @@ export function StarRatingInput({
   disabled?: boolean;
   label?: string;
 }) {
+  const t = useT("public");
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number | null = null;
@@ -46,7 +49,7 @@ export function StarRatingInput({
   return (
     <div>
       <input type="hidden" name={name} value={value} />
-      <div role="radiogroup" aria-label={label} className="inline-flex items-center gap-0.5">
+      <div role="radiogroup" aria-label={label ?? t("reviews.form.rating")} className="inline-flex items-center gap-0.5">
         {Array.from({ length: 5 }, (_, i) => {
           const starValue = i + 1;
           const filled = starValue <= value;
@@ -60,7 +63,7 @@ export function StarRatingInput({
               type="button"
               role="radio"
               aria-checked={starValue === value}
-              aria-label={`${starValue} star${starValue === 1 ? "" : "s"}`}
+              aria-label={t("certificates.stars.count", { count: starValue })}
               tabIndex={focusable ? 0 : -1}
               disabled={disabled}
               onClick={() => onChange(starValue === value ? 0 : starValue)}
@@ -71,7 +74,7 @@ export function StarRatingInput({
             </button>
           );
         })}
-        <span className="ml-2 text-sm text-ink-muted">{value ? `${value}/5` : "Not rated"}</span>
+        <span className="ms-2 text-sm text-ink-muted">{value ? t("certificates.stars.value", { value }) : t("certificates.stars.notRated")}</span>
       </div>
     </div>
   );

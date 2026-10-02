@@ -5,14 +5,16 @@ import { DEFAULT_LOCALE, localeDir, type Locale, type Namespace, type TextDirect
 import { createFormatters, type Formatters } from "./formatters";
 import { createTranslator, type Translator } from "./translate";
 import type { MessageKey } from "./catalog";
-import type { Messages } from "./types";
+import { mergeProvided, type ProvidedMessages } from "./provided";
 import englishCommon from "./messages/en/common";
 
 /**
  * Client-side i18n. Server layouts render `<I18nProvider namespaces={[…]}>`
  * (from `@/i18n/provider`), which hands this provider the active locale and
- * the messages of just those namespaces. Nested providers add namespaces to
- * the ones above them. In a client component:
+ * the messages of just those namespaces. Nested providers add to the ones
+ * above them, key by key (see `./provided.ts`). The root layout provides
+ * `common`, `shell` and the `global.` keys of every other namespace. In a
+ * client component:
  *
  *   const t = useT("learning");
  *   t("player.next");
@@ -21,14 +23,14 @@ import englishCommon from "./messages/en/common";
 
 interface I18nState {
   locale: Locale;
-  messages: Partial<Record<Namespace, Messages>>;
+  messages: ProvidedMessages;
 }
 
 const I18nContext = createContext<I18nState | null>(null);
 
-export function I18nClientProvider({ locale, messages, children }: { locale: Locale; messages: Partial<Record<Namespace, Messages>>; children: ReactNode }) {
+export function I18nClientProvider({ locale, messages, children }: { locale: Locale; messages: ProvidedMessages; children: ReactNode }) {
   const parent = useContext(I18nContext);
-  const value = useMemo<I18nState>(() => ({ locale, messages: parent ? { ...parent.messages, ...messages } : messages }), [locale, messages, parent]);
+  const value = useMemo<I18nState>(() => ({ locale, messages: parent ? mergeProvided(parent.messages, messages) : messages }), [locale, messages, parent]);
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 

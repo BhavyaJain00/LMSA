@@ -4,97 +4,110 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon, type IconName } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
+
+type NavItemId =
+  | "general" | "branding" | "seo" | "features" | "learning" | "video" | "storage" | "ai" | "api" | "pwa"
+  | "blog" | "leads" | "analytics" | "affiliates"
+  | "categories" | "badges" | "gamification" | "rubrics"
+  | "members" | "teams" | "marketplace" | "security" | "loginActivity"
+  | "email" | "broadcasts" | "sequences" | "outbox"
+  | "payments" | "transactions" | "coupons" | "plans" | "taxes" | "upsells"
+  | "sidebar" | "legal" | "audit" | "errors" | "data";
+
+type NavGroupId = "system" | "marketing" | "course" | "users" | "communication" | "payment" | "customization" | "legal" | "data";
 
 interface NavLink {
-  label: string;
+  id: NavItemId;
   href: string;
   icon: IconName;
 }
 
-/** Grouped settings navigation (Frappe's settings dialog sidebar, as routes). */
-export const SETTINGS_NAV: { group: string; items: NavLink[] }[] = [
+/** Grouped settings navigation (Frappe's settings dialog sidebar, as routes). Labels: `settingsNav.groups.*` / `settingsNav.items.*`. */
+export const SETTINGS_NAV: { group: NavGroupId; items: NavLink[] }[] = [
   {
-    group: "System configuration",
+    group: "system",
     items: [
-      { label: "General", href: "/admin/settings/general", icon: "Settings" },
-      { label: "Branding", href: "/admin/settings/branding", icon: "Palette" },
-      { label: "SEO", href: "/admin/settings/seo", icon: "Search" },
-      { label: "Features", href: "/admin/settings/features", icon: "Sliders" },
-      { label: "Learning", href: "/admin/settings/learning", icon: "GraduationCap" },
-      { label: "Video", href: "/admin/settings/video", icon: "Video" },
-      { label: "Storage & video", href: "/admin/settings/storage", icon: "Database" },
-      { label: "AI tutor", href: "/admin/settings/ai", icon: "Sparkles" },
-      { label: "API & webhooks", href: "/admin/settings/api", icon: "Code" },
-      { label: "Installable app", href: "/admin/settings/pwa", icon: "Smartphone" },
+      { id: "general", href: "/admin/settings/general", icon: "Settings" },
+      { id: "branding", href: "/admin/settings/branding", icon: "Palette" },
+      { id: "seo", href: "/admin/settings/seo", icon: "Search" },
+      { id: "features", href: "/admin/settings/features", icon: "Sliders" },
+      { id: "learning", href: "/admin/settings/learning", icon: "GraduationCap" },
+      { id: "video", href: "/admin/settings/video", icon: "Video" },
+      { id: "storage", href: "/admin/settings/storage", icon: "Database" },
+      { id: "ai", href: "/admin/settings/ai", icon: "Sparkles" },
+      { id: "api", href: "/admin/settings/api", icon: "Code" },
+      { id: "pwa", href: "/admin/settings/pwa", icon: "Smartphone" },
     ],
   },
   {
-    group: "Content & marketing",
+    group: "marketing",
     items: [
-      { label: "Blog", href: "/admin/blog", icon: "FileText" },
-      { label: "Leads", href: "/admin/leads", icon: "Inbox" },
-      { label: "Analytics", href: "/admin/analytics", icon: "BarChart" },
-      { label: "Affiliates", href: "/admin/affiliates", icon: "Handshake" },
+      { id: "blog", href: "/admin/blog", icon: "FileText" },
+      { id: "leads", href: "/admin/leads", icon: "Inbox" },
+      { id: "analytics", href: "/admin/analytics", icon: "BarChart" },
+      { id: "affiliates", href: "/admin/affiliates", icon: "Handshake" },
     ],
   },
   {
-    group: "Course configuration",
+    group: "course",
     items: [
-      { label: "Categories", href: "/admin/settings/categories", icon: "Tag" },
-      { label: "Badges", href: "/admin/settings/badges", icon: "Award" },
-      { label: "Points & leaderboard", href: "/admin/settings/gamification", icon: "Trophy" },
-      { label: "Rubrics", href: "/admin/rubrics", icon: "ClipboardList" },
+      { id: "categories", href: "/admin/settings/categories", icon: "Tag" },
+      { id: "badges", href: "/admin/settings/badges", icon: "Award" },
+      { id: "gamification", href: "/admin/settings/gamification", icon: "Trophy" },
+      { id: "rubrics", href: "/admin/rubrics", icon: "ClipboardList" },
     ],
   },
   {
-    group: "User management",
+    group: "users",
     items: [
-      { label: "Members", href: "/admin/members", icon: "Users" },
-      { label: "Teams", href: "/admin/teams", icon: "Building" },
-      { label: "Instructors & payouts", href: "/admin/marketplace", icon: "Presentation" },
-      { label: "Security", href: "/admin/settings/security", icon: "ShieldCheck" },
-      { label: "Login activity", href: "/admin/security", icon: "Shield" },
+      { id: "members", href: "/admin/members", icon: "Users" },
+      { id: "teams", href: "/admin/teams", icon: "Building" },
+      { id: "marketplace", href: "/admin/marketplace", icon: "Presentation" },
+      { id: "security", href: "/admin/settings/security", icon: "ShieldCheck" },
+      { id: "loginActivity", href: "/admin/security", icon: "Shield" },
     ],
   },
   {
-    group: "Communication",
+    group: "communication",
     items: [
-      { label: "Email", href: "/admin/settings/email", icon: "Mail" },
-      { label: "Broadcasts", href: "/admin/broadcasts", icon: "Megaphone" },
-      { label: "Email sequences", href: "/admin/sequences", icon: "Zap" },
-      { label: "Outbox", href: "/admin/emails", icon: "Send" },
+      { id: "email", href: "/admin/settings/email", icon: "Mail" },
+      { id: "broadcasts", href: "/admin/broadcasts", icon: "Megaphone" },
+      { id: "sequences", href: "/admin/sequences", icon: "Zap" },
+      { id: "outbox", href: "/admin/emails", icon: "Send" },
     ],
   },
   {
-    group: "Payment",
+    group: "payment",
     items: [
-      { label: "Payments", href: "/admin/settings/payments", icon: "CreditCard" },
-      { label: "Transactions", href: "/admin/settings/transactions", icon: "Receipt" },
-      { label: "Coupons", href: "/admin/settings/coupons", icon: "Ticket" },
-      { label: "Plans, bundles & installments", href: "/admin/settings/plans", icon: "Layers" },
-      { label: "Taxes & currencies", href: "/admin/settings/taxes", icon: "Percent" },
-      { label: "Upsells", href: "/admin/upsells", icon: "TrendingUp" },
+      { id: "payments", href: "/admin/settings/payments", icon: "CreditCard" },
+      { id: "transactions", href: "/admin/settings/transactions", icon: "Receipt" },
+      { id: "coupons", href: "/admin/settings/coupons", icon: "Ticket" },
+      { id: "plans", href: "/admin/settings/plans", icon: "Layers" },
+      { id: "taxes", href: "/admin/settings/taxes", icon: "Percent" },
+      { id: "upsells", href: "/admin/upsells", icon: "TrendingUp" },
     ],
   },
   {
-    group: "Customization",
-    items: [{ label: "Sidebar", href: "/admin/settings/sidebar", icon: "Menu" }],
+    group: "customization",
+    items: [{ id: "sidebar", href: "/admin/settings/sidebar", icon: "Menu" }],
   },
   {
-    group: "Legal & compliance",
+    group: "legal",
     items: [
-      { label: "Legal pages", href: "/admin/settings/legal", icon: "ShieldCheck" },
-      { label: "Audit log", href: "/admin/audit", icon: "ListChecks" },
-      { label: "Error log", href: "/admin/errors", icon: "AlertTriangle" },
+      { id: "legal", href: "/admin/settings/legal", icon: "ShieldCheck" },
+      { id: "audit", href: "/admin/audit", icon: "ListChecks" },
+      { id: "errors", href: "/admin/errors", icon: "AlertTriangle" },
     ],
   },
   {
-    group: "Data",
-    items: [{ label: "Backup & restore", href: "/admin/settings/data", icon: "Database" }],
+    group: "data",
+    items: [{ id: "data", href: "/admin/settings/data", icon: "Database" }],
   },
 ];
 
 export function SettingsNav() {
+  const t = useT("admin");
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const all = SETTINGS_NAV.flatMap((g) => g.items);
@@ -102,7 +115,7 @@ export function SettingsNav() {
   return (
     <>
       {/* Phones & tablets: horizontally scrollable pills */}
-      <nav aria-label="Settings sections" className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 lg:hidden">
+      <nav aria-label={t("settingsNav.label")} className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 lg:hidden">
         {all.map((item) => {
           const active = isActive(item.href);
           const IconCmp = Icon[item.icon];
@@ -117,18 +130,18 @@ export function SettingsNav() {
               )}
             >
               <IconCmp className="size-4" />
-              {item.label}
+              {t(`settingsNav.items.${item.id}`)}
             </Link>
           );
         })}
       </nav>
 
       {/* Desktop: grouped vertical list */}
-      <nav aria-label="Settings sections" className="hidden lg:block">
+      <nav aria-label={t("settingsNav.label")} className="hidden lg:block">
         <div className="space-y-5">
           {SETTINGS_NAV.map((group) => (
             <div key={group.group}>
-              <p className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">{group.group}</p>
+              <p className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">{t(`settingsNav.groups.${group.group}`)}</p>
               <ul className="space-y-0.5">
                 {group.items.map((item) => {
                   const active = isActive(item.href);
@@ -144,7 +157,7 @@ export function SettingsNav() {
                         )}
                       >
                         <IconCmp className={cn("size-4", active ? "text-accent" : "text-ink-faint")} />
-                        {item.label}
+                        {t(`settingsNav.items.${item.id}`)}
                         {item.href === "/admin/members" && <Icon.ArrowUpRight className="ml-auto size-3.5 text-ink-faint" />}
                       </Link>
                     </li>

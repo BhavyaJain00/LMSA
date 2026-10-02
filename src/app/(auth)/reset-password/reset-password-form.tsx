@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError } from "@/components/ui/input";
 import { PasswordField } from "@/components/security/password-field";
 import { PasswordStrengthMeter } from "@/components/security/password-strength-meter";
+import { useT } from "@/i18n/client";
 
 /** Choose a new password for the account behind a reset link. */
 export function ResetPasswordForm({ token, email, name, minLength }: { token: string; email: string; name: string; minLength: number }) {
   const [state, action, pending] = useActionState(resetPasswordAction, null);
   const [values, setValues] = useState({ password: "", confirm: "" });
+  const t = useT("auth");
   const errors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
   const mismatch = values.confirm.length > 0 && values.confirm !== values.password;
   const linkDead = !!errors.token;
@@ -23,12 +25,15 @@ export function ResetPasswordForm({ token, email, name, minLength }: { token: st
       <input type="email" name="username" autoComplete="username" value={email} readOnly hidden />
       <FormError message={state && !state.ok ? state.error : null} />
       {linkDead ? (
-        <Link href={`/forgot-password?email=${encodeURIComponent(email)}`} className="inline-block text-sm font-medium text-accent hover:underline">
-          Request a new reset link →
+        <Link href={`/forgot-password?email=${encodeURIComponent(email)}`} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+          {t("reset.requestNewReset")}
+          <span aria-hidden="true" className="inline-block rtl:rotate-180">
+            →
+          </span>
         </Link>
       ) : (
         <>
-          <Field label="New password" htmlFor="password" required error={errors.password}>
+          <Field label={t("fields.newPassword")} htmlFor="password" required error={errors.password}>
             <PasswordField
               id="password"
               name="password"
@@ -43,7 +48,7 @@ export function ResetPasswordForm({ token, email, name, minLength }: { token: st
             />
             <PasswordStrengthMeter id="new-password-strength" password={values.password} minLength={minLength} context={[name, email.split("@")[0] ?? ""]} />
           </Field>
-          <Field label="Confirm new password" htmlFor="confirm" required error={errors.confirm ?? (mismatch ? "Passwords do not match" : undefined)}>
+          <Field label={t("fields.confirmPassword")} htmlFor="confirm" required error={errors.confirm ?? (mismatch ? t("reset.mismatch") : undefined)}>
             <PasswordField
               id="confirm"
               name="confirm"
@@ -55,9 +60,9 @@ export function ResetPasswordForm({ token, email, name, minLength }: { token: st
             />
           </Field>
           <Button type="submit" className="w-full" size="lg" loading={pending} disabled={!values.password || !values.confirm || mismatch}>
-            Reset password and sign in
+            {t("reset.submit")}
           </Button>
-          <p className="text-center text-xs text-ink-faint">You&apos;ll be signed out on all other devices.</p>
+          <p className="text-center text-xs text-ink-faint">{t("reset.signOutNote")}</p>
         </>
       )}
     </form>

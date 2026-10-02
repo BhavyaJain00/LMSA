@@ -7,37 +7,38 @@ import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { MarkdownField } from "./markdown-field";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export type LearningValues = Settings["learning"] & {
   customSignupContent: string;
 };
 
-const NOTIFY_OPTIONS = [
-  { value: "none", label: "Don't notify" },
-  { value: "in_app", label: "In-app" },
-  { value: "email", label: "Email" },
-];
-
 export function LearningForm({ initial }: { initial: LearningValues }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveLearningSettingsAction);
+  const notifyOptions = [
+    { value: "none", label: t("learningForm.notify.none") },
+    { value: "in_app", label: t("learningForm.notify.inApp") },
+    { value: "email", label: t("learningForm.notify.email") },
+  ];
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Access & Availability">
+      <SettingsSection title={t("learningForm.access.title")}>
         <SettingsSwitchRow>
           <Switch
             name="allowGuestAccess"
             defaultChecked={initial.allowGuestAccess}
-            label="Allow Guest Access"
-            description="If enabled, users can access the course and batch lists and preview lessons without logging in."
+            label={t("learningForm.guest.label")}
+            description={t("learningForm.guest.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
-          <Switch name="disableSignup" defaultChecked={initial.disableSignup} label="Disable signup" description="New users will have to be manually registered by Admins." />
+          <Switch name="disableSignup" defaultChecked={initial.disableSignup} label={t("learningForm.disableSignup.label")} description={t("learningForm.disableSignup.description")} />
         </SettingsSwitchRow>
         <SettingsRow
-          label="Signup page content"
-          description="Markdown shown on the signup page, e.g. for consent notices or terms of service."
+          label={t("learningForm.signupContent.label")}
+          description={t("learningForm.signupContent.description")}
           htmlFor="customSignupContent"
           error={errors.customSignupContent}
           stacked
@@ -47,17 +48,17 @@ export function LearningForm({ initial }: { initial: LearningValues }) {
             name="customSignupContent"
             defaultValue={initial.customSignupContent}
             rows={6}
-            placeholder="By creating an account you agree to our **Terms of Service**."
+            placeholder={t("learningForm.signupContent.placeholder")}
             invalid={!!errors.customSignupContent}
             onChange={markDirty}
           />
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Completion Time">
+      <SettingsSection title={t("learningForm.completion.title")}>
         <SettingsRow
-          label="Lesson Completion Time (seconds)"
-          description="Seconds a learner must stay on a text lesson before it can be marked complete."
+          label={t("learningForm.dwell.label")}
+          description={t("learningForm.dwell.description")}
           htmlFor="lessonDwellTimeSeconds"
           error={errors.lessonDwellTimeSeconds}
           required
@@ -74,8 +75,8 @@ export function LearningForm({ initial }: { initial: LearningValues }) {
           />
         </SettingsRow>
         <SettingsRow
-          label="Video completion threshold (%)"
-          description="How much of a video counts as watched when video completion is enforced."
+          label={t("learningForm.threshold.label")}
+          description={t("learningForm.threshold.description")}
           htmlFor="videoCompletionThreshold"
           error={errors.videoCompletionThreshold}
           required
@@ -93,68 +94,68 @@ export function LearningForm({ initial }: { initial: LearningValues }) {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Enforcement">
+      <SettingsSection title={t("learningForm.enforcement.title")}>
         <SettingsSwitchRow>
           <Switch
             name="enforceVideoCompletion"
             defaultChecked={initial.enforceVideoCompletion}
-            label="Enforce video completion"
-            description="When enabled, lessons that contain a video can only be marked complete by playing the video to the end. If the video fails to load, the dwell timer is used as a fallback."
+            label={t("learningForm.enforceVideo.label")}
+            description={t("learningForm.enforceVideo.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="enforceAssignmentCompletion"
             defaultChecked={initial.enforceAssignmentCompletion}
-            label="Enforce assignment completion"
-            description="When enabled, lessons with an assignment cannot be marked complete until the assignment is submitted."
+            label={t("learningForm.enforceAssignment.label")}
+            description={t("learningForm.enforceAssignment.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="enforceQuizCompletion"
             defaultChecked={initial.enforceQuizCompletion}
-            label="Enforce quiz completion"
-            description="When enabled, lessons with a quiz cannot be marked complete until the quiz is passed."
+            label={t("learningForm.enforceQuiz.label")}
+            description={t("learningForm.enforceQuiz.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="preventSkippingVideos"
             defaultChecked={initial.preventSkippingVideos}
-            label="Prevent Skipping Videos"
-            description="If enabled, learners cannot seek forward past the furthest point they have watched."
+            label={t("learningForm.noSkip.label")}
+            description={t("learningForm.noSkip.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SettingsSection title="Home & Notifications">
-        <SettingsRow label="Default home page" description="Where signed-in members land when they open the site." htmlFor="defaultHome" error={errors.defaultHome}>
+      <SettingsSection title={t("learningForm.home.title")}>
+        <SettingsRow label={t("learningForm.defaultHome.label")} description={t("learningForm.defaultHome.description")} htmlFor="defaultHome" error={errors.defaultHome}>
           <Select
             id="defaultHome"
             name="defaultHome"
             defaultValue={initial.defaultHome}
             options={[
-              { value: "courses", label: "Courses" },
-              { value: "dashboard", label: "Dashboard" },
+              { value: "courses", label: t("learningForm.defaultHome.courses") },
+              { value: "dashboard", label: t("learningForm.defaultHome.dashboard") },
             ]}
           />
         </SettingsRow>
         <SettingsRow
-          label="Send Notification for Published Courses"
-          description="Notify members when a new course is published."
+          label={t("learningForm.notifyCourses.label")}
+          description={t("learningForm.notifyCourses.description")}
           htmlFor="notifyOnPublishedCourses"
           error={errors.notifyOnPublishedCourses}
         >
-          <Select id="notifyOnPublishedCourses" name="notifyOnPublishedCourses" defaultValue={initial.notifyOnPublishedCourses} options={NOTIFY_OPTIONS} />
+          <Select id="notifyOnPublishedCourses" name="notifyOnPublishedCourses" defaultValue={initial.notifyOnPublishedCourses} options={notifyOptions} />
         </SettingsRow>
         <SettingsRow
-          label="Send Notification for Published Batches"
-          description="Notify members when a new batch is published."
+          label={t("learningForm.notifyBatches.label")}
+          description={t("learningForm.notifyBatches.description")}
           htmlFor="notifyOnPublishedBatches"
           error={errors.notifyOnPublishedBatches}
         >
-          <Select id="notifyOnPublishedBatches" name="notifyOnPublishedBatches" defaultValue={initial.notifyOnPublishedBatches} options={NOTIFY_OPTIONS} />
+          <Select id="notifyOnPublishedBatches" name="notifyOnPublishedBatches" defaultValue={initial.notifyOnPublishedBatches} options={notifyOptions} />
         </SettingsRow>
       </SettingsSection>
 

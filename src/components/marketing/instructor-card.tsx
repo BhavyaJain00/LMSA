@@ -3,14 +3,16 @@ import type { InstructorCard as InstructorCardData } from "@/lib/data/seo";
 import { instructorPath } from "@/lib/seo/content-index";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatNumber, pluralize } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
 /**
  * Instructor summary linking to the teaching profile: avatar, name, headline,
  * what they teach and their numbers (courses, learners, average rating).
  * The whole card is clickable through the stretched name link. Server Component.
  */
-export function InstructorCard({ instructor, headingLevel = "h2", className }: { instructor: InstructorCardData; headingLevel?: "h2" | "h3"; className?: string }) {
+export async function InstructorCard({ instructor, headingLevel = "h2", className }: { instructor: InstructorCardData; headingLevel?: "h2" | "h3"; className?: string }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const Heading = headingLevel;
   return (
     <article
@@ -30,28 +32,26 @@ export function InstructorCard({ instructor, headingLevel = "h2", className }: {
           {instructor.headline && <p className="mt-0.5 line-clamp-2 text-sm text-ink-muted">{instructor.headline}</p>}
         </div>
       </div>
-      {instructor.categories.length > 0 && <p className="mt-3 line-clamp-1 text-xs text-ink-muted">Teaches {instructor.categories.slice(0, 3).join(", ")}</p>}
+      {instructor.categories.length > 0 && <p className="mt-3 line-clamp-1 text-xs text-ink-muted">{t("instructors.card.teaches", { subjects: f.list(instructor.categories.slice(0, 3)) })}</p>}
       <dl className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 pt-4 text-xs text-ink-muted">
         <div className="inline-flex items-center gap-1">
           <Icon.BookOpen className="size-3.5" aria-hidden="true" />
-          <dt className="sr-only">Courses</dt>
-          <dd>{pluralize(instructor.courseCount, "course")}</dd>
+          <dt className="sr-only">{t("instructors.card.courses")}</dt>
+          <dd>{t("catalog.courseCount", { count: instructor.courseCount })}</dd>
         </div>
         {instructor.learnerCount > 0 && (
           <div className="inline-flex items-center gap-1">
             <Icon.Users className="size-3.5" aria-hidden="true" />
-            <dt className="sr-only">Learners</dt>
-            <dd>
-              {formatNumber(instructor.learnerCount)} {instructor.learnerCount === 1 ? "learner" : "learners"}
-            </dd>
+            <dt className="sr-only">{t("instructors.card.learners")}</dt>
+            <dd>{t("instructors.card.learnerCount", { count: instructor.learnerCount, formatted: f.number(instructor.learnerCount) })}</dd>
           </div>
         )}
         {instructor.averageRating !== null && (
           <div className="inline-flex items-center gap-1">
             <Icon.StarFilled className="size-3.5 text-warning" aria-hidden="true" />
-            <dt className="sr-only">Average rating</dt>
+            <dt className="sr-only">{t("instructors.card.averageRating")}</dt>
             <dd>
-              {instructor.averageRating.toFixed(1)} ({formatNumber(instructor.reviewCount)})
+              {f.number(instructor.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ({f.number(instructor.reviewCount)})
             </dd>
           </div>
         )}

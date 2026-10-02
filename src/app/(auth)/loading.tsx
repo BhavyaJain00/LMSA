@@ -1,10 +1,14 @@
+"use client";
+
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/client";
 
 /** Card-shaped placeholder shared by the sign-in, sign-up and account-recovery screens. */
 export default function AuthLoading() {
+  const t = useT("common");
   return (
     <div className="w-full max-w-md" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <span className="sr-only">{t("status.loading")}</span>
       <div className="rounded-2xl border border-border bg-surface-1 p-6 shadow-card sm:p-8">
         <Skeleton className="h-7 w-48" />
         <Skeleton className="mt-2 h-4 w-64 max-w-full" />

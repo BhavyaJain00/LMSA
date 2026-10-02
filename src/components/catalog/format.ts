@@ -2,9 +2,15 @@
  * Pure formatting helpers shared by the catalog components (server and client).
  */
 
-/** 950 -> "950", 1234 -> "1.2k", 1500000 -> "1.5M" (Frappe's card number format). */
-export function compactCount(n: number): string {
+import { intlLocale } from "@/i18n/config";
+
+/**
+ * 950 -> "950", 1234 -> "1.2k", 1500000 -> "1.5M" (Frappe's card number format).
+ * With a locale, the compact form follows that language ("1,2 k", "1.2K").
+ */
+export function compactCount(n: number, locale?: string): string {
   if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n || 0)));
+  if (locale) return new Intl.NumberFormat(intlLocale(locale), { notation: "compact", maximumFractionDigits: 1 }).format(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
@@ -56,11 +62,26 @@ export function lessonKindFromBlocks(blocks: { type: string }[]): LessonKind {
   return "text";
 }
 
-/** Relative day label used on reviews: "Today", "3 days ago", "2 months ago", "1 year ago". */
-export function reviewDateLabel(iso: string, now: number): string {
+/**
+ * Relative day label used on reviews: "Today", "3 days ago", "2 months ago", "1 year ago".
+ * With a locale the label comes from `Intl.RelativeTimeFormat` in that language.
+ */
+export function reviewDateLabel(iso: string, now: number, locale?: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const days = Math.floor((now - then) / 86_400_000);
+  if (locale) {
+    const tag = intlLocale(locale);
+    if (days <= 0) {
+      const today = new Intl.RelativeTimeFormat(tag, { numeric: "auto" }).format(0, "day");
+      return today.charAt(0).toLocaleUpperCase(tag) + today.slice(1);
+    }
+    const rtf = new Intl.RelativeTimeFormat(tag, { numeric: "always" });
+    if (days < 30) return rtf.format(-days, "day");
+    const months = Math.floor(days / 30);
+    if (months < 12) return rtf.format(-months, "month");
+    return rtf.format(-Math.max(1, Math.floor(days / 365)), "year");
+  }
   if (days <= 0) return "Today";
   if (days < 30) return `${days} ${plural(days, "day")} ago`;
   const months = Math.floor(days / 30);

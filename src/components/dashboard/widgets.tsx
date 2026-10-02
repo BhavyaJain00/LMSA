@@ -4,7 +4,8 @@ import type { DashboardBadge, DashboardCertificate, PendingItem, PendingStatus }
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatDate, toDateKey } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
+import { cn, toDateKey } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* Your rank (points & leaderboard)                                     */
@@ -26,18 +27,19 @@ const kindIcon: Record<PendingItem["kind"], ReactNode> = {
   assignment: <Icon.ClipboardList />,
   exercise: <Icon.Code />,
 };
-const kindLabel: Record<PendingItem["kind"], string> = {
-  quiz: "Quiz",
-  assignment: "Assignment",
-  exercise: "Exercise",
-};
-const statusCopy: Record<PendingStatus, { label: string; tone: "neutral" | "warning" | "info" }> = {
-  not_started: { label: "Not started", tone: "neutral" },
-  retry: { label: "Try again", tone: "warning" },
-  awaiting_grading: { label: "Awaiting grading", tone: "info" },
-};
+const kindLabel = {
+  quiz: "dashboard.pending.kindQuiz",
+  assignment: "dashboard.pending.kindAssignment",
+  exercise: "dashboard.pending.kindExercise",
+} as const satisfies Record<PendingItem["kind"], string>;
+const statusCopy = {
+  not_started: { label: "dashboard.pending.notStarted", tone: "neutral" },
+  retry: { label: "dashboard.pending.retry", tone: "warning" },
+  awaiting_grading: { label: "dashboard.pending.awaitingGrading", tone: "info" },
+} as const satisfies Record<PendingStatus, { label: string; tone: "neutral" | "warning" | "info" }>;
 
-export function PendingWorkList({ items, total }: { items: PendingItem[]; total: number }) {
+export async function PendingWorkList({ items, total }: { items: PendingItem[]; total: number }) {
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
   const today = toDateKey();
   return (
     <Card className="overflow-hidden">
@@ -59,17 +61,18 @@ export function PendingWorkList({ items, total }: { items: PendingItem[]; total:
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-ink">{item.title}</span>
                   <span className="block truncate text-xs text-ink-muted">
-                    {kindLabel[item.kind]} · {item.context}
+                    {t(kindLabel[item.kind])} · {item.context}
                   </span>
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1">
                   <Badge tone={statusCopy[item.status].tone} size="xs">
-                    {statusCopy[item.status].label}
+                    {t(statusCopy[item.status].label)}
                   </Badge>
                   {item.dueDate && (
                     <span className={cn("text-[11px]", overdue ? "font-medium text-danger" : "text-ink-faint")}>
-                      {overdue ? "Overdue · " : "Due "}
-                      {formatDate(item.dueDate, { year: undefined })}
+                      {overdue
+                        ? t("dashboard.pending.overdue", { date: f.date(item.dueDate, { year: undefined }) })
+                        : t("dashboard.pending.due", { date: f.date(item.dueDate, { year: undefined }) })}
                     </span>
                   )}
                 </span>
@@ -80,7 +83,7 @@ export function PendingWorkList({ items, total }: { items: PendingItem[]; total:
       </ul>
       {total > items.length && (
         <p className="border-t border-border px-4 py-2.5 text-xs text-ink-muted">
-          And {total - items.length} more in your courses and batches.
+          {t("dashboard.pending.more", { count: total - items.length })}
         </p>
       )}
     </Card>
@@ -91,30 +94,31 @@ export function PendingWorkList({ items, total }: { items: PendingItem[]; total:
 /* Badges                                                               */
 /* ------------------------------------------------------------------ */
 
-export function RecentBadges({ badges, total, profileHref }: { badges: DashboardBadge[]; total: number; profileHref: string }) {
+export async function RecentBadges({ badges, total, profileHref }: { badges: DashboardBadge[]; total: number; profileHref: string }) {
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
   return (
     <Card className="p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-ink">Recent badges</h2>
+        <h2 className="text-sm font-semibold text-ink">{t("dashboard.badges.title")}</h2>
         {total > 0 && (
           <Link href={`${profileHref}/badges`} className="text-xs font-medium text-ink-muted hover:text-accent">
-            View all ({total})
+            {t("dashboard.badges.viewAll", { count: total })}
           </Link>
         )}
       </div>
       {badges.length === 0 ? (
         <div className="flex items-center gap-3 rounded-lg bg-surface-2 p-3">
           <Icon.Award className="size-6 shrink-0 text-ink-faint" />
-          <p className="text-xs text-ink-muted">Complete lessons, pass quizzes and keep your streak going to earn badges.</p>
+          <p className="text-xs text-ink-muted">{t("dashboard.badges.empty")}</p>
         </div>
       ) : (
         <ul className="grid grid-cols-4 gap-2">
           {badges.map((b) => (
-            <li key={`${b.id}-${b.issuedOn}`} className="flex flex-col items-center text-center" title={`${b.title} — ${b.description}`}>
+            <li key={`${b.id}-${b.issuedOn}`} className="flex flex-col items-center text-center" title={t("dashboard.badges.tooltip", { title: b.title, description: b.description })}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={b.imageUrl} alt="" className="size-12 object-contain" loading="lazy" />
               <span className="mt-1 line-clamp-2 text-[11px] font-medium leading-tight text-ink">{b.title}</span>
-              <span className="text-[10px] text-ink-faint">{formatDate(b.issuedOn, { year: undefined })}</span>
+              <span className="text-[10px] text-ink-faint">{f.date(b.issuedOn, { year: undefined })}</span>
             </li>
           ))}
         </ul>
@@ -127,21 +131,22 @@ export function RecentBadges({ badges, total, profileHref }: { badges: Dashboard
 /* Certificates                                                         */
 /* ------------------------------------------------------------------ */
 
-export function CertificateList({ certificates, profileHref }: { certificates: DashboardCertificate[]; profileHref: string }) {
+export async function CertificateList({ certificates, profileHref }: { certificates: DashboardCertificate[]; profileHref: string }) {
+  const [t, tc, f] = await Promise.all([getT("account"), getT("common"), getFormatter()]);
   return (
     <Card className="p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-ink">Certificates</h2>
+        <h2 className="text-sm font-semibold text-ink">{t("dashboard.certificates.title")}</h2>
         {certificates.length > 0 && (
           <Link href={`${profileHref}/certificates`} className="text-xs font-medium text-ink-muted hover:text-accent">
-            View all
+            {tc("actions.viewAll")}
           </Link>
         )}
       </div>
       {certificates.length === 0 ? (
         <div className="flex items-center gap-3 rounded-lg bg-surface-2 p-3">
           <Icon.Certificate className="size-6 shrink-0 text-ink-faint" />
-          <p className="text-xs text-ink-muted">Finish a course with certification enabled to earn your first certificate.</p>
+          <p className="text-xs text-ink-muted">{t("dashboard.certificates.empty")}</p>
         </div>
       ) : (
         <ul className="space-y-2">
@@ -153,7 +158,7 @@ export function CertificateList({ certificates, profileHref }: { certificates: D
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-ink">{c.title}</span>
-                  <span className="block text-xs text-ink-muted">Issued on {formatDate(c.issueDate)}</span>
+                  <span className="block text-xs text-ink-muted">{t("dashboard.certificates.issuedOn", { date: f.date(c.issueDate) })}</span>
                 </span>
                 <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint rtl:rotate-180" />
               </Link>

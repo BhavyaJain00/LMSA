@@ -3,6 +3,7 @@
 import type { Role } from "@/lib/types";
 import { Switch } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { ROLE_OPTIONS } from "./roles";
 
 /**
@@ -25,6 +26,8 @@ export function RoleSwitches({
   idPrefix?: string;
   className?: string;
 }) {
+  const t = useT("admin");
+  const ts = useT("shell");
   const options = ROLE_OPTIONS.filter((r) => !r.adminOnly || canGrantAdmin || defaultRoles.includes(r.value));
   return (
     <div className={cn("grid gap-3 sm:grid-cols-2", className)}>
@@ -39,8 +42,8 @@ export function RoleSwitches({
               value={r.value}
               defaultChecked={defaultRoles.includes(r.value)}
               disabled={disabled || locked}
-              label={r.label}
-              description={r.description}
+              label={ts(`roles.${r.value}`)}
+              description={t(`shared.roles.${r.value}`)}
             />
           </div>
         );

@@ -30,8 +30,10 @@ export interface MediaSourceState {
   /** URL for the <video> element; null while a signed URL is being fetched or access was denied. */
   url: string | null;
   status: MediaSourceStatus;
-  /** Human readable reason when status is "denied" or "error". */
+  /** Human readable reason when status is "denied" or "error" (English, from the server when it sent one). */
   message: string | null;
+  /** Why signing failed, for a message in the interface language (null while fine). */
+  reason: MediaFailureReason | null;
   /** The src is an upload that may need a signed token. */
   isProtected: boolean;
   /** Player options sent by the server with a signed URL (viewer watermark etc.). */
@@ -49,7 +51,12 @@ interface SignResponse {
   player?: MediaPlayerConfig;
 }
 
-type SignResult = { ok: true; url: string; ttlSeconds: number | null; config: MediaPlayerConfig | null } | { ok: false; denied: boolean; message: string };
+/** Why a signed URL could not be obtained. */
+export type MediaFailureReason = "signIn" | "forbidden" | "notFound" | "rateLimited" | "unavailable" | "failed" | "network";
+
+type SignResult =
+  | { ok: true; url: string; ttlSeconds: number | null; config: MediaPlayerConfig | null }
+  | { ok: false; denied: boolean; message: string; reason: MediaFailureReason };
 
 /** Refresh this many seconds before the token expires. */
 const REFRESH_LEAD_SECONDS = 45;
@@ -96,6 +103,18 @@ async function requestSignedUrl(src: string, lessonId: string | undefined, signa
       return { ok: true, url: body.src, ttlSeconds: ttl, config: body.player ?? null };
     }
     const denied = res.status === 401 || res.status === 403;
+    const reason: MediaFailureReason =
+      res.status === 401
+        ? "signIn"
+        : res.status === 403
+          ? "forbidden"
+          : res.status === 404
+            ? "notFound"
+            : res.status === 429
+              ? "rateLimited"
+              : res.status === 503
+                ? "unavailable"
+                : "failed";
     const fallback =
       res.status === 401
         ? "Sign in to watch this video."
@@ -108,10 +127,10 @@ async function requestSignedUrl(src: string, lessonId: string | undefined, signa
               : res.status === 503
                 ? "This video is unavailable right now. Please try again later."
                 : "The video could not be loaded.";
-    return { ok: false, denied, message: body?.error || fallback };
+    return { ok: false, denied, message: body?.error || fallback, reason };
   } catch (err) {
-    if ((err as { name?: string })?.name === "AbortError") return { ok: false, denied: false, message: "" };
-    return { ok: false, denied: false, message: "Check your connection and try again." };
+    if ((err as { name?: string })?.name === "AbortError") return { ok: false, denied: false, message: "", reason: "network" };
+    return { ok: false, denied: false, message: "Check your connection and try again.", reason: "network" };
   }
 }
 
@@ -121,6 +140,7 @@ interface Resolved {
   url: string | null;
   status: MediaSourceStatus;
   message: string | null;
+  reason: MediaFailureReason | null;
 }
 
 /**
@@ -148,10 +168,12 @@ export function useMediaSource(src: string, lessonId?: string, ttlHint?: number 
   let url: string | null;
   let status: MediaSourceStatus;
   let message: string | null = null;
+  let reason: MediaFailureReason | null = null;
   if (resolved && resolved.forSrc === src) {
     url = resolved.url;
     status = resolved.status;
     message = resolved.message;
+    reason = resolved.reason;
   } else if (!src) {
     // No rendition chosen yet (the player picks one after measuring itself).
     url = null;
@@ -172,7 +194,7 @@ export function useMediaSource(src: string, lessonId?: string, ttlHint?: number 
       if (id !== requestId.current || srcRef.current !== forSrc) return null;
       if (result.ok) {
         issuedRef.current = result.ttlSeconds ? { url: result.url, receivedAt: Date.now(), ttlSeconds: result.ttlSeconds } : null;
-        setResolved({ forSrc, url: result.url, status: "ready", message: null });
+        setResolved({ forSrc, url: result.url, status: "ready", message: null, reason: null });
         if (result.config) setConfig(result.config);
         return result.url;
       }
@@ -183,6 +205,7 @@ export function useMediaSource(src: string, lessonId?: string, ttlHint?: number 
         url: result.denied ? null : prev?.forSrc === forSrc ? prev.url : null,
         status: result.denied ? "denied" : "error",
         message: result.message,
+        reason: result.reason,
       }));
       return null;
     },
@@ -213,5 +236,5 @@ export function useMediaSource(src: string, lessonId?: string, ttlHint?: number 
     return sign(srcRef.current);
   }, [isProtected, sign]);
 
-  return { url, status, message, isProtected, config, refresh };
+  return { url, status, message, reason, isProtected, config, refresh };
 }

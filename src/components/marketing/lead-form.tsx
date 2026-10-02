@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface LeadFormProps {
   /** Where the form is ("blog", "course", "footer", "free"); stored on the lead. */
@@ -39,14 +40,19 @@ type State = ActionResult<{ status: LeadSubmitStatus }> | null;
 export function LeadForm({
   source,
   courseId,
-  title = "Get free lessons by email",
-  description = "Practical tips, new free lessons and course announcements. A few emails a month, unsubscribe any time.",
-  submitLabel = "Subscribe",
+  title: titleProp,
+  description: descriptionProp,
+  submitLabel: submitLabelProp,
   variant = "card",
   askName = variant !== "compact",
   privacyHref,
   className,
 }: LeadFormProps) {
+  // `global.` keys: the compact form is in the site footer on every page.
+  const t = useT("public");
+  const title = titleProp ?? t("global.leadForm.title");
+  const description = descriptionProp ?? t("global.leadForm.description");
+  const submitLabel = submitLabelProp ?? t("global.leadForm.submit");
   const id = useId();
   const mountedAt = useRef(0);
   const doneRef = useRef<HTMLDivElement>(null);
@@ -93,13 +99,13 @@ export function LeadForm({
           <Icon.Mail className="size-4.5" aria-hidden="true" />
         </span>
         <div className="min-w-0 text-sm">
-          <p className="font-semibold text-ink">{already ? "You're already subscribed" : "Check your inbox"}</p>
+          <p className="font-semibold text-ink">{already ? t("global.leadForm.alreadyTitle") : t("global.leadForm.checkInboxTitle")}</p>
           <p className="mt-0.5 text-ink-muted">
             {already
               ? courseId
-                ? "We've emailed the syllabus to you again."
-                : "This address is already on our list. Thanks for staying with us!"
-              : "We've sent you a confirmation link. Click it to finish signing up — check your spam folder if it isn't there in a minute."}
+                ? t("global.leadForm.syllabusResent")
+                : t("global.leadForm.alreadyBody")
+              : t("global.leadForm.checkInboxBody")}
           </p>
         </div>
       </div>
@@ -107,8 +113,8 @@ export function LeadForm({
   }
 
   const honeypot = (
-    <div aria-hidden="true" className="absolute -left-[10000px] top-auto size-px overflow-hidden">
-      <label htmlFor={`${id}-website`}>Leave this field empty</label>
+    <div aria-hidden="true" className="absolute -start-[10000px] top-auto size-px overflow-hidden">
+      <label htmlFor={`${id}-website`}>{t("global.leadForm.honeypot")}</label>
       <input id={`${id}-website`} type="text" name="website" tabIndex={-1} autoComplete="off" defaultValue="" />
     </div>
   );
@@ -127,12 +133,12 @@ export function LeadForm({
           className="mt-0.5 size-4 shrink-0 cursor-pointer rounded border-border-strong accent-accent"
         />
         <span>
-          I agree to receive emails with {courseId ? "the syllabus, " : ""}free lessons and offers. I can unsubscribe at any time.
+          {courseId ? t("global.leadForm.consentSyllabus") : t("global.leadForm.consent")}
           {privacyHref && (
             <>
               {" "}
               <Link href={privacyHref} className="font-medium text-accent hover:underline">
-                Privacy policy
+                {t("global.leadForm.privacy")}
               </Link>
             </>
           )}
@@ -149,7 +155,7 @@ export function LeadForm({
   const emailField = (
     <div className="min-w-0 flex-1">
       <label htmlFor={`${id}-email`} className={cn(compact || hero ? "sr-only" : "mb-1 block text-sm font-medium text-ink")}>
-        Email address
+        {t("global.leadForm.email")}
       </label>
       <Input
         id={`${id}-email`}
@@ -159,7 +165,7 @@ export function LeadForm({
         autoComplete="email"
         inputMode="email"
         maxLength={254}
-        placeholder="you@example.com"
+        placeholder={t("global.leadForm.emailPlaceholder")}
         invalid={!!errors.email}
         aria-describedby={errors.email ? `${id}-email-error` : undefined}
         leftAddon={<Icon.Mail className="size-4" />}
@@ -176,9 +182,16 @@ export function LeadForm({
   const nameField = askName ? (
     <div className="min-w-0 flex-1">
       <label htmlFor={`${id}-name`} className={cn(hero ? "sr-only" : "mb-1 block text-sm font-medium text-ink")}>
-        First name <span className="font-normal text-ink-muted">(optional)</span>
+        {t.rich("global.leadForm.firstName", { muted: (chunks) => <span className="font-normal text-ink-muted">{chunks}</span> })}
       </label>
-      <Input id={`${id}-name`} name="name" autoComplete="given-name" maxLength={120} placeholder={hero ? "First name (optional)" : "Alex"} className={cn(hero && "h-11 text-base")} />
+      <Input
+        id={`${id}-name`}
+        name="name"
+        autoComplete="given-name"
+        maxLength={120}
+        placeholder={hero ? t("global.leadForm.firstNameOptional") : t("global.leadForm.firstNamePlaceholder")}
+        className={cn(hero && "h-11 text-base")}
+      />
     </div>
   ) : null;
 

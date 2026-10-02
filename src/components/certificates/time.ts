@@ -5,7 +5,13 @@
  * Evaluator slots are stored as bare wall-clock times ("10:00") in the
  * platform time zone (the server's zone). Bookings store the zone they were
  * made in, so a request can always be converted to an absolute instant.
+ *
+ * The display helpers take an optional interface language (`f.locale` /
+ * `useLocale()`); without one they keep their English output, which emails,
+ * logs and server actions rely on.
  */
+
+import { intlLocale } from "@/i18n/config";
 
 export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
@@ -72,25 +78,33 @@ function utcDateFromKey(dateKey: string): Date {
 }
 
 /** "2 October 2026" — stable across server and client (formatted in UTC). */
-export function formatLongDate(dateKey: string): string {
+export function formatLongDate(dateKey: string, locale?: string): string {
   if (!isValidDateKey(dateKey)) return dateKey;
-  return utcDateFromKey(dateKey).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  return utcDateFromKey(dateKey).toLocaleDateString(locale ? intlLocale(locale) : "en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 /** "Oct 2, 2026" — stable across server and client (formatted in UTC). */
-export function formatShortDate(dateKey: string): string {
+export function formatShortDate(dateKey: string, locale?: string): string {
   if (!isValidDateKey(dateKey)) return dateKey;
-  return utcDateFromKey(dateKey).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  return utcDateFromKey(dateKey).toLocaleDateString(locale ? intlLocale(locale) : "en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 /** "October 2026" for calendar headers. */
-export function formatMonthYear(dateKey: string): string {
+export function formatMonthYear(dateKey: string, locale?: string): string {
   if (!isValidDateKey(dateKey)) return dateKey;
-  return utcDateFromKey(dateKey).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  return utcDateFromKey(dateKey).toLocaleDateString(locale ? intlLocale(locale) : "en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-export function weekdayName(dateKey: string): string {
+export function weekdayName(dateKey: string, locale?: string): string {
+  if (locale && isValidDateKey(dateKey)) return utcDateFromKey(dateKey).toLocaleDateString(intlLocale(locale), { weekday: "long", timeZone: "UTC" });
   return WEEKDAYS[weekdayOfDateKey(dateKey)] ?? "";
+}
+
+/** Name of a weekday (0 = Sunday) in the given language; English without one. */
+export function localWeekdayName(day: number, locale?: string, width: "long" | "short" = "long"): string {
+  if (!locale) return width === "long" ? (WEEKDAYS[day] ?? "") : (WEEKDAYS[day] ?? "").slice(0, 3);
+  // 2023-01-01 was a Sunday.
+  return new Date(Date.UTC(2023, 0, 1 + day)).toLocaleDateString(intlLocale(locale), { weekday: width, timeZone: "UTC" });
 }
 
 export function isValidTimeZone(timeZone: string): boolean {
@@ -160,9 +174,10 @@ export function timeZoneLabel(timeZone: string, at: Date = new Date()): string {
 }
 
 /** "14:30" → "2:30 PM" */
-export function formatClock12(hhmm: string | undefined): string {
+export function formatClock12(hhmm: string | undefined, locale?: string): string {
   if (!hhmm || !isValidClock(hhmm)) return hhmm ?? "";
   const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  if (locale) return new Date(Date.UTC(2000, 0, 1, h, m)).toLocaleTimeString(intlLocale(locale), { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
   const suffix = h >= 12 ? "PM" : "AM";
   const hour = h % 12 === 0 ? 12 : h % 12;
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;

@@ -7,21 +7,22 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn, initials } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { SettingsRow, SettingsSection } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
 
 /** Suggested accent colors (data values offered to the admin, not UI styling). */
 const PRESETS = [
-  { name: "Indigo", value: "#4f46e5" },
-  { name: "Blue", value: "#2563eb" },
-  { name: "Violet", value: "#7c3aed" },
-  { name: "Emerald", value: "#059669" },
-  { name: "Teal", value: "#0d9488" },
-  { name: "Rose", value: "#e11d48" },
-  { name: "Orange", value: "#ea580c" },
-  { name: "Slate", value: "#334155" },
-];
+  { name: "indigo", value: "#4f46e5" },
+  { name: "blue", value: "#2563eb" },
+  { name: "violet", value: "#7c3aed" },
+  { name: "emerald", value: "#059669" },
+  { name: "teal", value: "#0d9488" },
+  { name: "rose", value: "#e11d48" },
+  { name: "orange", value: "#ea580c" },
+  { name: "slate", value: "#334155" },
+] as const;
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -55,6 +56,7 @@ export interface BrandingValues {
 }
 
 export function BrandingForm({ initial }: { initial: BrandingValues }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveBrandingSettingsAction);
   const [logoUrl, setLogoUrl] = useState(initial.logoUrl);
   const [faviconUrl, setFaviconUrl] = useState(initial.faviconUrl);
@@ -71,10 +73,10 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Logo & favicon" description="Uploaded images are served from your own server.">
+      <SettingsSection title={t("brandingForm.logos.title")} description={t("brandingForm.logos.description")}>
         <SettingsRow
-          label="Brand logo"
-          description="Appears in the left sidebar next to the brand name. Recommended size is 32x32 px in PNG or SVG."
+          label={t("brandingForm.logo.label")}
+          description={t("brandingForm.logo.description")}
           error={errors.logoUrl}
           stacked
         >
@@ -86,12 +88,12 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
               setLogoUrl(url);
               markDirty();
             }}
-            hint="PNG, SVG, JPG or WebP up to 25 MB."
+            hint={t("brandingForm.logo.hint")}
           />
         </SettingsRow>
         <SettingsRow
-          label="Favicon"
-          description="Appears next to the title in your browser tab. Recommended size is 32x32 px in PNG or ICO."
+          label={t("brandingForm.favicon.label")}
+          description={t("brandingForm.favicon.description")}
           error={errors.faviconUrl}
           stacked
         >
@@ -107,12 +109,12 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Accent color" description="Used for primary buttons, links, focus rings and highlights in both light and dark mode.">
-        <SettingsRow label="Accent color" description="Pick a color or enter a hex value." htmlFor="accentColor" error={errors.accentColor}>
+      <SettingsSection title={t("brandingForm.accent.title")} description={t("brandingForm.accent.description")}>
+        <SettingsRow label={t("brandingForm.accent.label")} description={t("brandingForm.accent.hint")} htmlFor="accentColor" error={errors.accentColor}>
           <div className="flex items-center gap-2">
             <input
               type="color"
-              aria-label="Pick accent color"
+              aria-label={t("brandingForm.accent.pick")}
               value={valid ?? "#000000"}
               onChange={(e) => changeAccent(e.target.value)}
               className="size-9.5 shrink-0 cursor-pointer rounded-lg border border-border-strong bg-surface-1 p-1"
@@ -129,13 +131,13 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
               invalid={!valid || !!errors.accentColor}
             />
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Suggested colors">
+          <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label={t("brandingForm.accent.suggested")}>
             {PRESETS.map((p) => (
               <button
                 key={p.value}
                 type="button"
-                title={p.name}
-                aria-label={`Use ${p.name}`}
+                title={t(`brandingForm.colors.${p.name}`)}
+                aria-label={t("brandingForm.accent.use", { color: t(`brandingForm.colors.${p.name}`) })}
                 aria-pressed={valid === p.value}
                 onClick={() => changeAccent(p.value)}
                 className={cn("size-6 rounded-full ring-offset-2 ring-offset-surface-1 transition-transform hover:scale-110", valid === p.value && "ring-2 ring-ink")}
@@ -146,7 +148,7 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
         </SettingsRow>
 
         <div className="px-4 py-4 sm:px-5" style={previewStyle}>
-          <p className="mb-3 text-sm font-medium text-ink">Live preview</p>
+          <p className="mb-3 text-sm font-medium text-ink">{t("brandingForm.preview.title")}</p>
           <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
             <div className="rounded-xl border border-border bg-surface-1 p-3">
               <div className="flex items-center gap-2">
@@ -160,21 +162,23 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
               </div>
               <div className="mt-3 space-y-1 text-sm">
                 <span className="flex items-center gap-2 rounded-lg bg-accent/10 px-2 py-1.5 font-medium text-accent">
-                  <Icon.BookOpen className="size-4" /> Courses
+                  <Icon.BookOpen className="size-4" /> {t("brandingForm.preview.courses")}
                 </span>
                 <span className="flex items-center gap-2 px-2 py-1.5 text-ink-muted">
-                  <Icon.Users className="size-4" /> Batches
+                  <Icon.Users className="size-4" /> {t("brandingForm.preview.batches")}
                 </span>
               </div>
             </div>
             <div className="rounded-xl border border-border bg-surface-1 p-4">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg">Enroll now</span>
-                <span className="inline-flex h-9 items-center rounded-lg border border-accent px-4 text-sm font-medium text-accent">Preview</span>
-                <Badge tone="accent">Featured</Badge>
+                <span className="inline-flex h-9 items-center rounded-lg bg-accent px-4 text-sm font-medium text-accent-fg">{t("brandingForm.preview.enroll")}</span>
+                <span className="inline-flex h-9 items-center rounded-lg border border-accent px-4 text-sm font-medium text-accent">{t("brandingForm.preview.preview")}</span>
+                <Badge tone="accent">{t("brandingForm.preview.featured")}</Badge>
               </div>
               <p className="mt-3 text-sm text-ink-muted">
-                Links look <span className="font-medium text-accent underline underline-offset-4">like this</span> and progress bars fill with your accent.
+                {t.rich("brandingForm.preview.links", {
+                  link: (text) => <span className="font-medium text-accent underline underline-offset-4">{text}</span>,
+                })}
               </p>
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface-3">
                 <div className="h-full w-2/3 rounded-full bg-accent" />
@@ -185,12 +189,11 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
             <p className={cn("mt-3 flex items-start gap-1.5 text-xs", ratio >= 4.5 ? "text-success" : ratio >= 3 ? "text-warning" : "text-danger")}>
               {ratio >= 4.5 ? <Icon.CheckCircle className="mt-px size-4 shrink-0" /> : <Icon.AlertTriangle className="mt-px size-4 shrink-0" />}
               <span>
-                Contrast with button text: {ratio.toFixed(1)}:1 —{" "}
                 {ratio >= 4.5
-                  ? "passes WCAG AA for normal text."
+                  ? t("brandingForm.contrast.pass", { ratio: ratio.toFixed(1) })
                   : ratio >= 3
-                    ? "passes only for large text. Consider a darker shade so button labels stay readable."
-                    : "too low. Button labels will be hard to read — pick a darker color."}
+                    ? t("brandingForm.contrast.large", { ratio: ratio.toFixed(1) })
+                    : t("brandingForm.contrast.low", { ratio: ratio.toFixed(1) })}
               </span>
             </p>
           )}

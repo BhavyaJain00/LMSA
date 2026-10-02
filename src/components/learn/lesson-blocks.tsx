@@ -3,6 +3,9 @@ import type { LessonBlock } from "@/lib/types";
 import type { VideoWatchInfo } from "@/lib/data/lessons";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prepareLessonVideos } from "@/lib/media/sign";
+import { getT } from "@/i18n/server";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
 import { QuizBlock } from "@/components/quiz/quiz-block";
 import { AssignmentBlock } from "@/components/assessments/assignment-block";
 import { ExerciseBlock } from "@/components/assessments/exercise-block";
@@ -60,7 +63,7 @@ export async function LessonBlocks({
   const primaryVideoId = blocks.find((b) => b.type === "video")?.id;
   const lastVideoId = blocks.findLast((b) => b.type === "video")?.id;
   // Signed URLs for protected uploads + watermark/preview/autoplay options (Settings → Video).
-  const videos = await prepareLessonVideos(blocks, lessonId, loggedIn ? await getCurrentUser() : null);
+  const [videos, t] = await Promise.all([prepareLessonVideos(blocks, lessonId, loggedIn ? await getCurrentUser() : null), getT("learning")]);
 
   const renderBlock = (block: LessonBlock): ReactNode => {
     switch (block.type) {
@@ -137,7 +140,7 @@ export async function LessonBlocks({
         );
       case "exercise":
         if (!exercisesEnabled) {
-          return <DisabledBlock title="Programming exercises are turned off" description="An administrator has disabled programming exercises on this site." />;
+          return <DisabledBlock title={t("learn.exercisesOff.title")} description={t("learn.exercisesOff.body")} />;
         }
         return loggedIn ? (
           <BlockFrame interactive>
@@ -154,7 +157,7 @@ export async function LessonBlocks({
   return (
     <div className="space-y-8">
       {blocks.map((block) => (
-        <section key={block.id} id={`block-${block.id}`} className="scroll-mt-24" aria-label={blockLabel(block)}>
+        <section key={block.id} id={`block-${block.id}`} className="scroll-mt-24" aria-label={blockLabel(block, t)}>
           {renderBlock(block)}
         </section>
       ))}
@@ -162,22 +165,22 @@ export async function LessonBlocks({
   );
 }
 
-function blockLabel(block: LessonBlock): string | undefined {
+function blockLabel(block: LessonBlock, t: Translator<MessageKey<"learning">>): string | undefined {
   switch (block.type) {
     case "video":
-      return block.title ? `Video: ${block.title}` : "Video";
+      return block.title ? t("learn.block.videoNamed", { title: block.title }) : t("learn.block.video");
     case "audio":
-      return block.title ? `Audio: ${block.title}` : "Audio";
+      return block.title ? t("learn.block.audioNamed", { title: block.title }) : t("learn.audio");
     case "pdf":
-      return block.title ? `PDF: ${block.title}` : "PDF document";
+      return block.title ? t("learn.block.pdfNamed", { title: block.title }) : t("learn.pdf.document");
     case "quiz":
-      return "Quiz";
+      return t("learn.kind.quiz");
     case "assignment":
-      return "Assignment";
+      return t("learn.kind.assignment");
     case "exercise":
-      return "Programming exercise";
+      return t("learn.kind.exercise");
     case "file":
-      return `File: ${block.title}`;
+      return t("learn.block.fileNamed", { title: block.title });
     default:
       return undefined;
   }

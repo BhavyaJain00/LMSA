@@ -5,6 +5,7 @@ import { getLessonHref } from "@/lib/data/courses";
 import { getQuizAccess, getRunnerPayload } from "@/lib/data/quiz";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 import { QuizRunner } from "./quiz-runner";
 
 function BlockMessage({ icon, title, description, action }: { icon: React.ReactNode; title: string; description?: string; action?: React.ReactNode }) {
@@ -35,15 +36,9 @@ export async function QuizBlock({
   /** Rendered inside the video player overlay (adds the "continue the video" hints). */
   inVideo?: boolean;
 }) {
-  const quiz = await findById("quizzes", quizId);
+  const [quiz, t] = await Promise.all([findById("quizzes", quizId), getT("learning")]);
   if (!quiz) {
-    return (
-      <BlockMessage
-        icon={<Icon.Question />}
-        title="This quiz is no longer available"
-        description="It may have been removed by the instructor. You can continue with the rest of the lesson."
-      />
-    );
+    return <BlockMessage icon={<Icon.Question />} title={t("quiz.block.goneTitle")} description={t("quiz.block.goneBody")} />;
   }
 
   const user = await getCurrentUser();
@@ -52,11 +47,11 @@ export async function QuizBlock({
     return (
       <BlockMessage
         icon={<Icon.Lock />}
-        title="Please login to access the quiz."
+        title={t("quiz.block.loginTitle")}
         description={quiz.title}
         action={
           <ButtonLink href={`/login?next=${encodeURIComponent(back)}`} leftIcon={<Icon.LogIn className="size-4" />}>
-            Login
+            {t("quiz.block.login")}
           </ButtonLink>
         }
       />
@@ -68,8 +63,8 @@ export async function QuizBlock({
     return (
       <BlockMessage
         icon={<Icon.Lock />}
-        title={access.reason === "locked" ? "This quiz is locked" : "You can't take this quiz yet"}
-        description={access.reason === "locked" ? access.message : "Enroll in the course to take this quiz and track your score."}
+        title={access.reason === "locked" ? t("quiz.block.lockedTitle") : t("quiz.block.notYetTitle")}
+        description={access.reason === "locked" ? access.message : t("quiz.block.enrollBody")}
       />
     );
   }
@@ -81,14 +76,14 @@ export async function QuizBlock({
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-border-strong bg-surface-2/60 px-3 py-2 text-xs text-ink-muted">
           <span className="inline-flex items-center gap-1.5">
             <Icon.Info className="size-3.5" />
-            You manage this quiz. Attempts you submit here are recorded — use Preview in the builder to test without saving.
+            {t("quiz.block.managerNote")}
           </span>
           <span className="flex items-center gap-3">
             <Link href={`/admin/quizzes/submissions?quiz=${quiz.id}`} className="font-medium text-accent hover:underline">
-              Submissions
+              {t("quiz.page.submissions")}
             </Link>
             <Link href={`/admin/quizzes/${quiz.id}`} className="font-medium text-accent hover:underline">
-              Edit quiz
+              {t("quiz.page.editQuiz")}
             </Link>
           </span>
         </div>

@@ -6,10 +6,11 @@ import { tagSlug } from "@/lib/seo/text";
 import { VideoPlayer } from "@/components/player";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatDate, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { CourseCover } from "./course-cover";
 import { InstructorByline } from "./instructor-byline";
-import { compactCount, plural } from "./format";
+import { compactCount } from "./format";
 import { RatingStars } from "./rating-stars";
 
 function Dot() {
@@ -28,8 +29,9 @@ function Dot() {
  * pages. The cover (or the video poster) is the page's largest image, so it
  * is fetched with high priority.
  */
-export function CourseHero({ course, manager, className }: { course: CourseSummary; manager: boolean; className?: string }) {
-  const updated = course.updatedAt ? formatDate(course.updatedAt, { month: "long", year: "numeric", day: undefined }) : "";
+export async function CourseHero({ course, manager, className }: { course: CourseSummary; manager: boolean; className?: string }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
+  const updated = course.updatedAt ? f.date(course.updatedAt, { month: "long", year: "numeric", day: undefined }) : "";
   if (course.videoUrl && course.imageUrl) preload(course.imageUrl, { as: "image", fetchPriority: "high" });
   return (
     <section aria-labelledby="course-title" className={cn("space-y-5", className)}>
@@ -38,26 +40,26 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
         {!course.published && (
           <Badge tone="dark" size="sm">
             <Icon.EyeOff className="size-3" aria-hidden="true" />
-            Unpublished
+            {t("card.unpublished")}
           </Badge>
         )}
         {!course.published && course.status !== "approved" && <StatusBadge status={course.status} />}
         {course.upcoming && (
           <Badge tone="info" size="sm">
             <Icon.Clock className="size-3" aria-hidden="true" />
-            Upcoming
+            {t("card.upcoming")}
           </Badge>
         )}
         {course.featured && (
           <Badge tone="warning" size="sm">
             <Icon.Award className="size-3" aria-hidden="true" />
-            Featured
+            {t("card.featured")}
           </Badge>
         )}
         {course.enforceLessonCompletion && (
           <Badge tone="neutral" size="sm">
             <Icon.ListChecks className="size-3" aria-hidden="true" />
-            Lessons unlock in order
+            {t("course.hero.lessonsInOrder")}
           </Badge>
         )}
       </div>
@@ -82,11 +84,9 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
         {course.averageRating && course.reviewCount > 0 ? (
           <>
             <a href="#reviews" className="inline-flex items-center gap-1.5 hover:underline">
-              <span className="font-semibold text-ink">{course.averageRating.toFixed(1)}</span>
+              <span className="font-semibold text-ink">{f.number(course.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span>
               <RatingStars value={course.averageRating} size="sm" />
-              <span>
-                ({compactCount(course.reviewCount)} {plural(course.reviewCount, "rating")})
-              </span>
+              <span>{t("course.hero.ratings", { count: course.reviewCount, formatted: compactCount(course.reviewCount, f.locale) })}</span>
             </a>
             <Dot />
           </>
@@ -95,7 +95,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
           <>
             <span className="inline-flex items-center gap-1.5">
               <Icon.Users className="size-4" aria-hidden="true" />
-              {compactCount(course.enrollmentCount)} {plural(course.enrollmentCount, "Student")}
+              {t("card.students", { count: course.enrollmentCount, formatted: compactCount(course.enrollmentCount, f.locale) })}
             </span>
             <Dot />
           </>
@@ -103,8 +103,9 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
         {course.lessonCount > 0 && (
           <span className="inline-flex items-center gap-1.5">
             <Icon.BookOpen className="size-4" aria-hidden="true" />
-            {course.lessonCount} {plural(course.lessonCount, "lesson")}
-            {course.totalDurationSeconds > 0 && ` · ${formatDuration(course.totalDurationSeconds)}`}
+            {course.totalDurationSeconds > 0
+              ? t("course.hero.lessonsWithDuration", { count: course.lessonCount, duration: f.duration(course.totalDurationSeconds) })
+              : t("catalog.lessonCount", { count: course.lessonCount })}
           </span>
         )}
         {updated && (
@@ -112,16 +113,16 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
             {course.lessonCount > 0 && <Dot />}
             <span className="inline-flex items-center gap-1.5">
               <Icon.Refresh className="size-4" aria-hidden="true" />
-              Updated {updated}
+              {t("course.hero.updated", { date: updated })}
             </span>
           </>
         )}
       </div>
 
-      {course.instructors.length > 0 && <InstructorByline instructors={course.instructors} size="sm" prefix="Created by" />}
+      {course.instructors.length > 0 && <InstructorByline instructors={course.instructors} size="sm" prefix={t("course.hero.createdBy")} />}
 
       {course.tags.length > 0 && (
-        <ul className="flex flex-wrap gap-2" aria-label="Tags">
+        <ul className="flex flex-wrap gap-2" aria-label={t("course.hero.tags")}>
           {course.tags.map((tag) => (
             <li key={tag}>
               <Link
@@ -137,7 +138,7 @@ export function CourseHero({ course, manager, className }: { course: CourseSumma
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
         {course.videoUrl ? (
-          <VideoPlayer src={course.videoUrl} poster={course.imageUrl} title={`${course.title} — course preview`} className="rounded-none" />
+          <VideoPlayer src={course.videoUrl} poster={course.imageUrl} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
         ) : (
           <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
         )}

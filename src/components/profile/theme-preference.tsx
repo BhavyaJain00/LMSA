@@ -5,6 +5,7 @@ import { setTheme } from "@/components/ui/theme-toggle";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export type ThemePreference = "system" | "light" | "dark";
 
@@ -66,20 +67,20 @@ function useFollowSystem(pref: ThemePreference | null) {
   }, [pref]);
 }
 
-const options: { value: ThemePreference; label: string; description: string; icon: React.ReactNode }[] = [
-  { value: "system", label: "System", description: "Match your device setting", icon: <Icon.Monitor className="size-5" /> },
-  { value: "light", label: "Light", description: "Bright surfaces, dark text", icon: <Icon.Sun className="size-5" /> },
-  { value: "dark", label: "Dark", description: "Easy on the eyes at night", icon: <Icon.Moon className="size-5" /> },
+/** Labels are `theme.<value>`, descriptions `theme.<value>.description`. */
+const options: { value: ThemePreference; icon: React.ReactNode }[] = [
+  { value: "system", icon: <Icon.Monitor className="size-5" /> },
+  { value: "light", icon: <Icon.Sun className="size-5" /> },
+  { value: "dark", icon: <Icon.Moon className="size-5" /> },
 ];
-
-export const themeLabels: Record<ThemePreference, string> = { system: "System", light: "Light", dark: "Dark" };
 
 /** Three radio cards (used on the account settings page). */
 export function ThemePreferenceControl() {
+  const t = useT("account");
   const pref = useThemePreference();
   useFollowSystem(pref);
   return (
-    <div role="radiogroup" aria-label="Colour mode" className="grid gap-3 sm:grid-cols-3">
+    <div role="radiogroup" aria-label={t("theme.title")} className="grid gap-3 sm:grid-cols-3">
       {options.map((o) => {
         const checked = pref === o.value;
         return (
@@ -90,14 +91,14 @@ export function ThemePreferenceControl() {
             aria-checked={checked}
             onClick={() => applyThemePreference(o.value)}
             className={cn(
-              "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors",
+              "flex items-start gap-3 rounded-xl border p-3 text-start transition-colors",
               checked ? "border-accent bg-accent/5 ring-1 ring-accent" : "border-border hover:bg-surface-2",
             )}
           >
             <span className={cn("mt-0.5", checked ? "text-accent" : "text-ink-muted")}>{o.icon}</span>
             <span className="min-w-0">
-              <span className="block text-sm font-medium text-ink">{o.label}</span>
-              <span className="block text-xs text-ink-muted">{o.description}</span>
+              <span className="block text-sm font-medium text-ink">{t(`theme.${o.value}`)}</span>
+              <span className="block text-xs text-ink-muted">{t(`theme.${o.value}.description`)}</span>
             </span>
           </button>
         );
@@ -108,6 +109,7 @@ export function ThemePreferenceControl() {
 
 /** Settings-style row that opens a "Colour mode" bottom sheet (used on the mobile You page). */
 export function ColourModeRow({ className }: { className?: string }) {
+  const t = useT("account");
   const pref = useThemePreference();
   const [open, setOpen] = useState(false);
   useFollowSystem(pref);
@@ -118,19 +120,19 @@ export function ColourModeRow({ className }: { className?: string }) {
           <Icon.Sun className="size-4 dark:hidden" />
           <Icon.Moon className="hidden size-4 dark:block" />
         </span>
-        <span className="min-w-0 flex-1 text-left text-sm text-ink">Colour mode</span>
-        <span className="text-sm text-ink-muted">{pref ? themeLabels[pref] : ""}</span>
+        <span className="min-w-0 flex-1 text-start text-sm text-ink">{t("theme.title")}</span>
+        <span className="text-sm text-ink-muted">{pref ? t(`theme.${pref}`) : ""}</span>
         <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint rtl:rotate-180" />
       </button>
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title="Colour mode"
-        description="Applies to this device only."
+        title={t("theme.title")}
+        description={t("theme.deviceOnly")}
         size="sm"
         className="max-sm:mb-0 max-sm:max-w-full max-sm:rounded-b-none"
       >
-        <ul className="-mx-2" role="radiogroup" aria-label="Colour mode">
+        <ul className="-mx-2" role="radiogroup" aria-label={t("theme.title")}>
           {options.map((o) => {
             const checked = pref === o.value;
             return (
@@ -143,10 +145,10 @@ export function ColourModeRow({ className }: { className?: string }) {
                     applyThemePreference(o.value);
                     setOpen(false);
                   }}
-                  className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2 text-left hover:bg-surface-2"
+                  className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2 text-start hover:bg-surface-2"
                 >
                   <span className="text-ink-muted">{o.icon}</span>
-                  <span className="flex-1 text-sm text-ink">{o.label}</span>
+                  <span className="flex-1 text-sm text-ink">{t(`theme.${o.value}`)}</span>
                   {checked && <Icon.Check className="size-4 text-accent" />}
                 </button>
               </li>

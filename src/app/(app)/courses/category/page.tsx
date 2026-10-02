@@ -13,20 +13,23 @@ import { JsonLd } from "@/components/seo/json-ld";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
-import { pluralize } from "@/lib/utils";
+import { getLocale, getT } from "@/i18n/server";
 
 const PATH = "/courses/category";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const settings = await getSettings();
+  const [settings, t, locale] = await Promise.all([getSettings(), getT("public"), getLocale()]);
   const categories = settings.features.courses ? await getCategoryDirectory() : [];
   return pageMetadata(
     {
-      title: "Course categories",
+      title: t("categories.title"),
       description: [
-        `Browse ${settings.brand.name} courses by category${categories.length ? `: ${categories.slice(0, 6).map((c) => c.name).join(", ")}` : ""}. Pick a subject to see every course, its instructors and related articles.`,
+        categories.length
+          ? t("categories.meta.descriptionWithList", { brand: settings.brand.name, list: categories.slice(0, 6).map((c) => c.name).join(", ") })
+          : t("categories.meta.description", { brand: settings.brand.name }),
       ],
       path: PATH,
+      locale,
       noindex: categories.length === 0 || !catalogIsPublic(settings),
       follow: true,
     },
@@ -36,7 +39,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function CategoryIndexPage() {
   await requireCatalogAccess(PATH);
-  const [categories, tags] = await Promise.all([getCategoryDirectory(), getCourseTags()]);
+  const [categories, tags, t] = await Promise.all([getCategoryDirectory(), getCourseTags(), getT("public")]);
 
   return (
     <div className="animate-fade-in pb-6">
@@ -44,16 +47,16 @@ export default async function CategoryIndexPage() {
       {categories.length > 0 && <JsonLd data={itemListJsonLd("Course categories", categories.map((c) => ({ name: c.name, path: categoryPath(c.slug) })), { origin: siteOrigin() })} />}
 
       <header className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Course categories</h1>
-        <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted">Every course belongs to a subject area. Choose one to see its courses, the people who teach them and what to read next.</p>
+        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{t("categories.title")}</h1>
+        <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted">{t("categories.intro")}</p>
       </header>
 
       {categories.length === 0 ? (
         <EmptyState
           icon={<Icon.Tag />}
-          title="No categories yet"
-          description="Categories appear here once published courses are assigned to them."
-          action={<ButtonLink href="/courses">Browse all courses</ButtonLink>}
+          title={t("categories.emptyTitle")}
+          description={t("categories.emptyDescription")}
+          action={<ButtonLink href="/courses">{t("landing.browseAll")}</ButtonLink>}
         />
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -66,10 +69,10 @@ export default async function CategoryIndexPage() {
                       {category.name}
                     </Link>
                   </h2>
-                  <span className="shrink-0 rounded-full bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-ink-muted">{pluralize(category.courseCount, "course")}</span>
+                  <span className="shrink-0 rounded-full bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-ink-muted">{t("catalog.courseCount", { count: category.courseCount })}</span>
                 </div>
                 {category.blurb && <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-ink-muted">{category.blurb}</p>}
-                <ul className="mt-3 space-y-1 text-sm text-ink-muted" aria-label={`Popular ${category.name} courses`}>
+                <ul className="mt-3 space-y-1 text-sm text-ink-muted" aria-label={t("categories.popularIn", { category: category.name })}>
                   {category.sampleCourses.map((title) => (
                     <li key={title} className="flex items-start gap-2">
                       <Icon.BookOpen className="mt-0.5 size-3.5 shrink-0 text-ink-faint" aria-hidden="true" />
@@ -87,14 +90,14 @@ export default async function CategoryIndexPage() {
         <section aria-labelledby="category-index-topics" className="mt-12">
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h2 id="category-index-topics" className="text-xl font-semibold tracking-tight text-ink">
-              Popular topics
+              {t("categories.popularTopics")}
             </h2>
             <Link href="/courses/tag" className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-              All topics
+              {t("categories.allTopics")}
               <Icon.ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
             </Link>
           </div>
-          <ChipLinks label="Popular topics" items={tags.slice(0, 20).map((t) => ({ href: tagPath(t.slug), label: t.label, count: t.count }))} />
+          <ChipLinks label={t("categories.popularTopics")} items={tags.slice(0, 20).map((tag) => ({ href: tagPath(tag.slug), label: tag.label, count: tag.count }))} />
         </section>
       )}
     </div>

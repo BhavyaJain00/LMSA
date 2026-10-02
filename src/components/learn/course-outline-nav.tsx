@@ -2,25 +2,44 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { useFormatter, useT } from "@/i18n/client";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
 import { CircleHalfIcon, MonitorPlayIcon, NotebookPenIcon } from "./learn-icons";
-import { lockExplanation, lockOf } from "./drip-shared";
+import { lockOf, type LessonLock } from "./drip-shared";
 import { UnlockLabel, useRefreshWhenUnlocked } from "./unlock-time";
 import type { LessonKind, OutlineChapterItem, OutlineLessonItem } from "./types";
 
-const KIND_META: Record<LessonKind, { label: string; icon: (props: { className?: string }) => ReactNode }> = {
-  video: { label: "Video", icon: (p) => <MonitorPlayIcon {...p} /> },
-  quiz: { label: "Quiz", icon: (p) => <Icon.Question {...p} /> },
-  assignment: { label: "Assignment", icon: (p) => <NotebookPenIcon {...p} /> },
-  exercise: { label: "Programming exercise", icon: (p) => <Icon.Code {...p} /> },
-  text: { label: "Reading", icon: (p) => <Icon.FileText {...p} /> },
+type LearnT = Translator<MessageKey<"learning">>;
+
+const KIND_META: Record<LessonKind, { label: MessageKey<"learning">; icon: (props: { className?: string }) => ReactNode }> = {
+  video: { label: "learn.kind.video", icon: (p) => <MonitorPlayIcon {...p} /> },
+  quiz: { label: "learn.kind.quiz", icon: (p) => <Icon.Question {...p} /> },
+  assignment: { label: "learn.kind.assignment", icon: (p) => <NotebookPenIcon {...p} /> },
+  exercise: { label: "learn.kind.exercise", icon: (p) => <Icon.Code {...p} /> },
+  text: { label: "learn.kind.text", icon: (p) => <Icon.FileText {...p} /> },
 };
 
-function lockTitle(lesson: OutlineLessonItem): string {
+/** Why a lesson is locked, in the interface language (time is shown separately in local time). */
+export function lockExplanationText(lock: LessonLock, t: LearnT): string {
+  switch (lock.reason) {
+    case "order":
+      return t("learn.lock.order");
+    case "prerequisite":
+      return t("learn.lock.prerequisite");
+    case "enroll":
+      return t("learn.lock.enroll");
+    case "drip":
+      return lock.afterPrevious ? t("learn.lock.dripAfterPrevious") : t("learn.lock.drip");
+  }
+}
+
+function lockTitle(lesson: OutlineLessonItem, t: LearnT): string {
   const lock = lockOf(lesson);
-  if (lock) return lockExplanation(lock);
-  return lesson.lockReason === "sequential" ? "Complete the previous lesson to unlock this one" : "Enroll in the course to unlock this lesson";
+  if (lock) return lockExplanationText(lock, t);
+  return lesson.lockReason === "sequential" ? t("learn.lock.order") : t("learn.lock.enroll");
 }
 
 /** Earliest drip unlock among the chapter's lessons when every lesson of it is still scheduled. */
@@ -36,36 +55,37 @@ function chapterUnlocksAt(chapter: OutlineChapterItem): string | null {
 }
 
 function StatusIcon({ lesson, tracking }: { lesson: OutlineLessonItem; tracking: boolean }) {
+  const t = useT("learning");
   if (lesson.locked) {
     const scheduled = lockOf(lesson)?.reason === "drip";
     return (
-      <span className="flex shrink-0 text-ink-faint" title={lockTitle(lesson)}>
+      <span className="flex shrink-0 text-ink-faint" title={lockTitle(lesson, t)}>
         {scheduled ? <Icon.Clock className="size-4" /> : <Icon.Lock className="size-4" />}
-        <span className="sr-only">{scheduled ? "Scheduled" : "Locked"}</span>
+        <span className="sr-only">{scheduled ? t("learn.status.scheduled") : t("learn.status.locked")}</span>
       </span>
     );
   }
   if (!tracking) return null;
   if (lesson.status === "complete") {
     return (
-      <span className="flex shrink-0 text-success" title="Completed">
+      <span className="flex shrink-0 text-success" title={t("learn.completed")}>
         <Icon.CheckCircleFilled className="size-4" />
-        <span className="sr-only">Completed</span>
+        <span className="sr-only">{t("learn.completed")}</span>
       </span>
     );
   }
   if (lesson.status === "partial") {
     return (
-      <span className="flex shrink-0 text-warning" title="In progress">
+      <span className="flex shrink-0 text-warning" title={t("learn.status.inProgress")}>
         <CircleHalfIcon className="size-4" />
-        <span className="sr-only">In progress</span>
+        <span className="sr-only">{t("learn.status.inProgress")}</span>
       </span>
     );
   }
   return (
-    <span className="flex shrink-0 text-ink-faint" title="Not started">
+    <span className="flex shrink-0 text-ink-faint" title={t("learn.status.notStarted")}>
       <Icon.Circle className="size-4" />
-      <span className="sr-only">Not started</span>
+      <span className="sr-only">{t("learn.status.notStarted")}</span>
     </span>
   );
 }
@@ -83,6 +103,8 @@ export interface CourseOutlineNavProps {
 
 /** Chapters accordion with lesson rows (type icon, title, duration, status, lock). */
 export function CourseOutlineNav({ outline, currentLessonId, tracking, showPreview, onNavigate, className }: CourseOutlineNavProps) {
+  const t = useT("learning");
+  const f = useFormatter();
   const currentChapterId = outline.find((c) => c.lessons.some((l) => l.id === currentLessonId))?.id ?? outline[0]?.id;
   const [open, setOpen] = useState<Set<string>>(() => new Set(currentChapterId ? [currentChapterId] : []));
   const listRef = useRef<HTMLDivElement>(null);
@@ -124,7 +146,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
     return (
       <div className={cn("px-4 py-8 text-center text-sm text-ink-muted", className)}>
         <Icon.BookOpen className="mx-auto mb-2 size-6 text-ink-faint" />
-        Course content coming soon!
+        {t("learn.outline.empty")}
       </div>
     );
   }
@@ -143,16 +165,16 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
               onClick={() => toggle(chapter.id)}
               aria-expanded={isOpen}
               aria-controls={panelId}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-2"
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-surface-2"
             >
-              <Icon.ChevronDown className={cn("size-4 shrink-0 text-ink-faint transition-transform duration-200", !isOpen && "-rotate-90")} />
+              <Icon.ChevronDown className={cn("size-4 shrink-0 text-ink-faint transition-transform duration-200", !isOpen && "-rotate-90 rtl:rotate-90")} />
               <span className="min-w-0 flex-1">
-                <span className="block text-[11px] font-medium uppercase tracking-wider text-ink-faint">Chapter {chapter.number}</span>
+                <span className="block text-[11px] font-medium uppercase tracking-wider text-ink-faint">{t("learn.meta.chapter", { number: chapter.number })}</span>
                 <span className="block truncate text-sm font-semibold text-ink">{chapter.title}</span>
                 {chapterUnlock && <UnlockLabel at={chapterUnlock} icon className="mt-0.5 text-[11px] font-medium text-accent" />}
               </span>
               <span className="shrink-0 text-xs tabular-nums text-ink-muted">
-                {tracking ? `${done}/${chapter.lessons.length}` : `${chapter.lessons.length} ${chapter.lessons.length === 1 ? "lesson" : "lessons"}`}
+                {tracking ? `${done}/${chapter.lessons.length}` : t("learn.outline.lessons", { count: chapter.lessons.length })}
               </span>
             </button>
             {isOpen && (
@@ -160,12 +182,13 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                 {chapter.lessons.map((lesson) => {
                   const current = lesson.id === currentLessonId;
                   const kind = KIND_META[lesson.kind];
+                  const kindLabel = t(kind.label);
                   const lock = lockOf(lesson);
                   const inner = (
                     <>
-                      <span className={cn("flex shrink-0", current ? "text-accent" : "text-ink-faint")} title={kind.label}>
+                      <span className={cn("flex shrink-0", current ? "text-accent" : "text-ink-faint")} title={kindLabel}>
                         {kind.icon({ className: "size-4" })}
-                        <span className="sr-only">{kind.label}:</span>
+                        <span className="sr-only">{kindLabel}:</span>
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className={cn("line-clamp-2 text-sm", current ? "font-medium text-ink" : "text-ink-muted")}>{lesson.title}</span>
@@ -173,8 +196,8 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                           <span className="tabular-nums">
                             {lesson.chapterNumber}.{lesson.lessonNumber}
                           </span>
-                          {lesson.durationSeconds > 0 && <span>{formatDuration(lesson.durationSeconds)}</span>}
-                          {showPreview && lesson.preview && <span className="rounded bg-info/12 px-1 font-medium text-info">Preview</span>}
+                          {lesson.durationSeconds > 0 && <span>{f.duration(lesson.durationSeconds)}</span>}
+                          {showPreview && lesson.preview && <span className="rounded bg-info/12 px-1 font-medium text-info">{t("learn.outline.preview")}</span>}
                         </span>
                         {lock?.reason === "drip" && lock.unlocksAt && !chapterUnlock && (
                           <UnlockLabel at={lock.unlocksAt} className="mt-0.5 text-[11px] font-medium text-accent" />
@@ -184,13 +207,13 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                     </>
                   );
                   const rowClass = cn(
-                    "relative flex items-start gap-2.5 rounded-lg py-2 pl-9 pr-2.5 transition-colors",
-                    current && "bg-surface-2 before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-accent",
+                    "relative flex items-start gap-2.5 rounded-lg py-2 ps-9 pe-2.5 transition-colors",
+                    current && "bg-surface-2 before:absolute before:inset-y-2 before:inset-s-0 before:w-0.5 before:rounded-full before:bg-accent",
                   );
                   return (
                     <li key={lesson.id}>
                       {lesson.locked ? (
-                        <div className={cn(rowClass, "cursor-not-allowed opacity-60")} aria-disabled="true" title={lockTitle(lesson)}>
+                        <div className={cn(rowClass, "cursor-not-allowed opacity-60")} aria-disabled="true" title={lockTitle(lesson, t)}>
                           {inner}
                         </div>
                       ) : (

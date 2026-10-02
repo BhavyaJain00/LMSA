@@ -1,5 +1,6 @@
 import type { Course } from "@/lib/types";
 import { cn, formatPrice } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
 type Priced = Pick<Course, "paidCourse" | "price" | "currency">;
 
@@ -7,12 +8,14 @@ export function isPaidCourse(course: Priced): boolean {
   return course.paidCourse && course.price > 0;
 }
 
-export function coursePriceLabel(course: Priced): string {
-  return isPaidCourse(course) ? formatPrice(course.price, course.currency) : "Free";
+/** "Free" or the formatted amount; pass the translated free label and the active locale on localized pages. */
+export function coursePriceLabel(course: Priced, freeLabel = "Free", locale?: string): string {
+  return isPaidCourse(course) ? formatPrice(course.price, course.currency, freeLabel, locale) : freeLabel;
 }
 
 /** Course price ("Free" or the formatted amount). */
-export function PriceTag({ course, size = "sm", className }: { course: Priced; size?: "sm" | "md" | "xl"; className?: string }) {
+export async function PriceTag({ course, size = "sm", className }: { course: Priced; size?: "sm" | "md" | "xl"; className?: string }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const paid = isPaidCourse(course);
   return (
     <span
@@ -25,7 +28,7 @@ export function PriceTag({ course, size = "sm", className }: { course: Priced; s
         className,
       )}
     >
-      {coursePriceLabel(course)}
+      {coursePriceLabel(course, t("catalog.free"), f.locale)}
     </span>
   );
 }

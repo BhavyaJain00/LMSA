@@ -49,12 +49,11 @@ function FieldSkeleton() {
 
 /** Edit profile form placeholder: photos, basic information, social links and timelines cards. */
 export function ProfileEditSkeleton() {
-  const card = (title: string, fields: number, extra?: ReactNode) => (
+  const card = (fields: number, extra?: ReactNode) => (
     <div className="rounded-card border border-border bg-surface-1">
       <div className="space-y-2 border-b border-border px-5 py-4">
         <Skeleton className="h-4 w-36" />
         <Skeleton className="h-3 w-64 max-w-full" />
-        <span className="sr-only">{title}</span>
       </div>
       <div className="grid gap-4 p-5 md:grid-cols-2">
         {Array.from({ length: fields }).map((_, i) => (
@@ -79,8 +78,8 @@ export function ProfileEditSkeleton() {
           <Skeleton className="h-28 w-full rounded-lg" />
         </div>
       </div>
-      {card("Basic information", 6, <Skeleton className="h-24 w-full rounded-lg md:col-span-2" />)}
-      {card("Social links", 4)}
+      {card(6, <Skeleton className="h-24 w-full rounded-lg md:col-span-2" />)}
+      {card(4)}
       <div className="rounded-card border border-border bg-surface-1 p-5">
         <Skeleton className="h-4 w-40" />
         <div className="mt-4">

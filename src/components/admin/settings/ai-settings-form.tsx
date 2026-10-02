@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Input, RadioCard, Switch, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
@@ -28,6 +29,8 @@ type TestState = { ok: true; result: ConnectionResult } | { ok: false; error: st
 
 /** Admin → Settings → AI tutor: switch, model, daily limit, extra instructions, review queue and a connection test. */
 export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormProps) {
+  const t = useT("admin");
+  const f = useFormatter();
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveAiSettingsAction);
   const known = AI_MODEL_OPTIONS.some((m) => m.id === initial.model);
   const [choice, setChoice] = useState(known ? initial.model : CUSTOM);
@@ -51,18 +54,18 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Availability">
+      <SettingsSection title={t("aiForm.availability.title")}>
         <SettingsSwitchRow error={errors.enabled}>
           <Switch
             name="enabled"
             checked={enabled}
             onChange={(e) => setEnabled(e.currentTarget.checked)}
-            label="Turn on the AI tutor"
-            description="Learners can ask questions about courses that also have the tutor switched on in their Settings tab. Answers use only that course's lessons, transcripts and quiz explanations."
+            label={t("aiForm.enabled.label")}
+            description={t("aiForm.enabled.description")}
           />
           {enabled && !keyConfigured && (
             <p className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
-              The tutor stays hidden from learners until ANTHROPIC_API_KEY is set on the server (see API key below).
+              {t("aiForm.enabled.keyMissing", { name: "ANTHROPIC_API_KEY" })}
             </p>
           )}
         </SettingsSwitchRow>
@@ -70,14 +73,14 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
           <Switch
             name="reviewQueue"
             defaultChecked={initial.reviewQueue}
-            label="Instructor review queue"
-            description="Answers a learner marks as not helpful or reports go to the course instructors for review, and they get a notification. Instructors can approve an answer or write a correction that the learner sees and that the tutor uses from then on."
+            label={t("aiForm.reviewQueue.label")}
+            description={t("aiForm.reviewQueue.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SettingsSection title="Model" description="The Claude model that writes the answers. Faster models cost less per question.">
-        <div className="space-y-2 px-4 py-4 sm:px-5" role="radiogroup" aria-label="Claude model">
+      <SettingsSection title={t("aiForm.model.title")} description={t("aiForm.model.description")}>
+        <div className="space-y-2 px-4 py-4 sm:px-5" role="radiogroup" aria-label={t("aiForm.model.groupLabel")}>
           <input type="hidden" name="model" value={model} />
           {AI_MODEL_OPTIONS.map((option) => (
             <RadioCard
@@ -95,7 +98,7 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
                   <code className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] font-normal text-ink-muted">{option.id}</code>
                 </span>
               }
-              description={`${option.note} · $${option.inputPerMillion} / $${option.outputPerMillion} per million input / output tokens`}
+              description={t("aiForm.model.pricing", { note: option.note, input: `$${option.inputPerMillion}`, output: `$${option.outputPerMillion}` })}
             />
           ))}
           <RadioCard
@@ -106,13 +109,13 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
               setChoice(value);
               setTest(null);
             }}
-            title="Another model"
-            description="Enter any model id your Anthropic account can use."
+            title={t("aiForm.model.custom")}
+            description={t("aiForm.model.customDescription")}
           />
           {choice === CUSTOM && (
-            <div className="pl-1 pt-1">
+            <div className="ps-1 pt-1">
               <label htmlFor="ai-custom-model" className="sr-only">
-                Model id
+                {t("aiForm.model.customLabel")}
               </label>
               <Input
                 id="ai-custom-model"
@@ -136,45 +139,56 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
         </div>
       </SettingsSection>
 
-      <SettingsSection title="API key" description="The key is read from the server environment and never shown in full.">
+      <SettingsSection title={t("aiForm.key.title")} description={t("aiForm.key.description")}>
         <div className="space-y-3 px-4 py-4 sm:px-5">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="font-medium text-ink">ANTHROPIC_API_KEY</span>
             {keyConfigured ? (
               <>
                 <Badge tone="success" dot>
-                  Configured
+                  {t("aiForm.key.configured")}
                 </Badge>
                 <code className="rounded bg-surface-2 px-1.5 py-0.5 text-xs text-ink-muted">{keyHint}</code>
               </>
             ) : (
               <Badge tone="warning" dot>
-                Not set
+                {t("aiForm.key.notSet")}
               </Badge>
             )}
           </div>
           {!keyConfigured && (
-            <ol className="list-decimal space-y-1 pl-5 text-sm text-ink-muted">
-              <li>Create a key in the Anthropic Console under API keys.</li>
+            <ol className="list-decimal space-y-1 ps-5 text-sm text-ink-muted">
+              <li>{t("aiForm.key.step1")}</li>
               <li>
-                Add <code className="rounded bg-surface-2 px-1 text-xs">ANTHROPIC_API_KEY=your-key</code> to the server&apos;s <code className="rounded bg-surface-2 px-1 text-xs">.env</code> file or hosting
-                environment.
+                {t.rich("aiForm.key.step2", {
+                  setting: "ANTHROPIC_API_KEY=your-key",
+                  file: ".env",
+                  code: (chunks) => (
+                    <code dir="ltr" className="rounded bg-surface-2 px-1 text-xs">
+                      {chunks}
+                    </code>
+                  ),
+                })}
               </li>
-              <li>Restart the app, then come back here and test the connection.</li>
+              <li>{t("aiForm.key.step3")}</li>
             </ol>
           )}
           <div className="flex flex-wrap items-center gap-3">
             <Button type="button" variant="outline" size="sm" onClick={runTest} loading={testing} disabled={!keyConfigured || !model} leftIcon={<Icon.Zap className="size-4" />}>
-              Test connection
+              {t("aiForm.test.button")}
             </Button>
-            <span className="text-xs text-ink-faint">Sends one short request to {model || "the selected model"}.</span>
+            <span className="text-xs text-ink-faint">{model ? t("aiForm.test.hint", { model }) : t("aiForm.test.hintNoModel")}</span>
           </div>
           <div aria-live="polite">
             {test?.ok === true && (
               <p className="flex items-start gap-2 rounded-lg border border-success/30 bg-success/8 px-3 py-2 text-sm text-ink">
                 <Icon.CheckCircle className="mt-0.5 size-4 shrink-0 text-success" />
                 <span>
-                  Connected to <strong className="font-medium">{test.result.model}</strong> in {test.result.latencyMs.toLocaleString()} ms.
+                  {t.rich("aiForm.test.connected", {
+                    model: test.result.model,
+                    ms: f.number(test.result.latencyMs),
+                    b: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
                 </span>
               </p>
             )}
@@ -188,10 +202,10 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Limits">
+      <SettingsSection title={t("aiForm.limits.title")}>
         <SettingsRow
-          label="Questions per learner per day"
-          description="Resets at midnight UTC. Instructors and admins trying the tutor are not limited. Use 0 for no limit."
+          label={t("aiForm.limits.daily.label")}
+          description={t("aiForm.limits.daily.description")}
           htmlFor="ai-daily-limit"
           error={errors.dailyMessageLimit}
         >
@@ -209,11 +223,11 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Extra instructions" description="Added after the built-in ground rules, which they can't override.">
+      <SettingsSection title={t("aiForm.prompt.title")} description={t("aiForm.prompt.description")}>
         <SettingsRow
           stacked
-          label="Instructions for the tutor"
-          description="For example the tone to use, the audience's level, or where to send learners with questions the course doesn't cover."
+          label={t("aiForm.prompt.label")}
+          description={t("aiForm.prompt.hint")}
           htmlFor="ai-system-prompt"
           error={errors.systemPrompt}
         >
@@ -223,11 +237,11 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
             rows={5}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Use a warm, encouraging tone. Our learners are beginners, so avoid jargon."
+            placeholder={t("aiForm.prompt.placeholder")}
             invalid={!!errors.systemPrompt || prompt.length > MAX_PROMPT_ADDITION_CHARS}
           />
-          <p className={cn("mt-1 text-right text-xs tabular-nums", prompt.length > MAX_PROMPT_ADDITION_CHARS ? "text-danger" : "text-ink-faint")}>
-            {prompt.length.toLocaleString()}/{MAX_PROMPT_ADDITION_CHARS.toLocaleString()}
+          <p className={cn("mt-1 text-end text-xs tabular-nums", prompt.length > MAX_PROMPT_ADDITION_CHARS ? "text-danger" : "text-ink-faint")}>
+            {f.number(prompt.length)}/{f.number(MAX_PROMPT_ADDITION_CHARS)}
           </p>
           <button
             type="button"
@@ -237,7 +251,7 @@ export function AiSettingsForm({ initial, keyHint, baseRules }: AiSettingsFormPr
             className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
           >
             <Icon.ChevronDown className={cn("size-3.5 transition-transform", showRules && "rotate-180")} />
-            {showRules ? "Hide the built-in ground rules" : "Show the built-in ground rules"}
+            {showRules ? t("aiForm.prompt.hideRules") : t("aiForm.prompt.showRules")}
           </button>
           {showRules && (
             <pre id="ai-base-rules" className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-surface-2 p-3 text-xs leading-relaxed text-ink-muted">

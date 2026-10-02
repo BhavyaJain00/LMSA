@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { BreadcrumbNav } from "./breadcrumb-nav";
 
 /**
  * Presentational building blocks for the settings pages (usable from both
@@ -96,7 +97,7 @@ export interface Crumb {
 
 export function Breadcrumbs({ items, className }: { items: Crumb[]; className?: string }) {
   return (
-    <nav aria-label="Breadcrumb" className={cn("mb-2", className)}>
+    <BreadcrumbNav className={cn("mb-2", className)}>
       <ol className="flex flex-wrap items-center gap-1 text-sm text-ink-muted">
         {items.map((item, i) => {
           const last = i === items.length - 1;
@@ -116,7 +117,7 @@ export function Breadcrumbs({ items, className }: { items: Crumb[]; className?: 
           );
         })}
       </ol>
-    </nav>
+    </BreadcrumbNav>
   );
 }
 

@@ -1,11 +1,12 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { CourseGridSkeleton } from "@/components/catalog/course-grid";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 /** Catalog skeleton: header, tab strip, filters and 8 card placeholders. */
 export default function CoursesLoading() {
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <Skeleton className="h-7 w-44" />

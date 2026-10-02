@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/ui/icons";
 import { NextTrackIcon } from "./player-icons";
+import { useT } from "@/i18n/client";
 
 export const AUTOPLAY_NEXT_SECONDS = 5;
 
@@ -21,7 +22,7 @@ export function EndScreen({
   onNext,
   nextLabel,
   nextTitle,
-  countdownLabel = "Next lesson",
+  countdownLabel,
   autoplay,
   reducedMotion,
 }: {
@@ -36,6 +37,7 @@ export function EndScreen({
   autoplay: boolean;
   reducedMotion: boolean;
 }) {
+  const t = useT("learning");
   const [seconds, setSeconds] = useState(AUTOPLAY_NEXT_SECONDS);
   const [cancelled, setCancelled] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -80,8 +82,8 @@ export function EndScreen({
         <>
           <div className="flex flex-col items-center gap-3" aria-live="polite">
             <span className="sr-only">
-              {nextTitle ? `Up next: ${nextTitle}. ` : ""}
-              Playing automatically in {AUTOPLAY_NEXT_SECONDS} seconds.
+              {nextTitle ? `${t("global.player.end.upNextSr", { title: nextTitle })} ` : ""}
+              {t("global.player.end.autoplaySr", { seconds: AUTOPLAY_NEXT_SECONDS })}
             </span>
             {!compact && (
               <span className="relative flex size-16 items-center justify-center" aria-hidden="true">
@@ -106,9 +108,9 @@ export function EndScreen({
               </span>
             )}
             <p className="text-sm font-medium text-white" aria-hidden="true">
-              {countdownLabel} in {seconds}…
+              {t("global.player.end.countdown", { label: countdownLabel ?? t("global.player.nextLesson"), seconds })}
             </p>
-            {nextTitle && !compact && <p className="max-w-sm truncate text-xs text-white/70">Up next: {nextTitle}</p>}
+            {nextTitle && !compact && <p className="max-w-sm truncate text-xs text-white/70">{t("global.player.end.upNext", { title: nextTitle })}</p>}
           </div>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
@@ -117,20 +119,20 @@ export function EndScreen({
               onClick={() => setCancelled(true)}
               className="rounded-lg bg-white/15 px-4 py-2 text-sm font-medium hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
             >
-              Cancel
+              {t("global.player.end.cancel")}
             </button>
             <button
               type="button"
               onClick={goNext}
               className="flex items-center gap-2 rounded-lg bg-(--player-accent) px-4 py-2 text-sm font-medium hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
             >
-              <NextTrackIcon className="size-4" /> Play now
+              <NextTrackIcon className="size-4" /> {t("global.player.end.playNow")}
             </button>
           </div>
         </>
       ) : (
         <>
-          {!compact && <p className="text-sm text-white/80">{title ? `You finished “${title}”` : "Video complete"}</p>}
+          {!compact && <p className="text-sm text-white/80">{title ? t("global.player.end.finished", { title }) : t("global.player.end.complete")}</p>}
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
@@ -138,7 +140,7 @@ export function EndScreen({
               onClick={onReplay}
               className="flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 text-sm font-medium hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
             >
-              <Icon.Replay className="size-4" /> Replay
+              <Icon.Replay className="size-4" /> {t("global.player.end.replay")}
             </button>
             {onNext && (
               <button

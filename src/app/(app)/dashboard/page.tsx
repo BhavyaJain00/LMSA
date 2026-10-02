@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { isCreator, isEvaluator, requireUser } from "@/lib/auth/session";
@@ -20,17 +21,20 @@ import { DashboardSection } from "@/components/dashboard/section";
 import { StreakWidget } from "@/components/dashboard/streak-widget";
 import { CertificateList, MiniStat, PendingWorkList, RecentBadges, YourRankWidget } from "@/components/dashboard/widgets";
 import { CommandPaletteButton } from "@/components/command-palette/open-button";
-import { formatDate, formatDuration, formatPrice, pluralize } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
-export const metadata = { title: "Dashboard" };
+type AccountT = Awaited<ReturnType<typeof getT<"account">>>;
 
-function subtitleFor(liveCount: number, evalCount: number, hasCoursesInProgress: boolean): string {
-  const classes = `${liveCount} upcoming live ${liveCount === 1 ? "class" : "classes"}`;
-  const evals = `${evalCount} ${evalCount === 1 ? "evaluation" : "evaluations"} scheduled`;
-  if (liveCount && evalCount) return `You have ${classes} and ${evals}.`;
-  if (liveCount) return `You have ${classes}.`;
-  if (evalCount) return `You have ${evals}.`;
-  return hasCoursesInProgress ? "Resume where you left off" : "Find a course and start learning today.";
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("account");
+  return { title: t("dashboard.metaTitle") };
+}
+
+function subtitleFor(t: AccountT, liveCount: number, evalCount: number, hasCoursesInProgress: boolean): string {
+  if (liveCount && evalCount) return t("dashboard.subtitle.both", { classes: liveCount, evaluations: evalCount });
+  if (liveCount) return t("dashboard.subtitle.classes", { count: liveCount });
+  if (evalCount) return t("dashboard.subtitle.evaluations", { count: evalCount });
+  return hasCoursesInProgress ? t("dashboard.subtitle.resume") : t("dashboard.subtitle.start");
 }
 
 /** One row of the "Teaching at a glance" card; plain text when the viewer cannot open the linked page. */
@@ -59,7 +63,7 @@ function TeachingRow({ href, icon, label, value }: { href?: string; icon: ReactN
 
 export default async function DashboardPage() {
   const user = await requireUser("/dashboard");
-  const settings = await getSettings();
+  const [settings, t, tc, fmt] = await Promise.all([getSettings(), getT("account"), getT("common"), getFormatter()]);
   // No scheduler: send any due "batch starts tomorrow" / "live class today" reminders before reading the dashboard.
   // Best effort: a failed reminder write must never break the dashboard.
   if (settings.features.batches) await ensureBatchReminders(user.id).catch(() => 0);
@@ -82,17 +86,17 @@ export default async function DashboardPage() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-ink">
-              Hey, {user.name} <span aria-hidden="true">👋</span>
+              {t("dashboard.greeting", { name: user.name })} <span aria-hidden="true">👋</span>
             </h1>
             <StreakWidget current={data.streak.current} longest={data.streak.longest} activeToday={data.streak.activeToday} />
           </div>
-          <p className="mt-1 text-base text-ink-muted">{subtitleFor(data.upcomingCounts.liveClasses, data.upcomingCounts.evaluations, data.continueLearning.length > 0)}</p>
+          <p className="mt-1 text-base text-ink-muted">{subtitleFor(t, data.upcomingCounts.liveClasses, data.upcomingCounts.evaluations, data.continueLearning.length > 0)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CommandPaletteButton className="w-full sm:w-64" />
           {data.teaching && (
             <ButtonLink href="/admin" variant="outline" size="md" leftIcon={<Icon.Layout className="size-4" />}>
-              Admin overview
+              {t("dashboard.adminOverview")}
             </ButtonLink>
           )}
         </div>
@@ -105,12 +109,12 @@ export default async function DashboardPage() {
               <Icon.Sparkles className="size-5" />
             </span>
             <div>
-              <p className="text-sm font-semibold text-ink">Personalise your learning</p>
-              <p className="text-sm text-ink-muted">Answer three quick questions so we can suggest the right courses for you.</p>
+              <p className="text-sm font-semibold text-ink">{t("dashboard.persona.title")}</p>
+              <p className="text-sm text-ink-muted">{t("dashboard.persona.body")}</p>
             </div>
           </div>
           <ButtonLink href="/persona" size="sm" className="self-start sm:self-auto">
-            Get started
+            {t("dashboard.persona.cta")}
           </ButtonLink>
         </Card>
       )}
@@ -118,7 +122,7 @@ export default async function DashboardPage() {
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="min-w-0 space-y-10 lg:col-span-2">
           {data.evaluations.length > 0 && (
-            <DashboardSection title="Upcoming Evaluations" id="evaluations">
+            <DashboardSection title={t("dashboard.sections.evaluations")} id="evaluations">
               <div className="grid gap-4 sm:grid-cols-2">
                 {data.evaluations.map((e) => (
                   <EvaluationCard key={e.id} evaluation={e} />
@@ -128,7 +132,7 @@ export default async function DashboardPage() {
           )}
 
           {data.liveClasses.length > 0 && (
-            <DashboardSection title="Upcoming Live Classes" id="live-classes" href="/batches?tab=enrolled" linkLabel="My batches">
+            <DashboardSection title={t("dashboard.sections.liveClasses")} id="live-classes" href="/batches?tab=enrolled" linkLabel={t("dashboard.sections.myBatches")}>
               <div className="grid gap-4 sm:grid-cols-2">
                 {data.liveClasses.map((c) => (
                   <LiveClassCard key={c.id} liveClass={c} />
@@ -138,10 +142,10 @@ export default async function DashboardPage() {
           )}
 
           <DashboardSection
-            title="Continue learning"
+            title={t("dashboard.sections.continue")}
             id="continue"
             href={hasEnrollments ? "/courses?tab=enrolled" : undefined}
-            linkLabel="My courses"
+            linkLabel={t("dashboard.sections.myCourses")}
           >
             {data.continueLearning.length > 0 ? (
               <div className="space-y-4">
@@ -153,11 +157,11 @@ export default async function DashboardPage() {
               <EmptyState
                 compact
                 icon={<Icon.Trophy />}
-                title="You're all caught up"
-                description="You have finished every course you enrolled in. Pick something new to keep your streak going."
+                title={t("dashboard.empty.caughtUp")}
+                description={t("dashboard.empty.caughtUpBody")}
                 action={
                   <ButtonLink href="/courses" size="sm">
-                    Browse courses
+                    {t("dashboard.browseCourses")}
                   </ButtonLink>
                 }
               />
@@ -165,11 +169,11 @@ export default async function DashboardPage() {
               <EmptyState
                 compact
                 icon={<Icon.BookOpen />}
-                title="You haven't enrolled in any courses yet"
-                description="Courses you enroll in appear here with your progress and the next lesson to pick up."
+                title={t("dashboard.empty.noCourses")}
+                description={t("dashboard.empty.noCoursesBody")}
                 action={
                   <ButtonLink href="/courses" size="sm">
-                    Browse courses
+                    {t("dashboard.browseCourses")}
                   </ButtonLink>
                 }
               />
@@ -178,8 +182,8 @@ export default async function DashboardPage() {
 
           {data.pending.items.length > 0 && (
             <DashboardSection
-              title="Pending assignments & quizzes"
-              description="Work waiting for you in your courses and batches."
+              title={t("dashboard.sections.pending")}
+              description={t("dashboard.sections.pendingBody")}
               id="pending"
             >
               <PendingWorkList items={data.pending.items} total={data.pending.total} />
@@ -187,7 +191,7 @@ export default async function DashboardPage() {
           )}
 
           {data.batches.length > 0 && (
-            <DashboardSection title="My Batches" id="batches" href="/batches">
+            <DashboardSection title={t("dashboard.sections.batches")} id="batches" href="/batches">
               <div className="grid gap-4 sm:grid-cols-2">
                 {data.batches.slice(0, 4).map((b) => (
                   <DashboardBatchCard key={b.id} batch={b} />
@@ -197,7 +201,7 @@ export default async function DashboardPage() {
           )}
 
           {data.programs.length > 0 && (
-            <DashboardSection title="My Programs" id="programs" href="/programs">
+            <DashboardSection title={t("dashboard.sections.programs")} id="programs" href="/programs">
               <div className="grid gap-4 sm:grid-cols-2">
                 {data.programs.map((p) => (
                   <ProgramProgressCard key={p.id} program={p} />
@@ -208,7 +212,7 @@ export default async function DashboardPage() {
 
           {f.courses && (
             <DashboardSection
-              title={hasEnrollments ? "Recommended for you" : "Our Popular Courses"}
+              title={hasEnrollments ? t("dashboard.sections.recommended") : t("dashboard.sections.popular")}
               id="recommended"
               href="/courses"
             >
@@ -222,11 +226,11 @@ export default async function DashboardPage() {
                 <EmptyState
                   compact
                   icon={<Icon.Sparkles />}
-                  title="You're enrolled in every live course"
-                  description="New courses will be recommended here as soon as they are published."
+                  title={t("dashboard.empty.allEnrolled")}
+                  description={t("dashboard.empty.allEnrolledBody")}
                   action={
                     <ButtonLink href="/courses?tab=upcoming" size="sm" variant="outline">
-                      See upcoming courses
+                      {t("dashboard.empty.seeUpcoming")}
                     </ButtonLink>
                   }
                 />
@@ -235,7 +239,7 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        <aside className="min-w-0 space-y-6" aria-label="Your progress">
+        <aside className="min-w-0 space-y-6" aria-label={t("dashboard.aside")}>
           {showCompleteProfile && (
             <ProfileCompletenessCard percent={completeness.percent} items={completeness.items.filter((i) => !i.done).slice(0, 4)} editHref={`${profileHref}/edit`} />
           )}
@@ -243,25 +247,25 @@ export default async function DashboardPage() {
           <Card className="p-4">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold text-ink">Learning activity</h2>
-                <p className="text-xs text-ink-muted">Last 16 weeks</p>
+                <h2 className="text-sm font-semibold text-ink">{t("dashboard.activity.title")}</h2>
+                <p className="text-xs text-ink-muted">{t("dashboard.activity.range", { weeks: 16 })}</p>
               </div>
-              <div className="text-right">
+              <div className="text-end">
                 <p className="text-lg font-semibold leading-tight tabular-nums text-ink">
                   <span aria-hidden="true">🔥 </span>
-                  {pluralize(data.streak.current, "day")}
+                  {t("count.days", { count: data.streak.current })}
                 </p>
-                <p className="text-[11px] text-ink-muted">Longest: {pluralize(data.streak.longest, "day")}</p>
+                <p className="text-[11px] text-ink-muted">{t("dashboard.activity.longest", { count: data.streak.longest })}</p>
               </div>
             </div>
             <ActivityHeatmap days={data.streak.heatmap} />
           </Card>
 
           <div className="grid grid-cols-2 gap-3">
-            <MiniStat icon={<Icon.BookOpen />} label="Enrolled" value={data.stats.enrolled} href="/courses?tab=enrolled" />
-            <MiniStat icon={<Icon.Trophy />} label="Completed" value={data.stats.completed} />
-            <MiniStat icon={<Icon.CheckCircle />} label="Lessons done" value={data.stats.lessonsCompleted} />
-            <MiniStat icon={<Icon.Timer />} label="Time learning" value={data.stats.minutesLearned ? formatDuration(data.stats.minutesLearned * 60) : "0m"} />
+            <MiniStat icon={<Icon.BookOpen />} label={t("dashboard.stats.enrolled")} value={fmt.number(data.stats.enrolled)} href="/courses?tab=enrolled" />
+            <MiniStat icon={<Icon.Trophy />} label={t("dashboard.stats.completed")} value={fmt.number(data.stats.completed)} />
+            <MiniStat icon={<Icon.CheckCircle />} label={t("dashboard.stats.lessonsDone")} value={fmt.number(data.stats.lessonsCompleted)} />
+            <MiniStat icon={<Icon.Timer />} label={t("dashboard.stats.timeLearning")} value={fmt.duration(data.stats.minutesLearned * 60)} />
           </div>
 
           <YourRankWidget user={user} />
@@ -271,7 +275,7 @@ export default async function DashboardPage() {
 
           {data.completedCourses.length > 0 && (
             <Card className="p-4">
-              <h2 className="mb-3 text-sm font-semibold text-ink">Completed courses</h2>
+              <h2 className="mb-3 text-sm font-semibold text-ink">{t("dashboard.completedCourses")}</h2>
               <ul className="space-y-2.5">
                 {data.completedCourses.slice(0, 4).map((c) => (
                   <li key={c.id} className="flex items-center gap-2.5 text-sm">
@@ -279,7 +283,7 @@ export default async function DashboardPage() {
                     <Link href={`/courses/${c.slug}`} className="min-w-0 flex-1 truncate text-ink hover:text-accent">
                       {c.title}
                     </Link>
-                    <span className="shrink-0 text-xs text-ink-faint">{formatDate(c.completedAt, { year: undefined })}</span>
+                    <span className="shrink-0 text-xs text-ink-faint">{fmt.date(c.completedAt, { year: undefined })}</span>
                   </li>
                 ))}
               </ul>
@@ -289,9 +293,9 @@ export default async function DashboardPage() {
           {recentOrders.length > 0 && (
             <Card className="p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-ink">Recent orders</h2>
+                <h2 className="text-sm font-semibold text-ink">{t("dashboard.orders.title")}</h2>
                 <Link href="/billing/history" className="text-xs font-medium text-ink-muted hover:text-accent">
-                  Orders &amp; invoices
+                  {t("dashboard.orders.all")}
                 </Link>
               </div>
               <ul className="space-y-3">
@@ -301,27 +305,27 @@ export default async function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-ink">{o.itemTitle}</p>
                       <p className="flex flex-wrap items-center gap-x-2 text-xs text-ink-muted">
-                        <span className="tabular-nums">{formatPrice(o.amount, o.currency)}</span>
+                        <span className="tabular-nums">{fmt.price(o.amount, o.currency, tc("status.free"))}</span>
                         <span aria-hidden="true">·</span>
-                        <span>{formatDate(o.paidAt ?? o.createdAt, { year: undefined })}</span>
-                        {o.status === "refunded" && <span className="text-warning">Refunded</span>}
+                        <span>{fmt.date(o.paidAt ?? o.createdAt, { year: undefined })}</span>
+                        {o.status === "refunded" && <span className="text-warning">{t("dashboard.orders.refunded")}</span>}
                       </p>
                     </div>
                     {o.invoiceNumber ? (
                       <Link
                         href={`/billing/invoice/${encodeURIComponent(o.orderId)}`}
                         className="shrink-0 text-xs font-medium text-accent hover:underline"
-                        aria-label={`Invoice for ${o.itemTitle}`}
+                        aria-label={t("dashboard.orders.invoiceFor", { title: o.itemTitle })}
                       >
-                        Invoice
+                        {t("dashboard.orders.invoice")}
                       </Link>
                     ) : (
                       <Link
                         href={`/billing/success/${encodeURIComponent(o.orderId)}`}
                         className="shrink-0 text-xs font-medium text-accent hover:underline"
-                        aria-label={`Order details for ${o.itemTitle}`}
+                        aria-label={t("dashboard.orders.detailsFor", { title: o.itemTitle })}
                       >
-                        Details
+                        {t("dashboard.orders.details")}
                       </Link>
                     )}
                   </li>
@@ -333,24 +337,24 @@ export default async function DashboardPage() {
           {data.teaching && (
             <Card className="p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-ink">Teaching at a glance</h2>
+                <h2 className="text-sm font-semibold text-ink">{t("dashboard.teaching.title")}</h2>
                 <Link href="/admin" className="text-xs font-medium text-ink-muted hover:text-accent">
-                  Open overview
+                  {t("dashboard.teaching.open")}
                 </Link>
               </div>
               <ul className="space-y-2 text-sm">
-                <TeachingRow href={isCreator(user) && f.courses ? "/admin/courses" : undefined} icon={<Icon.Book className="size-4" />} label="Your courses" value={data.teaching.courses} />
-                <TeachingRow href={f.batches ? "/admin/batches" : undefined} icon={<Icon.Users className="size-4" />} label="Upcoming batches" value={data.teaching.upcomingBatches} />
+                <TeachingRow href={isCreator(user) && f.courses ? "/admin/courses" : undefined} icon={<Icon.Book className="size-4" />} label={t("dashboard.teaching.courses")} value={data.teaching.courses} />
+                <TeachingRow href={f.batches ? "/admin/batches" : undefined} icon={<Icon.Users className="size-4" />} label={t("dashboard.teaching.batches")} value={data.teaching.upcomingBatches} />
                 <TeachingRow
                   href="/admin/assignments/submissions?status=not_graded"
                   icon={<Icon.ClipboardList className="size-4" />}
-                  label="Waiting to be graded"
+                  label={t("dashboard.teaching.grading")}
                   value={data.teaching.pendingGrading}
                 />
                 <TeachingRow
                   href={isEvaluator(user) ? `${profileHref}/schedule` : undefined}
                   icon={<Icon.Calendar className="size-4" />}
-                  label="Evaluations to run"
+                  label={t("dashboard.teaching.evaluations")}
                   value={data.teaching.evaluations}
                 />
               </ul>

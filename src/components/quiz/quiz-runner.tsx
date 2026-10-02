@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn, seededShuffle, uid } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { useCountdown, useInterval, useIsFullscreen, useProctoring } from "./runner/hooks";
 import { QuizIntro } from "./runner/intro";
 import { QuestionView } from "./runner/question-view";
@@ -18,7 +19,6 @@ import { ActivityLog, QuestionNavigator, TimerPill, ViolationBanner, ViolationPi
 import { SubmitDialog } from "./runner/submit-dialog";
 import {
   getScheduleState,
-  violationLabels,
   type AttemptSummary,
   type CheckAnswerResult,
   type RunnerMode,
@@ -75,6 +75,7 @@ interface InlineMessage {
 export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHref, backLabel, inVideo, className }: QuizRunnerProps) {
   const live = mode === "live";
   const meta = payload.quiz;
+  const t = useT("learning");
   const { toast } = useToast();
   const router = useRouter();
   // Present when the runner is embedded in the lesson player (QuizBlock / in-video quiz).
@@ -154,8 +155,8 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   // Inline messages fade out after a few seconds.
   useEffect(() => {
     if (!inline) return;
-    const t = window.setTimeout(() => setInline((cur) => (cur?.id === inline.id ? null : cur)), 6000);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => setInline((cur) => (cur?.id === inline.id ? null : cur)), 6000);
+    return () => window.clearTimeout(timer);
   }, [inline]);
 
   const buildInput = (reason: SubmissionReason): SubmitQuizInput | null => {
@@ -187,7 +188,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     await Promise.allSettled(pendingLogs.current);
     const input = buildInput(reason);
     if (!input) {
-      failSubmit("This attempt could not be verified. Reload the page and start the quiz again.", reason);
+      failSubmit(t("quiz.runner.unverified"), reason, true);
       return;
     }
     try {
@@ -206,7 +207,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
       }
       failSubmit(res.error, reason);
     } catch {
-      failSubmit("Could not submit the quiz. Please try again.", reason);
+      failSubmit(t("quiz.runner.submitFailed"), reason);
     }
   };
 
@@ -218,7 +219,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
    */
   const onRecorded = (data: SubmitResult) => {
     if (data.lessonCompleted) {
-      toast({ title: "Lesson completed", description: "You passed the quiz, so this lesson is now marked as complete.", tone: "success" });
+      toast({ title: t("quiz.runner.lessonCompleted"), description: t("quiz.runner.lessonCompletedBody"), tone: "success" });
       if (lessonRuntime && lessonId && lessonRuntime.lessonId === lessonId && lessonRuntime.status !== "complete") {
         void lessonRuntime.attemptComplete({ silent: true });
       }
@@ -226,10 +227,11 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     router.refresh();
   };
 
-  const failSubmit = (message: string, reason: SubmissionReason) => {
+  /** `terminal` marks client-side errors; server messages are classified by `TERMINAL_ERRORS`. */
+  const failSubmit = (message: string, reason: SubmissionReason, terminal = TERMINAL_ERRORS.test(message)) => {
     say(message, "error");
     submittingRef.current = false;
-    if (TERMINAL_ERRORS.test(message)) {
+    if (terminal) {
       setDeadline(null);
       tokenRef.current = null;
       setStartError(message);
@@ -305,7 +307,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
         return;
       }
       if (!res.data.questions.length) {
-        setStartError("This quiz has no questions available yet.");
+        setStartError(t("quiz.noQuestions"));
         return;
       }
       const { token, startedAt, serverTime, questions } = res.data;
@@ -319,7 +321,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
         meta.durationSeconds > 0 ? localStart + meta.durationSeconds * 1000 : null,
       );
     } catch {
-      setStartError("Could not start the quiz. Check your connection and try again.");
+      setStartError(t("quiz.runner.startFailed"));
     } finally {
       setStarting(false);
     }
@@ -343,7 +345,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   /* ---------------------------- Timer & proctoring ---------------------------- */
 
   const remaining = useCountdown(phase === "active" ? deadline : null, () => {
-    say("Time's up — submitting your answers.", "warning");
+    say(t("quiz.runner.timeUp"), "warning");
     void submit("timer_expired");
   });
 
@@ -361,7 +363,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     violationsRef.current = [...violationsRef.current, local];
     setViolations(violationsRef.current);
     // The in-tree ViolationBanner already shows this while fullscreen.
-    toast({ title: `${violationLabels[type]}. Remaining: ${Math.max(0, max - count)}`, tone: "warning" });
+    toast({ title: t("quiz.runner.violationToast", { violation: t(`quiz.violation.${type}`), count: Math.max(0, max - count) }), tone: "warning" });
     if (token) {
       const logged = logQuizViolationAction({ quizId: meta.id, eventType: type, attemptToken: token })
         .then((res) => {
@@ -478,7 +480,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
     if (!q) return;
     const ans = answersRef.current[q.id] ?? [];
     if (!hasAnswer(ans)) {
-      say(q.type === "choices" ? "Please select an option" : "Please type an answer", "warning");
+      say(q.type === "choices" ? t("quiz.runner.selectOption") : t("quiz.runner.typeAnswer"), "warning");
       return;
     }
     setChecking(true);
@@ -487,7 +489,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
       if (res.ok) setChecks((prev) => ({ ...prev, [q.id]: res.data }));
       else say(res.error, "error");
     } catch {
-      say("Could not check the answer. Please try again.", "error");
+      say(t("quiz.runner.checkFailed"), "error");
     } finally {
       setChecking(false);
     }
@@ -506,7 +508,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
   return (
     <section
       ref={rootRef}
-      aria-label={`Quiz: ${meta.title}`}
+      aria-label={t("quiz.runner.label", { title: meta.title })}
       className={cn(
         "@container relative scroll-mt-20",
         "[&:fullscreen]:overflow-y-auto [&:fullscreen]:bg-surface [&:fullscreen]:p-4 sm:[&:fullscreen]:p-8",
@@ -545,7 +547,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
             )}
             {remaining !== null && remaining <= 60 && remaining > 0 && (
               <p className="sr-only" aria-live="assertive">
-                {remaining <= 10 ? `${remaining} seconds left` : "Less than a minute left"}
+                {remaining <= 10 ? t("quiz.runner.secondsLeft", { count: remaining }) : t("quiz.runner.lessThanMinute")}
               </p>
             )}
 
@@ -577,7 +579,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
                 <Icon.AlertCircle className="size-5 shrink-0 text-danger" />
                 <p className="min-w-0 flex-1 text-sm text-ink">{submitError.message}</p>
                 <Button size="sm" onClick={() => void submit(submitError.reason)} leftIcon={<Icon.Refresh className="size-4" />}>
-                  Try again
+                  {t("quiz.runner.tryAgain")}
                 </Button>
               </div>
             )}
@@ -585,7 +587,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
             {mode === "preview" && (
               <p className="flex items-center gap-2 rounded-lg bg-accent/6 px-3 py-2 text-xs font-medium text-accent">
                 <Icon.Eye className="size-4" />
-                Preview mode — the timer and proctoring are off and nothing is saved.
+                {t("quiz.runner.previewBanner")}
               </p>
             )}
 
@@ -622,7 +624,7 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
                 <div className="absolute inset-0 z-10 flex items-center justify-center rounded-card bg-surface-1/70 backdrop-blur-[1px]" role="status">
                   <span className="inline-flex items-center gap-2 rounded-full bg-surface-1 px-4 py-2 text-sm font-medium text-ink shadow-pop">
                     <Spinner className="size-4" />
-                    Submitting your answers…
+                    {t("quiz.runner.submitting")}
                   </span>
                 </div>
               )}
@@ -646,10 +648,10 @@ export function QuizRunner({ payload, mode = "live", lessonId, courseId, backHre
               onConfirm={leaveAttempt}
               loading={leaving}
               destructive
-              confirmLabel="Submit and leave"
-              cancelLabel="Stay on the quiz"
-              title="Leave the quiz?"
-              description="Your attempt is still running. If you leave now, your current answers are submitted and the attempt counts towards your limit."
+              confirmLabel={t("quiz.leave.confirm")}
+              cancelLabel={t("quiz.leave.cancel")}
+              title={t("quiz.leave.title")}
+              description={t("quiz.leave.body")}
             />
           </div>
         )}

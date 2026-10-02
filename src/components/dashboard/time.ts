@@ -8,6 +8,8 @@
  * only `Intl`, so they run identically on the server and in the browser.
  */
 
+import { intlLocale } from "@/i18n/config";
+
 const formatters = new Map<string, Intl.DateTimeFormat | null>();
 
 function formatterFor(timeZone: string): Intl.DateTimeFormat | null {
@@ -106,10 +108,10 @@ export function sessionState(window: SessionWindow, now: number): LiveState {
   return localDayKey(start) === localDayKey(now) ? "today" : "upcoming";
 }
 
-/** "in 3 hours", "in 2 days", "in 5 minutes". */
-export function timeUntil(target: number, now: number): string {
+/** "in 3 hours", "in 2 days", "in 5 minutes" (in the given interface language, English by default). */
+export function timeUntil(target: number, now: number, locale?: string): string {
   const diff = Math.max(0, target - now);
-  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat(locale ? intlLocale(locale) : "en", { numeric: "auto" });
   const minutes = Math.round(diff / 60_000);
   if (minutes < 60) return rtf.format(Math.max(1, minutes), "minute");
   const hours = Math.round(diff / 3_600_000);
@@ -119,11 +121,12 @@ export function timeUntil(target: number, now: number): string {
 }
 
 /** Short time in the class's own zone, e.g. "6:00 PM EDT". Used for the server render before hydration. */
-export function formatInZone(instant: Date, timeZone: string, opts: Intl.DateTimeFormatOptions): string {
+export function formatInZone(instant: Date, timeZone: string, opts: Intl.DateTimeFormatOptions, locale?: string): string {
   if (Number.isNaN(instant.getTime())) return "";
+  const tag = intlLocale(locale);
   try {
-    return instant.toLocaleString("en-US", { ...opts, timeZone });
+    return instant.toLocaleString(tag, { ...opts, timeZone });
   } catch {
-    return instant.toLocaleString("en-US", { ...opts, timeZone: "UTC" });
+    return instant.toLocaleString(tag, { ...opts, timeZone: "UTC" });
   }
 }

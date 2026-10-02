@@ -1,22 +1,19 @@
+"use client";
+
 import type { User } from "@/lib/types";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export type OpenTo = NonNullable<User["openTo"]>;
 
-export const openToOptions: { value: OpenTo; label: string; description: string }[] = [
-  { value: "work", label: "Open to Work", description: "Looking for new work" },
-  { value: "hiring", label: "Hiring", description: "Hiring talent" },
-];
+/** The "open to" choices; labels are `profile.openTo.<value>` and descriptions `profile.openTo.<value>.description`. */
+export const openToValues: OpenTo[] = ["work", "hiring"];
 
 const tone: Record<OpenTo, string> = {
   work: "border-success/40 text-success",
   hiring: "border-accent/40 text-accent",
 };
-
-export function openToLabel(value: User["openTo"]): string | null {
-  return openToOptions.find((o) => o.value === value)?.label ?? null;
-}
 
 /**
  * "Open to Work" / "Hiring" pill. Drawn on a solid surface so it stays legible
@@ -24,8 +21,9 @@ export function openToLabel(value: User["openTo"]): string | null {
  * `relative` avatar wrapper.
  */
 export function OpenToBadge({ value, overlay = false, size = "sm", className }: { value: User["openTo"]; overlay?: boolean; size?: "xs" | "sm"; className?: string }) {
-  const label = openToLabel(value);
-  if (!value || !label) return null;
+  const t = useT("account");
+  if (!value || !openToValues.includes(value)) return null;
+  const label = t(`profile.openTo.${value}`);
   return (
     <span
       className={cn(

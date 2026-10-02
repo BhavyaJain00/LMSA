@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { countdownParts, formatUtcDateTime } from "./drip-shared";
-import { fullLocalDateTime, useNow, useRefreshWhenUnlocked } from "./unlock-time";
+import { useFormatter, useT } from "@/i18n/client";
+import { countdownParts } from "./drip-shared";
+import { useNow, useRefreshWhenUnlocked, useUnlockText } from "./unlock-time";
 
 function Unit({ value, label }: { value: number; label: string }) {
   return (
@@ -15,13 +16,17 @@ function Unit({ value, label }: { value: number; label: string }) {
   );
 }
 
-function srCountdown(ms: number): string {
-  const { days, hours, minutes } = countdownParts(ms);
-  const parts: string[] = [];
-  if (days) parts.push(`${days} ${days === 1 ? "day" : "days"}`);
-  if (hours) parts.push(`${hours} ${hours === 1 ? "hour" : "hours"}`);
-  if (!days && minutes) parts.push(`${minutes} ${minutes === 1 ? "minute" : "minutes"}`);
-  return parts.length ? parts.join(", ") : "less than a minute";
+function useSrCountdown(): (ms: number) => string {
+  const t = useT("learning");
+  const f = useFormatter();
+  return (ms) => {
+    const { days, hours, minutes } = countdownParts(ms);
+    const parts: string[] = [];
+    if (days) parts.push(t("learn.drip.srDays", { count: days }));
+    if (hours) parts.push(t("learn.drip.srHours", { count: hours }));
+    if (!days && minutes) parts.push(t("learn.drip.srMinutes", { count: minutes }));
+    return parts.length ? f.list(parts) : t("learn.drip.srLessThanMinute");
+  };
 }
 
 /**
@@ -46,6 +51,9 @@ export function DripLockedCard({
   /** Where the learner can continue meanwhile. */
   resume: { href: string; title: string } | null;
 }) {
+  const t = useT("learning");
+  const text = useUnlockText();
+  const srCountdown = useSrCountdown();
   const ms = Date.parse(unlocksAt);
   const now = useNow("second");
   // Screen readers get a minute-resolution update instead of a per-second one.
@@ -56,7 +64,7 @@ export function DripLockedCard({
   const parts = countdownParts(remaining ?? 0);
   const unlocked = remaining !== null && remaining <= 0;
   // Before hydration (and without JavaScript) the exact UTC release time; then the viewer's local time.
-  const when = now === null ? formatUtcDateTime(ms) || unlocksAt : fullLocalDateTime(ms, now);
+  const when = now === null ? text.utcDateTime(ms) || unlocksAt : text.full(ms, now);
 
   return (
     <div className="mx-auto w-full max-w-(--lesson-w) py-6">
@@ -66,16 +74,21 @@ export function DripLockedCard({
             {unlocked ? <Icon.Unlock className="size-7" aria-hidden="true" /> : <Icon.Clock className="size-7" aria-hidden="true" />}
           </span>
           <div className="max-w-md">
-            <p className="text-xs font-medium uppercase tracking-wider text-ink-faint">Scheduled lesson</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-ink-faint">{t("learn.drip.eyebrow")}</p>
             <h1 id="drip-locked-title" className="mt-1 text-xl font-semibold text-ink text-balance">
-              {unlocked ? "This lesson is unlocking…" : "This lesson isn't available yet"}
+              {unlocked ? t("learn.drip.unlocking") : t("learn.drip.notYet")}
             </h1>
             <p className="mt-2 text-sm text-ink-muted">
-              <span className="font-medium text-ink">{lessonTitle}</span> opens on{" "}
-              <time dateTime={unlocksAt} className="font-medium text-ink">
-                {when}
-              </time>
-              .
+              {t.rich("learn.drip.opensOn", {
+                lesson: lessonTitle,
+                when,
+                b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
+                time: (chunks) => (
+                  <time dateTime={unlocksAt} className="font-medium text-ink">
+                    {chunks}
+                  </time>
+                ),
+              })}
             </p>
           </div>
 
@@ -85,42 +98,44 @@ export function DripLockedCard({
                 <div className="h-18 w-72 animate-pulse rounded-xl bg-surface-2 motion-reduce:animate-none" />
               ) : (
                 <>
-                  <Unit value={parts.days} label={parts.days === 1 ? "day" : "days"} />
-                  <Unit value={parts.hours} label="hours" />
-                  <Unit value={parts.minutes} label="min" />
-                  <Unit value={parts.seconds} label="sec" />
+                  <Unit value={parts.days} label={t("learn.drip.unitDays", { count: parts.days })} />
+                  <Unit value={parts.hours} label={t("learn.drip.unitHours")} />
+                  <Unit value={parts.minutes} label={t("learn.drip.unitMinutes")} />
+                  <Unit value={parts.seconds} label={t("learn.drip.unitSeconds")} />
                 </>
               )}
             </div>
           )}
           <p className="sr-only" role="status" aria-live="polite">
-            {minuteNow === null ? "" : unlocked ? "The lesson is unlocking. The page will refresh." : `Unlocks in ${srCountdown(ms - minuteNow)}.`}
+            {minuteNow === null ? "" : unlocked ? t("learn.drip.srUnlocking") : t("learn.drip.srUnlocksIn", { time: srCountdown(ms - minuteNow) })}
           </p>
 
           {afterPrevious && (
-            <p className="flex max-w-md items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-left text-xs text-ink-muted">
+            <p className="flex max-w-md items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-start text-xs text-ink-muted">
               <Icon.Info className="mt-px size-4 shrink-0 text-ink-faint" aria-hidden="true" />
-              This course unlocks lessons in order, so you&apos;ll also need to complete the lessons before it.
+              {t("learn.drip.afterPrevious")}
             </p>
           )}
         </div>
         <div className="flex flex-col-reverse items-stretch gap-2 border-t border-border bg-surface-2/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-center sm:px-8">
-          <ButtonLink href={courseHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
-            Back to course
+          <ButtonLink href={courseHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
+            {t("learn.backToCourse")}
           </ButtonLink>
           {resume && (
-            <ButtonLink href={resume.href} rightIcon={<Icon.ArrowRight className="size-4" />}>
-              <span className="truncate">Continue with {resume.title}</span>
+            <ButtonLink href={resume.href} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
+              <span className="truncate">{t("learn.drip.continueWith", { title: resume.title })}</span>
             </ButtonLink>
           )}
         </div>
       </section>
       <p className="mt-4 text-center text-xs text-ink-faint">
-        Scheduled lessons open automatically; this page refreshes when the countdown ends. See the full schedule on the{" "}
-        <Link href={`${courseHref}#curriculum`} className="font-medium text-accent hover:underline">
-          course page
-        </Link>
-        .
+        {t.rich("learn.drip.footer", {
+          link: (chunks) => (
+            <Link href={`${courseHref}#curriculum`} className="font-medium text-accent hover:underline">
+              {chunks}
+            </Link>
+          ),
+        })}
       </p>
     </div>
   );

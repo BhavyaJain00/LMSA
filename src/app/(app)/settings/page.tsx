@@ -12,6 +12,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ThemePreferenceControl } from "@/components/profile/theme-preference";
+import { LanguageSettingsCard } from "@/components/layout/language-settings-card";
 import { isEmailVerified, isTwoFactorActive } from "@/lib/auth/account-status";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/utils";
 import { PasswordForm } from "./password-form";
@@ -226,6 +227,8 @@ export default async function AccountSettingsPage() {
             <ThemePreferenceControl />
           </CardBody>
         </Card>
+
+        <LanguageSettingsCard />
 
         <Card>
           <CardHeader title="Learning preferences" description="Your answers help us recommend courses and batches." />

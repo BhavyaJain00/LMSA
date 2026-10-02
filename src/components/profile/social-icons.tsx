@@ -1,7 +1,10 @@
+"use client";
+
 import type { ReactNode, SVGProps } from "react";
 import type { SocialLinks as SocialLinksType } from "@/lib/types";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 /* Brand glyphs drawn in the same 24×24 style as the shared icon set (not in icons.tsx, so they live here). */
 
@@ -47,6 +50,7 @@ export function YoutubeIcon(props: P) {
   );
 }
 
+/** Social networks. Brand names are not translated; the website label is `global.social.website`. */
 export const socialMeta: { key: keyof SocialLinksType; label: string; placeholder: string; icon: (props: P) => ReactNode }[] = [
   { key: "website", label: "Website", placeholder: "https://your-site.com", icon: (p) => <Icon.Globe {...p} /> },
   { key: "linkedin", label: "LinkedIn", placeholder: "https://linkedin.com/in/username", icon: (p) => <LinkedinIcon {...p} /> },
@@ -57,10 +61,12 @@ export const socialMeta: { key: keyof SocialLinksType; label: string; placeholde
 
 /** Row of icon links for the socials a user has set (opens in a new tab). */
 export function SocialLinks({ socials, name, className }: { socials?: SocialLinksType; name: string; className?: string }) {
+  const t = useT("account");
   const entries = socialMeta.filter((m) => socials?.[m.key]);
   if (!entries.length) return null;
+  const labelOf = (m: (typeof socialMeta)[number]) => (m.key === "website" ? t("global.social.website") : m.label);
   return (
-    <ul className={cn("flex flex-wrap items-center gap-1", className)} aria-label={`${name} on the web`}>
+    <ul className={cn("flex flex-wrap items-center gap-1", className)} aria-label={t("global.social.onTheWeb", { name })}>
       {entries.map((m) => (
         <li key={m.key}>
           <a
@@ -68,8 +74,8 @@ export function SocialLinks({ socials, name, className }: { socials?: SocialLink
             target="_blank"
             rel="noopener noreferrer me"
             className="flex size-8 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
-            aria-label={`${name} on ${m.label}`}
-            title={m.label}
+            aria-label={t("global.social.onNetwork", { name, network: labelOf(m) })}
+            title={labelOf(m)}
           >
             {m.icon({ className: "size-4" })}
           </a>

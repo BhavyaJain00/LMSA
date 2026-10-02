@@ -44,9 +44,12 @@ import {
   RelatedCourses,
   SectionHeading,
 } from "@/components/catalog/course-sections";
-import { lessonKindFromBlocks, outlineStats, plural, reviewDateLabel } from "@/components/catalog/format";
+import { lessonKindFromBlocks, reviewDateLabel } from "@/components/catalog/format";
 import type { OutlineChapterView, OutlineMode, ReviewView } from "@/components/catalog/types";
-import { formatDuration, sum } from "@/lib/utils";
+import { sum } from "@/lib/utils";
+import { getFormatter, getLocale, getT } from "@/i18n/server";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
 import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
 import { splitKeywords } from "@/lib/seo/text";
 import { isCoursePublic } from "@/lib/seo/visibility";
@@ -97,7 +100,7 @@ function requestTime(): number {
 
 type ReviewWithUser = Review & { user: PublicUser | null };
 
-function toReviewViews(reviews: ReviewWithUser[], viewerId: string | null): ReviewView[] {
+function toReviewViews(reviews: ReviewWithUser[], viewerId: string | null, locale: string): ReviewView[] {
   const now = Date.now();
   return reviews
     .filter((r): r is Review & { user: PublicUser } => !!r.user)
@@ -106,16 +109,19 @@ function toReviewViews(reviews: ReviewWithUser[], viewerId: string | null): Revi
       rating: r.rating,
       review: r.review,
       createdAt: r.createdAt,
-      dateLabel: reviewDateLabel(r.createdAt, now),
+      dateLabel: reviewDateLabel(r.createdAt, now, locale),
       author: { id: r.user.id, name: r.user.name, username: r.user.username, avatarUrl: r.user.avatarUrl },
       isOwn: !!viewerId && r.userId === viewerId,
     }));
 }
 
-function reviewHint(opts: { user: User | null; enrolled: boolean; instructor: boolean; hasOwn: boolean; upcoming: boolean }): string | null {
+function reviewHint(
+  t: Translator<MessageKey<"public">>,
+  opts: { user: User | null; enrolled: boolean; instructor: boolean; hasOwn: boolean; upcoming: boolean },
+): string | null {
   if (opts.instructor || opts.hasOwn) return null;
-  if (!opts.user) return "Log in and enroll to rate this course.";
-  if (!opts.enrolled) return opts.upcoming ? "Reviews open once the course launches and you enroll." : "Enroll in this course to leave a review.";
+  if (!opts.user) return t("reviews.hint.guest");
+  if (!opts.enrolled) return opts.upcoming ? t("reviews.hint.upcoming") : t("reviews.hint.enroll");
   return null;
 }
 
@@ -125,9 +131,9 @@ function reviewHint(opts: { user: User | null; enrolled: boolean; instructor: bo
 
 export async function generateMetadata(props: PageProps<"/courses/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [course, user, settings] = await Promise.all([getCourseBySlug(slug), getCurrentUser(), getSettings()]);
+  const [course, user, settings, t, locale] = await Promise.all([getCourseBySlug(slug), getCurrentUser(), getSettings(), getT("public"), getLocale()]);
   const enrolled = course && user && !course.published ? !!(await getEnrollment(user.id, course.id)) : false;
-  if (!course || !(canViewCourse(user, course) || enrolled)) return notFoundMetadata("Course not found");
+  if (!course || !(canViewCourse(user, course) || enrolled)) return notFoundMetadata(t("course.notFound"));
   const custom = course.metaDescription?.trim();
   return pageMetadata(
     {
@@ -140,6 +146,7 @@ export async function generateMetadata(props: PageProps<"/courses/[slug]">): Pro
       keywords: splitKeywords(course.metaKeywords, course.tags),
       // Drafts, scheduled courses and a switched-off catalog stay out of the index.
       noindex: !isCoursePublic(course) || !settings.features.courses,
+      locale,
     },
     settings,
   );
@@ -151,7 +158,7 @@ export async function generateMetadata(props: PageProps<"/courses/[slug]">): Pro
 
 export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const { slug } = await props.params;
-  const [user, settings, course] = await Promise.all([getCurrentUser(), getSettings(), getCourseBySlug(slug)]);
+  const [user, settings, course, t, f] = await Promise.all([getCurrentUser(), getSettings(), getCourseBySlug(slug), getT("public"), getFormatter()]);
   if (!course) notFound();
 
   const manager = canManageCourse(user, course);
@@ -218,7 +225,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
     previewCount: content.previewLessonCount,
   };
 
-  const reviewViews = toReviewViews(reviews, user?.id ?? null);
+  const reviewViews = toReviewViews(reviews, user?.id ?? null, f.locale);
   const hasOwnReview = reviewViews.some((r) => r.isOwn);
   const isInstructor = !!user && course.instructorIds.includes(user.id);
   const canWriteReview = settings.features.reviews && !!user && !!enrollment && !hasOwnReview && !isInstructor;
@@ -255,13 +262,13 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
       ) : (
         <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-border-strong px-6 py-10 text-center">
           <Icon.BookOpen className="size-7 text-ink-faint" aria-hidden="true" />
-          <p className="mt-2 text-sm font-medium text-ink-muted">Course content coming soon!</p>
+          <p className="mt-2 text-sm font-medium text-ink-muted">{t("course.contentComingSoon")}</p>
         </div>
       )}
       {mode === "guest" && content.previewLessonCount > 0 && (
         <p className="mt-3 flex items-center gap-2 text-sm text-ink-muted">
-          <Icon.Eye className="size-4 text-accent" aria-hidden="true" />
-          Lessons marked <span className="font-medium text-ink">Preview</span> are free to watch without an account.
+          <Icon.Eye className="size-4 shrink-0 text-accent" aria-hidden="true" />
+          <span>{t.rich("course.previewNote", { b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}</span>
         </p>
       )}
     </>
@@ -271,9 +278,9 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
     <LeadForm
       source="course"
       courseId={course.id}
-      title="Get the syllabus by email"
-      description={`The full outline of ${course.title}, chapter by chapter, straight to your inbox. Confirm your address and it is on its way.`}
-      submitLabel="Email me the syllabus"
+      title={t("course.syllabus.title")}
+      description={t("course.syllabus.description", { title: course.title })}
+      submitLabel={t("course.syllabus.submit")}
       privacyHref={await privacyPolicyHref()}
     />
   ) : null;
@@ -298,14 +305,14 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
     ) : null;
 
   const reviewsBlock = settings.features.reviews ? (
-    <section id="reviews" aria-label="Reviews" className="scroll-mt-20">
+    <section id="reviews" aria-label={t("reviews.title")} className="scroll-mt-20">
       <ReviewsPanel
         courseSlug={course.slug}
         courseTitle={course.title}
         summary={breakdown}
         reviews={reviewViews}
         canWrite={canWriteReview}
-        writeHint={reviewHint({ user, enrolled: !!enrollment, instructor: isInstructor, hasOwn: hasOwnReview, upcoming: course.upcoming })}
+        writeHint={reviewHint(t, { user, enrolled: !!enrollment, instructor: isInstructor, hasOwn: hasOwnReview, upcoming: course.upcoming })}
         canModerate={isModerator(user)}
       />
     </section>
@@ -314,15 +321,19 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const handsOn = content.assignmentCount + content.exerciseCount;
   const salesIncludes = salesPage
     ? [
-        lessonCount > 0 ? `${lessonCount} ${plural(lessonCount, "lesson")}${summary.totalDurationSeconds > 0 ? ` · ${formatDuration(summary.totalDurationSeconds)} in total` : ""}` : "",
-        content.quizCount > 0 ? `${content.quizCount} ${plural(content.quizCount, "quiz", "quizzes")} to check your progress` : "",
-        handsOn > 0 ? `${handsOn} hands-on ${plural(handsOn, "exercise")}` : "",
-        showCertification ? (course.paidCertificate ? "Certificate after an evaluation" : "Certificate of completion") : "",
-        content.previewLessonCount > 0 ? `${content.previewLessonCount} free preview ${plural(content.previewLessonCount, "lesson")}` : "",
-        "Learn at your own pace on any device",
+        lessonCount > 0
+          ? summary.totalDurationSeconds > 0
+            ? t("course.salesIncludes.lessonsTotal", { count: lessonCount, duration: f.duration(summary.totalDurationSeconds) })
+            : t("catalog.lessonCount", { count: lessonCount })
+          : "",
+        content.quizCount > 0 ? t("course.salesIncludes.quizzes", { count: content.quizCount }) : "",
+        handsOn > 0 ? t("course.salesIncludes.handsOn", { count: handsOn }) : "",
+        showCertification ? (course.paidCertificate ? t("enroll.includes.certificateEvaluation") : t("enroll.includes.certificateCompletion")) : "",
+        content.previewLessonCount > 0 ? t("enroll.includes.previews", { count: content.previewLessonCount }) : "",
+        t("course.salesIncludes.anyDevice"),
       ].filter(Boolean)
     : [];
-  const salesAction = enrollment ? "Continue learning" : isPaidCourse(course) && !alreadyPaid ? "Get the course" : "Enroll now";
+  const salesAction = enrollment ? t("enroll.continueLearning") : isPaidCourse(course) && !alreadyPaid ? t("course.getCourse") : t("course.enrollNow");
 
   return (
     <div className="animate-fade-in pb-6">
@@ -333,8 +344,8 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
         <div role="status" className="mb-6 flex items-start gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-ink">
           <Icon.EyeOff className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
           <p>
-            <span className="font-medium">This course is not published.</span>{" "}
-            <span className="text-ink-muted">Only its instructors and moderators can see this page. Publish it from the course editor when it&apos;s ready.</span>
+            <span className="font-medium">{t("course.unpublished.title")}</span>{" "}
+            <span className="text-ink-muted">{t("course.unpublished.body")}</span>
           </p>
         </div>
       )}
@@ -344,7 +355,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
           {salesPage ? <SalesHero course={summary} page={salesPage} manager={manager} serverNow={serverNow} /> : <CourseHero course={summary} manager={manager} />}
         </div>
 
-        <aside id={ENROLL_ANCHOR} aria-label="Enrollment" className="min-w-0 scroll-mt-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+        <aside id={ENROLL_ANCHOR} aria-label={t("course.enrollment")} className="min-w-0 scroll-mt-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <div className="lg:sticky lg:top-20">{enrollCard}</div>
         </aside>
 
@@ -378,13 +389,14 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
                 aside={
                   lessonCount > 0 ? (
                     <span>
-                      {outlineStats(chapters.length, lessonCount)}
-                      {summary.totalDurationSeconds > 0 && ` · ${formatDuration(summary.totalDurationSeconds)} total length`}
+                      {summary.totalDurationSeconds > 0
+                        ? t("course.contentStatsWithLength", { sections: chapters.length, lessons: lessonCount, duration: f.duration(summary.totalDurationSeconds) })
+                        : t("course.contentStats", { sections: chapters.length, lessons: lessonCount })}
                     </span>
                   ) : undefined
                 }
               >
-                Course content
+                {t("course.content")}
               </SectionHeading>
               {curriculumBody}
             </section>

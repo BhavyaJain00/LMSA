@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { intlLocale } from "@/i18n/config";
+import { useLocale, useT } from "@/i18n/client";
 import { cn } from "@/lib/utils";
 import { chartColor, niceScale, type ChartTone } from "./scale";
 
@@ -15,26 +17,26 @@ function parseDay(key: string): Date {
   return new Date(`${key}T00:00:00`);
 }
 
-function tickLabel(key: string, spanDays: number): string {
+function tickLabel(key: string, spanDays: number, tag: string): string {
   const d = parseDay(key);
-  if (spanDays > 120) return d.toLocaleDateString("en-US", { month: "short" });
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (spanDays > 120) return d.toLocaleDateString(tag, { month: "short" });
+  return d.toLocaleDateString(tag, { month: "short", day: "numeric" });
 }
 
-function fullLabel(key: string): string {
-  return parseDay(key).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+function fullLabel(key: string, tag: string): string {
+  return parseDay(key).toLocaleDateString(tag, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
 /**
  * Responsive SVG line chart with an area fill, hover/keyboard tooltips and an
  * accessible data table fallback. Built without any chart library.
+ * Used on admin and statistics pages too, so its strings are `global.` keys.
  */
 export function LineChart({
   data,
   label,
   tone = "accent",
   height = 220,
-  unit = "",
   className,
 }: {
   data: LinePoint[];
@@ -42,10 +44,13 @@ export function LineChart({
   label: string;
   tone?: ChartTone;
   height?: number;
-  /** Singular unit appended in tooltips, e.g. "signup". */
+  /** Kept for compatibility: tooltips now show the series `label` (translated by the caller). */
   unit?: string;
   className?: string;
 }) {
+  const t = useT("account");
+  const tag = intlLocale(useLocale());
+  const num = (value: number) => value.toLocaleString(tag);
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [active, setActive] = useState<number | null>(null);
@@ -127,7 +132,7 @@ export function LineChart({
 
   const activePoint = active !== null ? points[active] : undefined;
   const activeDatum = active !== null ? data[active] : undefined;
-  const describe = (d: LinePoint) => `${fullLabel(d.date)}: ${d.value} ${unit ? (d.value === 1 ? unit : `${unit}s`) : label.toLowerCase()}`;
+  const describe = (d: LinePoint) => t("global.chart.point", { date: fullLabel(d.date, tag), value: num(d.value), label });
 
   return (
     <div className={cn("min-w-0", className)}>
@@ -139,7 +144,7 @@ export function LineChart({
           preserveAspectRatio="none"
           tabIndex={0}
           role="img"
-          aria-label={`${label} per day. ${total} in total over ${n} days. Use the arrow keys to read individual days.`}
+          aria-label={t("global.chart.summary", { label, total: num(total), days: n })}
           onPointerMove={onPointerMove}
           onPointerDown={onPointerMove}
           onPointerLeave={() => setActive(null)}
@@ -160,7 +165,7 @@ export function LineChart({
               <g key={t}>
                 <line x1={PAD.left} x2={PAD.left + plotW} y1={y} y2={y} stroke="var(--border)" strokeDasharray={t === 0 ? undefined : "3 4"} />
                 <text x={PAD.left - 8} y={y + 3.5} textAnchor="end" fontSize={10} className="fill-ink-faint tabular-nums">
-                  {t}
+                  {num(t)}
                 </text>
               </g>
             );
@@ -173,7 +178,7 @@ export function LineChart({
             const anchor = i === 0 ? "start" : i === n - 1 ? "end" : "middle";
             return (
               <text key={d.date} x={p.x} y={height - 8} textAnchor={anchor} fontSize={10} className="fill-ink-faint">
-                {tickLabel(d.date, n)}
+                {tickLabel(d.date, n, tag)}
               </text>
             );
           })}
@@ -196,7 +201,7 @@ export function LineChart({
 
         {total === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-6">
-            <p className="rounded-md bg-surface-1/90 px-2 py-1 text-xs text-ink-muted">No {label.toLowerCase()} in this period</p>
+            <p className="rounded-md bg-surface-1/90 px-2 py-1 text-xs text-ink-muted">{t("global.chart.empty", { label })}</p>
           </div>
         )}
 
@@ -209,10 +214,10 @@ export function LineChart({
               transform: activePoint.x > width * 0.7 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
             }}
           >
-            <p className="text-ink-muted">{fullLabel(activeDatum.date)}</p>
+            <p className="text-ink-muted">{fullLabel(activeDatum.date, tag)}</p>
             <p className="mt-0.5 flex items-center gap-1.5 font-semibold text-ink">
               <span className="size-2 rounded-full" style={{ background: color }} />
-              {activeDatum.value} {label.toLowerCase()}
+              {t("global.chart.tooltipValue", { value: num(activeDatum.value), label })}
             </p>
           </div>
         )}
@@ -224,20 +229,20 @@ export function LineChart({
 
       <details className="group mt-2">
         <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink [&::-webkit-details-marker]:hidden">
-          <svg viewBox="0 0 24 24" className="size-3.5 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+          <svg viewBox="0 0 24 24" className="size-3.5 transition-transform group-open:rotate-90 rtl:-scale-x-100" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path d="m9 18 6-6-6-6" />
           </svg>
-          View as table
+          {t("global.chart.viewTable")}
         </summary>
         <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border scrollbar-thin">
           <table className="w-full text-xs">
-            <caption className="sr-only">{label} per day</caption>
-            <thead className="sticky top-0 bg-surface-2 text-left text-ink-muted">
+            <caption className="sr-only">{t("global.chart.caption", { label })}</caption>
+            <thead className="sticky top-0 bg-surface-2 text-start text-ink-muted">
               <tr>
                 <th scope="col" className="px-3 py-1.5 font-medium">
-                  Date
+                  {t("global.chart.date")}
                 </th>
-                <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                <th scope="col" className="px-3 py-1.5 text-end font-medium">
                   {label}
                 </th>
               </tr>
@@ -245,8 +250,8 @@ export function LineChart({
             <tbody className="divide-y divide-border">
               {[...data].reverse().map((d) => (
                 <tr key={d.date} className={d.value ? "text-ink" : "text-ink-faint"}>
-                  <td className="px-3 py-1">{fullLabel(d.date)}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{d.value}</td>
+                  <td className="px-3 py-1">{fullLabel(d.date, tag)}</td>
+                  <td className="px-3 py-1 text-end tabular-nums">{num(d.value)}</td>
                 </tr>
               ))}
             </tbody>

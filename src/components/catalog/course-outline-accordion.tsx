@@ -4,12 +4,16 @@ import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
 import { describeReleaseRule, lockExplanation, type LessonLock, type ReleaseRule } from "@/components/learn/drip-shared";
 import { UnlockLabel, useRefreshWhenUnlocked } from "@/components/learn/unlock-time";
 import { LessonKindIcon } from "./lesson-kind-icon";
-import { plural } from "./format";
 import type { OutlineChapterView, OutlineLessonView, OutlineMode } from "./types";
+
+type PublicT = Translator<MessageKey<"public">>;
 
 /** Outline row with the viewer's detailed lock and (for managers) the configured release rule. */
 export interface ScheduledOutlineLessonView extends OutlineLessonView {
@@ -28,56 +32,56 @@ export interface ScheduledOutlineChapterView extends Omit<OutlineChapterView, "l
   ruleLabel?: string | null;
 }
 
-function lockedReason(mode: OutlineMode, lock: LessonLock | undefined): string {
+function lockedReason(t: PublicT, mode: OutlineMode, lock: LessonLock | undefined): string {
   if (lock) return lockExplanation(lock);
-  if (mode === "enrolled") return "Complete the previous lesson to unlock this one";
-  if (mode === "guest") return "Log in and enroll to unlock this lesson";
-  return "Enroll in the course to unlock this lesson";
+  if (mode === "enrolled") return t("outline.locked.enrolled");
+  if (mode === "guest") return t("outline.locked.guest");
+  return t("outline.locked.visitor");
 }
 
 function LessonStatus({ lesson, mode }: { lesson: ScheduledOutlineLessonView; mode: OutlineMode }) {
+  const t = useT("public");
   if (lesson.locked) {
-    const reason = lockedReason(mode, lesson.lock);
+    const reason = lockedReason(t, mode, lesson.lock);
     const scheduled = lesson.lock?.reason === "drip";
     return (
       <span className={cn("inline-flex shrink-0", scheduled ? "text-accent" : "text-ink-faint")} title={reason}>
         {scheduled ? <Icon.Clock className="size-4" aria-hidden="true" /> : <Icon.Lock className="size-4" aria-hidden="true" />}
-        <span className="sr-only">
-          {scheduled ? "Scheduled" : "Locked"}. {reason}
-        </span>
+        <span className="sr-only">{scheduled ? t("outline.status.scheduled", { reason }) : t("outline.status.locked", { reason })}</span>
       </span>
     );
   }
   if (mode !== "enrolled") return null;
   if (lesson.status === "complete") {
     return (
-      <span className="inline-flex shrink-0 text-success" title="Completed">
+      <span className="inline-flex shrink-0 text-success" title={t("outline.status.completed")}>
         <Icon.CheckCircleFilled className="size-4" aria-hidden="true" />
-        <span className="sr-only">Completed</span>
+        <span className="sr-only">{t("outline.status.completed")}</span>
       </span>
     );
   }
   if (lesson.status === "partial") {
     return (
-      <span className="inline-flex shrink-0 text-warning" title="In progress">
+      <span className="inline-flex shrink-0 text-warning" title={t("outline.status.inProgress")}>
         <Icon.CircleDot className="size-4" aria-hidden="true" />
-        <span className="sr-only">In progress</span>
+        <span className="sr-only">{t("outline.status.inProgress")}</span>
       </span>
     );
   }
   return (
-    <span className="inline-flex shrink-0 text-ink-faint/70" title="Not started">
+    <span className="inline-flex shrink-0 text-ink-faint/70" title={t("outline.status.notStarted")}>
       <Icon.Circle className="size-4" aria-hidden="true" />
-      <span className="sr-only">Not started</span>
+      <span className="sr-only">{t("outline.status.notStarted")}</span>
     </span>
   );
 }
 
 function RuleBadge({ label, rule, subject }: { label: string; rule: ReleaseRule | null | undefined; subject: "chapter" | "lesson" }) {
+  const t = useT("public");
   return (
     <Badge tone="outline" size="xs" className="shrink-0" title={describeReleaseRule(rule, subject)}>
       <Icon.Clock className="size-3" aria-hidden="true" />
-      <span className="sr-only">Release schedule: </span>
+      <span className="sr-only">{t("outline.releaseSchedule")} </span>
       {label}
     </Badge>
   );
@@ -95,6 +99,8 @@ function LessonRow({
   /** The chapter header already shows the unlock time for every lesson. */
   chapterScheduled: boolean;
 }) {
+  const t = useT("public");
+  const f = useFormatter();
   const showPreview = lesson.preview && (mode === "guest" || mode === "visitor");
   const interactive = !!lesson.href && !lesson.locked;
   const dripAt = lesson.lock?.reason === "drip" ? lesson.lock.unlocksAt : undefined;
@@ -103,9 +109,7 @@ function LessonRow({
     <>
       <LessonKindIcon kind={lesson.kind} className={cn(interactive ? "text-ink-muted group-hover/row:text-accent" : "text-ink-faint")} />
       <span className="min-w-0 flex-1">
-        <span className="sr-only">
-          Lesson {lesson.chapterNumber}.{lesson.lessonNumber}:{" "}
-        </span>
+        <span className="sr-only">{t("outline.lessonNumber", { chapter: lesson.chapterNumber, lesson: lesson.lessonNumber })} </span>
         <span className={cn("block truncate", interactive && "group-hover/row:text-accent", lesson.status === "complete" && mode === "enrolled" && "text-ink-muted")}>
           {lesson.title}
         </span>
@@ -115,16 +119,16 @@ function LessonRow({
       {showPreview && (
         <Badge tone="accent" size="xs" className="shrink-0">
           <Icon.Eye className="size-3" aria-hidden="true" />
-          Preview
+          {t("outline.preview")}
         </Badge>
       )}
       {highlight && (
         <Badge tone="info" size="xs" className="hidden shrink-0 sm:inline-flex">
-          Up next
+          {t("outline.upNext")}
         </Badge>
       )}
       {lesson.durationSeconds > 0 && (
-        <span className="hidden shrink-0 text-xs tabular-nums text-ink-faint sm:inline">{formatDuration(lesson.durationSeconds)}</span>
+        <span className="hidden shrink-0 text-xs tabular-nums text-ink-faint sm:inline">{f.duration(lesson.durationSeconds)}</span>
       )}
       <LessonStatus lesson={lesson} mode={mode} />
     </>
@@ -164,6 +168,8 @@ export function CourseOutlineAccordion({
   /** Lesson highlighted as "Up next" for enrolled learners. */
   nextLessonId?: string | null;
 }) {
+  const t = useT("public");
+  const f = useFormatter();
   const baseId = useId();
   const [open, setOpen] = useState<Set<string>>(() => new Set(defaultOpenIds ?? (chapters[0] ? [chapters[0].id] : [])));
   const allOpen = chapters.length > 0 && chapters.every((c) => open.has(c.id));
@@ -192,7 +198,7 @@ export function CourseOutlineAccordion({
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-accent/10"
           >
             {allOpen ? <Icon.ChevronUp className="size-3.5" aria-hidden="true" /> : <Icon.ChevronDown className="size-3.5" aria-hidden="true" />}
-            {allOpen ? "Collapse all sections" : "Expand all sections"}
+            {allOpen ? t("outline.collapseAll") : t("outline.expandAll")}
           </button>
         </div>
       )}
@@ -209,10 +215,13 @@ export function CourseOutlineAccordion({
                   aria-expanded={isOpen}
                   aria-controls={panelId}
                   onClick={() => toggle(chapter.id)}
-                  className="flex w-full items-center gap-3 bg-surface-1 px-4 py-3.5 text-left transition-colors hover:bg-surface-2"
+                  className="flex w-full items-center gap-3 bg-surface-1 px-4 py-3.5 text-start transition-colors hover:bg-surface-2"
                 >
                   <Icon.ChevronRight
-                    className={cn("size-4 shrink-0 text-ink-muted transition-transform duration-200 motion-reduce:transition-none", isOpen && "rotate-90")}
+                    className={cn(
+                      "size-4 shrink-0 text-ink-muted transition-transform duration-200 motion-reduce:transition-none rtl:rotate-180",
+                      isOpen && "rotate-90 rtl:rotate-90",
+                    )}
                     aria-hidden="true"
                   />
                   <span className="min-w-0 flex-1">
@@ -225,13 +234,16 @@ export function CourseOutlineAccordion({
                     {mode === "manager" && chapter.ruleLabel && <RuleBadge label={chapter.ruleLabel} rule={chapter.rule} subject="chapter" />}
                     {mode === "enrolled" && chapter.lessons.length > 0 && (
                       <span className={cn("tabular-nums", complete && "font-medium text-success")}>
-                        {chapter.completedCount}/{chapter.lessons.length}
-                        <span className="sr-only"> completed</span>
+                        <span aria-hidden="true">
+                          {chapter.completedCount}/{chapter.lessons.length}
+                        </span>
+                        <span className="sr-only">{t("outline.chapterCompleted", { done: chapter.completedCount, total: chapter.lessons.length })}</span>
                       </span>
                     )}
                     <span className="hidden sm:inline">
-                      {chapter.lessons.length} {plural(chapter.lessons.length, "lesson")}
-                      {chapter.durationSeconds > 0 && ` · ${formatDuration(chapter.durationSeconds)}`}
+                      {chapter.durationSeconds > 0
+                        ? t("course.hero.lessonsWithDuration", { count: chapter.lessons.length, duration: f.duration(chapter.durationSeconds) })
+                        : t("catalog.lessonCount", { count: chapter.lessons.length })}
                     </span>
                     {complete && <Icon.CheckCircleFilled className="size-4 text-success" aria-hidden="true" />}
                   </span>
@@ -248,7 +260,7 @@ export function CourseOutlineAccordion({
                     ))}
                   </ol>
                 ) : (
-                  <p className="px-3 py-2 text-sm text-ink-faint">Lessons for this section are coming soon.</p>
+                  <p className="px-3 py-2 text-sm text-ink-faint">{t("outline.emptyChapter")}</p>
                 )}
               </div>
             </li>

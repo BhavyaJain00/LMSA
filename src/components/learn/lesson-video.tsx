@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { VideoPlayer, type HeartbeatPayload, type PlayerWatermarkOptions, type SeekMarker } from "@/components/player";
 import type { VideoChapterMarker, VideoQuizMarker, VideoSource } from "@/lib/types";
 import { stripMediaToken } from "@/lib/media/paths";
+import { useT } from "@/i18n/client";
 
 const PLAY_EVENT = "ll:lesson-video-play";
 
@@ -104,6 +105,7 @@ export function LessonVideo({
   captionsLabel,
   captionsLang,
 }: LessonVideoProps) {
+  const t = useT("learning");
   const [completed, setCompleted] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Never store signed tokens in watch records.
@@ -154,7 +156,7 @@ export function LessonVideo({
     };
   }, [blockId]);
 
-  const markers: SeekMarker[] | undefined = quizMarkers?.map((m) => ({ id: `${m.quizId}@${m.time}`, time: m.time, label: "Quiz", kind: "quiz" }));
+  const markers: SeekMarker[] | undefined = quizMarkers?.map((m) => ({ id: `${m.quizId}@${m.time}`, time: m.time, label: t("learn.video.quiz"), kind: "quiz" }));
 
   return (
     <div ref={wrapRef} className="w-full">

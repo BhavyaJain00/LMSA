@@ -6,6 +6,7 @@ import { getSettings } from "@/lib/db/store";
 import { getLandingData } from "@/lib/data/catalog";
 import { pageMetadata } from "@/lib/seo/metadata";
 import { seoContext, websiteJsonLd } from "@/lib/seo/jsonld";
+import { getLocale, getT } from "@/i18n/server";
 import { courseItemList } from "@/lib/data/seo";
 import { JsonLd } from "@/components/seo/json-ld";
 import { Icon } from "@/components/ui/icons";
@@ -24,7 +25,7 @@ import {
 } from "@/components/catalog/landing/landing-sections";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const settings = await getSettings();
+  const [settings, locale] = await Promise.all([getSettings(), getLocale()]);
   const tagline = settings.brand.tagline.trim();
   return pageMetadata(
     {
@@ -32,6 +33,7 @@ export async function generateMetadata(): Promise<Metadata> {
       absoluteTitle: true,
       description: [settings.seo.defaultDescription, settings.brand.metaDescription],
       path: "/",
+      locale,
     },
     settings,
   );
@@ -46,16 +48,16 @@ export default async function HomePage() {
   const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
   if (user) redirect(settings.learning.defaultHome === "courses" && settings.features.courses ? "/courses" : "/dashboard");
 
-  const data = await getLandingData();
+  const [data, t] = await Promise.all([getLandingData(), getT("public")]);
   const signupEnabled = !settings.learning.disableSignup;
   // With guest access off, /courses, /courses/<slug> and /batches send guests to the login
   // page, so the landing page doesn't advertise individual courses or batches then.
   const guestsCanBrowse = settings.learning.allowGuestAccess;
   const coursesOn = settings.features.courses && guestsCanBrowse;
   const browse = guestsCanBrowse
-    ? { hero: { href: "/courses", label: "Browse courses" }, cta: { href: "/courses", label: "Explore the catalog" } }
+    ? { hero: { href: "/courses", label: t("home.browseCourses") }, cta: { href: "/courses", label: t("home.exploreCatalog") } }
     : signupEnabled
-      ? { hero: { href: "/login?next=%2Fcourses", label: "Log in to browse courses" }, cta: { href: "/login?next=%2Fcourses", label: "Log in to browse courses" } }
+      ? { hero: { href: "/login?next=%2Fcourses", label: t("home.logInToBrowse") }, cta: { href: "/login?next=%2Fcourses", label: t("home.logInToBrowse") } }
       : null;
 
   const instructorMap = new Map<string, PublicUser>();
@@ -73,7 +75,7 @@ export default async function HomePage() {
       <JsonLd data={structuredData} />
       <LandingHero
         brandName={settings.brand.name}
-        tagline={settings.brand.tagline || `Learn with ${settings.brand.name}`}
+        tagline={settings.brand.tagline || t("home.defaultTagline", { brand: settings.brand.name })}
         description={settings.brand.metaDescription}
         signupEnabled={signupEnabled}
         browse={settings.features.courses ? (browse?.hero ?? null) : null}
@@ -90,10 +92,10 @@ export default async function HomePage() {
       {coursesOn && (
         <LandingSection
           id="landing-featured"
-          eyebrow="Featured"
-          title="Popular courses"
-          description="Hand-picked courses our learners love. Start with a free preview lesson."
-          action={<SeeAllLink href="/courses">Browse all courses</SeeAllLink>}
+          eyebrow={t("home.featured.eyebrow")}
+          title={t("home.featured.title")}
+          description={t("home.featured.description")}
+          action={<SeeAllLink href="/courses">{t("home.featured.seeAll")}</SeeAllLink>}
         >
           <CourseGrid
             courses={data.featured}
@@ -101,8 +103,8 @@ export default async function HomePage() {
             empty={
               <EmptyState
                 icon={<Icon.BookOpen />}
-                title="No Courses Found"
-                description="There are no courses currently. Keep an eye out, fresh learning experiences are on the way!"
+                title={t("home.featured.emptyTitle")}
+                description={t("home.featured.emptyDescription")}
               />
             }
           />
@@ -116,10 +118,10 @@ export default async function HomePage() {
       {coursesOn && data.upcoming.length > 0 && (
         <LandingSection
           id="landing-upcoming"
-          eyebrow="Coming soon"
-          title="Upcoming courses"
-          description="Announced courses that open for enrollment soon."
-          action={<SeeAllLink href="/courses?tab=upcoming">See upcoming</SeeAllLink>}
+          eyebrow={t("home.upcoming.eyebrow")}
+          title={t("home.upcoming.title")}
+          description={t("home.upcoming.description")}
+          action={<SeeAllLink href="/courses?tab=upcoming">{t("home.upcoming.seeAll")}</SeeAllLink>}
         >
           <CourseGrid courses={data.upcoming} columns="compact" />
         </LandingSection>
@@ -133,11 +135,13 @@ export default async function HomePage() {
 
       {settings.contact.email && (
         <p className="text-center text-sm text-ink-muted">
-          Questions? Write to us at{" "}
-          <a href={`mailto:${settings.contact.email}`} className="font-medium text-accent hover:underline">
-            {settings.contact.email}
-          </a>
-          .
+          {t.rich("home.contact", {
+            email: (
+              <a href={`mailto:${settings.contact.email}`} dir="ltr" className="font-medium text-accent hover:underline">
+                {settings.contact.email}
+              </a>
+            ),
+          })}
         </p>
       )}
     </div>

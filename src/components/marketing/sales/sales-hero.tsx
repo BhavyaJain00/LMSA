@@ -4,12 +4,12 @@ import type { CourseSalesPage, CourseSummary } from "@/lib/types";
 import { categoryPath } from "@/lib/seo/content-index";
 import { CourseCover } from "@/components/catalog/course-cover";
 import { InstructorByline } from "@/components/catalog/instructor-byline";
-import { compactCount, plural } from "@/components/catalog/format";
+import { compactCount } from "@/components/catalog/format";
 import { RatingStars } from "@/components/catalog/rating-stars";
 import { VideoPlayer } from "@/components/player";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
-import { formatDuration } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { SalesCountdown } from "./sales-countdown";
 
 /**
@@ -19,7 +19,8 @@ import { SalesCountdown } from "./sales-countdown";
  * video section the hero shows the cover instead, so the video is not
  * repeated. The enroll card stays next to it (rendered by the page).
  */
-export function SalesHero({ course, page, manager, serverNow }: { course: CourseSummary; page: CourseSalesPage; manager: boolean; serverNow: number }) {
+export async function SalesHero({ course, page, manager, serverNow }: { course: CourseSummary; page: CourseSalesPage; manager: boolean; serverNow: number }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const headline = page.heroHeadline?.trim() || course.title;
   const subheadline = page.heroSubheadline?.trim() || course.shortIntroduction;
   const videoInHero = !!course.videoUrl && !page.sections.some((s) => s.type === "video");
@@ -32,19 +33,19 @@ export function SalesHero({ course, page, manager, serverNow }: { course: Course
           {!course.published && (
             <Badge tone="dark" size="sm">
               <Icon.EyeOff className="size-3" aria-hidden="true" />
-              Unpublished
+              {t("card.unpublished")}
             </Badge>
           )}
           {course.upcoming && (
             <Badge tone="info" size="sm">
               <Icon.Clock className="size-3" aria-hidden="true" />
-              Upcoming
+              {t("card.upcoming")}
             </Badge>
           )}
           {manager && course.published && (
             <Badge tone="success" size="sm">
               <Icon.Layout className="size-3" aria-hidden="true" />
-              Sales page
+              {t("sales.badge")}
             </Badge>
           )}
         </div>
@@ -64,46 +65,44 @@ export function SalesHero({ course, page, manager, serverNow }: { course: Course
       </div>
 
       {page.showStats && (
-        <ul className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-muted" aria-label="Course at a glance">
+        <ul className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-muted" aria-label={t("sales.atAGlance")}>
           {course.averageRating && course.reviewCount > 0 ? (
             <li>
               <a href="#reviews" className="inline-flex items-center gap-1.5 hover:underline">
-                <span className="font-semibold text-ink">{course.averageRating.toFixed(1)}</span>
+                <span className="font-semibold text-ink">{f.number(course.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span>
                 <RatingStars value={course.averageRating} size="sm" />
-                <span>
-                  ({compactCount(course.reviewCount)} {plural(course.reviewCount, "rating")})
-                </span>
+                <span>{t("course.hero.ratings", { count: course.reviewCount, formatted: compactCount(course.reviewCount, f.locale) })}</span>
               </a>
             </li>
           ) : null}
           {course.enrollmentCount > 0 && (
             <li className="inline-flex items-center gap-1.5">
               <Icon.Users className="size-4" aria-hidden="true" />
-              {compactCount(course.enrollmentCount)} {plural(course.enrollmentCount, "learner")}
+              {t("sales.learners", { count: course.enrollmentCount, formatted: compactCount(course.enrollmentCount, f.locale) })}
             </li>
           )}
           {course.lessonCount > 0 && (
             <li className="inline-flex items-center gap-1.5">
               <Icon.BookOpen className="size-4" aria-hidden="true" />
-              {course.lessonCount} {plural(course.lessonCount, "lesson")}
+              {t("catalog.lessonCount", { count: course.lessonCount })}
             </li>
           )}
           {course.totalDurationSeconds > 0 && (
             <li className="inline-flex items-center gap-1.5">
               <Icon.Clock className="size-4" aria-hidden="true" />
-              {formatDuration(course.totalDurationSeconds)}
+              {f.duration(course.totalDurationSeconds)}
             </li>
           )}
         </ul>
       )}
 
-      {course.instructors.length > 0 && <InstructorByline instructors={course.instructors} size="sm" prefix="Taught by" />}
+      {course.instructors.length > 0 && <InstructorByline instructors={course.instructors} size="sm" prefix={t("sales.taughtBy")} />}
 
       {page.countdownEndsAt && <SalesCountdown endsAt={page.countdownEndsAt} serverNow={serverNow} />}
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
         {videoInHero ? (
-          <VideoPlayer src={course.videoUrl!} poster={course.imageUrl} title={`${course.title} — course preview`} className="rounded-none" />
+          <VideoPlayer src={course.videoUrl!} poster={course.imageUrl} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
         ) : (
           <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
         )}

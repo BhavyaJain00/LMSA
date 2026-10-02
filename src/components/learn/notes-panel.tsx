@@ -4,7 +4,7 @@ import { useActionState, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import type { ActionResult, NoteColor } from "@/lib/types";
 import { createNoteAction, deleteNoteAction, updateNoteAction } from "@/lib/actions/notes";
 import { Markdown } from "@/lib/markdown";
-import { cn, formatTime, relativeTime, truncate } from "@/lib/utils";
+import { cn, formatTime, truncate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Dropdown } from "@/components/ui/dropdown";
@@ -13,6 +13,7 @@ import { Checkbox, FormError, Textarea } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/skeleton";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
+import { useFormatter, useT } from "@/i18n/client";
 import { useLessonRuntime } from "./lesson-runtime";
 import { NOTE_COLORS, noteColorStyle } from "./note-colors";
 import type { NoteItem } from "./types";
@@ -22,6 +23,7 @@ type NoteState = ActionResult<NoteItem> | null;
 /** Notes tab of the lesson sidebar: composer + the learner's notes for this lesson. */
 export function NotesPanel() {
   const rt = useLessonRuntime();
+  const t = useT("learning");
   const [sort, setSort] = useState<"newest" | "time">("newest");
   const hasTimestamps = rt.notes.some((n) => n.timestampSeconds !== undefined);
   const sorted = useMemo(() => {
@@ -32,17 +34,15 @@ export function NotesPanel() {
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
-        <h2 className="text-sm font-semibold text-ink">My notes</h2>
-        <p className="mt-0.5 text-xs text-ink-muted">
-          Private to you. Select text in the lesson to highlight it{rt.hasVideo ? ", or attach the current video time to a note" : ""}.
-        </p>
+        <h2 className="text-sm font-semibold text-ink">{t("learn.notes.title")}</h2>
+        <p className="mt-0.5 text-xs text-ink-muted">{rt.hasVideo ? t("learn.notes.introVideo") : t("learn.notes.intro")}</p>
       </div>
 
       <NoteComposer />
 
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium uppercase tracking-wider text-ink-faint">
-          {rt.notes.length} {rt.notes.length === 1 ? "note" : "notes"}
+          {t("learn.notes.count", { count: rt.notes.length })}
         </p>
         {hasTimestamps && rt.notes.length > 1 && (
           <SegmentedControl
@@ -50,8 +50,8 @@ export function NotesPanel() {
             value={sort}
             onChange={setSort}
             options={[
-              { value: "newest", label: "Newest" },
-              { value: "time", label: "Video time" },
+              { value: "newest", label: t("learn.notes.sortNewest") },
+              { value: "time", label: t("learn.notes.sortVideoTime") },
             ]}
           />
         )}
@@ -61,8 +61,8 @@ export function NotesPanel() {
         <EmptyState
           compact
           icon={<Icon.Note />}
-          title="No notes yet"
-          description="Write a note above or select text in the lesson to save it here for quick revision."
+          title={t("learn.notes.emptyTitle")}
+          description={t("learn.notes.emptyBody")}
         />
       ) : (
         <ul className="space-y-3">
@@ -78,11 +78,12 @@ export function NotesPanel() {
 }
 
 function ColorPicker({ name, value, onChange, disabled }: { name: string; value: NoteColor; onChange: (c: NoteColor) => void; disabled?: boolean }) {
+  const t = useT("learning");
   return (
     <fieldset className="flex items-center gap-1.5" disabled={disabled}>
-      <legend className="sr-only">Note color</legend>
+      <legend className="sr-only">{t("learn.notes.color")}</legend>
       {NOTE_COLORS.map((c) => (
-        <label key={c.value} className="relative flex cursor-pointer items-center justify-center p-0.5" title={c.label}>
+        <label key={c.value} className="relative flex cursor-pointer items-center justify-center p-0.5" title={t(`learn.color.${c.value}`)}>
           <input type="radio" name={name} value={c.value} checked={value === c.value} onChange={() => onChange(c.value)} className="peer sr-only" />
           <span
             className={cn(
@@ -90,7 +91,7 @@ function ColorPicker({ name, value, onChange, disabled }: { name: string; value:
               c.swatch,
             )}
           />
-          <span className="sr-only">{c.label}</span>
+          <span className="sr-only">{t(`learn.color.${c.value}`)}</span>
         </label>
       ))}
     </fieldset>
@@ -99,6 +100,7 @@ function ColorPicker({ name, value, onChange, disabled }: { name: string; value:
 
 function NoteComposer() {
   const rt = useLessonRuntime();
+  const t = useT("learning");
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const [color, setColor] = useState<NoteColor>("yellow");
@@ -113,7 +115,7 @@ function NoteComposer() {
       setText("");
       setAttachTime(false);
       clearQuote();
-      toast.success("Note saved");
+      toast.success(t("learn.notes.saved"));
     }
     return res;
   }, null);
@@ -127,23 +129,23 @@ function NoteComposer() {
   const generalError = state && !state.ok && !state.fieldErrors ? state.error : null;
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-2.5 rounded-xl border border-border bg-surface-2/50 p-3" aria-label="Add a note">
+    <form ref={formRef} action={formAction} className="space-y-2.5 rounded-xl border border-border bg-surface-2/50 p-3" aria-label={t("learn.notes.addLabel")}>
       <input type="hidden" name="lessonId" value={rt.lessonId} />
       {pendingQuote && <input type="hidden" name="highlightedText" value={pendingQuote} />}
       {attachTime && <input type="hidden" name="timestampSeconds" value={Math.floor(currentTime)} />}
       <FormError message={generalError} />
 
       {pendingQuote && (
-        <div className={cn("relative rounded-md border-l-2 border-l-accent py-1.5 pl-2.5 pr-8 text-sm italic text-ink-muted", noteColorStyle(color).soft)}>
+        <div className={cn("relative rounded-md border-s-2 border-s-accent py-1.5 ps-2.5 pe-8 text-sm italic text-ink-muted", noteColorStyle(color).soft)}>
           “{truncate(pendingQuote, 240)}”
-          <button type="button" onClick={clearQuote} className="absolute right-1 top-1 rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-ink" aria-label="Remove quote">
+          <button type="button" onClick={clearQuote} className="absolute inset-e-1 top-1 rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-ink" aria-label={t("learn.notes.removeQuote")}>
             <Icon.X className="size-3.5" />
           </button>
         </div>
       )}
 
       <label htmlFor="note-text" className="sr-only">
-        Note
+        {t("learn.notes.note")}
       </label>
       <Textarea
         id="note-text"
@@ -151,7 +153,7 @@ function NoteComposer() {
         rows={3}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={pendingQuote ? "Add your thoughts about this passage…" : "Write a note… (Markdown supported)"}
+        placeholder={pendingQuote ? t("learn.notes.placeholderQuote") : t("learn.notes.placeholder")}
         invalid={!!errors.note}
         aria-describedby={errors.note ? "note-text-error" : undefined}
         maxLength={5000}
@@ -178,7 +180,14 @@ function NoteComposer() {
           onChange={(e) => setAttachTime(e.target.checked)}
           label={
             <span className="font-normal text-ink-muted">
-              Attach current video time <span className="font-mono tabular-nums text-ink">{formatTime(currentTime)}</span>
+              {t.rich("learn.notes.attachTime", {
+                time: formatTime(currentTime),
+                b: (chunks) => (
+                  <span className="font-mono tabular-nums text-ink" dir="ltr">
+                    {chunks}
+                  </span>
+                ),
+              })}
             </span>
           }
         />
@@ -187,16 +196,19 @@ function NoteComposer() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <ColorPicker name="color" value={color} onChange={setColor} disabled={pending} />
         <Button type="submit" size="sm" loading={pending} disabled={!text.trim() && !pendingQuote}>
-          Save note
+          {t("learn.notes.save")}
         </Button>
       </div>
-      <p className="text-[11px] text-ink-faint">Press Ctrl + Enter to save.</p>
+      <p className="text-[11px] text-ink-faint">{t("learn.notes.shortcut")}</p>
     </form>
   );
 }
 
 function NoteCard({ note }: { note: NoteItem }) {
   const rt = useLessonRuntime();
+  const t = useT("learning");
+  const common = useT("common");
+  const f = useFormatter();
   const toast = useToast();
   const style = noteColorStyle(note.color);
   const [editing, setEditing] = useState(false);
@@ -208,16 +220,16 @@ function NoteCard({ note }: { note: NoteItem }) {
     startDelete(async () => {
       const res = await deleteNoteAction(note.id);
       if (!res.ok) {
-        toast.error("Could not delete the note", res.error);
+        toast.error(onlyHighlight ? t("learn.notes.removeHighlightFailed") : t("learn.notes.deleteFailed"), res.error);
         return;
       }
       setConfirmOpen(false);
-      toast.success(res.message ?? "Note deleted");
+      toast.success(onlyHighlight ? t("learn.notes.highlightRemoved") : t("learn.notes.deleted"));
     });
   };
 
   return (
-    <article className={cn("rounded-lg border border-l-4 border-border bg-surface-1 p-3 shadow-sm", style.border)} aria-label={onlyHighlight ? "Highlight" : "Note"}>
+    <article className={cn("rounded-lg border border-s-4 border-border bg-surface-1 p-3 shadow-sm", style.border)} aria-label={onlyHighlight ? t("learn.notes.highlight") : t("learn.notes.note")}>
       <header className="flex items-center gap-2 text-xs text-ink-muted">
         <span className={cn("size-2.5 shrink-0 rounded-full", style.swatch)} aria-hidden="true" />
         {note.timestampSeconds !== undefined &&
@@ -226,7 +238,7 @@ function NoteCard({ note }: { note: NoteItem }) {
               type="button"
               onClick={() => rt.seekPrimary(note.timestampSeconds!)}
               className="inline-flex items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 font-mono font-medium tabular-nums text-accent transition-colors hover:bg-accent/20"
-              aria-label={`Play video from ${formatTime(note.timestampSeconds)}`}
+              aria-label={t("learn.notes.playFrom", { time: formatTime(note.timestampSeconds) })}
             >
               <Icon.Play className="size-3" />
               {formatTime(note.timestampSeconds)}
@@ -234,20 +246,20 @@ function NoteCard({ note }: { note: NoteItem }) {
           ) : (
             <span className="font-mono tabular-nums">{formatTime(note.timestampSeconds)}</span>
           ))}
-        {onlyHighlight && <span className="font-medium text-ink-muted">Highlight</span>}
-        <time dateTime={note.updatedAt} className="ml-auto shrink-0" suppressHydrationWarning>
-          {relativeTime(note.updatedAt)}
+        {onlyHighlight && <span className="font-medium text-ink-muted">{t("learn.notes.highlight")}</span>}
+        <time dateTime={note.updatedAt} className="ms-auto shrink-0" suppressHydrationWarning>
+          {f.relative(note.updatedAt)}
         </time>
         <Dropdown
           trigger={
             <span className="flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-surface-2 hover:text-ink">
               <Icon.MoreHorizontal className="size-4" />
-              <span className="sr-only">Note actions</span>
+              <span className="sr-only">{t("learn.notes.actions")}</span>
             </span>
           }
           items={[
-            { label: "Edit", icon: <Icon.Edit />, onClick: () => setEditing(true) },
-            { label: onlyHighlight ? "Remove highlight" : "Delete", icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmOpen(true) },
+            { label: common("actions.edit"), icon: <Icon.Edit />, onClick: () => setEditing(true) },
+            { label: onlyHighlight ? t("learn.notes.removeHighlight") : common("actions.delete"), icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmOpen(true) },
           ]}
         />
       </header>
@@ -256,8 +268,8 @@ function NoteCard({ note }: { note: NoteItem }) {
         <button
           type="button"
           onClick={() => rt.focusQuote(note.highlightedText!)}
-          className={cn("mt-2 block w-full rounded-md px-2.5 py-1.5 text-left text-sm italic text-ink transition-opacity hover:opacity-80", style.soft)}
-          title="Show in lesson"
+          className={cn("mt-2 block w-full rounded-md px-2.5 py-1.5 text-start text-sm italic text-ink transition-opacity hover:opacity-80", style.soft)}
+          title={t("learn.notes.showInLesson")}
         >
           “{truncate(note.highlightedText, 280)}”
         </button>
@@ -277,13 +289,9 @@ function NoteCard({ note }: { note: NoteItem }) {
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={remove}
-        title={onlyHighlight ? "Remove this highlight?" : "Delete this note?"}
-        description={
-          note.highlightedText
-            ? "The note and its highlight in the lesson will be removed. This cannot be undone."
-            : "The note will be removed permanently. This cannot be undone."
-        }
-        confirmLabel={onlyHighlight ? "Remove" : "Delete"}
+        title={onlyHighlight ? t("learn.notes.confirmRemoveHighlight") : t("learn.notes.confirmDelete")}
+        description={note.highlightedText ? t("learn.notes.confirmBodyHighlight") : t("learn.notes.confirmBody")}
+        confirmLabel={onlyHighlight ? common("actions.remove") : common("actions.delete")}
         destructive
         loading={deleting}
       />
@@ -293,12 +301,14 @@ function NoteCard({ note }: { note: NoteItem }) {
 
 function NoteEditForm({ note, onDone }: { note: NoteItem; onDone: () => void }) {
   const toast = useToast();
+  const t = useT("learning");
+  const common = useT("common");
   const [color, setColor] = useState<NoteColor>(note.color);
   const [text, setText] = useState(note.note);
   const [state, formAction, pending] = useActionState<NoteState, FormData>(async (prev, formData) => {
     const res = await updateNoteAction(prev, formData);
     if (res.ok) {
-      toast.success("Note updated");
+      toast.success(t("learn.notes.updated"));
       onDone();
     }
     return res;
@@ -311,7 +321,7 @@ function NoteEditForm({ note, onDone }: { note: NoteItem; onDone: () => void }) 
       <input type="hidden" name="noteId" value={note.id} />
       <FormError message={state && !state.ok && !state.fieldErrors ? state.error : null} />
       <label htmlFor={fieldId} className="sr-only">
-        Edit note
+        {t("learn.notes.editLabel")}
       </label>
       <Textarea
         id={fieldId}
@@ -334,10 +344,10 @@ function NoteEditForm({ note, onDone }: { note: NoteItem; onDone: () => void }) 
         <ColorPicker name="color" value={color} onChange={setColor} disabled={pending} />
         <div className="flex gap-1.5">
           <Button type="button" variant="ghost" size="xs" onClick={onDone} disabled={pending}>
-            Cancel
+            {common("actions.cancel")}
           </Button>
           <Button type="submit" size="xs" loading={pending}>
-            Save
+            {common("actions.save")}
           </Button>
         </div>
       </div>

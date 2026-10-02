@@ -1,10 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 /** Course page skeleton: hero, media, outline rows and the CTA card. */
 export default function CourseLoading() {
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading course…</span>
+      <LoadingLabel />
       <div className="grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="min-w-0 space-y-5">
           <Skeleton className="h-4 w-56" />

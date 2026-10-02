@@ -3,16 +3,16 @@ import type { CourseSummary, PublicUser } from "@/lib/types";
 import { AvatarGroup } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { formatDuration } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { CourseCover } from "../course-cover";
-import { compactCount, plural } from "../format";
+import { compactCount } from "../format";
 import { PriceTag } from "../price-tag";
 
 /**
  * Guest landing hero: brand tagline, description, primary CTAs and a
  * spotlight card for the top featured course (real data only).
  */
-export function LandingHero({
+export async function LandingHero({
   brandName,
   tagline,
   description,
@@ -38,6 +38,7 @@ export function LandingHero({
   averageRating: number | null;
   reviewCount: number;
 }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
     <section aria-labelledby="landing-title" className="relative isolate overflow-hidden rounded-3xl border border-border bg-surface-1 px-5 py-10 shadow-card sm:px-10 sm:py-14 lg:px-14">
       <div aria-hidden="true" className="pointer-events-none absolute -right-24 -top-24 -z-10 size-96 rounded-full bg-accent/15 blur-3xl" />
@@ -52,7 +53,7 @@ export function LandingHero({
         <div>
           <p className="inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
             <Icon.Sparkles className="size-3.5" aria-hidden="true" />
-            Welcome to {brandName}
+            {t("home.hero.welcome", { brand: brandName })}
           </p>
           <h1 id="landing-title" className="mt-5 text-4xl font-semibold leading-[1.1] tracking-tight text-ink sm:text-5xl lg:text-6xl">
             {tagline}
@@ -61,12 +62,12 @@ export function LandingHero({
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             {signupEnabled ? (
-              <ButtonLink href="/register" size="lg" rightIcon={<Icon.ArrowRight className="size-4" />}>
-                Get started for free
+              <ButtonLink href="/register" size="lg" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
+                {t("home.hero.getStarted")}
               </ButtonLink>
             ) : (
-              <ButtonLink href="/login" size="lg" rightIcon={<Icon.ArrowRight className="size-4" />}>
-                Log in to start learning
+              <ButtonLink href="/login" size="lg" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
+                {t("home.hero.logInToStart")}
               </ButtonLink>
             )}
             {browse && (
@@ -80,17 +81,19 @@ export function LandingHero({
             {instructors.length > 0 && (
               <div className="flex items-center gap-2.5">
                 <AvatarGroup users={instructors} size="sm" max={4} />
-                <span>
-                  Taught by <span className="font-medium text-ink">{instructors.length}</span> {plural(instructors.length, "instructor")}
-                </span>
+                <span>{t.rich("home.hero.taughtBy", { count: instructors.length, b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}</span>
               </div>
             )}
             {averageRating && reviewCount > 0 && (
               <div className="flex items-center gap-1.5">
                 <Icon.StarFilled className="size-4 text-warning" aria-hidden="true" />
                 <span>
-                  <span className="font-medium text-ink">{averageRating.toFixed(1)}</span> average from {compactCount(reviewCount)}{" "}
-                  {plural(reviewCount, "review")}
+                  {t.rich("home.hero.averageRating", {
+                    rating: f.number(averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+                    count: reviewCount,
+                    reviews: compactCount(reviewCount, f.locale),
+                    b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
+                  })}
                 </span>
               </div>
             )}
@@ -98,7 +101,11 @@ export function LandingHero({
               <div className="flex items-center gap-1.5">
                 <Icon.Users className="size-4" aria-hidden="true" />
                 <span>
-                  <span className="font-medium text-ink">{compactCount(learnerCount)}</span> {plural(learnerCount, "learner")} enrolled
+                  {t.rich("home.hero.learnersEnrolled", {
+                    count: learnerCount,
+                    learners: compactCount(learnerCount, f.locale),
+                    b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
+                  })}
                 </span>
               </div>
             )}
@@ -115,7 +122,7 @@ export function LandingHero({
               <CourseCover title={spotlight.title} imageUrl={spotlight.imageUrl} gradient={spotlight.cardGradient} className="aspect-video w-full">
                 <span className="inline-flex items-center gap-1 rounded-full bg-surface-1 px-2 py-0.5 text-[11px] font-semibold text-ink shadow-sm">
                   <Icon.Award className="size-3 text-warning" aria-hidden="true" />
-                  {spotlight.featured ? "Featured course" : "Popular course"}
+                  {spotlight.featured ? t("home.hero.featuredCourse") : t("home.hero.popularCourse")}
                 </span>
               </CourseCover>
               <div className="p-5">
@@ -127,13 +134,13 @@ export function LandingHero({
                     {spotlight.lessonCount > 0 && (
                       <span className="inline-flex items-center gap-1">
                         <Icon.BookOpen className="size-4" aria-hidden="true" />
-                        {spotlight.lessonCount} {plural(spotlight.lessonCount, "lesson")}
+                        {t("catalog.lessonCount", { count: spotlight.lessonCount })}
                       </span>
                     )}
                     {spotlight.totalDurationSeconds > 0 && (
                       <span className="inline-flex items-center gap-1">
                         <Icon.Clock className="size-4" aria-hidden="true" />
-                        {formatDuration(spotlight.totalDurationSeconds)}
+                        {f.duration(spotlight.totalDurationSeconds)}
                       </span>
                     )}
                   </span>
@@ -142,24 +149,26 @@ export function LandingHero({
               </div>
             </Link>
             {spotlight.averageRating && spotlight.reviewCount > 0 && (
-              <div className="absolute -left-3 top-8 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
+              <div className="absolute -start-3 top-8 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
                 <Icon.StarFilled className="size-5 text-warning" aria-hidden="true" />
                 <div className="leading-tight">
-                  <p className="text-sm font-semibold text-ink">{spotlight.averageRating.toFixed(1)} rating</p>
-                  <p className="text-[11px] text-ink-muted">
-                    {spotlight.reviewCount} {plural(spotlight.reviewCount, "review")}
+                  <p className="text-sm font-semibold text-ink">
+                    {t("home.hero.rating", { rating: f.number(spotlight.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) })}
                   </p>
+                  <p className="text-[11px] text-ink-muted">{t("catalog.reviewCount", { count: spotlight.reviewCount })}</p>
                 </div>
               </div>
             )}
             {(spotlight.enableCertification || spotlight.paidCertificate) && (
-              <div className="absolute -right-3 bottom-24 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
+              <div className="absolute -end-3 bottom-24 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
                 <span className="flex size-8 items-center justify-center rounded-lg bg-success/12 text-success">
                   <Icon.GraduationCap className="size-4.5" aria-hidden="true" />
                 </span>
                 <div className="leading-tight">
-                  <p className="text-sm font-semibold text-ink">Certificate</p>
-                  <p className="text-[11px] text-ink-muted">{spotlight.paidCertificate ? "after an evaluation" : "on completion"}</p>
+                  <p className="text-sm font-semibold text-ink">{t("home.hero.certificate")}</p>
+                  <p className="text-[11px] text-ink-muted">
+                    {spotlight.paidCertificate ? t("home.hero.certificateAfterEvaluation") : t("home.hero.certificateOnCompletion")}
+                  </p>
                 </div>
               </div>
             )}

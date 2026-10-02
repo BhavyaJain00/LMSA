@@ -9,6 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { buttonClasses } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { getT } from "@/i18n/server";
 import { SalesCountdown } from "./sales-countdown";
 
 /** The enroll card's anchor on the course page (pricing and call-to-action buttons jump to it). */
@@ -32,10 +33,12 @@ export interface SalesSectionsProps {
   serverNow: number;
 }
 
-function SectionShell({ section, children, className }: { section: SalesSection; children: ReactNode; className?: string }) {
+async function SectionShell({ section, children, className }: { section: SalesSection; children: ReactNode; className?: string }) {
   const headingId = `sales-${section.id}`;
+  const t = await getT("public");
+  const typeLabel = SALES_SECTION_TYPES.some((type) => type.type === section.type) ? t(`sales.sectionType.${section.type}`) : undefined;
   return (
-    <section aria-labelledby={section.title ? headingId : undefined} aria-label={section.title ? undefined : SALES_SECTION_TYPES.find((t) => t.type === section.type)?.label} id={section.id} className={cn("scroll-mt-20", className)}>
+    <section aria-labelledby={section.title ? headingId : undefined} aria-label={section.title ? undefined : typeLabel} id={section.id} className={cn("scroll-mt-20", className)}>
       {section.title && (
         <h2 id={headingId} className="mb-5 text-2xl font-semibold tracking-tight text-ink text-balance">
           {section.title}
@@ -50,7 +53,7 @@ function EnrollJump({ label, size = "lg" }: { label: string; size?: "md" | "lg" 
   return (
     <a href={`#${ENROLL_ANCHOR}`} className={buttonClasses({ size })}>
       {label}
-      <Icon.ArrowRight className="size-4" aria-hidden="true" />
+      <Icon.ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
     </a>
   );
 }
@@ -134,7 +137,8 @@ function Guarantee({ text }: { text: string }) {
  * (no testimonials, no questions, no preview video, a features list without
  * items) are skipped, so a half-finished page never shows blank blocks.
  */
-export function SalesSections({ page, courseTitle, video, pricing, slots, serverNow }: SalesSectionsProps) {
+export async function SalesSections({ page, courseTitle, video, pricing, slots, serverNow }: SalesSectionsProps) {
+  const t = await getT("public");
   const rendered = page.sections.map((section) => {
     switch (section.type) {
       case "text":
@@ -177,7 +181,7 @@ export function SalesSections({ page, courseTitle, video, pricing, slots, server
         return video ? (
           <SectionShell key={section.id} section={section}>
             <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
-              <VideoPlayer src={video.url} poster={video.poster} title={`${courseTitle} — course preview`} className="rounded-none" />
+              <VideoPlayer src={video.url} poster={video.poster} title={t("course.hero.previewTitle", { title: courseTitle })} className="rounded-none" />
             </div>
           </SectionShell>
         ) : null;
@@ -187,16 +191,16 @@ export function SalesSections({ page, courseTitle, video, pricing, slots, server
             <div className="overflow-hidden rounded-card border border-accent/30 bg-surface-1 shadow-card">
               <div className="grid gap-6 p-5 sm:p-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <div>
-                  <p className="text-sm font-medium text-ink-muted">{isPaidCourse(pricing.course) ? "One payment, lifetime access" : "Free to join"}</p>
+                  <p className="text-sm font-medium text-ink-muted">{isPaidCourse(pricing.course) ? t("sales.pricing.paid") : t("sales.pricing.free")}</p>
                   <PriceTag course={pricing.course} size="xl" className="mt-1 block" />
-                  {page.countdownEndsAt && <SalesCountdown endsAt={page.countdownEndsAt} serverNow={serverNow} label="This offer ends in" className="mt-4" />}
+                  {page.countdownEndsAt && <SalesCountdown endsAt={page.countdownEndsAt} serverNow={serverNow} label={t("sales.countdown.thisOffer")} className="mt-4" />}
                   <div className="mt-5">
                     <EnrollJump label={pricing.actionLabel} />
                   </div>
                 </div>
                 {pricing.includes.length > 0 && (
                   <div>
-                    <p className="text-sm font-semibold text-ink">What&apos;s included</p>
+                    <p className="text-sm font-semibold text-ink">{t("sales.pricing.included")}</p>
                     <ul className="mt-3 space-y-2 text-sm text-ink">
                       {pricing.includes.map((line) => (
                         <li key={line} className="flex items-start gap-2">
@@ -220,9 +224,9 @@ export function SalesSections({ page, courseTitle, video, pricing, slots, server
         return (
           <section key={section.id} id={section.id} aria-labelledby={`sales-${section.id}`} className="scroll-mt-20">
             <div className="relative isolate overflow-hidden rounded-3xl border border-accent/25 bg-accent/8 px-5 py-10 text-center sm:px-10">
-              <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-20 -z-10 size-72 rounded-full bg-accent/15 blur-3xl" />
+              <div aria-hidden="true" className="pointer-events-none absolute -end-20 -top-20 -z-10 size-72 rounded-full bg-accent/15 blur-3xl" />
               <h2 id={`sales-${section.id}`} className="text-2xl font-semibold tracking-tight text-ink text-balance sm:text-3xl">
-                {section.title || `Start ${courseTitle} today`}
+                {section.title || t("sales.cta.defaultTitle", { title: courseTitle })}
               </h2>
               {section.body && (
                 <div className="mx-auto mt-3 max-w-xl text-ink-muted">
@@ -235,7 +239,7 @@ export function SalesSections({ page, courseTitle, video, pricing, slots, server
               {page.guarantee && !page.sections.some((s) => s.type === "pricing") && (
                 <p className="mt-4 inline-flex items-center gap-1.5 text-sm text-ink-muted">
                   <Icon.ShieldCheck className="size-4 text-success" aria-hidden="true" />
-                  Backed by our guarantee
+                  {t("sales.cta.guarantee")}
                 </p>
               )}
             </div>
@@ -250,7 +254,7 @@ export function SalesSections({ page, courseTitle, video, pricing, slots, server
     <>
       {rendered}
       {page.guarantee && !page.sections.some((s) => s.type === "pricing") && (
-        <section aria-label="Guarantee">
+        <section aria-label={t("sales.guarantee")}>
           <Guarantee text={page.guarantee} />
         </section>
       )}

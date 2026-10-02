@@ -2,19 +2,21 @@
 
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatTime, pluralize } from "@/lib/utils";
+import { cn, formatTime } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { LocalTime } from "../local-time";
-import { violationLabels, type RunnerQuestion, type ViolationEvent } from "../types";
+import type { RunnerQuestion, ViolationEvent } from "../types";
 
 /** Timer pill: neutral, amber at ≤25% of the time, red in the last minute (or ≤10%). */
 export function TimerPill({ remaining, total }: { remaining: number; total: number }) {
   const ratio = total > 0 ? remaining / total : 1;
   const critical = remaining <= 60 || ratio <= 0.1;
   const warning = !critical && ratio <= 0.25;
+  const t = useT("learning");
   return (
     <span
       role="timer"
-      aria-label={`Time remaining ${formatTime(remaining)}`}
+      aria-label={t("quiz.status.timeRemaining", { time: formatTime(remaining) })}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold tabular-nums transition-colors",
         critical ? "bg-danger/12 text-danger" : warning ? "bg-warning/15 text-warning" : "bg-surface-2 text-ink",
@@ -28,6 +30,7 @@ export function TimerPill({ remaining, total }: { remaining: number; total: numb
 }
 
 export function ViolationPill({ count, max }: { count: number; max: number }) {
+  const t = useT("learning");
   return (
     <span
       className={cn(
@@ -36,7 +39,7 @@ export function ViolationPill({ count, max }: { count: number; max: number }) {
       )}
     >
       <Icon.ShieldCheck className="size-4" />
-      {count} / {max} {max === 1 ? "violation" : "violations"}
+      {t("quiz.status.violationCount", { count, max })}
     </span>
   );
 }
@@ -54,6 +57,7 @@ export function ViolationBanner({
   canFullscreen: boolean;
   onReturnToFullscreen: () => void;
 }) {
+  const t = useT("learning");
   const last = events[events.length - 1];
   if (!last) return null;
   const remaining = Math.max(0, max - events.length);
@@ -62,15 +66,13 @@ export function ViolationBanner({
       <Icon.AlertTriangle className="size-5 shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-sm">
         <p className="font-medium text-ink">
-          {violationLabels[last.eventType]} recorded · {events.length} of {max}
+          {t("quiz.status.recorded", { violation: t(`quiz.violation.${last.eventType}`), count: events.length, max })}
         </p>
-        <p className="text-ink-muted">
-          {remaining > 0 ? `${pluralize(remaining, "more violation")} and the quiz will be submitted automatically.` : "The quiz is being submitted."}
-        </p>
+        <p className="text-ink-muted">{remaining > 0 ? t("quiz.status.remaining", { count: remaining }) : t("quiz.status.beingSubmitted")}</p>
       </div>
       {canFullscreen && !fullscreen && (
         <Button size="sm" variant="outline" onClick={onReturnToFullscreen} leftIcon={<Icon.Fullscreen className="size-4" />}>
-          Return to fullscreen
+          {t("quiz.status.returnFullscreen")}
         </Button>
       )}
     </div>
@@ -94,14 +96,13 @@ export function QuestionNavigator({
 }) {
   const reviewIndexes = questions.map((q, i) => (review.includes(q.id) ? i : -1)).filter((i) => i >= 0);
   const answeredCount = questions.filter((q) => answered(q.id)).length;
+  const t = useT("learning");
   return (
     <div className="space-y-3">
       <div className="rounded-card border border-border bg-surface-1 p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-ink">Questions</h3>
-          <span className="text-xs text-ink-muted">
-            {answeredCount} of {questions.length} answered
-          </span>
+          <h3 className="text-sm font-semibold text-ink">{t("quiz.nav.title")}</h3>
+          <span className="text-xs text-ink-muted">{t("quiz.nav.answered", { count: answeredCount, total: questions.length })}</span>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {questions.map((q, i) => {
@@ -114,36 +115,40 @@ export function QuestionNavigator({
                 onClick={() => onJump(i)}
                 disabled={disabled}
                 aria-current={isCurrent ? "step" : undefined}
-                aria-label={`Question ${i + 1}${isAnswered ? ", answered" : ", not answered"}${review.includes(q.id) ? ", marked for review" : ""}`}
+                aria-label={t("quiz.nav.questionLabel", {
+                  number: i + 1,
+                  state: isAnswered ? "answered" : "open",
+                  review: review.includes(q.id) ? "yes" : "no",
+                })}
                 className={cn(
                   "relative flex size-8 items-center justify-center rounded-full text-xs font-semibold tabular-nums transition-colors",
                   isCurrent ? "bg-ink text-surface-1" : isAnswered ? "bg-accent/15 text-accent hover:bg-accent/25" : "bg-surface-2 text-ink-muted hover:bg-surface-3",
                 )}
               >
                 {i + 1}
-                {review.includes(q.id) && <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-surface-1 bg-warning" aria-hidden="true" />}
+                {review.includes(q.id) && <span className="absolute -end-0.5 -top-0.5 size-2.5 rounded-full border-2 border-surface-1 bg-warning" aria-hidden="true" />}
               </button>
             );
           })}
         </div>
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-muted">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 rounded-full bg-ink" /> Current
+            <span className="size-2.5 rounded-full bg-ink" /> {t("quiz.nav.legendCurrent")}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 rounded-full bg-accent/40" /> Answered
+            <span className="size-2.5 rounded-full bg-accent/40" /> {t("quiz.nav.legendAnswered")}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 rounded-full bg-surface-3" /> Not answered
+            <span className="size-2.5 rounded-full bg-surface-3" /> {t("quiz.nav.legendOpen")}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 rounded-full bg-warning" /> Marked for review
+            <span className="size-2.5 rounded-full bg-warning" /> {t("quiz.nav.legendReview")}
           </span>
         </div>
       </div>
       {reviewIndexes.length > 0 && (
         <div className="rounded-card border border-border bg-surface-1 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-ink">Questions marked for review</h3>
+          <h3 className="mb-3 text-sm font-semibold text-ink">{t("quiz.nav.reviewTitle")}</h3>
           <div className="flex flex-wrap gap-1.5">
             {reviewIndexes.map((i) => (
               <button
@@ -152,7 +157,7 @@ export function QuestionNavigator({
                 onClick={() => onJump(i)}
                 disabled={disabled}
                 className="flex size-8 items-center justify-center rounded-full bg-warning/15 text-xs font-semibold text-warning hover:bg-warning/25"
-                aria-label={`Go to question ${i + 1}`}
+                aria-label={t("quiz.nav.goTo", { number: i + 1 })}
               >
                 {i + 1}
               </button>
@@ -165,21 +170,22 @@ export function QuestionNavigator({
 }
 
 export function ActivityLog({ events }: { events: ViolationEvent[] }) {
+  const t = useT("learning");
   if (!events.length) return null;
   return (
     <div className="overflow-hidden rounded-card border border-border bg-surface-1">
       <div className="flex items-center justify-between border-b border-border bg-surface-2 px-4 py-2">
-        <h3 className="text-sm font-semibold text-ink">Activity</h3>
-        <span className="text-xs text-ink-muted">{pluralize(events.length, "event")}</span>
+        <h3 className="text-sm font-semibold text-ink">{t("quiz.activity.title")}</h3>
+        <span className="text-xs text-ink-muted">{t("quiz.activity.events", { count: events.length })}</span>
       </div>
       <ul className="scrollbar-thin max-h-64 divide-y divide-border overflow-y-auto">
         {events.map((e) => (
           <li key={e.id} className="flex items-center gap-3 px-4 py-2 text-sm">
             <span className={cn("size-2 shrink-0 rounded-full", e.severity === "violation" ? "bg-danger" : "bg-warning")} />
-            <span className="min-w-0 flex-1 truncate text-ink">{violationLabels[e.eventType]}</span>
+            <span className="min-w-0 flex-1 truncate text-ink">{t(`quiz.violation.${e.eventType}`)}</span>
             <LocalTime iso={e.timestamp} format="time" className="text-xs tabular-nums text-ink-muted" />
             <span className={cn("text-[10px] font-semibold uppercase tracking-wide", e.severity === "violation" ? "text-danger" : "text-warning")}>
-              {e.severity}
+              {e.severity === "violation" ? t("quiz.activity.violation") : t("quiz.activity.warning")}
             </span>
           </li>
         ))}

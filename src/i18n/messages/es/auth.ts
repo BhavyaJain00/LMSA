@@ -49,7 +49,7 @@ const auth: Translation<typeof en> = {
 
   "reset.metaTitle": "Elige una contraseña nueva",
   "reset.title": "Elige una contraseña nueva",
-  "reset.subtitle": "Para tu cuenta de {brand} <email>{email}</email>.",
+  "reset.subtitle": "Para tu cuenta de {brand} <b>{email}</b>.",
   "reset.usedTitle": "Este enlace ya se usó",
   "reset.usedBody": "Cada enlace de restablecimiento funciona una sola vez. Si aún necesitas cambiar la contraseña, pide un enlace nuevo.",
   "reset.expiredTitle": "Este enlace ha caducado",
@@ -64,7 +64,7 @@ const auth: Translation<typeof en> = {
 
   "twoFactor.metaTitle": "Verificación en dos pasos",
   "twoFactor.title": "Verificación en dos pasos",
-  "twoFactor.subtitle": "Iniciando sesión en {brand} como <email>{email}</email>.",
+  "twoFactor.subtitle": "Iniciando sesión en {brand} como <b>{email}</b>.",
   "twoFactor.expiredTitle": "Tu intento de inicio de sesión caducó",
   "twoFactor.expiredBody": "Por tu seguridad, el paso de verificación caduca a los 10 minutos. Vuelve a iniciar sesión para continuar.",
   "twoFactor.codeLabel": "Código de autenticación",

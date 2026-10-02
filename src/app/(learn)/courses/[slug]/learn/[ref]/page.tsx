@@ -34,6 +34,7 @@ import { NotesPanel } from "@/components/learn/notes-panel";
 import { SelectableContent } from "@/components/learn/selectable-content";
 import type { LessonNeighbor, OutlineChapterItem, SidebarTab } from "@/components/learn/types";
 import { KeyboardIcon } from "@/components/learn/learn-icons";
+import { getT } from "@/i18n/server";
 
 /** One load per request, shared by generateMetadata and the page. */
 const loadLesson = cache(async (slug: string, ref: string) => {
@@ -44,17 +45,17 @@ const loadLesson = cache(async (slug: string, ref: string) => {
 
 export async function generateMetadata(props: PageProps<"/courses/[slug]/learn/[ref]">): Promise<Metadata> {
   const { slug, ref } = await props.params;
-  const { data } = await loadLesson(slug, ref);
+  const [{ data }, t] = await Promise.all([loadLesson(slug, ref), getT("learning")]);
   switch (data.kind) {
     case "ok":
-      return { title: data.lesson.title, description: `${data.ctx.course.title} · Chapter ${data.chapter.number}: ${data.chapter.title}` };
+      return { title: data.lesson.title, description: t("learn.meta.description", { course: data.ctx.course.title, number: data.chapter.number, chapter: data.chapter.title }) };
     case "locked":
     case "no_preview":
       return { title: data.lesson.title, description: data.ctx.course.title, robots: { index: false } };
     case "missing":
-      return { title: "Lesson not found", robots: { index: false } };
+      return { title: t("learn.lessonNotFound"), robots: { index: false } };
     default:
-      return { title: "Lesson" };
+      return { title: t("learn.meta.lesson") };
   }
 }
 
@@ -78,7 +79,7 @@ function markCurrentStarted(outline: OutlineChapterItem[], lessonId: string, tra
 export default async function LessonPage(props: PageProps<"/courses/[slug]/learn/[ref]">) {
   const { slug, ref } = await props.params;
   const sp = await props.searchParams;
-  const { viewer, data } = await loadLesson(slug, ref);
+  const [{ viewer, data }, t] = await Promise.all([loadLesson(slug, ref), getT("learning")]);
 
   if (data.kind === "not_found") notFound();
   if (data.kind === "redirect") redirect(data.href);
@@ -107,7 +108,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
       >
         <main id="lesson-main" className="px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pt-8">
           <div className="mx-auto w-full max-w-(--lesson-w)">
-            <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={locked ? data.lesson.title : "Lesson not found"} />
+            <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={locked ? data.lesson.title : t("learn.lessonNotFound")} />
           </div>
           <LockedLessonNotice
             variant={locked ? "locked" : "not_found"}
@@ -209,7 +210,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
     if (certificate) {
       certificateButton = (
         <ButtonLink href={`/certificates/${certificate.code}`} variant="outline" size="sm" leftIcon={<Icon.GraduationCap className="size-4" />}>
-          View certificate
+          {t("learn.viewCertificate")}
         </ButtonLink>
       );
     } else if (ctx.enrolled && !ctx.manager && course.paidCertificate && ctx.enrollment) {
@@ -220,7 +221,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           size="sm"
           leftIcon={<Icon.GraduationCap className="size-4" />}
         >
-          Get certified
+          {t("learn.getCertified")}
         </ButtonLink>
       );
     }
@@ -243,7 +244,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
             topics={topics}
             canPost={ctx.enrolled || ctx.manager}
             canModerate={ctx.manager}
-            closedReason={discussionsClosed ? "This lesson contains a quiz, so discussions are turned off to keep answers private. Ask your question on another lesson of the course." : null}
+            closedReason={discussionsClosed ? t("learn.discussionsClosed") : null}
             mentionables={mentionables}
             initialTopicId={initialTopicId}
           />
@@ -276,10 +277,10 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           {studentView && (
             <div className="mx-auto mb-4 flex w-full max-w-(--lesson-w) flex-wrap items-center justify-between gap-2 rounded-xl border border-info/30 bg-info/8 px-4 py-2.5 text-sm">
               <span className="flex items-center gap-2 text-ink">
-                <Icon.Eye className="size-4 text-info" /> You are viewing this lesson as a student would.
+                <Icon.Eye className="size-4 text-info" /> {t("learn.studentView.banner")}
               </span>
               <a href={lesson.href} className="font-medium text-accent hover:underline">
-                Exit student view
+                {t("learn.studentView.exit")}
               </a>
             </div>
           )}
@@ -305,8 +306,8 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
                   <p className="mt-1.5 flex items-center gap-1.5 text-sm text-ink-muted">
                     {chapter.title} - {course.title}
                     {tracking && (
-                      <Tooltip label={`${ctx.progress.percent}% completed`}>
-                        <span tabIndex={0} className="inline-flex rounded text-ink-faint" aria-label={`${ctx.progress.percent}% completed`}>
+                      <Tooltip label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
+                        <span tabIndex={0} className="inline-flex rounded text-ink-faint" aria-label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
                           <Icon.Info className="size-4" />
                         </span>
                       </Tooltip>
@@ -320,7 +321,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 {ctx.manager && (
                   <ButtonLink href={`/admin/courses/${course.id}/lessons/${lesson.id}`} variant="outline" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                    Editor view
+                    {t("learn.editorView")}
                   </ButtonLink>
                 )}
                 {certificateButton}
@@ -359,12 +360,12 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
               <div className="mx-auto w-full max-w-(--lesson-w)">
                 <EmptyState
                   icon={<Icon.BookOpen />}
-                  title="This lesson has no content yet"
-                  description={ctx.manager ? "Add videos, text, quizzes and more in the lesson editor." : "The instructor has not added content to this lesson yet. Check back soon."}
+                  title={t("learn.empty.title")}
+                  description={ctx.manager ? t("learn.empty.manager") : t("learn.empty.learner")}
                   action={
                     ctx.manager ? (
                       <ButtonLink href={`/admin/courses/${course.id}/lessons/${lesson.id}`} size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                        Open editor
+                        {t("learn.openEditor")}
                       </ButtonLink>
                     ) : undefined
                   }
@@ -378,8 +379,10 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
             <LessonPager />
             <p className="hidden items-center justify-center gap-2 text-xs text-ink-faint lg:flex">
               <KeyboardIcon className="size-4" />
-              Use <kbd className="rounded border border-border bg-surface-1 px-1.5 font-sans">←</kbd> and{" "}
-              <kbd className="rounded border border-border bg-surface-1 px-1.5 font-sans">→</kbd> to move between lessons.
+              {t.rich("learn.keyboardHint", {
+                prev: (text) => <kbd className="rounded border border-border bg-surface-1 px-1.5 font-sans">{text}</kbd>,
+                next: (text) => <kbd className="rounded border border-border bg-surface-1 px-1.5 font-sans">{text}</kbd>,
+              })}
             </p>
           </div>
         </main>

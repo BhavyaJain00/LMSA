@@ -9,8 +9,10 @@ import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { Field, FormError, Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatBytes, formatNumber, pluralize } from "@/lib/utils";
-import { BACKUP_KIND_LABELS, countChanges, signedNumber } from "./data-labels";
+import { formatBytes } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
+import { countChanges, signedNumber } from "./data-labels";
+import { useCollectionLabel } from "./use-data-labels";
 import { useFormAction } from "./use-form-action";
 
 export type RestoreTarget =
@@ -24,6 +26,7 @@ export type RestoreTarget =
  * administrator has already moved on from is dropped.
  */
 export function useRestoreDialog() {
+  const t = useT("admin");
   const [target, setTarget] = useState<RestoreTarget | null>(null);
   const request = useRef(0);
 
@@ -37,10 +40,10 @@ export function useRestoreDialog() {
       },
       () => {
         if (request.current !== id) return;
-        setTarget({ name, label, status: "error", error: "The backup could not be read. Check your connection and try again." });
+        setTarget({ name, label, status: "error", error: t("backups.restore.readFailed") });
       },
     );
-  }, []);
+  }, [t]);
 
   const close = useCallback(() => {
     request.current++;
@@ -56,6 +59,9 @@ const FORM_ID = "restore-backup-form";
 const MAX_CHANGES = 12;
 
 function PreviewBody({ preview }: { preview: RestorePreview }) {
+  const t = useT("admin");
+  const f = useFormatter();
+  const collectionLabel = useCollectionLabel();
   const { backup } = preview;
   const changes = countChanges(preview.currentCounts, preview.backupCounts);
   const shown = changes.slice(0, MAX_CHANGES);
@@ -63,23 +69,23 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
     <div className="space-y-4">
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-border bg-surface-2/60 p-3 text-sm">
         <div className="col-span-2 min-w-0">
-          <dt className="text-xs text-ink-muted">Backup</dt>
+          <dt className="text-xs text-ink-muted">{t("backups.restore.backup")}</dt>
           <dd className="flex flex-wrap items-center gap-2">
             <span className="break-all font-mono text-[13px] text-ink">{backup.name}</span>
-            <Badge size="xs">{BACKUP_KIND_LABELS[backup.kind]}</Badge>
+            <Badge size="xs">{t(`backups.kinds.${backup.kind}`)}</Badge>
           </dd>
-          {backup.originalName && <dd className="mt-0.5 break-all text-xs text-ink-muted">Uploaded as {backup.originalName}</dd>}
+          {backup.originalName && <dd className="mt-0.5 break-all text-xs text-ink-muted">{t("backups.uploadedAs", { name: backup.originalName })}</dd>}
         </div>
         <div>
-          <dt className="text-xs text-ink-muted">Records in the backup</dt>
-          <dd className="font-medium tabular-nums text-ink">{formatNumber(preview.backupRecords)}</dd>
+          <dt className="text-xs text-ink-muted">{t("backups.restore.recordsInBackup")}</dt>
+          <dd className="font-medium tabular-nums text-ink">{f.count(preview.backupRecords)}</dd>
         </div>
         <div>
-          <dt className="text-xs text-ink-muted">Records now</dt>
-          <dd className="font-medium tabular-nums text-ink">{formatNumber(preview.currentRecords)}</dd>
+          <dt className="text-xs text-ink-muted">{t("backups.restore.recordsNow")}</dt>
+          <dd className="font-medium tabular-nums text-ink">{f.count(preview.currentRecords)}</dd>
         </div>
         <div>
-          <dt className="text-xs text-ink-muted">File</dt>
+          <dt className="text-xs text-ink-muted">{t("backups.file")}</dt>
           <dd className="text-ink">
             {backup.format === "sqlite" ? "SQLite" : "JSON"}, {formatBytes(backup.sizeBytes)}
           </dd>
@@ -88,8 +94,8 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
 
       {preview.errors.length > 0 && (
         <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2.5 text-sm text-danger">
-          <p className="font-medium">This backup cannot be restored</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+          <p className="font-medium">{t("backups.restore.blocked")}</p>
+          <ul className="mt-1 list-disc space-y-0.5 ps-5">
             {preview.errors.map((message) => (
               <li key={message}>{message}</li>
             ))}
@@ -101,9 +107,9 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
         <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
           <p className="flex items-center gap-2 font-medium">
             <Icon.AlertTriangle className="size-4 shrink-0 text-warning" />
-            Before you continue
+            {t("backups.restore.warningsTitle")}
           </p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-muted">
+          <ul className="mt-1 list-disc space-y-0.5 ps-5 text-ink-muted">
             {preview.warnings.map((message) => (
               <li key={message}>{message}</li>
             ))}
@@ -112,44 +118,44 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
       )}
 
       <div>
-        <h3 className="text-sm font-semibold text-ink">What changes</h3>
+        <h3 className="text-sm font-semibold text-ink">{t("backups.restore.changesTitle")}</h3>
         {changes.length === 0 ? (
-          <p className="mt-1 text-sm text-ink-muted">Every collection holds the same number of records as the backup. Their contents may still differ.</p>
+          <p className="mt-1 text-sm text-ink-muted">{t("backups.restore.noChanges")}</p>
         ) : (
           <div className="mt-2 overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-sm">
-              <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-ink-muted">
+              <thead className="bg-surface-2 text-start text-xs uppercase tracking-wide text-ink-muted">
                 <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Collection
+                  <th scope="col" className="px-3 py-2 text-start font-medium">
+                    {t("backups.restore.collection")}
                   </th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">
-                    Now
+                  <th scope="col" className="px-3 py-2 text-end font-medium">
+                    {t("backups.restore.now")}
                   </th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">
-                    After
+                  <th scope="col" className="px-3 py-2 text-end font-medium">
+                    {t("backups.restore.after")}
                   </th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">
-                    Change
+                  <th scope="col" className="px-3 py-2 text-end font-medium">
+                    {t("backups.restore.change")}
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {shown.map((change) => (
                   <tr key={change.name}>
-                    <th scope="row" className="px-3 py-1.5 text-left font-normal text-ink">
-                      {change.label}
+                    <th scope="row" className="px-3 py-1.5 text-start font-normal text-ink">
+                      {collectionLabel(change.name, change.label)}
                     </th>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-ink-muted">{formatNumber(change.current)}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-ink">{formatNumber(change.backup)}</td>
-                    <td className={`px-3 py-1.5 text-right font-medium tabular-nums ${change.difference < 0 ? "text-danger" : "text-success"}`}>{signedNumber(change.difference)}</td>
+                    <td className="px-3 py-1.5 text-end tabular-nums text-ink-muted">{f.count(change.current)}</td>
+                    <td className="px-3 py-1.5 text-end tabular-nums text-ink">{f.count(change.backup)}</td>
+                    <td dir="ltr" className={`px-3 py-1.5 text-end font-medium tabular-nums ${change.difference < 0 ? "text-danger" : "text-success"}`}>{signedNumber(change.difference)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {changes.length > shown.length && (
               <p className="border-t border-border px-3 py-2 text-xs text-ink-muted">
-                and {pluralize(changes.length - shown.length, "more collection", "more collections")}
+                {t("backups.restore.moreCollections", { count: changes.length - shown.length })}
               </p>
             )}
           </div>
@@ -168,6 +174,8 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
  * last error never carry over from one backup to another.
  */
 export function BackupRestoreDialog({ target, onClose, onRetry }: { target: RestoreTarget | null; onClose: () => void; onRetry: (name: string, label: string) => void }) {
+  const t = useT("admin");
+  const tc = useT("common");
   const [confirm, setConfirm] = useState("");
   const { onSubmit, pending, errors, formError } = useFormAction(restoreBackupAction, { toastSuccess: false, toastError: false });
   const blocked = target?.status !== "ready" || target.preview.errors.length > 0;
@@ -178,15 +186,15 @@ export function BackupRestoreDialog({ target, onClose, onRetry }: { target: Rest
       // A restore that has started cannot be abandoned by closing the dialog.
       onClose={() => (pending ? undefined : onClose())}
       size="md"
-      title="Restore this backup?"
+      title={t("backups.restore.title")}
       description={target && target.label !== target.name ? target.label : undefined}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={pending}>
-            {blocked && target?.status !== "loading" ? "Close" : "Cancel"}
+            {blocked && target?.status !== "loading" ? tc("actions.close") : tc("actions.cancel")}
           </Button>
           <Button type="submit" form={FORM_ID} variant="danger" loading={pending} disabled={blocked || confirm !== CONFIRM_WORD}>
-            Restore backup
+            {t("backups.restore.submit")}
           </Button>
         </>
       }
@@ -197,7 +205,7 @@ export function BackupRestoreDialog({ target, onClose, onRetry }: { target: Rest
 
           {target.status === "loading" && (
             <div aria-busy="true" aria-live="polite" className="space-y-3">
-              <span className="sr-only">Reading the backup…</span>
+              <span className="sr-only">{t("backups.restore.reading")}</span>
               <Skeleton className="h-24 w-full" />
               <Skeleton className="h-4 w-32" />
               <Skeleton className="h-28 w-full" />
@@ -208,7 +216,7 @@ export function BackupRestoreDialog({ target, onClose, onRetry }: { target: Rest
             <div className="space-y-3">
               <FormError message={target.error} />
               <Button variant="outline" size="sm" leftIcon={<Icon.Refresh className="size-4" />} onClick={() => onRetry(target.name, target.label)}>
-                Try again
+                {tc("actions.tryAgain")}
               </Button>
             </div>
           )}
@@ -217,16 +225,16 @@ export function BackupRestoreDialog({ target, onClose, onRetry }: { target: Rest
 
           {!blocked && (
             <>
-              <p className="text-sm text-ink-muted">
-                Everything in the database is replaced with this backup. The data as it is now is first saved as a safety backup, so you can undo the restore. Everyone is signed out; you stay
-                signed in when your account is part of the backup.
-              </p>
+              <p className="text-sm text-ink-muted">{t("backups.restore.explain")}</p>
               <Field
-                label={
-                  <>
-                    Type <span className="font-mono">{CONFIRM_WORD}</span> to confirm
-                  </>
-                }
+                label={t.rich("backups.restore.typeToConfirm", {
+                  word: CONFIRM_WORD,
+                  mono: (chunks) => (
+                    <span dir="ltr" className="font-mono">
+                      {chunks}
+                    </span>
+                  ),
+                })}
                 htmlFor="restore-confirm"
                 error={errors.confirm}
               >

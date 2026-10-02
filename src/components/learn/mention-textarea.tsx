@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Textarea, type TextareaProps } from "@/components/ui/input";
+import { useT } from "@/i18n/client";
 import type { MentionOption } from "./types";
 
 const MAX_SUGGESTIONS = 8;
@@ -59,6 +60,7 @@ export function MentionTextarea({
   className,
   ...props
 }: MentionTextareaProps) {
+  const t = useT("learning");
   const listId = useId();
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
@@ -160,7 +162,7 @@ export function MentionTextarea({
         <ul
           id={listId}
           role="listbox"
-          aria-label="People you can mention"
+          aria-label={t("learn.mention.list")}
           className={cn(
             "absolute inset-x-0 z-30 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface-1 p-1 shadow-pop",
             placement === "above" ? "bottom-full mb-1" : "top-full mt-1",
@@ -188,7 +190,7 @@ export function MentionTextarea({
               </span>
               {option.isInstructor && (
                 <Badge tone="accent" size="xs">
-                  Instructor
+                  {t("learn.mention.instructor")}
                 </Badge>
               )}
             </li>

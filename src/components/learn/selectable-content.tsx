@@ -6,6 +6,8 @@ import { createHighlightAction, deleteNoteAction } from "@/lib/actions/notes";
 import { cn } from "@/lib/utils";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useLocale, useT } from "@/i18n/client";
+import { intlLocale } from "@/i18n/config";
 import { useLessonRuntime } from "./lesson-runtime";
 import { FLASH_HIGHLIGHT, HIGHLIGHT_CSS, NOTE_COLORS, highlightName } from "./note-colors";
 
@@ -115,6 +117,8 @@ const MAX_SELECTION = 2000;
 export function SelectableContent({ children, className }: { children: ReactNode; className?: string }) {
   const rt = useLessonRuntime();
   const toast = useToast();
+  const t = useT("learning");
+  const locale = useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -149,9 +153,9 @@ export function SelectableContent({ children, className }: { children: ReactNode
     };
     paint();
     // Content can change after hydration (e.g. quiz blocks loading); repaint once shortly after.
-    const t = window.setTimeout(paint, 600);
+    const timer = window.setTimeout(paint, 600);
     return () => {
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
       for (const c of NOTE_COLORS) CSS.highlights.delete(highlightName(c.value));
     };
   }, [notes]);
@@ -275,10 +279,10 @@ export function SelectableContent({ children, className }: { children: ReactNode
       const res = await createHighlightAction({ lessonId: rt.lessonId, highlightedText: text, color });
       setPendingColor(null);
       if (!res.ok) {
-        toast.error("Could not save the highlight", res.error);
+        toast.error(t("learn.notes.highlightFailed"), res.error);
         return;
       }
-      toast.success("Highlight saved", "Find it any time in your notes.");
+      toast.success(t("learn.notes.highlightSaved"), t("learn.notes.highlightSavedHint"));
       clearSelection();
     });
   };
@@ -288,10 +292,10 @@ export function SelectableContent({ children, className }: { children: ReactNode
     startTransition(async () => {
       const res = await deleteNoteAction(existing.id);
       if (!res.ok) {
-        toast.error("Could not remove the highlight", res.error);
+        toast.error(t("learn.notes.removeHighlightFailed"), res.error);
         return;
       }
-      toast.success("Highlight removed");
+      toast.success(t("learn.notes.highlightRemoved"));
       clearSelection();
     });
   };
@@ -317,7 +321,7 @@ export function SelectableContent({ children, className }: { children: ReactNode
           ref={menuRef}
           role="toolbar"
           data-selection-toolbar=""
-          aria-label="Selected text actions"
+          aria-label={t("learn.notes.selectionActions")}
           className={cn(
             "fixed z-50 flex max-w-[calc(100vw-16px)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
             menu.placement === "above" ? "-translate-y-full" : "",
@@ -328,20 +332,23 @@ export function SelectableContent({ children, className }: { children: ReactNode
             pointerInMenu.current = true;
           }}
         >
-          <span className="sr-only">Highlight</span>
-          {NOTE_COLORS.map((c) => (
+          <span className="sr-only">{t("learn.notes.highlight")}</span>
+          {NOTE_COLORS.map((c) => {
+            const label = t("learn.notes.highlightIn", { color: t(`learn.color.${c.value}`).toLocaleLowerCase(intlLocale(locale)) });
+            return (
             <button
               key={c.value}
               type="button"
               disabled={pending}
               onClick={() => highlight(c.value)}
               className="flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2 disabled:opacity-60"
-              aria-label={`Highlight ${c.label.toLowerCase()}`}
-              title={`Highlight ${c.label.toLowerCase()}`}
+              aria-label={label}
+              title={label}
             >
               {pending && pendingColor === c.value ? <Spinner className="size-3.5" /> : <span className={cn("size-3.5 rounded-full ring-2 ring-surface-1", c.swatch)} />}
             </button>
-          ))}
+            );
+          })}
           <span className="mx-0.5 h-6 w-px bg-border" aria-hidden="true" />
           <button
             type="button"
@@ -349,7 +356,7 @@ export function SelectableContent({ children, className }: { children: ReactNode
             disabled={pending}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-60"
           >
-            <Icon.Note className="size-4" /> Add note
+            <Icon.Note className="size-4" /> {t("learn.notes.addNote")}
           </button>
           {existing && (
             <button
@@ -357,8 +364,8 @@ export function SelectableContent({ children, className }: { children: ReactNode
               onClick={removeHighlight}
               disabled={pending}
               className="inline-flex size-8 items-center justify-center rounded-lg text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
-              aria-label="Remove highlight"
-              title="Remove highlight"
+              aria-label={t("learn.notes.removeHighlight")}
+              title={t("learn.notes.removeHighlight")}
             >
               <Icon.Trash className="size-4" />
             </button>

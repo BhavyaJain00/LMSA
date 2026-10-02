@@ -11,9 +11,13 @@ import { PwaProvider } from "@/components/pwa/pwa-provider";
 import { RootSeo } from "@/components/seo/root-seo";
 import { TrackingScripts } from "@/components/seo/tracking-scripts";
 import { ConsentManager } from "@/components/legal/consent-manager";
-import { documentDir } from "@/i18n/config";
+import { NAMESPACES, documentDir } from "@/i18n/config";
 import { getLocale } from "@/i18n/server";
 import { I18nProvider } from "@/i18n/provider";
+import { globalSlices } from "@/i18n/provided";
+
+/** Provided in full on every page; every other namespace contributes only its `global.` keys. */
+const ROOT_PICK = globalSlices(["common", "shell"]);
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -36,8 +40,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full flex flex-col">
         <RootSeo />
-        {/* Shared words and the app shell are needed on every page (the lesson player reuses the account menu). */}
-        <I18nProvider namespaces={["common", "shell"]}>
+        {/*
+          Shared words and the app shell are needed on every page (the lesson player reuses the account menu).
+          The `global.` keys of the other namespaces serve client components mounted here or reused across
+          sections (PWA prompts, the cookie banner, the command palette, the footer sign-up form).
+        */}
+        <I18nProvider namespaces={NAMESPACES} pick={ROOT_PICK}>
           <ToastProvider>
             {children}
             {flash && <FlashToast message={flash.message} tone={flash.tone} />}

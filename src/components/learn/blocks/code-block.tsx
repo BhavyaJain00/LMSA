@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 const LANGUAGE_LABELS: Record<string, string> = {
   js: "JavaScript",
@@ -49,10 +50,13 @@ const LANGUAGE_LABELS: Record<string, string> = {
   txt: "Plain text",
 };
 
-export function languageLabel(language: string): string {
+/** Display name of a code language; `names` words the generic labels in the interface language. */
+export function languageLabel(language: string, names: { code: string; plainText: string } = { code: "Code", plainText: "Plain text" }): string {
   const key = language.trim().toLowerCase();
-  if (!key) return "Code";
-  return LANGUAGE_LABELS[key] ?? language.trim();
+  if (!key) return names.code;
+  const label = LANGUAGE_LABELS[key];
+  if (label === "Plain text") return names.plainText;
+  return label ?? language.trim();
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -82,9 +86,12 @@ async function copyText(text: string): Promise<boolean> {
 
 /** Code sample with a language label and a copy button. */
 export function CodeBlock({ language, code, className }: { language: string; code: string; className?: string }) {
+  const t = useT("learning");
+  const common = useT("common");
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<number | null>(null);
   const lines = code.split("\n").length;
+  const label = languageLabel(language, { code: t("learn.code.code"), plainText: t("learn.code.plainText") });
 
   useEffect(
     () => () => {
@@ -105,8 +112,8 @@ export function CodeBlock({ language, code, className }: { language: string; cod
       <figcaption className="flex items-center justify-between gap-2 border-b border-border bg-surface-2 px-3 py-1.5">
         <span className="flex items-center gap-2 text-xs font-medium text-ink-muted">
           <Icon.Code className="size-3.5" />
-          {languageLabel(language)}
-          <span className="text-ink-faint">· {lines} {lines === 1 ? "line" : "lines"}</span>
+          {label}
+          <span className="text-ink-faint">· {t("learn.code.lines", { count: lines })}</span>
         </span>
         <button
           type="button"
@@ -115,17 +122,17 @@ export function CodeBlock({ language, code, className }: { language: string; cod
             "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
             state === "copied" ? "text-success" : state === "failed" ? "text-danger" : "text-ink-muted hover:bg-surface-3 hover:text-ink",
           )}
-          aria-label={state === "copied" ? "Code copied" : "Copy code"}
+          aria-label={state === "copied" ? t("learn.code.codeCopied") : t("learn.code.copyCode")}
         >
           {state === "copied" ? <Icon.Check className="size-3.5" /> : <Icon.Copy className="size-3.5" />}
-          {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy"}
+          {state === "copied" ? common("actions.copied") : state === "failed" ? t("learn.code.copyFailed") : common("actions.copy")}
         </button>
         <span className="sr-only" aria-live="polite">
-          {state === "copied" ? "Copied to clipboard" : ""}
+          {state === "copied" ? t("learn.code.copiedSr") : ""}
         </span>
       </figcaption>
       <div className="prose-ll">
-        <pre className="m-0! rounded-none! scrollbar-thin" data-lang={language || undefined} tabIndex={0} aria-label={`${languageLabel(language)} code`}>
+        <pre className="m-0! rounded-none! scrollbar-thin" data-lang={language || undefined} tabIndex={0} aria-label={t("learn.code.ariaLabel", { language: label })} dir="ltr">
           <code>{code}</code>
         </pre>
       </div>

@@ -8,6 +8,7 @@ import { languageLabel } from "@/lib/transcripts/editor-shared";
 import { parseTimeParam } from "@/lib/transcripts/panel";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 import { LessonVideo } from "../lesson-video";
 import { useLearnPrefs } from "../learn-provider";
 import { useLessonRuntime } from "../lesson-runtime";
@@ -91,6 +92,7 @@ export function VideoBlock({
   transcriptId,
 }: VideoBlockProps) {
   const rt = useLessonRuntime();
+  const t = useT("learning");
   const { theater, toggleTheater } = useLearnPrefs();
   const searchParams = useSearchParams();
 
@@ -172,18 +174,18 @@ export function VideoBlock({
       {sortedMarkers.length > 0 && (
         <div className="mb-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm text-ink-muted">
           <p className="font-medium text-ink">
-            This video contains {sortedMarkers.length} {sortedMarkers.length === 1 ? "quiz" : "quizzes"}:
+            {t("learn.video.quizList", { count: sortedMarkers.length })}
           </p>
           <ol className="mt-1 space-y-0.5">
             {sortedMarkers.map((m, i) => (
               <li key={`${m.quizId}@${m.time}`} className="flex items-center gap-2">
                 <span className="tabular-nums text-ink-faint">{i + 1}.</span>
-                <span className="min-w-0 truncate">{quizTitles[m.quizId] ?? "Quiz"}</span>
-                <span className="text-ink-faint">at</span>
+                <span className="min-w-0 truncate">{quizTitles[m.quizId] ?? t("learn.video.quiz")}</span>
+                <span className="text-ink-faint">{t("learn.video.quizAt")}</span>
                 <span className="font-medium tabular-nums text-ink">{formatTime(m.time)}</span>
                 {passedQuizIds.includes(m.quizId) && (
                   <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
-                    <Icon.CheckCircle className="size-3.5" /> Passed
+                    <Icon.CheckCircle className="size-3.5" /> {t("learn.video.passed")}
                   </span>
                 )}
               </li>
@@ -214,7 +216,7 @@ export function VideoBlock({
           onEnded={rt.onVideoEnded}
           onQuizMarker={onQuizMarker}
           onNext={rt.canGoNext ? () => void rt.goNext() : undefined}
-          nextLabel={rt.next?.locked ? "Complete and continue" : "Next lesson"}
+          nextLabel={rt.next?.locked ? t("learn.nav.completeAndContinue") : t("learn.nextLesson")}
           nextTitle={rt.next?.title}
           autoplayNext={!!player?.autoplayNext && lastVideo && !active}
           watermark={player?.watermark ?? null}
@@ -231,7 +233,7 @@ export function VideoBlock({
               <QuizOverlay
                 key={`${active.quizId}@${active.time}`}
                 active={active}
-                title={quizTitles[active.quizId] ?? "Quiz"}
+                title={quizTitles[active.quizId] ?? t("learn.video.quiz")}
                 passed={passedQuizIds.includes(active.quizId)}
                 node={quizNodes[active.quizId]}
                 onContinue={continueVideo}
@@ -245,7 +247,7 @@ export function VideoBlock({
         <details className="group mt-3 rounded-lg border border-border bg-surface-1">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-ink [&::-webkit-details-marker]:hidden">
             <span className="flex items-center gap-2">
-              <Icon.Layers className="size-4 text-ink-muted" /> Chapters
+              <Icon.Layers className="size-4 text-ink-muted" /> {t("learn.video.chapters")}
               <span className="rounded-full bg-surface-2 px-1.5 text-xs text-ink-muted">{chapters.length}</span>
             </span>
             <Icon.ChevronDown className="size-4 text-ink-faint transition-transform group-open:rotate-180" />
@@ -256,9 +258,9 @@ export function VideoBlock({
                 <button
                   type="button"
                   onClick={() => seekTo(c.time)}
-                  className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                  className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-start text-sm text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
                 >
-                  <span className="w-12 shrink-0 font-mono text-xs tabular-nums text-accent">{formatTime(c.time)}</span>
+                  <span className="w-12 shrink-0 font-mono text-xs tabular-nums text-accent" dir="ltr">{formatTime(c.time)}</span>
                   <span className="min-w-0 truncate">{c.title}</span>
                 </button>
               </li>
@@ -293,6 +295,7 @@ function QuizOverlay({
   node: ReactNode;
   onContinue: () => void;
 }) {
+  const t = useT("learning");
   const rootRef = useRef<HTMLDivElement>(null);
   const [opened, setOpened] = useState(false);
   const [seconds, setSeconds] = useState(COUNTDOWN);
@@ -338,25 +341,24 @@ function QuizOverlay({
             </span>
             <div className="min-w-0">
               <p id="video-quiz-title" className="font-semibold">
-                Time for a quiz
+                {t("learn.video.timeForQuiz")}
               </p>
               <p id="video-quiz-desc" className="mt-1 text-sm text-ink-muted">
-                Complete the upcoming quiz to continue watching the video. The quiz will open in{" "}
-                <span className="font-medium tabular-nums text-ink">{seconds}</span> {seconds === 1 ? "second" : "seconds"}.
+                {t.rich("learn.video.quizCountdown", { seconds, b: (chunks) => <span className="font-medium tabular-nums text-ink">{chunks}</span> })}
               </p>
               {passed && (
                 <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-success">
-                  <Icon.CheckCircle className="size-3.5" /> You already passed this quiz.
+                  <Icon.CheckCircle className="size-3.5" /> {t("learn.video.alreadyPassed")}
                 </p>
               )}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button variant="outline" size="sm" onClick={onContinue}>
-              Continue video
+              {t("learn.video.continue")}
             </Button>
-            <Button data-autofocus size="sm" onClick={() => setOpened(true)} rightIcon={<Icon.ArrowRight className="size-4" />}>
-              Open quiz now
+            <Button data-autofocus size="sm" onClick={() => setOpened(true)} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
+              {t("learn.video.openQuizNow")}
             </Button>
           </div>
         </div>
@@ -365,20 +367,20 @@ function QuizOverlay({
   }
 
   return (
-    <div ref={rootRef} role="dialog" aria-label={`In-video quiz: ${title}`} className="flex size-full flex-col bg-surface-1 text-ink animate-fade-in">
+    <div ref={rootRef} role="dialog" aria-label={t("learn.video.inVideoQuizLabel", { title })} className="flex size-full flex-col bg-surface-1 text-ink animate-fade-in">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
         <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-ink-faint">In-video quiz · {formatTime(active.time)}</p>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-ink-faint">{t("learn.video.inVideoQuizAt", { time: formatTime(active.time) })}</p>
           <p className="truncate text-sm font-semibold">{title}</p>
         </div>
         <Button data-autofocus size="sm" variant="outline" onClick={onContinue} leftIcon={<Icon.Play className="size-3.5" />}>
-          Continue video
+          {t("learn.video.continue")}
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 scrollbar-thin">
-        <p className="mb-3 text-xs text-ink-muted">Complete the quiz, then continue the video.</p>
+        <p className="mb-3 text-xs text-ink-muted">{t("learn.video.completeThenContinue")}</p>
         {node ?? (
-          <p className="rounded-lg border border-dashed border-border-strong p-6 text-center text-sm text-ink-muted">This quiz is no longer available. You can continue the video.</p>
+          <p className="rounded-lg border border-dashed border-border-strong p-6 text-center text-sm text-ink-muted">{t("learn.video.quizGone")}</p>
         )}
       </div>
     </div>

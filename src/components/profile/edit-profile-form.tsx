@@ -14,7 +14,8 @@ import { Checkbox, Field, FormError, Input, Select, Textarea } from "@/component
 import { SegmentedControl } from "@/components/ui/tabs";
 import { Markdown } from "@/lib/markdown";
 import { cn, uid } from "@/lib/utils";
-import { OpenToBadge, openToOptions, type OpenTo } from "./open-to-badge";
+import { useFormatter, useT } from "@/i18n/client";
+import { OpenToBadge, openToValues, type OpenTo } from "./open-to-badge";
 import { socialMeta } from "./social-icons";
 
 export interface EditProfileValues {
@@ -41,6 +42,7 @@ const MAX_SKILLS = 30;
 
 function SkillsInput({ value, onChange, error }: { value: string[]; onChange: (next: string[]) => void; error?: string }) {
   const [draft, setDraft] = useState("");
+  const t = useT("account");
 
   const add = (raw: string) => {
     const parts = raw
@@ -67,7 +69,7 @@ function SkillsInput({ value, onChange, error }: { value: string[]; onChange: (n
   };
 
   return (
-    <Field label="Skills" htmlFor="skill-input" hint={`Press Enter or comma to add. ${value.length}/${MAX_SKILLS}`} error={error}>
+    <Field label={t("profile.edit.skills")} htmlFor="skill-input" hint={t("profile.edit.skillsHint", { count: value.length, max: MAX_SKILLS })} error={error}>
       <div
         className={cn(
           "flex min-h-9.5 flex-wrap items-center gap-1.5 rounded-lg border border-border-strong bg-surface-1 px-2 py-1.5 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25",
@@ -75,13 +77,13 @@ function SkillsInput({ value, onChange, error }: { value: string[]; onChange: (n
         )}
       >
         {value.map((skill) => (
-          <span key={skill} className="inline-flex items-center gap-1 rounded-md bg-surface-2 py-0.5 pl-2 pr-1 text-xs font-medium text-ink">
+          <span key={skill} className="inline-flex items-center gap-1 rounded-md bg-surface-2 py-0.5 ps-2 pe-1 text-xs font-medium text-ink">
             {skill}
             <button
               type="button"
               onClick={() => onChange(value.filter((s) => s !== skill))}
               className="rounded p-0.5 text-ink-faint hover:bg-surface-3 hover:text-ink"
-              aria-label={`Remove ${skill}`}
+              aria-label={t("profile.edit.removeSkill", { skill })}
             >
               <Icon.X className="size-3" />
             </button>
@@ -93,7 +95,7 @@ function SkillsInput({ value, onChange, error }: { value: string[]; onChange: (n
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           onBlur={() => add(draft)}
-          placeholder={value.length ? "" : "e.g. JavaScript, Figma, Public speaking"}
+          placeholder={value.length ? "" : t("profile.edit.skillsPlaceholder")}
           disabled={value.length >= MAX_SKILLS}
           className="min-w-32 flex-1 bg-transparent px-1 text-sm text-ink placeholder:text-ink-faint focus:outline-none"
         />
@@ -107,6 +109,7 @@ function SkillsInput({ value, onChange, error }: { value: string[]; onChange: (n
 /* ------------------------------------------------------------------ */
 
 function WorkEditor({ value, onChange, error }: { value: WorkExperience[]; onChange: (next: WorkExperience[]) => void; error?: string }) {
+  const t = useT("account");
   const patch = (id: string, changes: Partial<WorkExperience>) => onChange(value.map((w) => (w.id === id ? { ...w, ...changes } : w)));
   const move = (index: number, dir: -1 | 1) => {
     const next = [...value];
@@ -118,46 +121,46 @@ function WorkEditor({ value, onChange, error }: { value: WorkExperience[]; onCha
   return (
     <div className="space-y-3">
       {error && <p className="text-xs text-danger">{error}</p>}
-      {value.length === 0 && <p className="rounded-lg border border-dashed border-border-strong px-3 py-4 text-center text-sm text-ink-muted">No positions added yet.</p>}
+      {value.length === 0 && <p className="rounded-lg border border-dashed border-border-strong px-3 py-4 text-center text-sm text-ink-muted">{t("profile.edit.noPositions")}</p>}
       {value.map((w, i) => (
         <fieldset key={w.id} className="rounded-xl border border-border p-3 sm:p-4">
-          <legend className="sr-only">Position {i + 1}</legend>
+          <legend className="sr-only">{t("profile.edit.position", { n: i + 1 })}</legend>
           <div className="mb-3 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">Position {i + 1}</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{t("profile.edit.position", { n: i + 1 })}</p>
             <div className="flex items-center gap-1">
-              <IconButton label="Move up" size="icon-sm" onClick={() => move(i, -1)} disabled={i === 0}>
+              <IconButton label={t("profile.edit.moveUp")} size="icon-sm" onClick={() => move(i, -1)} disabled={i === 0}>
                 <Icon.ChevronUp className="size-4" />
               </IconButton>
-              <IconButton label="Move down" size="icon-sm" onClick={() => move(i, 1)} disabled={i === value.length - 1}>
+              <IconButton label={t("profile.edit.moveDown")} size="icon-sm" onClick={() => move(i, 1)} disabled={i === value.length - 1}>
                 <Icon.ChevronDown className="size-4" />
               </IconButton>
-              <IconButton label="Remove position" size="icon-sm" onClick={() => onChange(value.filter((x) => x.id !== w.id))} className="hover:text-danger">
+              <IconButton label={t("profile.edit.removePosition")} size="icon-sm" onClick={() => onChange(value.filter((x) => x.id !== w.id))} className="hover:text-danger">
                 <Icon.Trash className="size-4" />
               </IconButton>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Job title" htmlFor={`we-title-${w.id}`} required>
-              <Input id={`we-title-${w.id}`} value={w.title} onChange={(e) => patch(w.id, { title: e.target.value })} placeholder="Frontend Engineer" maxLength={120} />
+            <Field label={t("profile.edit.jobTitle")} htmlFor={`we-title-${w.id}`} required>
+              <Input id={`we-title-${w.id}`} value={w.title} onChange={(e) => patch(w.id, { title: e.target.value })} placeholder={t("profile.edit.jobTitlePlaceholder")} maxLength={120} />
             </Field>
-            <Field label="Company" htmlFor={`we-company-${w.id}`} required>
-              <Input id={`we-company-${w.id}`} value={w.company} onChange={(e) => patch(w.id, { company: e.target.value })} placeholder="Acme Inc." maxLength={120} />
+            <Field label={t("profile.edit.company")} htmlFor={`we-company-${w.id}`} required>
+              <Input id={`we-company-${w.id}`} value={w.company} onChange={(e) => patch(w.id, { company: e.target.value })} placeholder={t("profile.edit.companyPlaceholder")} maxLength={120} />
             </Field>
-            <Field label="Location" htmlFor={`we-location-${w.id}`}>
-              <Input id={`we-location-${w.id}`} value={w.location ?? ""} onChange={(e) => patch(w.id, { location: e.target.value })} placeholder="Remote" maxLength={120} />
+            <Field label={t("profile.edit.location")} htmlFor={`we-location-${w.id}`}>
+              <Input id={`we-location-${w.id}`} value={w.location ?? ""} onChange={(e) => patch(w.id, { location: e.target.value })} placeholder={t("profile.edit.workLocationPlaceholder")} maxLength={120} />
             </Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Start" htmlFor={`we-start-${w.id}`}>
-                <Input id={`we-start-${w.id}`} type="month" value={w.startDate ?? ""} onChange={(e) => patch(w.id, { startDate: e.target.value })} placeholder="YYYY-MM" />
+              <Field label={t("profile.edit.start")} htmlFor={`we-start-${w.id}`}>
+                <Input id={`we-start-${w.id}`} type="month" value={w.startDate ?? ""} onChange={(e) => patch(w.id, { startDate: e.target.value })} placeholder={t("profile.edit.monthPlaceholder")} />
               </Field>
-              <Field label="End" htmlFor={`we-end-${w.id}`}>
+              <Field label={t("profile.edit.end")} htmlFor={`we-end-${w.id}`}>
                 <Input
                   id={`we-end-${w.id}`}
                   type="month"
                   value={w.current ? "" : (w.endDate ?? "")}
                   onChange={(e) => patch(w.id, { endDate: e.target.value })}
                   disabled={!!w.current}
-                  placeholder="YYYY-MM"
+                  placeholder={t("profile.edit.monthPlaceholder")}
                 />
               </Field>
             </div>
@@ -166,11 +169,11 @@ function WorkEditor({ value, onChange, error }: { value: WorkExperience[]; onCha
                 id={`we-current-${w.id}`}
                 checked={!!w.current}
                 onChange={(e) => patch(w.id, { current: e.target.checked, endDate: e.target.checked ? undefined : w.endDate })}
-                label="I currently work here"
+                label={t("profile.edit.currentJob")}
               />
             </div>
-            <Field label="Description" htmlFor={`we-desc-${w.id}`} className="sm:col-span-2">
-              <Textarea id={`we-desc-${w.id}`} rows={2} value={w.description ?? ""} onChange={(e) => patch(w.id, { description: e.target.value })} maxLength={1000} placeholder="What did you work on?" />
+            <Field label={t("profile.edit.description")} htmlFor={`we-desc-${w.id}`} className="sm:col-span-2">
+              <Textarea id={`we-desc-${w.id}`} rows={2} value={w.description ?? ""} onChange={(e) => patch(w.id, { description: e.target.value })} maxLength={1000} placeholder={t("profile.edit.descriptionPlaceholder")} />
             </Field>
           </div>
         </fieldset>
@@ -182,7 +185,7 @@ function WorkEditor({ value, onChange, error }: { value: WorkExperience[]; onCha
           leftIcon={<Icon.Plus className="size-4" />}
           onClick={() => onChange([...value, { id: uid("we"), company: "", title: "", current: false }])}
         >
-          Add position
+          {t("profile.edit.addPosition")}
         </Button>
       )}
     </div>
@@ -195,35 +198,36 @@ function WorkEditor({ value, onChange, error }: { value: WorkExperience[]; onCha
 
 function EducationEditor({ value, onChange, error }: { value: EducationDetail[]; onChange: (next: EducationDetail[]) => void; error?: string }) {
   const patch = (id: string, changes: Partial<EducationDetail>) => onChange(value.map((e) => (e.id === id ? { ...e, ...changes } : e)));
+  const t = useT("account");
   const yearValue = (n: number | undefined) => (n ? String(n) : "");
   const parseYear = (s: string) => (s ? Number(s.replace(/\D/g, "").slice(0, 4)) || undefined : undefined);
   return (
     <div className="space-y-3">
       {error && <p className="text-xs text-danger">{error}</p>}
-      {value.length === 0 && <p className="rounded-lg border border-dashed border-border-strong px-3 py-4 text-center text-sm text-ink-muted">No education added yet.</p>}
+      {value.length === 0 && <p className="rounded-lg border border-dashed border-border-strong px-3 py-4 text-center text-sm text-ink-muted">{t("profile.edit.noEducation")}</p>}
       {value.map((e, i) => (
         <fieldset key={e.id} className="rounded-xl border border-border p-3 sm:p-4">
-          <legend className="sr-only">Education {i + 1}</legend>
+          <legend className="sr-only">{t("profile.edit.educationItem", { n: i + 1 })}</legend>
           <div className="mb-3 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">Education {i + 1}</p>
-            <IconButton label="Remove education" size="icon-sm" onClick={() => onChange(value.filter((x) => x.id !== e.id))} className="hover:text-danger">
+            <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{t("profile.edit.educationItem", { n: i + 1 })}</p>
+            <IconButton label={t("profile.edit.removeEducation")} size="icon-sm" onClick={() => onChange(value.filter((x) => x.id !== e.id))} className="hover:text-danger">
               <Icon.Trash className="size-4" />
             </IconButton>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Institution" htmlFor={`ed-inst-${e.id}`} required className="sm:col-span-2">
-              <Input id={`ed-inst-${e.id}`} value={e.institution} onChange={(ev) => patch(e.id, { institution: ev.target.value })} placeholder="University of Somewhere" maxLength={120} />
+            <Field label={t("profile.edit.institution")} htmlFor={`ed-inst-${e.id}`} required className="sm:col-span-2">
+              <Input id={`ed-inst-${e.id}`} value={e.institution} onChange={(ev) => patch(e.id, { institution: ev.target.value })} placeholder={t("profile.edit.institutionPlaceholder")} maxLength={120} />
             </Field>
-            <Field label="Degree" htmlFor={`ed-degree-${e.id}`} required>
-              <Input id={`ed-degree-${e.id}`} value={e.degree} onChange={(ev) => patch(e.id, { degree: ev.target.value })} placeholder="B.Sc." maxLength={120} />
+            <Field label={t("profile.edit.degree")} htmlFor={`ed-degree-${e.id}`} required>
+              <Input id={`ed-degree-${e.id}`} value={e.degree} onChange={(ev) => patch(e.id, { degree: ev.target.value })} placeholder={t("profile.edit.degreePlaceholder")} maxLength={120} />
             </Field>
-            <Field label="Field of study" htmlFor={`ed-field-${e.id}`}>
-              <Input id={`ed-field-${e.id}`} value={e.fieldOfStudy ?? ""} onChange={(ev) => patch(e.id, { fieldOfStudy: ev.target.value })} placeholder="Computer Science" maxLength={120} />
+            <Field label={t("profile.edit.fieldOfStudy")} htmlFor={`ed-field-${e.id}`}>
+              <Input id={`ed-field-${e.id}`} value={e.fieldOfStudy ?? ""} onChange={(ev) => patch(e.id, { fieldOfStudy: ev.target.value })} placeholder={t("profile.edit.fieldOfStudyPlaceholder")} maxLength={120} />
             </Field>
-            <Field label="Start year" htmlFor={`ed-start-${e.id}`}>
+            <Field label={t("profile.edit.startYear")} htmlFor={`ed-start-${e.id}`}>
               <Input id={`ed-start-${e.id}`} inputMode="numeric" value={yearValue(e.startYear)} onChange={(ev) => patch(e.id, { startYear: parseYear(ev.target.value) })} placeholder="2018" maxLength={4} />
             </Field>
-            <Field label="End year" htmlFor={`ed-end-${e.id}`}>
+            <Field label={t("profile.edit.endYear")} htmlFor={`ed-end-${e.id}`}>
               <Input id={`ed-end-${e.id}`} inputMode="numeric" value={yearValue(e.endYear)} onChange={(ev) => patch(e.id, { endYear: parseYear(ev.target.value) })} placeholder="2022" maxLength={4} />
             </Field>
           </div>
@@ -231,7 +235,7 @@ function EducationEditor({ value, onChange, error }: { value: EducationDetail[];
       ))}
       {value.length < 20 && (
         <Button variant="outline" size="sm" leftIcon={<Icon.Plus className="size-4" />} onClick={() => onChange([...value, { id: uid("ed"), institution: "", degree: "" }])}>
-          Add education
+          {t("profile.edit.addEducation")}
         </Button>
       )}
     </div>
@@ -244,6 +248,9 @@ function EducationEditor({ value, onChange, error }: { value: EducationDetail[];
 
 export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId: string; initial: EditProfileValues; isSelf: boolean; backHref: string }) {
   const [state, action, pending] = useActionState(updateProfileAction, null);
+  const t = useT("account");
+  const tc = useT("common");
+  const f = useFormatter();
   const [values, setValues] = useState<EditProfileValues>(initial);
   const [bioMode, setBioMode] = useState<"write" | "preview">("write");
   const errors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
@@ -270,19 +277,19 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold tracking-tight text-ink">{isSelf ? "Edit Profile" : `Edit ${initial.name}'s profile`}</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-ink">{isSelf ? t("profile.header.editProfile") : t("profile.edit.titleOther", { name: initial.name })}</h2>
           {dirty && (
             <Badge tone="warning" size="sm">
-              Not Saved
+              {t("profile.edit.notSaved")}
             </Badge>
           )}
         </div>
         <div className="flex gap-2">
           <ButtonLink href={backHref} variant="ghost" size="sm">
-            Cancel
+            {tc("actions.cancel")}
           </ButtonLink>
           <Button type="submit" size="sm" loading={pending} disabled={!dirty && !pending}>
-            Save
+            {tc("actions.save")}
           </Button>
         </div>
       </div>
@@ -290,41 +297,41 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
       <FormError message={state && !state.ok ? state.error : null} />
 
       <Card>
-        <CardHeader title="Photos" description="Your photo appears on your profile, in discussions and next to your certificates." />
+        <CardHeader title={t("profile.edit.photos")} description={t("profile.edit.photosHint")} />
         <CardBody className="grid gap-6 md:grid-cols-2">
           <div className="flex items-start gap-4">
             <Avatar name={values.name || initial.name} src={values.avatarUrl || null} size="xl" />
             <FileUpload
               className="min-w-0 flex-1"
               name="avatarUrl"
-              label="Profile image"
+              label={t("profile.edit.profileImage")}
               kind="image"
               accept="image/png,image/jpeg,image/webp"
               value={values.avatarUrl}
               onChange={(url) => set("avatarUrl", url)}
               preview={false}
-              hint={errors.avatarUrl ?? "Square images work best (at least 200 × 200 px)."}
+              hint={errors.avatarUrl ?? t("profile.edit.profileImageHint")}
             />
           </div>
           <FileUpload
             name="coverImageUrl"
-            label="Cover image"
+            label={t("profile.cover.title")}
             kind="image"
             accept="image/png,image/jpeg,image/webp"
             value={values.coverImageUrl}
             onChange={(url) => set("coverImageUrl", url)}
-            hint={errors.coverImageUrl ?? "Wide images work best (1500 × 400 px). Leave empty to use a colour gradient."}
+            hint={errors.coverImageUrl ?? t("profile.edit.coverImageHint")}
           />
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="Basic information" />
+        <CardHeader title={t("profile.edit.basicInfo")} />
         <CardBody className="grid gap-4 md:grid-cols-2">
-          <Field label="Full name" htmlFor="name" required error={errors.name}>
+          <Field label={t("profile.edit.fullName")} htmlFor="name" required error={errors.name}>
             <Input id="name" name="name" value={values.name} onChange={(e) => set("name", e.target.value)} invalid={!!errors.name} autoComplete="name" maxLength={80} required />
           </Field>
-          <Field label="Username" htmlFor="username" required error={errors.username} hint="Your profile lives at /user/username.">
+          <Field label={t("profile.edit.username")} htmlFor="username" required error={errors.username} hint={t("profile.edit.usernameHint")}>
             <Input
               id="username"
               name="username"
@@ -337,10 +344,10 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
               required
             />
           </Field>
-          <Field label="Headline" htmlFor="headline" error={errors.headline} hint="A one-line summary, e.g. “Frontend developer learning data science”.">
+          <Field label={t("profile.edit.headline")} htmlFor="headline" error={errors.headline} hint={t("profile.edit.headlineHint")}>
             <Input id="headline" name="headline" value={values.headline} onChange={(e) => set("headline", e.target.value)} invalid={!!errors.headline} maxLength={120} />
           </Field>
-          <Field label="Location" htmlFor="location" error={errors.location}>
+          <Field label={t("profile.edit.location")} htmlFor="location" error={errors.location}>
             <Input
               id="location"
               name="location"
@@ -348,15 +355,15 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
               onChange={(e) => set("location", e.target.value)}
               invalid={!!errors.location}
               leftAddon={<Icon.MapPin className="size-4" />}
-              placeholder="City, Country"
+              placeholder={t("profile.edit.locationPlaceholder")}
               maxLength={80}
             />
           </Field>
           <Field
-            label="Open to"
+            label={t("profile.edit.openTo")}
             htmlFor="openTo"
             error={errors.openTo}
-            hint="Shows an “Open to Work” or “Hiring” badge on your profile picture and in Certified Members."
+            hint={t("profile.edit.openToHint")}
           >
             <Select
               id="openTo"
@@ -364,7 +371,7 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
               value={values.openTo}
               onChange={(e) => set("openTo", e.target.value === "work" || e.target.value === "hiring" ? e.target.value : "")}
               invalid={!!errors.openTo}
-              options={[{ value: "", label: "Looking for new work or hiring talent?" }, ...openToOptions.map((o) => ({ value: o.value, label: o.label }))]}
+              options={[{ value: "", label: t("profile.edit.openToNone") }, ...openToValues.map((v) => ({ value: v, label: t(`profile.openTo.${v}`) }))]}
             />
           </Field>
           <div className="flex items-end pb-2">
@@ -374,24 +381,24 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
                   <Avatar name={values.name || initial.name} src={values.avatarUrl || null} size="lg" />
                   <OpenToBadge value={values.openTo} overlay size="xs" />
                 </span>
-                Preview of your badge
+                {t("profile.edit.badgePreview")}
               </span>
             ) : (
-              <span className="text-sm text-ink-faint">No badge is shown on your profile.</span>
+              <span className="text-sm text-ink-faint">{t("profile.edit.noBadge")}</span>
             )}
           </div>
           <div className="md:col-span-2">
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <label htmlFor="bio" className="text-sm font-medium text-ink">
-                Bio
+                {t("profile.edit.bio")}
               </label>
               <SegmentedControl
                 size="xs"
                 value={bioMode}
                 onChange={setBioMode}
                 options={[
-                  { value: "write", label: "Write" },
-                  { value: "preview", label: "Preview" },
+                  { value: "write", label: t("profile.edit.write") },
+                  { value: "preview", label: t("profile.edit.preview") },
                 ]}
               />
             </div>
@@ -404,20 +411,20 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
                 onChange={(e) => set("bio", e.target.value)}
                 invalid={!!errors.bio}
                 maxLength={5000}
-                placeholder="Tell people about yourself. Markdown is supported: **bold**, _italic_, [links](https://…) and lists."
+                placeholder={t("profile.edit.bioPlaceholder")}
               />
             ) : (
               <>
                 <input type="hidden" name="bio" value={values.bio} />
                 <div className="min-h-48 rounded-lg border border-border bg-surface-2/40 px-4 py-3">
-                  {values.bio.trim() ? <Markdown content={values.bio} /> : <p className="text-sm italic text-ink-faint">Nothing to preview yet.</p>}
+                  {values.bio.trim() ? <Markdown content={values.bio} /> : <p className="text-sm italic text-ink-faint">{t("profile.edit.nothingToPreview")}</p>}
                 </div>
               </>
             )}
             {errors.bio ? (
               <p className="mt-1.5 text-xs text-danger">{errors.bio}</p>
             ) : (
-              <p className="mt-1.5 text-xs text-ink-muted">{values.bio.length.toLocaleString()}/5,000 characters · Markdown supported</p>
+              <p className="mt-1.5 text-xs text-ink-muted">{t("profile.edit.bioCount", { count: f.number(values.bio.length), max: f.number(5000) })}</p>
             )}
           </div>
           <div className="md:col-span-2">
@@ -427,10 +434,10 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
       </Card>
 
       <Card>
-        <CardHeader title="Social links" description="Shown as icons on your profile." />
+        <CardHeader title={t("profile.edit.socialLinks")} description={t("profile.edit.socialLinksHint")} />
         <CardBody className="grid gap-4 md:grid-cols-2">
           {socialMeta.map((m) => (
-            <Field key={m.key} label={m.label} htmlFor={`social_${m.key}`} error={errors[`social_${m.key}`]}>
+            <Field key={m.key} label={m.key === "website" ? t("global.social.website") : m.label} htmlFor={`social_${m.key}`} error={errors[`social_${m.key}`]}>
               <Input
                 id={`social_${m.key}`}
                 name={`social_${m.key}`}
@@ -448,14 +455,14 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
       </Card>
 
       <Card>
-        <CardHeader title="Work experience" description="Most recent first. Use the arrows to reorder." />
+        <CardHeader title={t("profile.about.work")} description={t("profile.edit.workHint")} />
         <CardBody>
           <WorkEditor value={values.workExperience} onChange={(v) => set("workExperience", v)} error={errors.workExperience} />
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="Education" />
+        <CardHeader title={t("profile.about.education")} />
         <CardBody>
           <EducationEditor value={values.education} onChange={(v) => set("education", v)} error={errors.education} />
         </CardBody>
@@ -463,13 +470,13 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
 
       <div className="sticky bottom-0 z-10 -mx-4 flex items-center justify-between gap-3 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-card sm:border sm:px-5">
         <p className="text-xs text-ink-muted">
-          {dirty ? "You have unsaved changes." : "All changes saved."}{" "}
+          {dirty ? t("profile.edit.unsaved") : t("profile.edit.allSaved")}{" "}
           <Link href={backHref} className="font-medium text-ink hover:underline">
-            Back to profile
+            {t("profile.edit.backToProfile")}
           </Link>
         </p>
         <Button type="submit" loading={pending} disabled={!dirty && !pending}>
-          Save changes
+          {tc("actions.saveChanges")}
         </Button>
       </div>
     </form>

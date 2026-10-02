@@ -67,10 +67,10 @@ export function CourseCover({
               {monogram}
             </span>
           </div>
-          <span className="absolute -bottom-6 -right-4 select-none text-[7rem] font-black leading-none text-white/10">{monogram}</span>
+          <span className="absolute -bottom-6 -end-4 select-none text-[7rem] font-black leading-none text-white/10">{monogram}</span>
         </div>
       )}
-      {children && <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-1.5">{children}</div>}
+      {children && <div className="absolute start-3 top-3 z-10 flex flex-wrap gap-1.5">{children}</div>}
     </div>
   );
 }

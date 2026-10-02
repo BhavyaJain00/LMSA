@@ -6,8 +6,11 @@ import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { EditProfileForm, type EditProfileValues } from "@/components/profile/edit-profile-form";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Edit profile" };
+export async function generateMetadata() {
+  return { title: (await getT("account"))("profile.edit.metaTitle") };
+}
 
 export default async function EditProfilePage(props: PageProps<"/user/[username]/edit">) {
   const { username } = await props.params;
@@ -17,14 +20,15 @@ export default async function EditProfilePage(props: PageProps<"/user/[username]
   const base = `/user/${view.user.username}`;
 
   if (!view.canEdit) {
+    const t = await getT("account");
     return (
       <EmptyState
         icon={<Icon.Lock />}
-        title="You can only edit your own profile."
-        description="Ask a moderator if something on this profile needs to change."
+        title={t("profile.edit.notAllowed")}
+        description={t("profile.edit.notAllowedHint")}
         action={
           <ButtonLink href={base} variant="outline" size="sm">
-            Back to profile
+            {t("profile.edit.backToProfile")}
           </ButtonLink>
         }
       />

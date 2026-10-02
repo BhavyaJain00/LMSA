@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface RoleOption {
   role: Role;
@@ -25,6 +26,7 @@ export function RolesForm({ userId, initialRoles, options }: { userId: string; i
   const [busy, setBusy] = useState<Role | null>(null);
   const [, startTransition] = useTransition();
   const toast = useToast();
+  const t = useT("account");
 
   const toggle = (role: Role, enabled: boolean) => {
     const previous = roles;
@@ -35,7 +37,7 @@ export function RolesForm({ userId, initialRoles, options }: { userId: string; i
       setBusy(null);
       if (res.ok) {
         setRoles(res.data.roles);
-        toast.success(res.message ?? "Role updated successfully");
+        toast.success(res.message ?? t("profile.roles.updated"));
       } else {
         setRoles(previous);
         toast.error(res.error);

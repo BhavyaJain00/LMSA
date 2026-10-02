@@ -5,14 +5,15 @@ import { clientMessages, getLocale } from "./server";
 
 /**
  * Server component that makes namespaces available to `useT()` in the client
- * components below it. Put it once in the layout (or page) that owns a
- * namespace; the root layout already provides `common`, `AppShell` provides
- * `shell`, the auth layout provides `auth`.
+ * components below it. Put it in the layout (or page) that renders those
+ * components. The root layout already provides `common`, `shell` and the
+ * `global.` keys of every other namespace; the auth layout provides `auth`.
  *
  *   <I18nProvider namespaces={["learning"]}>{children}</I18nProvider>
  *
  * Only the listed namespaces are serialized, already merged with English.
- * For a large namespace, `pick` limits it to key prefixes:
+ * For a large namespace, `pick` limits it to key prefixes (nested providers
+ * merge key by key, so a slice never hides keys provided higher up):
  *
  *   <I18nProvider namespaces={["admin"]} pick={{ admin: ["courses.", "editor."] }}>
  */

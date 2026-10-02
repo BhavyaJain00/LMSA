@@ -3,6 +3,7 @@
 import { startTransition, useActionState, useState, type FormEvent } from "react";
 import type { ActionResult } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 type FormActionFn<T> = (prev: ActionResult<T> | null, formData: FormData) => Promise<ActionResult<T>>;
 
@@ -19,12 +20,13 @@ export function useFormAction<T = undefined>(
   opts: { onSuccess?: (result: Extract<ActionResult<T>, { ok: true }>) => void; toastSuccess?: boolean; toastError?: boolean } = {},
 ) {
   const toast = useToast();
+  const tc = useT("common");
   const [dirty, setDirty] = useState(false);
   const [state, formAction, pending] = useActionState<ActionResult<T> | null, FormData>(async (prev, formData) => {
     const result = await action(prev, formData);
     if (result.ok) {
       setDirty(false);
-      if (opts.toastSuccess ?? true) toast.success(result.message ?? "Saved");
+      if (opts.toastSuccess ?? true) toast.success(result.message ?? tc("status.saved"));
       opts.onSuccess?.(result);
     } else if (opts.toastError ?? true) {
       toast.error(result.error);

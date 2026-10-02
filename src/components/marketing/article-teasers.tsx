@@ -1,17 +1,18 @@
 import Link from "next/link";
 import type { PostListItem } from "@/lib/data/blog";
 import { postPath } from "@/lib/seo/content-index";
-import { readingTimeLabel } from "@/lib/seo/text";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
 /**
  * Compact article cards for "From the blog" blocks on course, category,
  * topic and instructor pages. The cover sits in a fixed 16:9 box so the
  * layout never shifts while it loads. Server Component.
  */
-export function ArticleTeasers({ posts, headingLevel = "h3", className }: { posts: PostListItem[]; headingLevel?: "h3" | "h4"; className?: string }) {
+export async function ArticleTeasers({ posts, headingLevel = "h3", className }: { posts: PostListItem[]; headingLevel?: "h3" | "h4"; className?: string }) {
   if (!posts.length) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const Heading = headingLevel;
   return (
     <ul className={cn("grid gap-5 sm:grid-cols-2 lg:grid-cols-3", className)}>
@@ -39,9 +40,9 @@ export function ArticleTeasers({ posts, headingLevel = "h3", className }: { post
               <p className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-3 text-xs text-ink-muted">
                 {post.author && <span className="truncate">{post.author.name}</span>}
                 {post.author && post.publishedAt && <span aria-hidden="true">·</span>}
-                {post.publishedAt && <time dateTime={post.publishedAt}>{formatDate(post.publishedAt)}</time>}
+                {post.publishedAt && <time dateTime={post.publishedAt}>{f.date(post.publishedAt)}</time>}
                 <span aria-hidden="true">·</span>
-                <span>{readingTimeLabel(post.readingTimeSeconds)}</span>
+                <span>{t("blog.readingTime", { minutes: Math.max(1, Math.round(post.readingTimeSeconds / 60)) })}</span>
               </p>
             </div>
           </article>

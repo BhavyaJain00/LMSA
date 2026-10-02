@@ -8,13 +8,14 @@ import { Icon } from "@/components/ui/icons";
 import { Input, Textarea } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
 import { OptionOutcomeList } from "../result-breakdown";
 import { formatScore, type CheckAnswerResult, type RunnerQuestion } from "../types";
 
-function instructionFor(q: RunnerQuestion): string {
-  if (q.type === "choices") return q.multiple ? "Choose all answers that apply" : "Choose one answer";
-  if (q.type === "user_input") return "Type your answer";
-  return "Write your answer";
+function instructionKey(q: RunnerQuestion) {
+  if (q.type === "choices") return q.multiple ? "quiz.question.chooseMany" : "quiz.question.chooseOne";
+  if (q.type === "user_input") return "quiz.question.typeAnswer";
+  return "quiz.question.writeAnswer";
 }
 
 function OptionCard({
@@ -35,6 +36,7 @@ function OptionCard({
   index: number;
 }) {
   const letter = String.fromCharCode(65 + index);
+  const t = useT("learning");
   return (
     <label
       className={cn(
@@ -56,7 +58,7 @@ function OptionCard({
         {checked && (type === "radio" ? <span className="size-2 rounded-full bg-current" /> : <Icon.Check className="size-3.5" strokeWidth={3} />)}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="sr-only">Option {letter}: </span>
+        <span className="sr-only">{t("quiz.question.optionLabel", { letter })} </span>
         <Markdown content={label} className="text-sm [&_p]:m-0" />
       </span>
       <span aria-hidden="true" className="mt-0.5 hidden text-xs font-medium text-ink-faint sm:inline">
@@ -107,6 +109,8 @@ export function QuestionView({
   const locked = !!check || busy;
   const textValue = answer[0] ?? "";
   const canCheck = showAnswers && !check && question.type !== "open_ended";
+  const t = useT("learning");
+  const f = useFormatter();
 
   const primary = () => {
     if (canCheck) onCheck();
@@ -119,17 +123,13 @@ export function QuestionView({
       <div className="px-5 pt-5 sm:px-6">
         <div className="flex items-start justify-between gap-3 text-sm">
           <p className="text-ink-muted">
-            <span className="font-medium text-ink">
-              Question {index + 1} of {total}
-            </span>
+            <span className="font-medium text-ink">{t("quiz.question.position", { index: index + 1, total })}</span>
             <span className="hidden sm:inline"> · </span>
-            <span className="block sm:inline">{instructionFor(question)}</span>
+            <span className="block sm:inline">{t(instructionKey(question))}</span>
           </p>
-          <span className="shrink-0 font-semibold text-ink">
-            {formatScore(question.marks)} {question.marks === 1 ? "Mark" : "Marks"}
-          </span>
+          <span className="shrink-0 font-semibold text-ink">{t("quiz.question.marks", { count: Number(formatScore(question.marks)) })}</span>
         </div>
-        <ProgressBar value={((index + 1) / total) * 100} size="xs" className="mt-3" label={`Question ${index + 1} of ${total}`} />
+        <ProgressBar value={((index + 1) / total) * 100} size="xs" className="mt-3" label={t("quiz.question.position", { index: index + 1, total })} />
       </div>
 
       <div className="px-5 py-5 sm:px-6">
@@ -166,7 +166,7 @@ export function QuestionView({
         {question.type === "user_input" && (
           <div className="space-y-2">
             <label htmlFor={`${uid}-input`} className="sr-only">
-              Your answer
+              {t("quiz.question.yourAnswer")}
             </label>
             <Input
               id={`${uid}-input`}
@@ -182,13 +182,13 @@ export function QuestionView({
               maxLength={500}
               autoComplete="off"
               spellCheck={false}
-              placeholder="Type your answer"
+              placeholder={t("quiz.question.typeAnswer")}
               className="h-11 text-base"
             />
             {check && (
               <Badge tone={check.isCorrect ? "success" : "danger"} size="md">
                 {check.isCorrect ? <Icon.CheckCircle className="size-4" /> : <Icon.XCircle className="size-4" />}
-                {check.isCorrect ? "Correct" : "Incorrect"}
+                {check.isCorrect ? t("quiz.question.correct") : t("quiz.question.incorrect")}
               </Badge>
             )}
           </div>
@@ -197,7 +197,7 @@ export function QuestionView({
         {question.type === "open_ended" && (
           <div className="space-y-1.5">
             <label htmlFor={`${uid}-text`} className="sr-only">
-              Your answer
+              {t("quiz.question.yourAnswer")}
             </label>
             <Textarea
               id={`${uid}-text`}
@@ -206,12 +206,14 @@ export function QuestionView({
               disabled={busy}
               rows={7}
               maxLength={20000}
-              placeholder="Write your answer here…"
+              placeholder={t("quiz.question.writePlaceholder")}
               className="min-h-32"
             />
             <p className="flex justify-between gap-2 text-xs text-ink-faint">
-              <span>Markdown formatting is supported. Your instructor grades this answer.</span>
-              <span className="tabular-nums">{textValue.length.toLocaleString()}/20,000</span>
+              <span>{t("quiz.question.openEndedHint")}</span>
+              <span className="tabular-nums">
+                {f.number(textValue.length)}/{f.number(20000)}
+              </span>
             </p>
           </div>
         )}
@@ -223,28 +225,28 @@ export function QuestionView({
             <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-ink-muted">
               <input type="checkbox" checked={reviewMarked} onChange={onToggleReview} className="size-4 accent-accent" />
               <Icon.Bookmark className="size-4" />
-              Mark for review
+              {t("quiz.question.markForReview")}
             </label>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {!showAnswers && !isFirst && (
-            <Button variant="outline" onClick={onPrev} disabled={busy} leftIcon={<Icon.ChevronLeft className="size-4" />}>
-              Previous
+            <Button variant="outline" onClick={onPrev} disabled={busy} leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
+              {t("quiz.question.previous")}
             </Button>
           )}
           {canCheck && (
             <Button variant="outline" onClick={onCheck} loading={checking} disabled={busy} leftIcon={<Icon.CheckCircle className="size-4" />}>
-              Check
+              {t("quiz.question.check")}
             </Button>
           )}
           {!isLast ? (
-            <Button variant={canCheck ? "subtle" : "primary"} onClick={onNext} disabled={busy || checking} rightIcon={<Icon.ChevronRight className="size-4" />}>
-              Next
+            <Button variant={canCheck ? "subtle" : "primary"} onClick={onNext} disabled={busy || checking} rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}>
+              {t("quiz.question.next")}
             </Button>
           ) : (
-            <Button onClick={onSubmit} disabled={busy || checking} leftIcon={<Icon.Send className="size-4" />}>
-              Submit
+            <Button onClick={onSubmit} disabled={busy || checking} leftIcon={<Icon.Send className="size-4 rtl:-scale-x-100" />}>
+              {t("quiz.submit.submit")}
             </Button>
           )}
         </div>

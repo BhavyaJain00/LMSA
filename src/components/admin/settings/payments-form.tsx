@@ -10,6 +10,7 @@ import { Icon } from "@/components/ui/icons";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 type Gateway = Settings["commerce"]["paymentGateway"];
 
@@ -22,71 +23,74 @@ interface GatewayChoice {
   blocked?: string;
 }
 
-function gatewayChoices(statuses: GatewayStatusView[]): GatewayChoice[] {
+type AdminT = ReturnType<typeof useT<"admin">>;
+
+function gatewayChoices(statuses: GatewayStatusView[], t: AdminT): GatewayChoice[] {
   const status = (g: "stripe" | "razorpay") => statuses.find((s) => s.gateway === g);
   const describe = (g: "stripe" | "razorpay", text: string) => {
     const s = status(g);
-    if (!s?.configured) return `${text} Not available yet: ${s?.missing[0] ?? "keys missing"}.`;
-    return `${text} ${s.mode === "live" ? "Live mode — real payments." : "Test mode — no real money moves."}`;
+    if (!s?.configured) return `${text} ${t("paymentsForm.gateway.unavailable", { reason: s?.missing[0] ?? t("paymentsForm.gateway.keysMissing") })}`;
+    return `${text} ${s.mode === "live" ? t("paymentsForm.gateway.live") : t("paymentsForm.gateway.test")}`;
   };
   return [
     {
       value: "manual",
-      title: "Manual payment",
-      description: "Learners place an order and pay offline (bank transfer, invoice). Confirm payments in Transactions to enroll them.",
+      title: t("paymentsForm.gateway.manualTitle"),
+      description: t("paymentsForm.gateway.manualDescription"),
       icon: <Icon.Receipt className="size-5" />,
     },
     {
       value: "stripe",
       title: "Stripe",
-      description: describe("stripe", "Learners pay on Stripe's hosted checkout (cards, wallets) and are enrolled automatically."),
+      description: describe("stripe", t("paymentsForm.gateway.stripeDescription")),
       icon: <Icon.CreditCard className="size-5" />,
-      blocked: status("stripe")?.configured ? undefined : (status("stripe")?.missing[0] ?? "Stripe is not configured"),
+      blocked: status("stripe")?.configured ? undefined : (status("stripe")?.missing[0] ?? t("paymentsForm.gateway.notConfigured", { gateway: "Stripe" })),
     },
     {
       value: "razorpay",
       title: "Razorpay",
-      description: describe("razorpay", "Learners pay in the Razorpay window (cards, UPI, netbanking, wallets) and are enrolled automatically."),
+      description: describe("razorpay", t("paymentsForm.gateway.razorpayDescription")),
       icon: <Icon.CreditCard className="size-5" />,
-      blocked: status("razorpay")?.configured ? undefined : (status("razorpay")?.missing[0] ?? "Razorpay is not configured"),
+      blocked: status("razorpay")?.configured ? undefined : (status("razorpay")?.missing[0] ?? t("paymentsForm.gateway.notConfigured", { gateway: "Razorpay" })),
     },
     {
       value: "none",
-      title: "No payment gateway",
-      description: "Payment is not collected: paid items are granted as soon as the learner checks out.",
+      title: t("paymentsForm.gateway.noneTitle"),
+      description: t("paymentsForm.gateway.noneDescription"),
       icon: <Icon.Gift className="size-5" />,
     },
   ];
 }
 
 export function PaymentsForm({ initial, gateways }: { initial: Settings["commerce"]; gateways: GatewayStatusView[] }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(savePaymentGatewaySettingsAction);
   const [gateway, setGateway] = useState<Gateway>(initial.paymentGateway);
   const [applyTax, setApplyTax] = useState(initial.applyTax);
-  const choices = gatewayChoices(gateways);
+  const choices = gatewayChoices(gateways, t);
   const selectedBlocked = choices.find((c) => c.value === gateway)?.blocked;
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Configuration">
-        <SettingsRow label="Default Currency" description="Default currency used for new course and batch prices." htmlFor="defaultCurrency" error={errors.defaultCurrency}>
+      <SettingsSection title={t("paymentsForm.config.title")}>
+        <SettingsRow label={t("paymentsForm.currency.label")} description={t("paymentsForm.currency.description")} htmlFor="defaultCurrency" error={errors.defaultCurrency}>
           <Select id="defaultCurrency" name="defaultCurrency" defaultValue={initial.defaultCurrency} options={currencies.map((c) => ({ value: c, label: c }))} />
         </SettingsRow>
         <SettingsSwitchRow>
           <Switch
             name="showUsdEquivalent"
             defaultChecked={initial.showUsdEquivalent}
-            label="Show USD equivalent amount"
-            description="If enabled, checkout shows an approximate USD equivalent for prices in other currencies."
+            label={t("paymentsForm.usd.label")}
+            description={t("paymentsForm.usd.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
-          <Switch name="applyRounding" defaultChecked={initial.applyRounding} label="Apply rounding on equivalent" description="If enabled, the USD equivalent is rounded up to the next whole dollar." />
+          <Switch name="applyRounding" defaultChecked={initial.applyRounding} label={t("paymentsForm.rounding.label")} description={t("paymentsForm.rounding.description")} />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SettingsSection title="Payment Gateway" description="Payment gateway used to process course, batch and certificate purchases.">
-        <div className="grid gap-2 px-4 py-4 sm:grid-cols-2 sm:px-5" role="radiogroup" aria-label="Payment gateway">
+      <SettingsSection title={t("paymentsForm.gateway.title")} description={t("paymentsForm.gateway.description")}>
+        <div className="grid gap-2 px-4 py-4 sm:grid-cols-2 sm:px-5" role="radiogroup" aria-label={t("paymentsForm.gateway.label")}>
           {choices.map((g) => (
             <RadioCard
               key={g.value}
@@ -107,24 +111,23 @@ export function PaymentsForm({ initial, gateways }: { initial: Settings["commerc
         {selectedBlocked && !errors.paymentGateway && (
           <p role="alert" className="mx-4 mb-4 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-ink sm:mx-5">
             <Icon.AlertTriangle className="mt-px size-3.5 shrink-0 text-danger" />
-            The selected gateway cannot take payments ({selectedBlocked}). Learners see &ldquo;Online payments are unavailable&rdquo; at checkout until you fix the keys or choose
-            another gateway.
+            {t("paymentsForm.gateway.blocked", { reason: selectedBlocked })}
           </p>
         )}
         {errors.paymentGateway && <p className="px-5 pb-3 text-xs text-danger">{errors.paymentGateway}</p>}
       </SettingsSection>
 
-      <SettingsSection title="Tax">
+      <SettingsSection title={t("paymentsForm.tax.title")}>
         <SettingsSwitchRow>
           <Switch
             name="applyTax"
             checked={applyTax}
             onChange={(e) => setApplyTax(e.target.checked)}
-            label="Apply tax"
-            description="If enabled, tax is added to every order total and checkout asks for GSTIN / PAN (optional)."
+            label={t("paymentsForm.tax.label")}
+            description={t("paymentsForm.tax.description")}
           />
         </SettingsSwitchRow>
-        <SettingsRow label="Tax percentage" description="Percentage added on top of the discounted price." htmlFor="taxPercentage" error={errors.taxPercentage} required={applyTax}>
+        <SettingsRow label={t("paymentsForm.taxPercentage.label")} description={t("paymentsForm.taxPercentage.description")} htmlFor="taxPercentage" error={errors.taxPercentage} required={applyTax}>
           <Input
             id="taxPercentage"
             name="taxPercentage"
@@ -137,18 +140,18 @@ export function PaymentsForm({ initial, gateways }: { initial: Settings["commerc
             invalid={!!errors.taxPercentage}
           />
         </SettingsRow>
-        <SettingsRow label="Tax label" description="Shown in the order summary, e.g. GST or VAT." htmlFor="taxLabel" error={errors.taxLabel} required={applyTax}>
-          <Input id="taxLabel" name="taxLabel" defaultValue={initial.taxLabel} maxLength={30} placeholder="GST" invalid={!!errors.taxLabel} />
+        <SettingsRow label={t("paymentsForm.taxLabel.label")} description={t("paymentsForm.taxLabel.description")} htmlFor="taxLabel" error={errors.taxLabel} required={applyTax}>
+          <Input id="taxLabel" name="taxLabel" defaultValue={initial.taxLabel} maxLength={30} placeholder={t("paymentsForm.taxLabel.placeholder")} invalid={!!errors.taxLabel} />
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Payment Reminders">
+      <SettingsSection title={t("paymentsForm.reminders.title")}>
         <SettingsSwitchRow>
           <Switch
             name="sendPaymentReminders"
             defaultChecked={initial.sendPaymentReminders}
-            label="Send payment reminders"
-            description="If enabled, learners who left an order unpaid in the last week are reminded automatically once a day until they pay (checked whenever an admin opens the admin overview or Transactions). Transactions also offers Send reminders to remind everyone right away."
+            label={t("paymentsForm.reminders.label")}
+            description={t("paymentsForm.reminders.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>

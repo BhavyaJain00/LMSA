@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { clamp, cn, formatTime } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /** Compact custom audio player (no native controls). */
 export function AudioPlayer({ src, title, className }: { src: string; title?: string; className?: string }) {
+  const t = useT("learning");
   const ref = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -56,7 +58,7 @@ export function AudioPlayer({ src, title, className }: { src: string; title?: st
   return (
     <div className={cn("flex items-center gap-3 rounded-xl border border-border bg-surface-1 p-3", className)}>
       <audio ref={ref} src={src} preload="metadata" muted={muted} />
-      <button type="button" onClick={toggle} aria-label={playing ? "Pause" : "Play"} className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg hover:brightness-110">
+      <button type="button" onClick={toggle} aria-label={playing ? t("global.player.pause") : t("global.player.play")} className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-fg hover:brightness-110">
         {playing ? <Icon.Pause className="size-5" /> : <Icon.Play className="ml-0.5 size-5" />}
       </button>
       <div className="min-w-0 flex-1">
@@ -70,17 +72,17 @@ export function AudioPlayer({ src, title, className }: { src: string; title?: st
             step={0.5}
             value={time}
             onChange={(e) => seek(Number(e.target.value))}
-            aria-label="Seek"
+            aria-label={t("global.player.seek")}
             className="ll-range h-1 flex-1 cursor-pointer"
             style={{ background: `linear-gradient(to right, var(--accent) ${pct}%, var(--surface-3) ${pct}%)` }}
           />
           <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-ink-muted">{formatTime(duration)}</span>
         </div>
       </div>
-      <button type="button" onClick={cycleRate} className="shrink-0 rounded-md px-2 py-1 font-mono text-xs text-ink-muted hover:bg-surface-2" title="Playback speed">
+      <button type="button" onClick={cycleRate} className="shrink-0 rounded-md px-2 py-1 font-mono text-xs text-ink-muted hover:bg-surface-2" title={t("global.player.speed")}>
         {rate}×
       </button>
-      <button type="button" onClick={() => setMuted((m) => !m)} aria-label={muted ? "Unmute" : "Mute"} className="shrink-0 rounded-md p-1.5 text-ink-muted hover:bg-surface-2">
+      <button type="button" onClick={() => setMuted((m) => !m)} aria-label={muted ? t("global.player.unmute") : t("global.player.mute")} className="shrink-0 rounded-md p-1.5 text-ink-muted hover:bg-surface-2">
         {muted ? <Icon.VolumeMute className="size-4" /> : <Icon.VolumeHigh className="size-4" />}
       </button>
     </div>

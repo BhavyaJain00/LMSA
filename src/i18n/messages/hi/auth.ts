@@ -49,7 +49,7 @@ const auth: Translation<typeof en> = {
 
   "reset.metaTitle": "नया पासवर्ड चुनें",
   "reset.title": "नया पासवर्ड चुनें",
-  "reset.subtitle": "आपके {brand} खाते <email>{email}</email> के लिए।",
+  "reset.subtitle": "आपके {brand} खाते <b>{email}</b> के लिए।",
   "reset.usedTitle": "यह लिंक पहले ही इस्तेमाल हो चुका है",
   "reset.usedBody": "हर रीसेट लिंक केवल एक बार काम करता है। अगर आपको अब भी पासवर्ड बदलना है, तो नया लिंक माँगें।",
   "reset.expiredTitle": "इस लिंक की समय-सीमा खत्म हो गई है",
@@ -64,7 +64,7 @@ const auth: Translation<typeof en> = {
 
   "twoFactor.metaTitle": "दो-चरणीय सत्यापन",
   "twoFactor.title": "दो-चरणीय सत्यापन",
-  "twoFactor.subtitle": "{brand} में <email>{email}</email> के रूप में साइन इन हो रहा है।",
+  "twoFactor.subtitle": "{brand} में <b>{email}</b> के रूप में साइन इन हो रहा है।",
   "twoFactor.expiredTitle": "आपके साइन-इन प्रयास की समय-सीमा खत्म हो गई",
   "twoFactor.expiredBody": "आपकी सुरक्षा के लिए सत्यापन चरण 10 मिनट बाद समाप्त हो जाता है। जारी रखने के लिए फिर से लॉग इन करें।",
   "twoFactor.codeLabel": "प्रमाणीकरण कोड",

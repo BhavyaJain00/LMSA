@@ -4,7 +4,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Markdown } from "@/lib/markdown";
-import { cn, formatDate, formatPrice, relativeTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { CourseGrid } from "./course-grid";
 
 /** Section heading used across the course page. */
@@ -20,12 +21,13 @@ export function SectionHeading({ id, children, aside }: { id: string; children: 
 }
 
 /** "What you'll learn" checklist (course outcomes). */
-export function CourseOutcomes({ outcomes }: { outcomes: string[] }) {
+export async function CourseOutcomes({ outcomes }: { outcomes: string[] }) {
   if (!outcomes.length) return null;
+  const t = await getT("public");
   return (
     <section aria-labelledby="outcomes-heading" className="rounded-card border border-border bg-surface-1 p-5 sm:p-6">
       <h2 id="outcomes-heading" className="text-xl font-semibold tracking-tight text-ink">
-        What you&apos;ll learn
+        {t("course.sections.outcomes")}
       </h2>
       <ul className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2">
         {outcomes.map((outcome, i) => (
@@ -40,11 +42,12 @@ export function CourseOutcomes({ outcomes }: { outcomes: string[] }) {
 }
 
 /** Requirements / prerequisites list. */
-export function CourseRequirements({ requirements }: { requirements: string[] }) {
+export async function CourseRequirements({ requirements }: { requirements: string[] }) {
   if (!requirements.length) return null;
+  const t = await getT("public");
   return (
     <section aria-labelledby="requirements-heading">
-      <SectionHeading id="requirements-heading">Requirements</SectionHeading>
+      <SectionHeading id="requirements-heading">{t("course.sections.requirements")}</SectionHeading>
       <ul className="space-y-2">
         {requirements.map((req, i) => (
           <li key={i} className="flex items-start gap-2.5 text-sm leading-6 text-ink-muted">
@@ -58,11 +61,12 @@ export function CourseRequirements({ requirements }: { requirements: string[] })
 }
 
 /** Markdown course description ("About this course"). */
-export function CourseDescription({ description }: { description: string }) {
+export async function CourseDescription({ description }: { description: string }) {
   if (!description.trim()) return null;
+  const t = await getT("public");
   return (
     <section aria-labelledby="about-heading">
-      <SectionHeading id="about-heading">About this course</SectionHeading>
+      <SectionHeading id="about-heading">{t("course.sections.about")}</SectionHeading>
       <Markdown content={description} />
     </section>
   );
@@ -71,12 +75,13 @@ export function CourseDescription({ description }: { description: string }) {
 export type AnnouncementView = Announcement & { author: PublicUser | null };
 
 /** Latest course announcements from the instructors. */
-export function CourseAnnouncements({ announcements }: { announcements: AnnouncementView[] }) {
+export async function CourseAnnouncements({ announcements }: { announcements: AnnouncementView[] }) {
   if (!announcements.length) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
     <section aria-labelledby="announcements-heading">
-      <SectionHeading id="announcements-heading" aside={`${announcements.length} recent`}>
-        Announcements
+      <SectionHeading id="announcements-heading" aside={t("course.sections.recent", { count: announcements.length })}>
+        {t("course.sections.announcements")}
       </SectionHeading>
       <ol className="space-y-3">
         {announcements.map((a) => (
@@ -95,8 +100,8 @@ export function CourseAnnouncements({ announcements }: { announcements: Announce
                       <span aria-hidden="true">·</span>
                     </>
                   )}
-                  <time dateTime={a.createdAt} title={formatDate(a.createdAt)}>
-                    {relativeTime(a.createdAt)}
+                  <time dateTime={a.createdAt} title={f.date(a.createdAt)}>
+                    {f.relative(a.createdAt)}
                   </time>
                 </p>
                 <Markdown content={a.body} className="mt-3 text-sm! text-ink-muted!" />
@@ -110,20 +115,21 @@ export function CourseAnnouncements({ announcements }: { announcements: Announce
 }
 
 /** "Related Courses" grid (hidden when there are none). */
-export function RelatedCourses({ courses, explicit }: { courses: CourseSummary[]; explicit: boolean }) {
+export async function RelatedCourses({ courses, explicit }: { courses: CourseSummary[]; explicit: boolean }) {
   if (!courses.length) return null;
+  const t = await getT("public");
   return (
     <section aria-labelledby="related-heading">
       <SectionHeading
         id="related-heading"
         aside={
           <Link href="/courses" className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
-            Browse all courses
-            <Icon.ArrowRight className="size-3.5" aria-hidden="true" />
+            {t("landing.browseAll")}
+            <Icon.ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
           </Link>
         }
       >
-        {explicit ? "Related Courses" : "More courses like this"}
+        {explicit ? t("course.sections.related") : t("course.sections.moreLikeThis")}
       </SectionHeading>
       <CourseGrid courses={courses} />
     </section>
@@ -131,7 +137,7 @@ export function RelatedCourses({ courses, explicit }: { courses: CourseSummary[]
 }
 
 /** Certification details card linking to the certification page. */
-export function CertificationCard({
+export async function CertificationCard({
   slug,
   enableCertification,
   paidCertificate,
@@ -153,6 +159,14 @@ export function CertificationCard({
   className?: string;
 }) {
   if (!enableCertification && !paidCertificate && !certificate) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
+  const paidDescription = (): string => {
+    const price = certificatePrice > 0 ? f.price(certificatePrice, currency) : null;
+    if (evaluatorName && price) return t("course.certification.paidWithEvaluatorAndPrice", { evaluator: evaluatorName, price });
+    if (evaluatorName) return t("course.certification.paidWithEvaluator", { evaluator: evaluatorName });
+    if (price) return t("course.certification.paidWithPrice", { price });
+    return t("course.certification.paid");
+  };
   return (
     <section aria-labelledby="certification-heading" className={cn("overflow-hidden rounded-card border border-border bg-surface-1 shadow-card", className)}>
       <div className="flex items-start gap-3 p-5">
@@ -161,27 +175,32 @@ export function CertificationCard({
         </span>
         <div className="min-w-0">
           <h2 id="certification-heading" className="font-semibold text-ink">
-            {certificate ? "You're certified" : paidCertificate ? "Get certified" : "Certificate of completion"}
+            {certificate ? t("course.certification.certified") : paidCertificate ? t("enroll.getCertified") : t("enroll.includes.certificateCompletion")}
           </h2>
           <p className="mt-1 text-sm text-ink-muted">
             {certificate
-              ? `Issued on ${formatDate(certificate.issueDate)}. Share it or download a printable copy.`
+              ? t("course.certification.issued", { date: f.date(certificate.issueDate) })
               : paidCertificate
-                ? `Finish the course, then book an evaluation${evaluatorName ? ` with ${evaluatorName}` : ""} to earn a verified certificate${certificatePrice > 0 ? ` (${formatPrice(certificatePrice, currency)})` : ""}.`
+                ? paidDescription()
                 : lessonCount > 0
-                  ? `Complete all ${lessonCount} ${lessonCount === 1 ? "lesson" : "lessons"} to receive a certificate you can share and verify online.`
-                  : "Complete every lesson to receive a certificate you can share and verify online."}
+                  ? t("course.certification.completeLessons", { count: lessonCount })
+                  : t("course.certification.completeEvery")}
           </p>
         </div>
       </div>
       <div className="flex flex-wrap gap-2 border-t border-border bg-surface-2/40 px-5 py-3">
         {certificate && (
           <ButtonLink href={`/certificates/${certificate.code}`} size="sm" leftIcon={<Icon.GraduationCap className="size-4" />}>
-            View certificate
+            {t("enroll.viewCertificate")}
           </ButtonLink>
         )}
-        <ButtonLink href={`/courses/${slug}/certification`} size="sm" variant={certificate ? "ghost" : "outline"} rightIcon={<Icon.ArrowRight className="size-3.5" />}>
-          Certification details
+        <ButtonLink
+          href={`/courses/${slug}/certification`}
+          size="sm"
+          variant={certificate ? "ghost" : "outline"}
+          rightIcon={<Icon.ArrowRight className="size-3.5 rtl:rotate-180" />}
+        >
+          {t("course.certification.details")}
         </ButtonLink>
       </div>
     </section>
@@ -189,13 +208,18 @@ export function CertificationCard({
 }
 
 /** Live batches that teach this course. */
-export function CourseBatches({ batches }: { batches: { slug: string; title: string; startDate: string; endDate: string; paidBatch: boolean; amount: number; currency: string }[] }) {
+export async function CourseBatches({
+  batches,
+}: {
+  batches: { slug: string; title: string; startDate: string; endDate: string; paidBatch: boolean; amount: number; currency: string }[];
+}) {
   if (!batches.length) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
     <section aria-labelledby="batches-heading" className="rounded-card border border-border bg-surface-1 p-5 shadow-card">
       <h2 id="batches-heading" className="flex items-center gap-2 font-semibold text-ink">
         <Icon.Users className="size-4.5 text-accent" aria-hidden="true" />
-        Learn with a cohort
+        {t("course.sections.cohort")}
       </h2>
       <ul className="mt-3 divide-y divide-border">
         {batches.map((b) => (
@@ -203,11 +227,11 @@ export function CourseBatches({ batches }: { batches: { slug: string; title: str
             <Link href={`/batches/${b.slug}`} className="group flex items-center justify-between gap-3 py-2.5">
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-ink group-hover:text-accent">{b.title}</span>
-                <span className="block text-xs text-ink-muted">
-                  {formatDate(b.startDate)} – {formatDate(b.endDate)}
-                </span>
+                <span className="block text-xs text-ink-muted">{t("home.batches.range", { start: f.date(b.startDate), end: f.date(b.endDate) })}</span>
               </span>
-              <span className="shrink-0 text-xs font-semibold text-ink">{b.paidBatch ? formatPrice(b.amount, b.currency) : "Free"}</span>
+              <span className="shrink-0 text-xs font-semibold text-ink">
+                {b.paidBatch ? f.price(b.amount, b.currency, t("catalog.free")) : t("catalog.free")}
+              </span>
             </Link>
           </li>
         ))}

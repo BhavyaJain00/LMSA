@@ -11,6 +11,8 @@ import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { AddToCalendar } from "@/components/pwa/add-to-calendar";
+import { intlLocale } from "@/i18n/config";
+import { useLocale, useT } from "@/i18n/client";
 import { formatInZone, sessionState } from "./time";
 import { useNow } from "./use-now";
 
@@ -19,6 +21,8 @@ import { useNow } from "./use-now";
  * - "student" variant: shows the evaluator, a Join Call button on the day and
  *   an Options menu with Cancel for future evaluations.
  * - "evaluator" variant: shows the learner and links to the evaluator's schedule.
+ *
+ * Rendered on the dashboard and the admin overview, so its strings are `global.` keys.
  */
 export function EvaluationCard({
   evaluation,
@@ -31,6 +35,8 @@ export function EvaluationCard({
   scheduleHref?: string;
   className?: string;
 }) {
+  const t = useT("account");
+  const locale = useLocale();
   const now = useNow();
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
@@ -40,14 +46,15 @@ export function EvaluationCard({
   const end = new Date(evaluation.endsAt);
   const state = now === null ? null : sessionState({ start, end }, now);
   const zone = now === null ? evaluation.timezone || "UTC" : undefined;
+  const tag = intlLocale(locale);
   const dateLabel =
     zone !== undefined
-      ? formatInZone(start, zone, { day: "numeric", month: "long", year: "numeric" })
-      : start.toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+      ? formatInZone(start, zone, { day: "numeric", month: "long", year: "numeric" }, locale)
+      : start.toLocaleDateString(tag, { day: "numeric", month: "long", year: "numeric" });
   const timeLabel =
     zone !== undefined
-      ? formatInZone(start, zone, { hour: "numeric", minute: "2-digit" })
-      : start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      ? formatInZone(start, zone, { hour: "numeric", minute: "2-digit" }, locale)
+      : start.toLocaleTimeString(tag, { hour: "numeric", minute: "2-digit" });
 
   const person = variant === "student" ? evaluation.evaluator : evaluation.member;
   const showOptions = variant === "student" && evaluation.cancellable && state !== "ended" && state !== "live";
@@ -59,7 +66,7 @@ export function EvaluationCard({
     startTransition(async () => {
       const res = await cancelEvaluationAction(evaluation.id);
       if (res.ok) {
-        toast.success(res.message ?? "Evaluation cancelled successfully");
+        toast.success(res.message ?? t("global.evaluation.cancelled"));
         setConfirming(false);
       } else {
         toast.error(res.error);
@@ -80,11 +87,11 @@ export function EvaluationCard({
                 size="xs"
                 event={{
                   uid: `evaluation-${evaluation.id}`,
-                  title: `Certificate evaluation · ${evaluation.courseTitle}`,
+                  title: t("global.evaluation.calendarTitle", { course: evaluation.courseTitle }),
                   description: [
-                    evaluation.meetingLink ? `Join: ${evaluation.meetingLink}` : "",
-                    evaluation.evaluator ? `Evaluator: ${evaluation.evaluator.name}` : "",
-                    evaluation.batchTitle ? `Batch: ${evaluation.batchTitle}` : "",
+                    evaluation.meetingLink ? t("global.evaluation.calendarJoin", { link: evaluation.meetingLink }) : "",
+                    evaluation.evaluator ? t("global.evaluation.calendarEvaluator", { name: evaluation.evaluator.name }) : "",
+                    evaluation.batchTitle ? t("global.evaluation.calendarBatch", { title: evaluation.batchTitle }) : "",
                   ]
                     .filter(Boolean)
                     .join("\n"),
@@ -101,12 +108,12 @@ export function EvaluationCard({
                 trigger={
                   <span className="flex size-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink">
                     <Icon.MoreVertical className="size-4" />
-                    <span className="sr-only">Options</span>
+                    <span className="sr-only">{t("global.evaluation.options")}</span>
                   </span>
                 }
                 items={[
                   {
-                    label: "Cancel",
+                    label: t("global.evaluation.cancel"),
                     icon: <Icon.XCircle />,
                     destructive: true,
                     onClick: () => setConfirming(true),
@@ -120,31 +127,31 @@ export function EvaluationCard({
       {evaluation.batchTitle && <p className="mt-0.5 truncate text-xs text-ink-muted">{evaluation.batchTitle}</p>}
       <dl className="mt-3 space-y-1.5 text-sm text-ink">
         <div className="flex items-center gap-2">
-          <dt className="sr-only">Date</dt>
+          <dt className="sr-only">{t("global.evaluation.date")}</dt>
           <Icon.Calendar className="size-4 shrink-0 text-ink-faint" />
           <dd>{dateLabel}</dd>
         </div>
         <div className="flex items-center gap-2">
-          <dt className="sr-only">Time</dt>
+          <dt className="sr-only">{t("global.evaluation.time")}</dt>
           <Icon.Clock className="size-4 shrink-0 text-ink-faint" />
           <dd>{timeLabel}</dd>
         </div>
         {evaluation.timezone && (
           <div className="flex items-center gap-2">
-            <dt className="sr-only">Timezone</dt>
+            <dt className="sr-only">{t("global.evaluation.timezone")}</dt>
             <Icon.Globe className="size-4 shrink-0 text-ink-faint" />
             <dd className="truncate text-ink-muted">{evaluation.timezone}</dd>
           </div>
         )}
         {person && (
           <div className="flex items-center gap-2">
-            <dt className="sr-only">{variant === "student" ? "Evaluator" : "Learner"}</dt>
+            <dt className="sr-only">{variant === "student" ? t("global.evaluation.evaluator") : t("global.evaluation.learner")}</dt>
             <Icon.GraduationCap className="size-4 shrink-0 text-ink-faint" />
             <dd className="truncate">{person.name}</dd>
           </div>
         )}
       </dl>
-      {state === "live" && <p className="mt-3 text-xs font-medium text-success">In progress now</p>}
+      {state === "live" && <p className="mt-3 text-xs font-medium text-success">{t("global.evaluation.inProgress")}</p>}
     </>
   );
 
@@ -166,7 +173,7 @@ export function EvaluationCard({
           {canJoin && (
             <div className="mt-auto pt-4">
               <ButtonLink href={evaluation.meetingLink!} size="sm" className="w-full" leftIcon={<Icon.Video className="size-4" />}>
-                Join Call
+                {t("global.evaluation.joinCall")}
               </ButtonLink>
             </div>
           )}
@@ -178,10 +185,10 @@ export function EvaluationCard({
         onConfirm={cancel}
         loading={pending}
         destructive
-        title="Confirm Cancellation?"
-        description="Are you sure you want to cancel this evaluation? This action cannot be undone."
-        confirmLabel="Cancel"
-        cancelLabel="Keep evaluation"
+        title={t("global.evaluation.confirmTitle")}
+        description={t("global.evaluation.confirmBody")}
+        confirmLabel={t("global.evaluation.confirmCancel")}
+        cancelLabel={t("global.evaluation.keep")}
       />
     </>
   );

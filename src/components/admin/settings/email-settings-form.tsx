@@ -9,21 +9,23 @@ import { Button } from "@/components/ui/button";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export type EmailSettingsValues = Settings["email"];
 
 /** Settings → Email: master switch, sender identity, footer and which notifications are emailed. */
 export function EmailSettingsForm({ initial, senderAddress }: { initial: EmailSettingsValues; senderAddress: string | null }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveEmailSettingsAction);
   const [types, setTypes] = useState<Set<NotificationType>>(new Set(initial.notifyTypes));
   const [enabled, setEnabled] = useState(initial.enabled);
   const [fromName, setFromName] = useState(initial.fromName);
 
-  const toggleType = (t: NotificationType) => {
+  const toggleType = (type: NotificationType) => {
     setTypes((prev) => {
       const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
       return next;
     });
     markDirty();
@@ -35,29 +37,29 @@ export function EmailSettingsForm({ initial, senderAddress }: { initial: EmailSe
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Notification emails">
+      <SettingsSection title={t("emailSettingsForm.notifications.title")}>
         <SettingsSwitchRow>
           <Switch
             name="enabled"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            label="Send email notifications"
-            description="Email copies of notifications, announcements, batch messages and receipts. Password reset and verification emails are always sent."
+            label={t("emailSettingsForm.enabled.label")}
+            description={t("emailSettingsForm.enabled.description")}
           />
         </SettingsSwitchRow>
         <SettingsRow
-          label="Emailed notification types"
-          description="Members only receive the types checked here, and can turn categories off in their own email preferences."
+          label={t("emailSettingsForm.types.label")}
+          description={t("emailSettingsForm.types.description")}
           error={errors.notifyTypes}
           stacked
         >
           <div className={enabled ? "" : "pointer-events-none opacity-60"} aria-disabled={!enabled}>
             <div className="mb-3 flex gap-2">
               <Button size="xs" variant="subtle" onClick={() => setAll(true)} disabled={!enabled}>
-                Select all
+                {t("emailSettingsForm.types.selectAll")}
               </Button>
               <Button size="xs" variant="subtle" onClick={() => setAll(false)} disabled={!enabled}>
-                Clear
+                {t("emailSettingsForm.types.clear")}
               </Button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -69,8 +71,8 @@ export function EmailSettingsForm({ initial, senderAddress }: { initial: EmailSe
                   value={o.value}
                   checked={types.has(o.value)}
                   onChange={() => toggleType(o.value)}
-                  label={o.label}
-                  description={o.description}
+                  label={t(`notificationTypes.${o.value}.label`)}
+                  description={t(`notificationTypes.${o.value}.description`)}
                 />
               ))}
             </div>
@@ -78,20 +80,24 @@ export function EmailSettingsForm({ initial, senderAddress }: { initial: EmailSe
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Sender">
+      <SettingsSection title={t("emailSettingsForm.sender.title")}>
         <SettingsRow
-          label="From name"
-          description={senderAddress ? `Shown as the sender, e.g. “${fromName || "LearnLoop"} <${senderAddress}>”. The address comes from MAIL_FROM.` : "Shown as the sender name. The address comes from MAIL_FROM."}
+          label={t("emailSettingsForm.fromName.label")}
+          description={
+            senderAddress
+              ? t("emailSettingsForm.fromName.descriptionWithAddress", { sender: `${fromName || "LearnLoop"} <${senderAddress}>` })
+              : t("emailSettingsForm.fromName.description")
+          }
           htmlFor="fromName"
           error={errors.fromName}
           required
         >
           <Input id="fromName" name="fromName" value={fromName} onChange={(e) => setFromName(e.target.value)} maxLength={80} invalid={!!errors.fromName} required />
         </SettingsRow>
-        <SettingsRow label="Reply-to address" description="Where replies go. Leave empty to use the sender address." htmlFor="replyTo" error={errors.replyTo}>
+        <SettingsRow label={t("emailSettingsForm.replyTo.label")} description={t("emailSettingsForm.replyTo.description")} htmlFor="replyTo" error={errors.replyTo}>
           <Input id="replyTo" name="replyTo" type="email" defaultValue={initial.replyTo ?? ""} placeholder="support@example.com" invalid={!!errors.replyTo} />
         </SettingsRow>
-        <SettingsRow label="Footer text" description="Printed at the bottom of every email, e.g. your postal address or why members receive emails." htmlFor="footerText" error={errors.footerText} stacked>
+        <SettingsRow label={t("emailSettingsForm.footer.label")} description={t("emailSettingsForm.footer.description")} htmlFor="footerText" error={errors.footerText} stacked>
           <Textarea id="footerText" name="footerText" rows={3} maxLength={500} defaultValue={initial.footerText ?? ""} invalid={!!errors.footerText} />
         </SettingsRow>
       </SettingsSection>

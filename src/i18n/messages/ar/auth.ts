@@ -49,7 +49,7 @@ const auth: Translation<typeof en> = {
 
   "reset.metaTitle": "اختر كلمة مرور جديدة",
   "reset.title": "اختر كلمة مرور جديدة",
-  "reset.subtitle": "لحسابك على {brand} <email>{email}</email>.",
+  "reset.subtitle": "لحسابك على {brand} <b>{email}</b>.",
   "reset.usedTitle": "استُخدم هذا الرابط من قبل",
   "reset.usedBody": "يعمل كل رابط لإعادة التعيين مرة واحدة فقط. إذا كنت لا تزال بحاجة إلى تغيير كلمة المرور، فاطلب رابطًا جديدًا.",
   "reset.expiredTitle": "انتهت صلاحية هذا الرابط",
@@ -64,7 +64,7 @@ const auth: Translation<typeof en> = {
 
   "twoFactor.metaTitle": "التحقق بخطوتين",
   "twoFactor.title": "التحقق بخطوتين",
-  "twoFactor.subtitle": "جارٍ تسجيل الدخول إلى {brand} باسم <email>{email}</email>.",
+  "twoFactor.subtitle": "جارٍ تسجيل الدخول إلى {brand} باسم <b>{email}</b>.",
   "twoFactor.expiredTitle": "انتهت مهلة محاولة تسجيل الدخول",
   "twoFactor.expiredBody": "حفاظًا على أمانك، تنتهي مهلة خطوة التحقق بعد 10 دقائق. سجّل الدخول مرة أخرى للمتابعة.",
   "twoFactor.codeLabel": "رمز المصادقة",

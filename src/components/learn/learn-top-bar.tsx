@@ -12,6 +12,7 @@ import { UserMenu } from "@/components/layout/user-menu";
 import { useLearnPrefs } from "./learn-provider";
 import { openCommandPalette } from "@/components/command-palette/events";
 import { useShortcutLabel } from "@/components/command-palette/open-button";
+import { useT } from "@/i18n/client";
 
 export interface LearnTopBarProps {
   brand: { name: string; logoUrl?: string };
@@ -28,6 +29,8 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
   const pathname = usePathname();
   const next = encodeURIComponent(pathname || course.href);
   const shortcut = useShortcutLabel();
+  const t = useT("learning");
+  const shell = useT("shell");
 
   return (
     <header
@@ -36,7 +39,7 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
         zen && "hidden",
       )}
     >
-      <Link href="/" className="flex shrink-0 items-center gap-2 rounded-lg p-1 text-ink hover:bg-surface-2" aria-label={`${brand.name} home`}>
+      <Link href="/" className="flex shrink-0 items-center gap-2 rounded-lg p-1 text-ink hover:bg-surface-2" aria-label={t("learn.topBar.home", { brand: brand.name })}>
         {brand.logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={brand.logoUrl} alt="" className="size-7 rounded-md object-contain" />
@@ -49,7 +52,7 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
       <span className="hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
 
       <div className="min-w-0 flex-1">
-        <p className="hidden text-[11px] font-medium uppercase tracking-wider text-ink-faint sm:block">Course</p>
+        <p className="hidden text-[11px] font-medium uppercase tracking-wider text-ink-faint sm:block">{t("learn.topBar.course")}</p>
         <Link href={course.href} className="block truncate text-sm font-semibold text-ink hover:text-accent" title={course.title}>
           {course.title}
         </Link>
@@ -58,30 +61,30 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
       {progress && (
         <div
           className="flex shrink-0 items-center gap-2"
-          title={`${progress.completed} of ${progress.total} lessons completed`}
-          aria-label={`Course progress: ${progress.percent}% (${progress.completed} of ${progress.total} lessons)`}
+          title={t("learn.topBar.progressTitle", { completed: progress.completed, total: progress.total })}
+          aria-label={t("learn.topBar.progressLabel", { percent: progress.percent, completed: progress.completed, total: progress.total })}
           role="img"
         >
           <ProgressRing value={progress.percent} size={34} stroke={3} tone={progress.percent >= 100 ? "success" : "accent"}>
             <span className="text-[10px] font-semibold tabular-nums">{progress.percent}%</span>
           </ProgressRing>
           <span className="hidden text-xs leading-tight text-ink-muted lg:block">
-            <span className="block font-medium text-ink">{progress.percent >= 100 ? "Completed" : "Your progress"}</span>
-            {progress.completed}/{progress.total} lessons
+            <span className="block font-medium text-ink">{progress.percent >= 100 ? t("learn.completed") : t("learn.topBar.yourProgress")}</span>
+            {t("learn.topBar.lessonsCount", { completed: progress.completed, total: progress.total })}
           </span>
         </div>
       )}
 
-      <ButtonLink href={course.href} variant="ghost" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />} aria-label="Back to course" className="shrink-0">
-        <span className="hidden sm:inline">Back to course</span>
+      <ButtonLink href={course.href} variant="ghost" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />} aria-label={t("learn.backToCourse")} className="shrink-0">
+        <span className="hidden sm:inline">{t("learn.backToCourse")}</span>
       </ButtonLink>
 
       <button
         type="button"
         onClick={openCommandPalette}
         className="shrink-0 rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink"
-        aria-label="Search"
-        title={`Search (${shortcut})`}
+        aria-label={shell("header.search")}
+        title={t("learn.topBar.searchShortcut", { shortcut })}
         aria-keyshortcuts="Control+K Meta+K"
       >
         <Icon.Search className="size-5" />
@@ -94,11 +97,11 @@ export function LearnTopBar({ brand, course, progress, user, signupEnabled }: Le
       ) : (
         <div className="flex shrink-0 items-center gap-1">
           <ButtonLink href={`/login?next=${next}`} variant="ghost" size="sm">
-            Log in
+            {shell("header.logIn")}
           </ButtonLink>
           {signupEnabled && (
             <ButtonLink href={`/register?next=${next}`} size="sm" className="hidden sm:inline-flex">
-              Sign up
+              {shell("header.signUp")}
             </ButtonLink>
           )}
         </div>

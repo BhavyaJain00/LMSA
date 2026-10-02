@@ -4,12 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { CourseCover } from "./course-cover";
 import { InstructorByline } from "./instructor-byline";
 import { PriceTag } from "./price-tag";
 import { RatingInline } from "./rating-stars";
-import { compactCount, plural } from "./format";
+import { compactCount } from "./format";
 
 export interface CourseCardProps {
   course: CourseSummary;
@@ -25,8 +26,9 @@ export interface CourseCardProps {
  * page. The whole card is clickable through a stretched title link; the
  * instructor links sit above it.
  */
-export function CourseCard({ course, className, headingLevel = "h3", priority }: CourseCardProps) {
+export async function CourseCard({ course, className, headingLevel = "h3", priority }: CourseCardProps) {
   if (!course.title) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const Heading = headingLevel;
   const href = `/courses/${course.slug}`;
   const enrolled = !!course.enrollment;
@@ -44,19 +46,19 @@ export function CourseCard({ course, className, headingLevel = "h3", priority }:
         {!course.published && (
           <Badge tone="dark" size="xs">
             <Icon.EyeOff className="size-3" aria-hidden="true" />
-            Unpublished
+            {t("card.unpublished")}
           </Badge>
         )}
         {course.upcoming && (
           <Badge tone="info" size="xs" className="bg-surface-1 shadow-sm">
             <Icon.Clock className="size-3" aria-hidden="true" />
-            Upcoming
+            {t("card.upcoming")}
           </Badge>
         )}
         {course.featured && (
           <Badge tone="warning" size="xs" className="bg-surface-1 shadow-sm">
             <Icon.Award className="size-3" aria-hidden="true" />
-            Featured
+            {t("card.featured")}
           </Badge>
         )}
       </CourseCover>
@@ -67,13 +69,13 @@ export function CourseCard({ course, className, headingLevel = "h3", priority }:
           {course.lessonCount > 0 && (
             <span className="inline-flex items-center gap-1">
               <Icon.BookOpen className="size-3.5" aria-hidden="true" />
-              {course.lessonCount} {plural(course.lessonCount, "lesson")}
+              {t("catalog.lessonCount", { count: course.lessonCount })}
             </span>
           )}
           {course.totalDurationSeconds > 0 && (
             <span className="inline-flex items-center gap-1">
               <Icon.Clock className="size-3.5" aria-hidden="true" />
-              {formatDuration(course.totalDurationSeconds)}
+              {f.duration(course.totalDurationSeconds)}
             </span>
           )}
         </div>
@@ -90,7 +92,7 @@ export function CourseCard({ course, className, headingLevel = "h3", priority }:
           {course.enrollmentCount > 0 && (
             <span className="inline-flex items-center gap-1">
               <Icon.Users className="size-3.5" aria-hidden="true" />
-              {compactCount(course.enrollmentCount)} {plural(course.enrollmentCount, "student")}
+              {t("card.students", { count: course.enrollmentCount, formatted: compactCount(course.enrollmentCount, f.locale) })}
             </span>
           )}
           {course.tags.slice(0, 2).map((tag) => (
@@ -102,9 +104,9 @@ export function CourseCard({ course, className, headingLevel = "h3", priority }:
 
         {enrolled && (
           <div className="mt-4">
-            <ProgressBar value={progress} size="xs" label={`${progress}% completed`} />
+            <ProgressBar value={progress} size="xs" label={t("card.progress", { percent: progress })} />
             <p className="mt-1.5 text-xs font-medium text-ink-muted" aria-hidden="true">
-              {progress >= 100 ? "Completed" : `${progress}% completed`}
+              {progress >= 100 ? t("card.completed") : t("card.progress", { percent: progress })}
             </p>
           </div>
         )}
@@ -114,12 +116,12 @@ export function CourseCard({ course, className, headingLevel = "h3", priority }:
             <InstructorByline instructors={course.instructors} className="min-w-0 flex-1" />
             <div className="flex shrink-0 items-center gap-2">
               {certification && (
-                <span className="relative z-10 text-ink-faint" title="Get Certified">
+                <span className="relative z-10 text-ink-faint" title={t("card.getCertified")}>
                   <Icon.GraduationCap className="size-5" aria-hidden="true" />
-                  <span className="sr-only">Offers a certificate</span>
+                  <span className="sr-only">{t("card.offersCertificate")}</span>
                 </span>
               )}
-              {course.upcoming ? <span className="text-sm font-medium text-info">Coming soon</span> : <PriceTag course={course} />}
+              {course.upcoming ? <span className="text-sm font-medium text-info">{t("card.comingSoon")}</span> : <PriceTag course={course} />}
             </div>
           </div>
         </div>

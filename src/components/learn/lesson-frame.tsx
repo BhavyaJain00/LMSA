@@ -7,6 +7,7 @@ import { Icon } from "@/components/ui/icons";
 import { useLearnPrefs } from "./learn-provider";
 import { useOptionalLessonRuntime } from "./lesson-runtime";
 import type { SidebarTab } from "./types";
+import { useT } from "@/i18n/client";
 import { FocusExitIcon, FocusIcon } from "./learn-icons";
 
 /**
@@ -19,6 +20,7 @@ import { FocusExitIcon, FocusIcon } from "./learn-icons";
  */
 export function LessonFrame({ children, sidebar }: { children: ReactNode; sidebar?: ReactNode }) {
   const { zen, theater, zenPanel, setZenPanel } = useLearnPrefs();
+  const t = useT("learning");
   const rt = useOptionalLessonRuntime();
   const theaterActive = theater && !!rt?.hasVideo;
   const collapse = zen || theaterActive || !sidebar;
@@ -38,7 +40,7 @@ export function LessonFrame({ children, sidebar }: { children: ReactNode; sideba
                 onClick={() => setZenPanel(false)}
                 className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
               >
-                <Icon.X className="size-4" /> Hide panel
+                <Icon.X className="size-4" /> {t("learn.zen.hidePanel")}
               </button>
             </div>
             {sidebar}
@@ -57,8 +59,9 @@ export function LessonFrame({ children, sidebar }: { children: ReactNode; sideba
 export function ZenPanelToggle({ tab, className }: { tab: Exclude<SidebarTab, "outline">; className?: string }) {
   const { zen, zenPanel, setZenPanel } = useLearnPrefs();
   const rt = useOptionalLessonRuntime();
+  const t = useT("learning");
   if (!zen || !rt) return null;
-  const label = "Toggle discussions";
+  const label = t("learn.zen.toggleDiscussions");
   const onClick = () => {
     if (!window.matchMedia("(min-width: 1024px)").matches) {
       rt.openSidebar(tab);
@@ -98,7 +101,8 @@ export function ZenPanelToggle({ tab, className }: { tab: Exclude<SidebarTab, "o
 /** Header button that toggles zen (distraction-free, fullscreen) mode. */
 export function ZenToggle({ className }: { className?: string }) {
   const { zen, toggleZen } = useLearnPrefs();
-  const label = zen ? "Exit zen mode" : "Zen mode";
+  const t = useT("learning");
+  const label = zen ? t("learn.zen.exit") : t("learn.zen.enter");
   return (
     <Tooltip label={label} side="bottom" className={className}>
       <button

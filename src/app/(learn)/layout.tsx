@@ -3,6 +3,11 @@ import { CommandPalette } from "@/components/command-palette/command-palette";
 import { buildPaletteConfig } from "@/components/command-palette/config";
 import { getCurrentPublicUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
+import { getT } from "@/i18n/server";
+import { I18nProvider } from "@/i18n/provider";
+
+/** Message slices the lesson player needs on the client. */
+const LEARN_PICK = { learning: ["learn.", "player.", "quiz.", "assignment.", "exercise.", "ai."] } as const;
 
 /**
  * Full-width frame for the lesson player. Pages in this group do not get the
@@ -12,21 +17,21 @@ import { getSettings } from "@/lib/db/store";
  * mounted here too, as in the (app) group.
  */
 export default async function LearnGroupLayout({ children }: LayoutProps<"/">) {
-  const [user, settings] = await Promise.all([getCurrentPublicUser(), getSettings()]);
+  const [user, settings, t] = await Promise.all([getCurrentPublicUser(), getSettings(), getT("learning")]);
   const palette = buildPaletteConfig(user, settings);
   return (
-    <>
+    <I18nProvider namespaces={["learning"]} pick={LEARN_PICK}>
       <div className="flex min-h-screen flex-col bg-surface">
         <a
           href="#lesson-main"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:rounded-lg focus:bg-surface-1 focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-ink focus:shadow-pop"
+          className="sr-only focus:not-sr-only focus:fixed focus:inset-s-3 focus:top-3 focus:z-[60] focus:rounded-lg focus:bg-surface-1 focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-ink focus:shadow-pop"
         >
-          Skip to lesson content
+          {t("learn.skipToContent")}
         </a>
         {children}
       </div>
       <CommandPalette {...palette} />
       <AnalyticsBeacon />
-    </>
+    </I18nProvider>
   );
 }

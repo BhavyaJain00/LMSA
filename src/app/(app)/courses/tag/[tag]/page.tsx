@@ -15,7 +15,7 @@ import { ChipLinks } from "@/components/marketing/chip-links";
 import { SortLinks } from "@/components/marketing/sort-links";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
-import { pluralize } from "@/lib/utils";
+import { getLocale, getT } from "@/i18n/server";
 
 function firstParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -27,19 +27,22 @@ function topicSlug(segment: string): string {
 }
 
 export async function generateMetadata(props: PageProps<"/courses/tag/[tag]">): Promise<Metadata> {
-  const [{ tag }, sp, settings] = await Promise.all([props.params, props.searchParams, getSettings()]);
+  const [{ tag }, sp, settings, t, locale] = await Promise.all([props.params, props.searchParams, getSettings(), getT("public"), getLocale()]);
   const slug = topicSlug(tag);
   const landing = settings.features.courses && slug ? await getTagLanding(slug) : null;
-  if (!landing) return notFoundMetadata("Topic not found");
+  if (!landing) return notFoundMetadata(t("topics.notFound"));
   const { noindex } = listingIndexing({ sort: firstParam(sp.sort), page: parsePageParam(sp.page) });
   const titles = landing.courses.slice(0, 3).map((c) => c.title);
   return pageMetadata(
     {
-      title: `${landing.label} courses`,
+      title: t("catalog.meta.categoryTitle", { category: landing.label }),
       description: [
-        `${pluralize(landing.courses.length, "course")} about ${landing.label} on ${settings.brand.name}${titles.length ? `, including ${titles.join(", ")}` : ""}. Learn with video lessons, quizzes and hands-on practice.`,
+        titles.length
+          ? t("topics.meta.landingDescriptionWithTitles", { count: landing.courses.length, topic: landing.label, brand: settings.brand.name, titles: titles.join(", ") })
+          : t("topics.meta.landingDescription", { count: landing.courses.length, topic: landing.label, brand: settings.brand.name }),
       ],
       path: tagPath(landing.slug),
+      locale,
       keywords: [landing.label, ...landing.relatedTags.slice(0, 8).map((t) => t.label)],
       noindex: noindex || !isTagIndexable(landing.courses.length) || !catalogIsPublic(settings),
       follow: true,
@@ -59,6 +62,7 @@ export default async function TagPage(props: PageProps<"/courses/tag/[tag]">) {
   const landing = await getTagLanding(slug, sort, user);
   if (!landing) notFound();
 
+  const t = await getT("public");
   const { label, courses, relatedTags, categories, posts } = landing;
   const path = tagPath(landing.slug);
   const paged = paginate(courses, parsePageParam(sp.page), LANDING_PAGE_SIZE);
@@ -70,47 +74,53 @@ export default async function TagPage(props: PageProps<"/courses/tag/[tag]">) {
       {canonicalView && <JsonLd data={courseItemList(`${label} courses`, paged.items, { origin: siteOrigin() })} />}
 
       <header className="mb-8">
-        <p className="text-xs font-semibold uppercase tracking-wider text-ink-faint">Topic</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{label} courses</h1>
+        <p className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{t("topics.eyebrow")}</p>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{t("catalog.meta.categoryTitle", { category: label })}</h1>
         <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted">
-          {pluralize(courses.length, "course")} on {settings.brand.name} {courses.length === 1 ? "covers" : "cover"} {label}
-          {categories.length > 0 && <> across {categories.length === 1 ? categories[0]!.name : `${categories.length} categories`}</>}. Start with the free preview lessons, then learn at your own pace with quizzes and hands-on practice.
+          {categories.length === 0
+            ? t("topics.intro.plain", { count: courses.length, brand: settings.brand.name, topic: label })
+            : categories.length === 1
+              ? t("topics.intro.oneCategory", { count: courses.length, brand: settings.brand.name, topic: label, category: categories[0]!.name })
+              : t("topics.intro.manyCategories", { count: courses.length, brand: settings.brand.name, topic: label, categories: categories.length })}
         </p>
       </header>
 
       <section aria-labelledby="tag-courses-heading">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 id="tag-courses-heading" className="text-xl font-semibold tracking-tight text-ink">
-            Courses about {label}
+            {t("topics.coursesAbout", { topic: label })}
           </h2>
           {courses.length > 1 && <SortLinks base={path} current={sort} />}
         </div>
         <CourseGrid courses={paged.items} headingLevel="h3" eagerCount={paged.page === 1 ? 4 : 0} />
-        <PageLinks className="mt-6" page={paged.page} pageCount={paged.pages} hrefFor={(page) => landingHref(path, { sort, page })} label={`${label} course pages`} />
+        <PageLinks className="mt-6" page={paged.page} pageCount={paged.pages} hrefFor={(page) => landingHref(path, { sort, page })} label={t("landing.pages", { name: label })} />
       </section>
 
       {relatedTags.length > 0 && (
         <section aria-labelledby="tag-related-heading" className="mt-12">
           <h2 id="tag-related-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-            Related topics
+            {t("topics.related")}
           </h2>
-          <ChipLinks label={`Topics related to ${label}`} items={relatedTags.map((t) => ({ href: tagPath(t.slug), label: t.label, count: t.count }))} />
+          <ChipLinks
+            label={t("topics.relatedLabel", { topic: label })}
+            items={relatedTags.map((related) => ({ href: tagPath(related.slug), label: related.label, count: related.count }))}
+          />
         </section>
       )}
 
       {categories.length > 0 && (
         <section aria-labelledby="tag-categories-heading" className="mt-12">
           <h2 id="tag-categories-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-            Categories with {label} courses
+            {t("topics.categoriesWith", { topic: label })}
           </h2>
-          <ChipLinks label={`Categories with ${label} courses`} items={categories.map((c) => ({ href: categoryPath(c.slug), label: c.name, count: c.courseCount }))} />
+          <ChipLinks label={t("topics.categoriesWith", { topic: label })} items={categories.map((c) => ({ href: categoryPath(c.slug), label: c.name, count: c.courseCount }))} />
         </section>
       )}
 
       {posts.length > 0 && (
         <section aria-labelledby="tag-articles-heading" className="mt-12">
           <h2 id="tag-articles-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-            Articles about {label}
+            {t("topics.articlesAbout", { topic: label })}
           </h2>
           <ArticleTeasers posts={posts} />
         </section>

@@ -5,13 +5,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import { buttonClasses } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 function LoadMoreLabel() {
   const { pending } = useLinkStatus();
+  const common = useT("common");
   return (
     <>
       {pending && <Spinner className="size-4" />}
-      {pending ? "Loading…" : "Load More"}
+      {pending ? common("status.loading") : common("actions.loadMore")}
     </>
   );
 }
@@ -33,6 +35,7 @@ export function CatalogFooter({
   pageSizes: readonly number[];
   nextHref: string | null;
 }) {
+  const t = useT("public");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -50,20 +53,23 @@ export function CatalogFooter({
   return (
     <div className="mt-8 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
       <label className="flex items-center gap-2 text-sm text-ink-muted">
-        <span>Show</span>
-        <select
-          value={pageSize}
-          onChange={(e) => changePageSize(e.target.value)}
-          disabled={pending}
-          className="h-8 rounded-lg border border-border-strong bg-surface-1 px-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
-        >
-          {pageSizes.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-        <span>per page</span>
+        {t.rich("catalog.footer.perPage", {
+          select: () => (
+            <select
+              value={pageSize}
+              onChange={(e) => changePageSize(e.target.value)}
+              disabled={pending}
+              className="h-8 rounded-lg border border-border-strong bg-surface-1 px-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
+            >
+              {pageSizes.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          ),
+          text: (chunks) => <span>{chunks}</span>,
+        })}
         {pending && <Spinner className="size-4" />}
       </label>
       <div className="flex items-center gap-3">
@@ -76,7 +82,7 @@ export function CatalogFooter({
           </>
         )}
         <p className="text-sm tabular-nums text-ink-muted" aria-live="polite">
-          <span className="font-medium text-ink">{shown}</span> of {total}
+          {t.rich("catalog.footer.shown", { shown, total, b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}
         </p>
       </div>
     </div>

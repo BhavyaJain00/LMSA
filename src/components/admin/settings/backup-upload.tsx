@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
 import { cn, formatBytes } from "@/lib/utils";
-import { BACKUP_FILE_EXTENSIONS, uploadProblem } from "./data-labels";
+import { useFormatter, useT } from "@/i18n/client";
+import { BACKUP_FILE_EXTENSIONS, isBackupFileName } from "./data-labels";
 
 type UploadState =
   | { status: "idle" }
@@ -35,6 +36,9 @@ function parseResponse(text: string): { ok: true; backup: BackupInfo } | { ok: f
  * confirmation for the stored file.
  */
 export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: number; onUploaded: (backup: BackupInfo) => void; disabled?: boolean }) {
+  const t = useT("admin");
+  const tc = useT("common");
+  const f = useFormatter();
   const [state, setState] = useState<UploadState>({ status: "idle" });
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -45,7 +49,13 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
 
   const upload = useCallback(
     (file: File) => {
-      const problem = uploadProblem(file, maxBytes);
+      const problem = !isBackupFileName(file.name)
+        ? t("backups.upload.wrongType", { types: BACKUP_FILE_EXTENSIONS.join(", ") })
+        : file.size === 0
+          ? t("backups.upload.empty")
+          : file.size > maxBytes
+            ? t("backups.upload.tooLarge", { limit: f.number(Math.round(maxBytes / (1024 * 1024))) })
+            : null;
       if (problem) {
         setState({ status: "error", fileName: file.name, error: problem });
         return;
@@ -75,14 +85,14 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
           onUploaded(result.backup);
           return;
         }
-        finish({ status: "error", fileName: file.name, error: result?.error ?? `The upload failed (the server answered ${xhr.status}). Please try again.` });
+        finish({ status: "error", fileName: file.name, error: result?.error ?? t("backups.upload.serverError", { status: xhr.status }) });
       };
-      xhr.onerror = () => finish({ status: "error", fileName: file.name, error: "The connection was lost during the upload. Check your network and try again." });
+      xhr.onerror = () => finish({ status: "error", fileName: file.name, error: t("backups.upload.connectionLost") });
       xhr.onabort = () => finish({ status: "idle" });
       setState({ status: "uploading", fileName: file.name, sizeBytes: file.size, percent: 0 });
       xhr.send(file);
     },
-    [maxBytes, onUploaded],
+    [maxBytes, onUploaded, t, f],
   );
 
   const busy = state.status === "uploading" || state.status === "checking";
@@ -117,13 +127,21 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
       {!busy && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-ink">Restore from a file</p>
+            <p className="text-sm font-medium text-ink">{t("backups.upload.title")}</p>
             <p className="mt-0.5 text-xs text-ink-muted">
-              Upload a <span className="font-mono">.sqlite</span> backup or a JSON export made by this site, up to {formatBytes(maxBytes)}. You review what it contains before anything is replaced.
+              {t.rich("backups.upload.hint", {
+                ext: ".sqlite",
+                size: formatBytes(maxBytes),
+                mono: (chunks) => (
+                  <span dir="ltr" className="font-mono">
+                    {chunks}
+                  </span>
+                ),
+              })}
             </p>
           </div>
           <Button variant="outline" leftIcon={<Icon.Upload className="size-4" />} onClick={() => input.current?.click()} disabled={disabled} className="self-start sm:self-auto">
-            Choose file
+            {t("backups.upload.choose")}
           </Button>
         </div>
       )}
@@ -133,14 +151,14 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
           <div className="flex items-center justify-between gap-3">
             <p className="min-w-0 truncate text-sm font-medium text-ink">{state.fileName}</p>
             <Button variant="ghost" size="sm" onClick={() => request.current?.abort()}>
-              Cancel
+              {tc("actions.cancel")}
             </Button>
           </div>
           <ProgressBar
             className="mt-2"
             size="sm"
             value={state.status === "uploading" ? state.percent : 100}
-            label={state.status === "uploading" ? `Uploading ${formatBytes(state.sizeBytes)}…` : "Checking the file…"}
+            label={state.status === "uploading" ? t("backups.upload.uploading", { size: formatBytes(state.sizeBytes) }) : t("backups.upload.checking")}
             showLabel={state.status === "uploading"}
           />
         </div>
@@ -150,8 +168,7 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
         <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-danger">
           <Icon.AlertCircle className="mt-0.5 size-4 shrink-0" />
           <span className="min-w-0">
-            {state.fileName && <span className="break-all font-medium">{state.fileName}: </span>}
-            {state.error}
+            {state.fileName ? t.rich("backups.upload.errorWithFile", { file: state.fileName, error: state.error, b: (chunks) => <span className="break-all font-medium">{chunks}</span> }) : state.error}
           </span>
         </p>
       )}

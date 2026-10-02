@@ -7,6 +7,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { Checkbox, Field, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface CatalogToolbarProps {
   categories: { slug: string; name: string; courseCount: number }[];
@@ -26,6 +27,7 @@ type Updates = Record<string, string | null>;
  * rendered on the server; the page is reset to the first "load more" page.
  */
 export function CatalogToolbar({ categories, sorts, category, sort, certification, showCertification }: CatalogToolbarProps) {
+  const t = useT("public");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -96,22 +98,22 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
   const categorySelect = (id: string) => (
     <Select
       id={id}
-      aria-label="Category"
+      aria-label={t("catalog.filters.category")}
       value={category}
       onChange={(e) => apply({ category: e.target.value || null })}
       className="sm:w-48"
     >
-      <option value="">All categories</option>
+      <option value="">{t("catalog.filters.allCategories")}</option>
       {categories.map((c) => (
         <option key={c.slug} value={c.slug}>
-          {c.name} ({c.courseCount})
+          {t("catalog.filters.categoryOption", { name: c.name, count: c.courseCount })}
         </option>
       ))}
     </Select>
   );
 
   const sortSelect = (id: string) => (
-    <Select id={id} aria-label="Sort by" value={sort} onChange={(e) => apply({ sort: e.target.value === "newest" ? null : e.target.value })} className="sm:w-44">
+    <Select id={id} aria-label={t("catalog.filters.sortBy")} value={sort} onChange={(e) => apply({ sort: e.target.value === "newest" ? null : e.target.value })} className="sm:w-44">
       {sorts.map((s) => (
         <option key={s.value} value={s.value}>
           {s.label}
@@ -131,26 +133,26 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
         }}
       >
         <label htmlFor="catalog-search" className="sr-only">
-          Search courses
+          {t("catalog.search.label")}
         </label>
-        <Icon.Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+        <Icon.Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" aria-hidden="true" />
         <input
           ref={inputRef}
           id="catalog-search"
           type="search"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search by title, topic, tag or instructor"
+          placeholder={t("catalog.search.placeholder")}
           autoComplete="off"
-          className="h-10 w-full rounded-lg border border-border-strong bg-surface-1 pl-9 pr-10 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
+          className="h-10 w-full rounded-lg border border-border-strong bg-surface-1 ps-9 pe-10 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
         />
-        <span className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center">
+        <span className="absolute end-3 top-1/2 flex -translate-y-1/2 items-center">
           {pending ? (
             <Spinner className="size-4 text-ink-faint" />
           ) : query ? (
             <button
               type="button"
-              aria-label="Clear search"
+              aria-label={t("catalog.search.clear")}
               onClick={() => {
                 setQuery("");
                 if (timer.current) clearTimeout(timer.current);
@@ -175,7 +177,7 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
               "inline-flex h-9.5 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm transition-colors",
               certification ? "border-accent bg-accent/5 text-ink" : "border-border-strong bg-surface-1 text-ink-muted hover:bg-surface-2",
             )}
-            title="Only show courses that offer a certificate"
+            title={t("catalog.filters.certificationHint")}
           >
             <input
               type="checkbox"
@@ -184,7 +186,7 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
               className="size-4 cursor-pointer accent-accent"
             />
             <Icon.GraduationCap className="size-4" aria-hidden="true" />
-            Certification
+            {t("catalog.filters.certification")}
           </label>
         )}
       </div>
@@ -192,27 +194,27 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
       {/* Mobile: filters in a sheet */}
       <div className="flex items-center gap-2 sm:hidden">
         <Button variant="outline" className="flex-1" onClick={() => setSheetOpen(true)} leftIcon={<Icon.Filter className="size-4" />}>
-          Filters
+          {t("catalog.filters.title")}
           {activeFilters > 0 && (
-            <span className="ml-1 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">{activeFilters}</span>
+            <span className="ms-1 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">{activeFilters}</span>
           )}
         </Button>
       </div>
-      <Dialog open={sheetOpen} onClose={() => setSheetOpen(false)} title="Filters" size="sm">
+      <Dialog open={sheetOpen} onClose={() => setSheetOpen(false)} title={t("catalog.filters.title")} size="sm">
         <div className="space-y-4">
           {categories.length > 0 && (
-            <Field label="Category" htmlFor="catalog-category-mobile">
+            <Field label={t("catalog.filters.category")} htmlFor="catalog-category-mobile">
               {categorySelect("catalog-category-mobile")}
             </Field>
           )}
-          <Field label="Sort by" htmlFor="catalog-sort-mobile">
+          <Field label={t("catalog.filters.sortBy")} htmlFor="catalog-sort-mobile">
             {sortSelect("catalog-sort-mobile")}
           </Field>
           {showCertification && (
             <Checkbox
               id="catalog-certification-mobile"
-              label="Certification available"
-              description="Only show courses that offer a certificate"
+              label={t("catalog.filters.certificationAvailable")}
+              description={t("catalog.filters.certificationHint")}
               checked={certification}
               onChange={(e) => apply({ certification: e.target.checked ? "true" : null })}
             />
@@ -224,10 +226,10 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
               disabled={activeFilters === 0}
               onClick={() => apply({ category: null, sort: null, certification: null })}
             >
-              Reset
+              {t("catalog.filters.reset")}
             </Button>
             <Button className="flex-1" onClick={() => setSheetOpen(false)} loading={pending}>
-              Show results
+              {t("catalog.filters.showResults")}
             </Button>
           </div>
         </div>

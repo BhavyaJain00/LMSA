@@ -2,10 +2,11 @@ import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
 import { siteConfig } from "@/lib/config";
 import { Markdown } from "@/lib/markdown";
-import { cn, formatBytes, formatDuration } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { AudioPlayer } from "@/components/player";
 import { buttonClasses } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { getFormatter, getT } from "@/i18n/server";
 
 /** Width wrapper shared by every lesson block (follows the zen/normal width variable). */
 export function BlockFrame({ children, className, interactive }: { children: ReactNode; className?: string; interactive?: boolean }) {
@@ -26,21 +27,23 @@ export function MarkdownBlock({ content }: { content: string }) {
 }
 
 const CALLOUTS = {
-  info: { icon: Icon.Info, label: "Note", box: "border-info/30 bg-info/8", fg: "text-info" },
-  success: { icon: Icon.CheckCircle, label: "Tip", box: "border-success/30 bg-success/8", fg: "text-success" },
-  warning: { icon: Icon.AlertTriangle, label: "Warning", box: "border-warning/35 bg-warning/10", fg: "text-warning" },
-  danger: { icon: Icon.AlertCircle, label: "Important", box: "border-danger/30 bg-danger/8", fg: "text-danger" },
+  info: { icon: Icon.Info, label: "learn.callout.info", box: "border-info/30 bg-info/8", fg: "text-info" },
+  success: { icon: Icon.CheckCircle, label: "learn.callout.success", box: "border-success/30 bg-success/8", fg: "text-success" },
+  warning: { icon: Icon.AlertTriangle, label: "learn.callout.warning", box: "border-warning/35 bg-warning/10", fg: "text-warning" },
+  danger: { icon: Icon.AlertCircle, label: "learn.callout.danger", box: "border-danger/30 bg-danger/8", fg: "text-danger" },
 } as const;
 
-export function CalloutBlock({ tone, content }: { tone: keyof typeof CALLOUTS; content: string }) {
+export async function CalloutBlock({ tone, content }: { tone: keyof typeof CALLOUTS; content: string }) {
+  const t = await getT("learning");
   const style = CALLOUTS[tone] ?? CALLOUTS.info;
+  const label = t(style.label);
   const IconCmp = style.icon;
   return (
     <BlockFrame>
-      <aside role="note" aria-label={style.label} className={cn("flex gap-3 rounded-xl border p-4", style.box)}>
+      <aside role="note" aria-label={label} className={cn("flex gap-3 rounded-xl border p-4", style.box)}>
         <IconCmp className={cn("mt-0.5 size-5 shrink-0", style.fg)} />
         <div className="min-w-0 flex-1">
-          <p className={cn("mb-1 text-xs font-semibold uppercase tracking-wider", style.fg)}>{style.label}</p>
+          <p className={cn("mb-1 text-xs font-semibold uppercase tracking-wider", style.fg)}>{label}</p>
           <Markdown content={content} />
         </div>
       </aside>
@@ -48,11 +51,12 @@ export function CalloutBlock({ tone, content }: { tone: keyof typeof CALLOUTS; c
   );
 }
 
-export function ImageBlock({ src, alt, caption }: { src: string; alt?: string; caption?: string }) {
+export async function ImageBlock({ src, alt, caption }: { src: string; alt?: string; caption?: string }) {
+  const t = await getT("learning");
   return (
     <BlockFrame>
       <figure>
-        <a href={src} target="_blank" rel="noopener noreferrer" className="group block overflow-hidden rounded-xl border border-border bg-surface-2" aria-label={`Open image${alt ? `: ${alt}` : ""} in a new tab`}>
+        <a href={src} target="_blank" rel="noopener noreferrer" className="group block overflow-hidden rounded-xl border border-border bg-surface-2" aria-label={alt ? t("learn.image.openNamed", { alt }) : t("learn.image.open")}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={src} alt={alt ?? caption ?? ""} loading="lazy" decoding="async" className="mx-auto max-h-[80vh] w-full object-contain transition-transform duration-300 group-hover:scale-[1.01]" />
         </a>
@@ -68,31 +72,33 @@ function fileExtension(src: string): string {
   return ext.length <= 5 ? ext.toUpperCase() : "";
 }
 
-export function FileBlock({ src, title, sizeBytes }: { src: string; title: string; sizeBytes?: number }) {
+export async function FileBlock({ src, title, sizeBytes }: { src: string; title: string; sizeBytes?: number }) {
+  const [t, common] = await Promise.all([getT("learning"), getT("common")]);
   const ext = fileExtension(src);
   return (
     <BlockFrame interactive>
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface-1 p-4 shadow-card sm:flex-row sm:items-center">
         <span className="relative flex size-11 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
           <Icon.File className="size-5" />
-          {ext && <span className="absolute -bottom-1 -right-1 rounded bg-accent px-1 text-[9px] font-bold leading-4 text-accent-fg">{ext}</span>}
+          {ext && <span className="absolute -bottom-1 -end-1 rounded bg-accent px-1 text-[9px] font-bold leading-4 text-accent-fg">{ext}</span>}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium text-ink">{title || "Download"}</p>
+          <p className="truncate font-medium text-ink">{title || common("actions.download")}</p>
           <p className="text-xs text-ink-muted">
-            {[ext ? `${ext} file` : "File", sizeBytes ? formatBytes(sizeBytes) : null].filter(Boolean).join(" · ")}
+            {[ext ? t("learn.file.typed", { ext }) : t("learn.file.generic"), sizeBytes ? formatBytes(sizeBytes) : null].filter(Boolean).join(" · ")}
           </p>
         </div>
         <a href={src} download className={buttonClasses({ variant: "outline", size: "sm" })} target="_blank" rel="noopener noreferrer">
-          <Icon.Download className="size-4" /> Download
+          <Icon.Download className="size-4" /> {common("actions.download")}
         </a>
       </div>
     </BlockFrame>
   );
 }
 
-export function PdfBlock({ src, title }: { src: string; title?: string }) {
-  const name = title || "PDF document";
+export async function PdfBlock({ src, title }: { src: string; title?: string }) {
+  const [t, common] = await Promise.all([getT("learning"), getT("common")]);
+  const name = title || t("learn.pdf.document");
   return (
     <BlockFrame interactive>
       <div className="overflow-hidden rounded-xl border border-border bg-surface-1 shadow-card">
@@ -103,10 +109,10 @@ export function PdfBlock({ src, title }: { src: string; title?: string }) {
           </p>
           <div className="flex items-center gap-1">
             <a href={src} target="_blank" rel="noopener noreferrer" className={buttonClasses({ variant: "ghost", size: "xs" })}>
-              <Icon.ExternalLink className="size-3.5" /> Open in new tab
+              <Icon.ExternalLink className="size-3.5" /> {t("learn.openInNewTab")}
             </a>
             <a href={src} download className={buttonClasses({ variant: "ghost", size: "xs" })}>
-              <Icon.Download className="size-3.5" /> Download
+              <Icon.Download className="size-3.5" /> {common("actions.download")}
             </a>
           </div>
         </div>
@@ -117,14 +123,15 @@ export function PdfBlock({ src, title }: { src: string; title?: string }) {
   );
 }
 
-export function AudioBlock({ src, title, duration }: { src: string; title?: string; duration?: number }) {
+export async function AudioBlock({ src, title, duration }: { src: string; title?: string; duration?: number }) {
+  const [t, f] = await Promise.all([getT("learning"), getFormatter()]);
   return (
     <BlockFrame interactive>
       {(title || duration) && (
         <p className="mb-2 flex items-center gap-2 px-1 text-sm font-medium text-ink">
           <Icon.Audio className="size-4 text-accent" />
-          <span className="min-w-0 truncate">{title || "Audio"}</span>
-          {duration ? <span className="ml-auto shrink-0 text-xs font-normal text-ink-muted">{formatDuration(duration)}</span> : null}
+          <span className="min-w-0 truncate">{title || t("learn.audio")}</span>
+          {duration ? <span className="ms-auto shrink-0 text-xs font-normal text-ink-muted">{f.duration(duration)}</span> : null}
         </p>
       )}
       <AudioPlayer src={src} title={title} className="shadow-card" />
@@ -172,7 +179,8 @@ function embedTarget(src: string): EmbedTarget {
 const EMBED_SANDBOX_CROSS_ORIGIN = "allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-downloads";
 const EMBED_SANDBOX_SAME_ORIGIN = "allow-scripts allow-forms allow-popups allow-presentation allow-downloads";
 
-export function EmbedBlock({ src, title, height }: { src: string; title?: string; height?: number }) {
+export async function EmbedBlock({ src, title, height }: { src: string; title?: string; height?: number }) {
+  const t = await getT("learning");
   const target = embedTarget(src);
   if (!target.ok) {
     return (
@@ -180,17 +188,17 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
         <div className="flex items-start gap-3 rounded-xl border border-dashed border-border-strong bg-surface-2/60 p-4 text-sm">
           <Icon.AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" />
           <div className="min-w-0">
-            <p className="font-medium text-ink">{target.reason === "video" ? "This video is hosted on an external site" : "This embed could not be displayed"}</p>
+            <p className="font-medium text-ink">{target.reason === "video" ? t("learn.embed.videoTitle") : t("learn.embed.failedTitle")}</p>
             <p className="mt-0.5 text-ink-muted">
               {target.reason === "video"
-                ? "Videos from third-party video sites are not embedded here. Open it in a new tab to watch it."
+                ? t("learn.embed.videoBody")
                 : target.reason === "unsafe"
-                  ? "This type of uploaded file cannot be embedded. Let your instructor know."
-                  : "The embedded content has an invalid address. Let your instructor know."}
+                  ? t("learn.embed.unsafeBody")
+                  : t("learn.embed.invalidBody")}
             </p>
             {target.reason === "video" && (
               <a href={src} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 font-medium text-accent hover:underline">
-                Open link <Icon.ExternalLink className="size-3.5" />
+                {t("learn.embed.openLink")} <Icon.ExternalLink className="size-3.5" />
               </a>
             )}
           </div>
@@ -204,7 +212,7 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
       <div className="overflow-hidden rounded-xl border border-border bg-surface-1">
         <iframe
           src={target.url}
-          title={title || "Embedded content"}
+          title={title || t("learn.embed.content")}
           loading="lazy"
           className="block h-60 w-full bg-surface-2 sm:h-(--embed-h)"
           style={{ "--embed-h": `${h}px` } as CSSProperties}
@@ -214,9 +222,9 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
           allowFullScreen
         />
         <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-xs text-ink-muted">
-          <span className="min-w-0 truncate">{title || target.host || "Embedded content"}</span>
+          <span className="min-w-0 truncate">{title || target.host || t("learn.embed.content")}</span>
           <a href={target.url} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 font-medium hover:text-ink">
-            Open in new tab <Icon.ExternalLink className="size-3" />
+            {t("learn.openInNewTab")} <Icon.ExternalLink className="size-3" />
           </a>
         </div>
       </div>
@@ -225,8 +233,8 @@ export function EmbedBlock({ src, title, height }: { src: string; title?: string
 }
 
 /** Shown instead of quizzes/assignments/exercises for visitors who are not logged in. */
-export function LoginRequiredBlock({ kind, loginHref }: { kind: "quiz" | "assignment" | "exercise"; loginHref: string }) {
-  const noun = kind === "quiz" ? "quiz" : kind === "assignment" ? "assignment" : "exercise";
+export async function LoginRequiredBlock({ kind, loginHref }: { kind: "quiz" | "assignment" | "exercise"; loginHref: string }) {
+  const [t, shell] = await Promise.all([getT("learning"), getT("shell")]);
   const IconCmp = kind === "quiz" ? Icon.ListChecks : kind === "assignment" ? Icon.ClipboardList : Icon.Code;
   return (
     <BlockFrame interactive>
@@ -234,9 +242,9 @@ export function LoginRequiredBlock({ kind, loginHref }: { kind: "quiz" | "assign
         <span className="flex size-11 items-center justify-center rounded-full bg-surface-2 text-ink-muted">
           <IconCmp className="size-5" />
         </span>
-        <p className="font-medium text-ink">Please log in to access the {noun}.</p>
+        <p className="font-medium text-ink">{t("learn.loginRequired", { kind })}</p>
         <Link href={loginHref} className={buttonClasses({ size: "sm" })}>
-          <Icon.LogIn className="size-4" /> Log in
+          <Icon.LogIn className="size-4" /> {shell("header.logIn")}
         </Link>
       </div>
     </BlockFrame>

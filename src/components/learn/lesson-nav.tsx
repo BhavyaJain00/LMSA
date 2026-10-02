@@ -4,22 +4,28 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Icon, Spinner } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 import { useLearnPrefs } from "./learn-provider";
 import { useLessonRuntime } from "./lesson-runtime";
 
-function nextLabel(locked: boolean): string {
-  return locked ? "Complete and continue" : "Next";
+function useNextLabel(): (locked: boolean) => string {
+  const t = useT("learning");
+  const common = useT("common");
+  return (locked) => (locked ? t("learn.nav.completeAndContinue") : common("actions.next"));
 }
 
 /** Compact Previous / Next buttons for the lesson header (desktop). */
 export function LessonNavButtons({ className }: { className?: string }) {
   const rt = useLessonRuntime();
+  const t = useT("learning");
+  const common = useT("common");
+  const nextLabel = useNextLabel();
   const busy = rt.navigating || rt.completing;
   return (
     <div className={cn("flex items-center gap-2", className)}>
       {rt.prev && (
-        <Button variant="outline" size="sm" onClick={rt.goPrev} disabled={!rt.canGoPrev || busy} leftIcon={<Icon.ChevronLeft className="size-4" />}>
-          Previous
+        <Button variant="outline" size="sm" onClick={rt.goPrev} disabled={!rt.canGoPrev || busy} leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
+          {common("actions.previous")}
         </Button>
       )}
       {rt.canGoNext ? (
@@ -27,14 +33,14 @@ export function LessonNavButtons({ className }: { className?: string }) {
           size="sm"
           onClick={() => void rt.goNext()}
           loading={busy}
-          rightIcon={<Icon.ChevronRight className="size-4" />}
-          title={rt.next?.locked ? "Complete this lesson to unlock the next one" : undefined}
+          rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}
+          title={rt.next?.locked ? t("learn.nav.lockedHint") : undefined}
         >
           {nextLabel(!!rt.next?.locked)}
         </Button>
       ) : (
         <ButtonLink href={rt.courseHref} variant="outline" size="sm">
-          Back to course
+          {t("learn.backToCourse")}
         </ButtonLink>
       )}
     </div>
@@ -44,17 +50,20 @@ export function LessonNavButtons({ className }: { className?: string }) {
 /** Large Previous / Next cards at the end of the lesson. */
 export function LessonPager() {
   const rt = useLessonRuntime();
+  const t = useT("learning");
+  const common = useT("common");
+  const nextLabel = useNextLabel();
   const busy = rt.navigating || rt.completing;
   return (
-    <nav aria-label="Lesson navigation" className="grid gap-3 sm:grid-cols-2">
+    <nav aria-label={t("learn.nav.label")} className="grid gap-3 sm:grid-cols-2">
       {rt.prev && rt.canGoPrev ? (
         <Link
           href={rt.prev.href}
           className="group flex items-center gap-3 rounded-xl border border-border bg-surface-1 p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
         >
-          <Icon.ArrowLeft className="size-5 shrink-0 text-ink-faint transition-transform group-hover:-translate-x-0.5" />
+          <Icon.ArrowLeft className="size-5 shrink-0 text-ink-faint transition-transform group-hover:-translate-x-0.5 rtl:rotate-180 rtl:group-hover:translate-x-0.5" />
           <span className="min-w-0">
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">Previous</span>
+            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">{common("actions.previous")}</span>
             <span className="block truncate text-sm font-medium text-ink">{rt.prev.title}</span>
           </span>
         </Link>
@@ -66,7 +75,7 @@ export function LessonPager() {
           type="button"
           onClick={() => void rt.goNext()}
           disabled={busy}
-          className="group flex items-center justify-end gap-3 rounded-xl border border-accent/40 bg-accent/5 p-4 text-right transition-colors hover:bg-accent/10 disabled:opacity-70 sm:col-start-2"
+          className="group flex items-center justify-end gap-3 rounded-xl border border-accent/40 bg-accent/5 p-4 text-end transition-colors hover:bg-accent/10 disabled:opacity-70 sm:col-start-2"
         >
           <span className="min-w-0">
             <span className="block text-xs font-medium uppercase tracking-wider text-accent">{nextLabel(rt.next.locked)}</span>
@@ -75,17 +84,17 @@ export function LessonPager() {
           {busy ? (
             <Spinner className="size-5 shrink-0 text-accent" />
           ) : (
-            <Icon.ArrowRight className="size-5 shrink-0 text-accent transition-transform group-hover:translate-x-0.5" />
+            <Icon.ArrowRight className="size-5 shrink-0 text-accent transition-transform group-hover:translate-x-0.5 rtl:rotate-180 rtl:group-hover:-translate-x-0.5" />
           )}
         </button>
       ) : (
         <Link
           href={rt.courseHref}
-          className="group flex items-center justify-end gap-3 rounded-xl border border-border bg-surface-1 p-4 text-right transition-colors hover:bg-surface-2 sm:col-start-2"
+          className="group flex items-center justify-end gap-3 rounded-xl border border-border bg-surface-1 p-4 text-end transition-colors hover:bg-surface-2 sm:col-start-2"
         >
           <span className="min-w-0">
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">{rt.next ? "Next lesson is locked" : "You reached the end"}</span>
-            <span className="block truncate text-sm font-medium text-ink">Back to course</span>
+            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">{rt.next ? t("learn.nav.nextLocked") : t("learn.nav.reachedEnd")}</span>
+            <span className="block truncate text-sm font-medium text-ink">{t("learn.backToCourse")}</span>
           </span>
           <Icon.BookOpen className="size-5 shrink-0 text-ink-faint" />
         </Link>
@@ -97,6 +106,7 @@ export function LessonPager() {
 /** Sticky pager bar under the top bar on small screens: ‹ i / n ›. */
 export function MobilePager({ index, total }: { index: number; total: number }) {
   const rt = useLessonRuntime();
+  const t = useT("learning");
   const { zen } = useLearnPrefs();
   const busy = rt.navigating || rt.completing;
   return (
@@ -105,23 +115,23 @@ export function MobilePager({ index, total }: { index: number; total: number }) 
         type="button"
         onClick={rt.goPrev}
         disabled={!rt.canGoPrev || busy}
-        aria-label="Previous lesson"
+        aria-label={t("learn.nav.previousLesson")}
         className="flex size-9 items-center justify-center rounded-lg bg-surface-2 text-ink transition-colors hover:bg-surface-3 disabled:opacity-40"
       >
-        <Icon.ChevronLeft className="size-5" />
+        <Icon.ChevronLeft className="size-5 rtl:rotate-180" />
       </button>
       <span className="text-xs font-medium tabular-nums text-ink-muted" aria-live="polite">
-        Lesson {index + 1} / {total}
+        {t("learn.nav.mobilePosition", { index: index + 1, total })}
       </span>
       {rt.canGoNext ? (
         <button
           type="button"
           onClick={() => void rt.goNext()}
           disabled={busy}
-          aria-label={rt.next?.locked ? "Complete this lesson and go to the next one" : "Next lesson"}
+          aria-label={rt.next?.locked ? t("learn.nav.completeAndNext") : t("learn.nextLesson")}
           className="flex size-9 items-center justify-center rounded-lg bg-surface-2 text-ink transition-colors hover:bg-surface-3 disabled:opacity-40"
         >
-          {busy ? <Spinner className="size-4" /> : <Icon.ChevronRight className="size-5" />}
+          {busy ? <Spinner className="size-4" /> : <Icon.ChevronRight className="size-5 rtl:rotate-180" />}
         </button>
       ) : (
         <span className="size-9" aria-hidden="true" />

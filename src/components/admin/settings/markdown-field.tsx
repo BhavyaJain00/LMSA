@@ -4,17 +4,19 @@ import { useId, useRef, useState } from "react";
 import { Markdown } from "@/lib/markdown";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 type Mode = "write" | "preview";
 
-const TOOLBAR: { label: string; title: string; before: string; after?: string; block?: boolean }[] = [
-  { label: "B", title: "Bold", before: "**", after: "**" },
-  { label: "I", title: "Italic", before: "_", after: "_" },
-  { label: "H", title: "Heading", before: "## ", block: true },
-  { label: "•", title: "Bulleted list", before: "- ", block: true },
-  { label: "1.", title: "Numbered list", before: "1. ", block: true },
-  { label: "</>", title: "Inline code", before: "`", after: "`" },
-  { label: "Link", title: "Link", before: "[", after: "](https://)" },
+/** `label` is shown on the button (null: use the translated title); titles are `global.markdownField.tools.*`. */
+const TOOLBAR: { label: string | null; title: "bold" | "italic" | "heading" | "bullets" | "numbers" | "code" | "link"; before: string; after?: string; block?: boolean }[] = [
+  { label: "B", title: "bold", before: "**", after: "**" },
+  { label: "I", title: "italic", before: "_", after: "_" },
+  { label: "H", title: "heading", before: "## ", block: true },
+  { label: "•", title: "bullets", before: "- ", block: true },
+  { label: "1.", title: "numbers", before: "1. ", block: true },
+  { label: "</>", title: "code", before: "`", after: "`" },
+  { label: null, title: "link", before: "[", after: "](https://)" },
 ];
 
 /**
@@ -41,6 +43,7 @@ export function MarkdownField({
   onChange?: (value: string) => void;
   className?: string;
 }) {
+  const t = useT("admin");
   const autoId = useId();
   const inputId = id ?? autoId;
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -65,7 +68,7 @@ export function MarkdownField({
       next = value.slice(0, lineStart) + tool.before + value.slice(lineStart);
       cursor = end + tool.before.length;
     } else {
-      const text = selected || tool.title.toLowerCase();
+      const text = selected || t(`global.markdownField.tools.${tool.title}`).toLocaleLowerCase();
       next = value.slice(0, start) + tool.before + text + (tool.after ?? "") + value.slice(end);
       cursor = start + tool.before.length + text.length;
     }
@@ -90,12 +93,12 @@ export function MarkdownField({
             <button
               key={tool.title}
               type="button"
-              title={tool.title}
-              aria-label={tool.title}
+              title={t(`global.markdownField.tools.${tool.title}`)}
+              aria-label={t(`global.markdownField.tools.${tool.title}`)}
               onClick={() => apply(tool)}
               className="min-w-7 rounded-md px-1.5 py-1 font-mono text-xs font-semibold text-ink-muted hover:bg-surface-3 hover:text-ink"
             >
-              {tool.label}
+              {tool.label ?? t(`global.markdownField.tools.${tool.title}`)}
             </button>
           ))}
         </div>
@@ -104,8 +107,8 @@ export function MarkdownField({
           value={mode}
           onChange={setMode}
           options={[
-            { value: "write", label: "Write" },
-            { value: "preview", label: "Preview" },
+            { value: "write", label: t("global.markdownField.write") },
+            { value: "preview", label: t("global.markdownField.preview") },
           ]}
         />
       </div>
@@ -125,7 +128,7 @@ export function MarkdownField({
       />
       {mode === "preview" && (
         <div className="max-h-128 min-h-40 overflow-y-auto px-4 py-3">
-          {value.trim() ? <Markdown content={value} /> : <p className="text-sm italic text-ink-faint">Nothing to preview yet.</p>}
+          {value.trim() ? <Markdown content={value} /> : <p className="text-sm italic text-ink-faint">{t("global.markdownField.empty")}</p>}
         </div>
       )}
     </div>

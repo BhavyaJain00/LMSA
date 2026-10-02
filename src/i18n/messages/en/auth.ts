@@ -49,7 +49,7 @@ const auth = {
 
   "reset.metaTitle": "Choose a new password",
   "reset.title": "Choose a new password",
-  "reset.subtitle": "For your {brand} account <email>{email}</email>.",
+  "reset.subtitle": "For your {brand} account <b>{email}</b>.",
   "reset.usedTitle": "This link was already used",
   "reset.usedBody": "Each reset link works once. If you still need to change your password, request a new link.",
   "reset.expiredTitle": "This link has expired",
@@ -64,7 +64,7 @@ const auth = {
 
   "twoFactor.metaTitle": "Two-step verification",
   "twoFactor.title": "Two-step verification",
-  "twoFactor.subtitle": "Signing in to {brand} as <email>{email}</email>.",
+  "twoFactor.subtitle": "Signing in to {brand} as <b>{email}</b>.",
   "twoFactor.expiredTitle": "Your sign-in attempt expired",
   "twoFactor.expiredBody": "For your security, the verification step times out after 10 minutes. Log in again to continue.",
   "twoFactor.codeLabel": "Authentication code",

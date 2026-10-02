@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
 import { RatingStars } from "./rating-stars";
 import { ReviewDialog, type ReviewDraft } from "./review-dialog";
 import type { ReviewView } from "./types";
@@ -25,15 +26,16 @@ export interface RatingSummary {
 }
 
 function ReviewText({ text }: { text: string }) {
+  const t = useT("public");
   const [expanded, setExpanded] = useState(false);
-  if (!text) return <p className="text-sm italic text-ink-faint">Rated without a written review.</p>;
+  if (!text) return <p className="text-sm italic text-ink-faint">{t("reviews.noText")}</p>;
   const long = text.length > CLAMP_AT;
   return (
     <div>
       <p className={cn("whitespace-pre-line text-sm leading-6 text-ink-muted", long && !expanded && "line-clamp-5")}>{text}</p>
       {long && (
         <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-1 text-sm font-medium text-accent hover:underline" aria-expanded={expanded}>
-          {expanded ? "See less" : "See more"}
+          {expanded ? t("reviews.seeLess") : t("reviews.seeMore")}
         </button>
       )}
     </div>
@@ -51,11 +53,13 @@ function ReviewItem({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const t = useT("public");
+  const common = useT("common");
   const profile = review.author.username ? `/user/${review.author.username}` : null;
   return (
     <article className={cn("flex gap-3 rounded-card p-4", review.isOwn ? "border border-accent/30 bg-accent/5" : "border border-border bg-surface-1")}>
       {profile ? (
-        <Link href={profile} className="shrink-0 rounded-full" aria-label={`${review.author.name}'s profile`}>
+        <Link href={profile} className="shrink-0 rounded-full" aria-label={t("course.instructors.profileOf", { name: review.author.name })}>
           <Avatar name={review.author.name} src={review.author.avatarUrl} size="md" />
         </Link>
       ) : (
@@ -74,7 +78,7 @@ function ReviewItem({
               )}
               {review.isOwn && (
                 <Badge tone="accent" size="xs">
-                  Your review
+                  {t("reviews.yours")}
                 </Badge>
               )}
             </p>
@@ -86,14 +90,14 @@ function ReviewItem({
             </div>
           </div>
           {(review.isOwn || canModerate) && (
-            <div className="-mr-1 -mt-1 flex items-center gap-0.5">
+            <div className="-me-1 -mt-1 flex items-center gap-0.5">
               {review.isOwn && (
                 <Button variant="ghost" size="xs" onClick={onEdit} leftIcon={<Icon.Edit className="size-3.5" />}>
-                  Edit
+                  {common("actions.edit")}
                 </Button>
               )}
               <Button variant="ghost" size="xs" onClick={onDelete} className="text-danger hover:bg-danger/10" leftIcon={<Icon.Trash className="size-3.5" />}>
-                Delete
+                {common("actions.delete")}
               </Button>
             </div>
           )}
@@ -130,6 +134,9 @@ export function ReviewsPanel({
   writeHint?: string | null;
   canModerate: boolean;
 }) {
+  const t = useT("public");
+  const common = useT("common");
+  const f = useFormatter();
   const toast = useToast();
   const [dialog, setDialog] = useState<{ open: boolean; existing: ReviewDraft | null }>({ open: false, existing: null });
   const [showAll, setShowAll] = useState(false);
@@ -151,10 +158,10 @@ export function ReviewsPanel({
       formData.set("reviewId", target.id);
       const result = await deleteReviewAction(null, formData);
       if (result.ok) {
-        toast.success(result.message ?? "Review deleted.");
+        toast.success(result.message ?? t("reviews.deleted"));
         setToDelete(null);
       } else {
-        toast.error("Could not delete the review", result.error);
+        toast.error(t("reviews.deleteFailed"), result.error);
       }
     });
   };
@@ -162,10 +169,10 @@ export function ReviewsPanel({
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-2xl font-semibold tracking-tight text-ink">Reviews</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-ink">{t("reviews.title")}</h2>
         {canWrite && (
           <Button onClick={() => setDialog({ open: true, existing: null })} leftIcon={<Icon.Star className="size-4" />}>
-            Write a Review
+            {t("reviews.write")}
           </Button>
         )}
       </div>
@@ -174,14 +181,14 @@ export function ReviewsPanel({
         <div className="rounded-card border border-border bg-surface-1 p-5">
           <div className="flex items-center gap-2">
             <Icon.StarFilled className="size-7 text-warning" aria-hidden="true" />
-            <span className="text-4xl font-semibold tracking-tight text-ink">{summary.count ? average.toFixed(1) : "0"}</span>
+            <span className="text-4xl font-semibold tracking-tight text-ink">
+              {summary.count ? f.number(average, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : f.number(0)}
+            </span>
           </div>
           <RatingStars value={average} size="sm" className="mt-2" />
-          <p className="mt-1 text-sm text-ink-muted">
-            course rating &amp; {summary.count} user {summary.count === 1 ? "rating" : "ratings"}
-          </p>
+          <p className="mt-1 text-sm text-ink-muted">{t("reviews.summary", { count: summary.count })}</p>
           {summary.count > 0 && (
-            <ul className="mt-4 space-y-1" aria-label="Rating breakdown">
+            <ul className="mt-4 space-y-1" aria-label={t("reviews.breakdown")}>
               {([5, 4, 3, 2, 1] as const).map((star) => {
                 const n = summary.buckets[star];
                 const pct = summary.count ? Math.round((n / summary.count) * 100) : 0;
@@ -209,10 +216,9 @@ export function ReviewsPanel({
                       <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-3">
                         <span className="block h-full rounded-full bg-warning" style={{ width: `${pct}%` }} />
                       </span>
-                      <span className="w-9 shrink-0 text-right tabular-nums">{pct}%</span>
+                      <span className="w-9 shrink-0 text-end tabular-nums">{f.percent(pct)}</span>
                       <span className="sr-only">
-                        {n} {n === 1 ? "review" : "reviews"} with {star} {star === 1 ? "star" : "stars"}
-                        {active ? ", filter active" : ""}
+                        {active ? t("reviews.bucketActive", { count: n, stars: star }) : t("reviews.bucket", { count: n, stars: star })}
                       </span>
                     </button>
                   </li>
@@ -235,11 +241,9 @@ export function ReviewsPanel({
 
           {filter && (
             <div className="flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-muted">
-              <span>
-                Showing {filtered.length} {filtered.length === 1 ? "review" : "reviews"} with {filter} {filter === 1 ? "star" : "stars"}
-              </span>
+              <span>{t("reviews.filtered", { count: filtered.length, stars: filter })}</span>
               <button type="button" onClick={() => setFilter(null)} className="font-medium text-accent hover:underline">
-                Show all
+                {t("reviews.showAll")}
               </button>
             </div>
           )}
@@ -255,12 +259,12 @@ export function ReviewsPanel({
               <EmptyState
                 compact
                 icon={<Icon.MessageSquare />}
-                title="No reviews yet"
-                description={canWrite ? "Be the first to share what you think of this course." : "Reviews from enrolled learners will appear here."}
+                title={t("reviews.emptyTitle")}
+                description={canWrite ? t("reviews.emptyCanWrite") : t("reviews.emptyDescription")}
                 action={
                   canWrite ? (
                     <Button size="sm" onClick={() => setDialog({ open: true, existing: null })}>
-                      Write a Review
+                      {t("reviews.write")}
                     </Button>
                   ) : undefined
                 }
@@ -270,7 +274,7 @@ export function ReviewsPanel({
 
           {!showAll && filtered.length > INITIAL_VISIBLE && (
             <Button variant="outline" className="w-full" onClick={() => setShowAll(true)}>
-              View all reviews ({filtered.length})
+              {t("reviews.viewAll", { count: filtered.length })}
             </Button>
           )}
         </div>
@@ -289,13 +293,15 @@ export function ReviewsPanel({
         onConfirm={confirmDelete}
         loading={deleting}
         destructive
-        title={toDelete?.isOwn ? "Delete your review?" : "Delete this review?"}
+        title={toDelete?.isOwn ? t("reviews.deleteOwnTitle") : t("reviews.deleteTitle")}
         description={
           toDelete?.isOwn
-            ? "Your rating and review will be removed from this course. You can write a new one afterwards."
-            : `The review by ${toDelete?.author.name ?? "this learner"} will be permanently removed.`
+            ? t("reviews.deleteOwnDescription")
+            : toDelete
+              ? t("reviews.deleteDescription", { name: toDelete.author.name })
+              : t("reviews.deleteDescriptionAnonymous")
         }
-        confirmLabel="Delete"
+        confirmLabel={common("actions.delete")}
       />
     </div>
   );

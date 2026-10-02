@@ -1,5 +1,6 @@
 import { CourseGridSkeleton } from "@/components/catalog/course-grid";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 /**
  * Loading placeholder shared by the landing pages: breadcrumb, title, intro,
@@ -8,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function LandingSkeleton({ variant = "courses" }: { variant?: "courses" | "cards" }) {
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <Skeleton className="mb-4 h-4 w-48" />
       <Skeleton className="h-9 w-72 max-w-full" />
       <Skeleton className="mt-3 h-4 w-40" />

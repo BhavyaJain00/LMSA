@@ -32,6 +32,11 @@ import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
 import { siteOrigin } from "@/lib/seo/site";
 import { courseItemList } from "@/lib/data/seo";
 import { JsonLd } from "@/components/seo/json-ld";
+import { getLocale, getT } from "@/i18n/server";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
+
+type PublicT = Translator<MessageKey<"public">>;
 
 function readParams(sp: Record<string, string | string[] | undefined>): CatalogParams {
   const out: CatalogParams = {};
@@ -49,13 +54,17 @@ function readParams(sp: Record<string, string | string[] | undefined>): CatalogP
 
 export async function generateMetadata(props: PageProps<"/courses">): Promise<Metadata> {
   const params = readParams(await props.searchParams);
-  const settings = await getSettings();
+  const [settings, t, locale] = await Promise.all([getSettings(), getT("public"), getLocale()]);
   const category = await getCategoryBySlug(params.category);
   const search = params.search?.trim();
-  const title = search ? `Search results for “${search.slice(0, 60)}”` : category ? `${category.name} courses` : "All courses";
+  const title = search
+    ? t("catalog.meta.searchTitle", { search: search.slice(0, 60) })
+    : category
+      ? t("catalog.meta.categoryTitle", { category: category.name })
+      : t("catalog.meta.title");
   const description = category
-    ? [category.seoDescription, category.intro, `Browse ${category.name.toLowerCase()} courses on ${settings.brand.name}: self-paced video lessons, quizzes, hands-on assignments and certificates.`]
-    : [`Browse self-paced courses with video lessons, quizzes, assignments and certificates on ${settings.brand.name}. Learn at your own pace and earn a certificate when you finish.`];
+    ? [category.seoDescription, category.intro, t("catalog.meta.categoryDescription", { category: category.name, brand: settings.brand.name })]
+    : [t("catalog.meta.description", { brand: settings.brand.name })];
   // Every search, sort, filter, tab or "load more" permutation canonicalises to the plain catalog.
   const { noindex, follow } = listingIndexing({
     search,
@@ -63,19 +72,19 @@ export async function generateMetadata(props: PageProps<"/courses">): Promise<Me
     filters: [params.category, params.tab && params.tab !== "live" ? params.tab : undefined, params.certification, params.limit],
     page: Number(params.page) || 1,
   });
-  return pageMetadata({ title, description, path: "/courses", noindex, follow }, settings);
+  return pageMetadata({ title, description, path: "/courses", noindex, follow, locale }, settings);
 }
 
-function emptyStateFor(tab: CatalogTab, opts: { filtered: boolean; clearHref: string; viewer: User | null }) {
+function emptyStateFor(t: PublicT, tab: CatalogTab, opts: { filtered: boolean; clearHref: string; viewer: User | null }) {
   if (opts.filtered) {
     return (
       <EmptyState
         icon={<Icon.Search />}
-        title="No courses match your filters"
-        description="Try a different search term, pick another category or clear the filters."
+        title={t("catalog.empty.filteredTitle")}
+        description={t("catalog.empty.filteredDescription")}
         action={
           <ButtonLink href={opts.clearHref} variant="outline" leftIcon={<Icon.X className="size-4" />}>
-            Clear filters
+            {t("catalog.filters.clear")}
           </ButtonLink>
         }
       />
@@ -86,37 +95,37 @@ function emptyStateFor(tab: CatalogTab, opts: { filtered: boolean; clearHref: st
       return (
         <EmptyState
           icon={<Icon.BookOpen />}
-          title="You haven't enrolled in any courses yet"
-          description="Courses you join will appear here with your progress, so you can pick up right where you left off."
-          action={<ButtonLink href="/courses">Browse courses</ButtonLink>}
+          title={t("catalog.empty.enrolledTitle")}
+          description={t("catalog.empty.enrolledDescription")}
+          action={<ButtonLink href="/courses">{t("catalog.browseCourses")}</ButtonLink>}
         />
       );
     case "created":
       return (
         <EmptyState
           icon={<Icon.GraduationCap />}
-          title="No courses created"
-          description="There are no courses currently. Create your first course to get started!"
+          title={t("catalog.empty.createdTitle")}
+          description={t("catalog.empty.createdDescription")}
           action={
             isCreator(opts.viewer) ? (
               <ButtonLink href="/admin/courses/new" leftIcon={<Icon.Plus className="size-4" />}>
-                Create Course
+                {t("catalog.create.course")}
               </ButtonLink>
             ) : undefined
           }
         />
       );
     case "unpublished":
-      return <EmptyState icon={<Icon.EyeOff />} title="No unpublished courses" description="Drafts and courses awaiting review will appear here." />;
+      return <EmptyState icon={<Icon.EyeOff />} title={t("catalog.empty.unpublishedTitle")} description={t("catalog.empty.unpublishedDescription")} />;
     case "upcoming":
       return (
         <EmptyState
           icon={<Icon.Calendar />}
-          title="No upcoming courses"
-          description="Announced courses show up here before they open for enrollment. Keep an eye out!"
+          title={t("catalog.empty.upcomingTitle")}
+          description={t("catalog.empty.upcomingDescription")}
           action={
             <ButtonLink href="/courses" variant="outline">
-              See live courses
+              {t("catalog.empty.seeLive")}
             </ButtonLink>
           }
         />
@@ -125,37 +134,31 @@ function emptyStateFor(tab: CatalogTab, opts: { filtered: boolean; clearHref: st
       return (
         <EmptyState
           icon={<Icon.Sparkles />}
-          title="No new courses"
-          description="Nothing has been published in the last 30 days. Check back soon for fresh courses."
+          title={t("catalog.empty.newTitle")}
+          description={t("catalog.empty.newDescription")}
           action={
             <ButtonLink href="/courses" variant="outline">
-              See live courses
+              {t("catalog.empty.seeLive")}
             </ButtonLink>
           }
         />
       );
     default:
-      return (
-        <EmptyState
-          icon={<Icon.BookOpen />}
-          title="No Courses Found"
-          description="There are no courses currently. Keep an eye out, fresh learning experiences are on the way!"
-        />
-      );
+      return <EmptyState icon={<Icon.BookOpen />} title={t("catalog.empty.title")} description={t("catalog.empty.description")} />;
   }
 }
 
-function FilterChip({ label, removeHref }: { label: React.ReactNode; removeHref: string }) {
+function FilterChip({ label, removeHref, removeLabel }: { label: React.ReactNode; removeHref: string; removeLabel: string }) {
   return (
     <li>
       <Link
         href={removeHref}
         scroll={false}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-1 py-1 pl-3 pr-2 text-xs font-medium text-ink transition-colors hover:border-border-strong hover:bg-surface-2"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-1 py-1 ps-3 pe-2 text-xs font-medium text-ink transition-colors hover:border-border-strong hover:bg-surface-2"
       >
         {label}
         <Icon.X className="size-3.5 text-ink-faint" aria-hidden="true" />
-        <span className="sr-only">Remove filter</span>
+        <span className="sr-only">{removeLabel}</span>
       </Link>
     </li>
   );
@@ -163,7 +166,7 @@ function FilterChip({ label, removeHref }: { label: React.ReactNode; removeHref:
 
 export default async function CoursesPage(props: PageProps<"/courses">) {
   const sp = await props.searchParams;
-  const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
+  const [user, settings, t] = await Promise.all([getCurrentUser(), getSettings(), getT("public")]);
 
   // Legacy Frappe deep link for the "New Course" form.
   if (firstParam(sp.newCourse) === "1" && isCreator(user)) redirect("/admin/courses/new");
@@ -171,22 +174,22 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
   const creator = isCreator(user);
   const header = (
     <PageHeader
-      title="All Courses"
-      description={`Learn at your own pace with hands-on courses from the ${settings.brand.name} community.`}
+      title={t("catalog.title")}
+      description={t("catalog.description", { brand: settings.brand.name })}
       actions={
         creator ? (
           <Dropdown
             trigger={
               <span className={buttonClasses({ variant: "primary" })}>
                 <Icon.Plus className="size-4" aria-hidden="true" />
-                Create
+                {t("catalog.create.button")}
                 <Icon.ChevronDown className="size-4" aria-hidden="true" />
               </span>
             }
             items={[
-              { label: "New Course", icon: <Icon.BookOpen />, href: "/admin/courses/new", description: "Start a course from scratch" },
-              { label: "Import course", icon: <Icon.Upload />, href: "/admin/courses/import", description: "Create a course from a JSON export" },
-              { label: "Manage courses", icon: <Icon.Layout />, href: "/admin/courses", description: "Edit, publish and track your courses" },
+              { label: t("catalog.create.new"), icon: <Icon.BookOpen />, href: "/admin/courses/new", description: t("catalog.create.newDescription") },
+              { label: t("catalog.create.import"), icon: <Icon.Upload />, href: "/admin/courses/import", description: t("catalog.create.importDescription") },
+              { label: t("catalog.create.manage"), icon: <Icon.Layout />, href: "/admin/courses", description: t("catalog.create.manageDescription") },
             ]}
           />
         ) : undefined
@@ -200,12 +203,12 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
         {header}
         <EmptyState
           icon={<Icon.BookOpen />}
-          title="Courses are not available"
-          description="The course catalog is currently turned off on this platform."
+          title={t("catalog.disabled.title")}
+          description={t("catalog.disabled.description")}
           action={
             user && isModerator(user) ? (
               <ButtonLink href="/admin/settings" variant="outline">
-                Open settings
+                {t("catalog.disabled.openSettings")}
               </ButtonLink>
             ) : undefined
           }
@@ -220,14 +223,14 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
         {header}
         <EmptyState
           icon={<Icon.Lock />}
-          title="Log in to browse courses"
-          description={`The ${settings.brand.name} catalog is available to members. Log in or create a free account to explore every course.`}
+          title={t("catalog.membersOnly.title")}
+          description={t("catalog.membersOnly.description", { brand: settings.brand.name })}
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <ButtonLink href="/login?next=%2Fcourses">Log in</ButtonLink>
+              <ButtonLink href="/login?next=%2Fcourses">{t("catalog.logIn")}</ButtonLink>
               {!settings.learning.disableSignup && (
                 <ButtonLink href="/register?next=%2Fcourses" variant="outline">
-                  Sign up
+                  {t("catalog.signUp")}
                 </ButtonLink>
               )}
             </div>
@@ -255,18 +258,20 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
   const visible = courses.slice(0, pageSize * page);
   const nextHref = visible.length < courses.length ? catalogHref(params, { page: String(page + 1) }) : null;
 
-  const tabs: CatalogTabLink[] = catalogTabsFor(user).map((t) => ({
-    value: t.value,
-    label: t.label,
-    description: t.description,
-    href: catalogHref(params, { tab: t.value === "live" ? null : t.value, page: null }),
-    count: counts[t.value],
-    active: t.value === tab,
+  const tabs: CatalogTabLink[] = catalogTabsFor(user).map((def) => ({
+    value: def.value,
+    label: t(`catalog.tabs.${def.value}.label`),
+    description: t(`catalog.tabs.${def.value}.description`),
+    href: catalogHref(params, { tab: def.value === "live" ? null : def.value, page: null }),
+    count: counts[def.value],
+    active: def.value === tab,
   }));
 
   const filtered = !!search || !!category || certification;
   const clearHref = catalogHref({ tab: params.tab, sort: params.sort, limit: params.limit }, {});
-  const activeTab = tabs.find((t) => t.active);
+  const activeTab = tabs.find((item) => item.active);
+  const bold = (chunks: React.ReactNode) => <span className="font-medium text-ink">{chunks}</span>;
+  const tabLabel = activeTab && tab !== "live" ? activeTab.label.toLocaleLowerCase(t.locale) : null;
 
   // Structured data only for the canonical view (the plain list crawlers index).
   const canonicalView = tab === "live" && !filtered && !params.sort && page === 1;
@@ -282,7 +287,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
         </div>
         <CatalogToolbar
           categories={categories.map((c) => ({ slug: c.slug, name: c.name, courseCount: c.courseCount }))}
-          sorts={CATALOG_SORTS}
+          sorts={CATALOG_SORTS.map((s) => ({ value: s.value, label: t(`catalog.sort.${s.value}`) }))}
           category={category?.slug ?? ""}
           sort={sort}
           certification={certification}
@@ -292,49 +297,52 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
 
       <div className="mb-5 mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-ink-muted">
-          {courses.length === 0 ? (
-            "No Courses Found"
-          ) : (
-            <>
-              <span className="font-medium text-ink">{courses.length}</span> {courses.length === 1 ? "course" : "courses"}
-              {activeTab && tab !== "live" && <> in {activeTab.label.toLowerCase()}</>}
-              {search && (
-                <>
-                  {" "}
-                  for <span className="font-medium text-ink">“{search}”</span>
-                </>
-              )}
-            </>
-          )}
+          {courses.length === 0
+            ? t("catalog.empty.title")
+            : tabLabel
+              ? search
+                ? t.rich("catalog.results.inTabForSearch", { count: courses.length, tab: tabLabel, search, b: bold })
+                : t.rich("catalog.results.inTab", { count: courses.length, tab: tabLabel, b: bold })
+              : search
+                ? t.rich("catalog.results.forSearch", { count: courses.length, search, b: bold })
+                : t.rich("catalog.results.count", { count: courses.length, b: bold })}
         </p>
         {filtered && (
-          <ul className="flex flex-wrap items-center gap-2" aria-label="Active filters">
-            {search && <FilterChip label={<>Search: {search}</>} removeHref={catalogHref(params, { search: null, page: null })} />}
-            {category && <FilterChip label={category.name} removeHref={catalogHref(params, { category: null, page: null })} />}
-            {certification && <FilterChip label="Certification" removeHref={catalogHref(params, { certification: null, page: null })} />}
+          <ul className="flex flex-wrap items-center gap-2" aria-label={t("catalog.filters.active")}>
+            {search && (
+              <FilterChip
+                label={t("catalog.filters.searchChip", { search })}
+                removeHref={catalogHref(params, { search: null, page: null })}
+                removeLabel={t("catalog.filters.remove")}
+              />
+            )}
+            {category && (
+              <FilterChip label={category.name} removeHref={catalogHref(params, { category: null, page: null })} removeLabel={t("catalog.filters.remove")} />
+            )}
+            {certification && (
+              <FilterChip
+                label={t("catalog.filters.certification")}
+                removeHref={catalogHref(params, { certification: null, page: null })}
+                removeLabel={t("catalog.filters.remove")}
+              />
+            )}
             <li>
               <Link href={clearHref} scroll={false} className="text-xs font-medium text-accent hover:underline">
-                Clear all
+                {t("catalog.filters.clearAll")}
               </Link>
             </li>
           </ul>
         )}
       </div>
 
-      <CourseGrid courses={visible} headingLevel="h2" eagerCount={4} empty={emptyStateFor(tab, { filtered, clearHref, viewer: user })} />
+      <CourseGrid courses={visible} headingLevel="h2" eagerCount={4} empty={emptyStateFor(t, tab, { filtered, clearHref, viewer: user })} />
 
       {courses.length > 0 && (
         <CatalogFooter shown={visible.length} total={courses.length} pageSize={pageSize} pageSizes={CATALOG_PAGE_SIZES} nextHref={nextHref} />
       )}
       {/* Single polite live region for result changes (filters, tabs and "load more"). */}
       <p className="sr-only" role="status">
-        {courses.length === 0
-          ? "No courses found"
-          : visible.length < courses.length
-            ? `Showing ${visible.length} of ${courses.length} courses`
-            : courses.length === 1
-              ? "1 course found"
-              : `${courses.length} courses found`}
+        {visible.length < courses.length ? t("catalog.results.showing", { shown: visible.length, total: courses.length }) : t("catalog.results.found", { count: courses.length })}
       </p>
     </div>
   );

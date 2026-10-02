@@ -8,8 +8,9 @@ import { Icon, type IconName } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
-import { roleLabels } from "@/lib/config";
-import { cn, relativeTime } from "@/lib/utils";
+import type { Role } from "@/lib/types";
+import { getFormatter, getT } from "@/i18n/server";
+import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* KPI card (StatCard, optionally clickable)                            */
@@ -100,19 +101,20 @@ export function QuickLinksGrid({ links }: { links: QuickLink[] }) {
 /* Recent enrollments                                                   */
 /* ------------------------------------------------------------------ */
 
-export function RecentEnrollmentsTable({ rows }: { rows: RecentEnrollment[] }) {
+export async function RecentEnrollmentsTable({ rows }: { rows: RecentEnrollment[] }) {
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
   return (
     <Table>
       <THead>
         <tr>
-          <TH>Learner</TH>
-          <TH>Course</TH>
-          <TH className="hidden sm:table-cell">Enrolled</TH>
-          <TH className="w-36">Progress</TH>
+          <TH>{t("dashboard.admin.learner")}</TH>
+          <TH>{t("dashboard.admin.course")}</TH>
+          <TH className="hidden sm:table-cell">{t("dashboard.admin.enrolled")}</TH>
+          <TH className="w-36">{t("dashboard.admin.progress")}</TH>
         </tr>
       </THead>
       <TBody>
-        {rows.length === 0 && <TableEmpty colSpan={4}>No enrollments yet. New learners will show up here as they join your courses.</TableEmpty>}
+        {rows.length === 0 && <TableEmpty colSpan={4}>{t("dashboard.admin.noEnrollments")}</TableEmpty>}
         {rows.map((r) => (
           <TR key={r.id}>
             <TD>
@@ -122,25 +124,25 @@ export function RecentEnrollmentsTable({ rows }: { rows: RecentEnrollment[] }) {
                   <span className="max-w-40 truncate font-medium">{r.user.name}</span>
                 </Link>
               ) : (
-                <span className="text-ink-muted">Deleted user</span>
+                <span className="text-ink-muted">{t("dashboard.admin.deletedUser")}</span>
               )}
             </TD>
             <TD>
               <Link href={`/courses/${r.course.slug}`} className="line-clamp-2 min-w-40 hover:text-accent">
                 {r.course.title}
               </Link>
-              {r.batchTitle && <span className="block truncate text-xs text-ink-muted">via {r.batchTitle}</span>}
+              {r.batchTitle && <span className="block truncate text-xs text-ink-muted">{t("dashboard.admin.viaBatch", { title: r.batchTitle })}</span>}
             </TD>
-            <TD className="hidden whitespace-nowrap text-ink-muted sm:table-cell">{relativeTime(r.enrolledAt)}</TD>
+            <TD className="hidden whitespace-nowrap text-ink-muted sm:table-cell">{f.relative(r.enrolledAt)}</TD>
             <TD>
               {r.completed ? (
                 <Badge tone="success" dot>
-                  Completed
+                  {t("dashboard.admin.completed")}
                 </Badge>
               ) : (
                 <div className="flex items-center gap-2">
-                  <ProgressBar value={r.progress} size="xs" label={`${r.user?.name ?? "Learner"} progress`} />
-                  <span className="w-9 shrink-0 text-right text-xs tabular-nums text-ink-muted">{r.progress}%</span>
+                  <ProgressBar value={r.progress} size="xs" label={t("dashboard.cards.progressLabel", { title: r.user?.name ?? t("dashboard.admin.learner") })} />
+                  <span className="w-9 shrink-0 text-end text-xs tabular-nums text-ink-muted">{f.percent(r.progress)}</span>
                 </div>
               )}
             </TD>
@@ -155,12 +157,14 @@ export function RecentEnrollmentsTable({ rows }: { rows: RecentEnrollment[] }) {
 /* Recent signups                                                       */
 /* ------------------------------------------------------------------ */
 
-export function RecentSignupsList({ users, showEmail }: { users: RecentSignup[]; showEmail: boolean }) {
+export async function RecentSignupsList({ users, showEmail }: { users: RecentSignup[]; showEmail: boolean }) {
+  const [t, ts, f] = await Promise.all([getT("account"), getT("shell"), getFormatter()]);
+  const roleLabel = (role: Role) => (ts.has(`roles.${role}`) ? ts(`roles.${role}`) : t("dashboard.admin.staff"));
   return (
     <Card className="h-full">
       {users.length === 0 ? (
         <div className="p-4">
-          <EmptyState compact icon={<Icon.UserPlus />} title="No members yet" description="People who sign up will appear here." />
+          <EmptyState compact icon={<Icon.UserPlus />} title={t("dashboard.admin.noMembers")} description={t("dashboard.admin.noMembersBody")} />
         </div>
       ) : (
         <ul className="divide-y divide-border">
@@ -171,14 +175,14 @@ export function RecentSignupsList({ users, showEmail }: { users: RecentSignup[];
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-ink">{u.name}</span>
                   <span className="block truncate text-xs text-ink-muted">
-                    {showEmail && u.email ? u.email : `@${u.username}`} · {u.enrollments} {u.enrollments === 1 ? "course" : "courses"}
+                    <span dir="ltr">{showEmail && u.email ? u.email : `@${u.username}`}</span> · {t("count.courses", { count: u.enrollments })}
                   </span>
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1">
-                  <span className="text-[11px] text-ink-faint">{relativeTime(u.createdAt)}</span>
+                  <span className="text-[11px] text-ink-faint">{f.relative(u.createdAt)}</span>
                   {u.roles.some((r) => r !== "student") && (
                     <Badge tone="accent" size="xs">
-                      {roleLabels[u.roles.find((r) => r !== "student")!] ?? "Staff"}
+                      {roleLabel(u.roles.find((r) => r !== "student")!)}
                     </Badge>
                   )}
                 </span>
@@ -207,20 +211,21 @@ const activityIcon: Record<ActivityKind, { icon: ReactNode; tone: string }> = {
   payment: { icon: <Icon.CreditCard />, tone: "bg-success/10 text-success" },
 };
 
-export function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
+export async function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
   if (items.length === 0) {
     return (
       <EmptyState
         compact
         icon={<Icon.Zap />}
-        title="No activity yet"
-        description="Enrollments, submissions, certificates and reviews will show up here as they happen."
+        title={t("dashboard.admin.noActivity")}
+        description={t("dashboard.admin.noActivityBody")}
       />
     );
   }
   return (
     <Card className="p-4">
-      <ol className="relative space-y-4 before:absolute before:bottom-2 before:left-[15px] before:top-2 before:w-px before:bg-border">
+      <ol className="relative space-y-4 before:absolute before:bottom-2 before:start-[15px] before:top-2 before:w-px before:bg-border">
         {items.map((item) => {
           const meta = activityIcon[item.kind];
           return (
@@ -235,7 +240,7 @@ export function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
                       {item.actor.name}
                     </Link>
                   ) : (
-                    <span className="font-medium text-ink">Someone</span>
+                    <span className="font-medium text-ink">{t("dashboard.admin.someone")}</span>
                   )}{" "}
                   {item.verb}
                   {item.target && (
@@ -252,7 +257,7 @@ export function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
                   )}
                 </p>
                 {item.detail && <p className="mt-0.5 line-clamp-2 text-xs text-ink-muted">{item.detail}</p>}
-                <p className="mt-0.5 text-[11px] text-ink-faint">{relativeTime(item.at)}</p>
+                <p className="mt-0.5 text-[11px] text-ink-faint">{f.relative(item.at)}</p>
               </div>
             </li>
           );

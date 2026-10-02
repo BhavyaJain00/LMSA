@@ -1,13 +1,15 @@
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { PrerequisiteList } from "@/components/catalog/prerequisite-list";
+import { getT } from "@/i18n/server";
 import type { PrerequisiteItem } from "./drip-shared";
 
 /**
  * Shown on a lesson page when a logged-in visitor cannot enroll yet because
  * prerequisite courses are not completed: lists them with progress and links.
  */
-export function PrerequisiteLockedCard({ lessonTitle, prerequisites, courseHref }: { lessonTitle: string; prerequisites: PrerequisiteItem[]; courseHref: string }) {
+export async function PrerequisiteLockedCard({ lessonTitle, prerequisites, courseHref }: { lessonTitle: string; prerequisites: PrerequisiteItem[]; courseHref: string }) {
+  const t = await getT("learning");
   return (
     <div className="mx-auto w-full max-w-(--lesson-w) py-6">
       <section aria-labelledby="prereq-locked-title" className="overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
@@ -16,13 +18,16 @@ export function PrerequisiteLockedCard({ lessonTitle, prerequisites, courseHref 
             <Icon.ListChecks className="size-7" aria-hidden="true" />
           </span>
           <div className="max-w-md">
-            <p className="text-xs font-medium uppercase tracking-wider text-ink-faint">Prerequisites required</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-ink-faint">{t("learn.prereq.eyebrow")}</p>
             <h1 id="prereq-locked-title" className="mt-1 text-xl font-semibold text-ink text-balance">
-              Finish the required courses first
+              {t("learn.prereq.title")}
             </h1>
             <p className="mt-2 text-sm text-ink-muted">
-              <span className="font-medium text-ink">{lessonTitle}</span> is part of a course that builds on other courses. Complete{" "}
-              {prerequisites.length === 1 ? "this course" : "these courses"}, then enroll to open it.
+              {t.rich("learn.prereq.body", {
+                lesson: lessonTitle,
+                count: Math.max(1, prerequisites.length),
+                b: (text) => <span className="font-medium text-ink">{text}</span>,
+              })}
             </p>
           </div>
         </div>
@@ -30,12 +35,12 @@ export function PrerequisiteLockedCard({ lessonTitle, prerequisites, courseHref 
           {prerequisites.length ? (
             <PrerequisiteList items={prerequisites} />
           ) : (
-            <p className="rounded-lg bg-surface-2 px-3 py-2 text-center text-sm text-ink-muted">All prerequisites are complete. Enroll from the course page to continue.</p>
+            <p className="rounded-lg bg-surface-2 px-3 py-2 text-center text-sm text-ink-muted">{t("learn.prereq.allDone")}</p>
           )}
         </div>
         <div className="flex justify-center border-t border-border bg-surface-2/40 px-5 py-4">
-          <ButtonLink href={courseHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
-            Back to course
+          <ButtonLink href={courseHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
+            {t("learn.backToCourse")}
           </ButtonLink>
         </div>
       </section>

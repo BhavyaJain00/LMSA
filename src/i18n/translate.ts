@@ -79,6 +79,11 @@ export function createTranslator<K extends string = string>(options: TranslatorO
 const TOKEN_OPEN = "";
 const TOKEN_CLOSE = "";
 const TOKEN_RE = /(\d+)/g;
+// Stands in for `<` inside interpolated values, so user content is never parsed as markup.
+const LT_SHIELD = "";
+const LT_SHIELD_RE = //g;
+// The marker characters themselves are removed from interpolated values.
+const PRIVATE_USE_RE = /[-]/g;
 const TAG_RE = /<(\/?)([A-Za-z][\w-]*)\s*(\/?)>/g;
 
 function isPlain(value: RichValue): value is MessageValue {
@@ -114,12 +119,17 @@ function parseTags(text: string): RichTree {
   return root;
 }
 
+function unshield(text: string): string {
+  return text.includes(LT_SHIELD) ? text.replace(LT_SHIELD_RE, "<") : text;
+}
+
 function formatRich(template: string, vars: RichVars, locale: Locale): ReactNode {
   const elements: ReactNode[] = [];
   const plain: MessageVars = {};
   for (const [name, value] of Object.entries(vars)) {
     if (typeof value === "function") continue;
-    if (isPlain(value)) plain[name] = value;
+    if (typeof value === "string") plain[name] = value.replace(PRIVATE_USE_RE, "").replace(/</g, LT_SHIELD);
+    else if (isPlain(value)) plain[name] = value;
     else {
       plain[name] = `${TOKEN_OPEN}${elements.length}${TOKEN_CLOSE}`;
       elements.push(value);
@@ -133,11 +143,11 @@ function formatRich(template: string, vars: RichVars, locale: Locale): ReactNode
     let last = 0;
     TOKEN_RE.lastIndex = 0;
     for (let match = TOKEN_RE.exec(text); match; match = TOKEN_RE.exec(text)) {
-      if (match.index > last) out.push(text.slice(last, match.index));
+      if (match.index > last) out.push(unshield(text.slice(last, match.index)));
       out.push(createElement(Fragment, { key: `e${key++}` }, elements[Number(match[1])]));
       last = match.index + match[0].length;
     }
-    if (last < text.length) out.push(text.slice(last));
+    if (last < text.length) out.push(unshield(text.slice(last)));
     return out;
   };
 

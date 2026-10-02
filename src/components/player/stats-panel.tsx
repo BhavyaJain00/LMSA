@@ -5,14 +5,15 @@ import { Icon } from "@/components/ui/icons";
 import { formatBytes } from "@/lib/utils";
 import { backBufferLength, bufferInfo, toRanges } from "./hls/buffer";
 import type { HlsStats } from "./hls/engine";
+import { useT } from "@/i18n/client";
 
 export type PlaybackMode = "mse" | "native" | "progressive";
 
-const MODE_LABEL: Record<PlaybackMode, string> = {
-  mse: "Adaptive HLS (built-in engine)",
-  native: "Adaptive HLS (browser)",
-  progressive: "Progressive download",
-};
+const MODE_LABEL = {
+  mse: "global.player.stats.modeMse",
+  native: "global.player.stats.modeNative",
+  progressive: "global.player.stats.modeProgressive",
+} as const satisfies Record<PlaybackMode, string>;
 
 interface Snapshot {
   resolution: string;
@@ -63,6 +64,7 @@ export function StatsPanel({
   getHls: () => HlsStats | null;
   onClose: () => void;
 }) {
+  const t = useT("learning");
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const getRef = useRef(getHls);
@@ -94,31 +96,34 @@ export function StatsPanel({
   const playing = hls?.levels[hls.playingLevel];
   const rows: [string, string][] = snap
     ? [
-        ["Mode", MODE_LABEL[mode]],
-        ["Resolution", snap.resolution],
-        ["Player size", snap.viewport],
+        [t("global.player.stats.mode"), t(MODE_LABEL[mode])],
+        [t("global.player.stats.resolution"), snap.resolution],
+        [t("global.player.stats.playerSize"), snap.viewport],
         ...(hls
           ? ([
-              ["Quality", `${playing?.label ?? "—"}${hls.auto ? " (auto)" : " (pinned)"}`],
-              ["Loading", loading ? `${loading.label} · ${kbps(loading.bandwidth)}` : "—"],
-              ["Codecs", playing?.codecs ?? loading?.codecs ?? "—"],
-              ["Bandwidth estimate", kbps(hls.estimate)],
-              ["Last segment", hls.lastSegment ? `${formatBytes(hls.lastSegment.bytes)} in ${hls.lastSegment.ms} ms` : "—"],
-              ["Segments / data", `${hls.segmentsLoaded} · ${formatBytes(hls.bytesLoaded)}`],
-              ["Quality switches", String(hls.switches)],
-              ["Retries", String(hls.retries)],
+              [t("global.player.stats.quality"), t(hls.auto ? "global.player.stats.qualityAuto" : "global.player.stats.qualityPinned", { quality: playing?.label ?? "—" })],
+              [t("global.player.stats.loading"), loading ? `${loading.label} · ${kbps(loading.bandwidth)}` : "—"],
+              [t("global.player.stats.codecs"), playing?.codecs ?? loading?.codecs ?? "—"],
+              [t("global.player.stats.bandwidth"), kbps(hls.estimate)],
+              [
+                t("global.player.stats.lastSegment"),
+                hls.lastSegment ? t("global.player.stats.lastSegmentValue", { size: formatBytes(hls.lastSegment.bytes), ms: hls.lastSegment.ms }) : "—",
+              ],
+              [t("global.player.stats.segments"), `${hls.segmentsLoaded} · ${formatBytes(hls.bytesLoaded)}`],
+              [t("global.player.stats.switches"), String(hls.switches)],
+              [t("global.player.stats.retries"), String(hls.retries)],
             ] as [string, string][])
           : []),
-        ["Buffer ahead", `${snap.bufferAhead.toFixed(1)} s${hls ? ` / ${hls.forwardTarget} s` : ""}`],
-        ["Back buffer", `${snap.backBuffer.toFixed(1)} s`],
-        ["Dropped frames", `${snap.dropped} / ${snap.frames}`],
+        [t("global.player.stats.bufferAhead"), `${snap.bufferAhead.toFixed(1)} s${hls ? ` / ${hls.forwardTarget} s` : ""}`],
+        [t("global.player.stats.backBuffer"), `${snap.backBuffer.toFixed(1)} s`],
+        [t("global.player.stats.dropped"), `${snap.dropped} / ${snap.frames}`],
       ]
     : [];
 
   return (
     <div
       role="dialog"
-      aria-label="Playback statistics"
+      aria-label={t("global.player.stats.label")}
       className="absolute left-2 top-2 z-30 w-[min(20rem,calc(100%-1rem))] rounded-lg bg-black/80 p-3 font-mono text-[11px] leading-5 text-white/90 shadow-lg backdrop-blur-sm animate-fade-in"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
@@ -128,12 +133,12 @@ export function StatsPanel({
       }}
     >
       <div className="mb-1 flex items-center justify-between gap-2">
-        <p className="font-sans text-xs font-semibold text-white">Stats for nerds</p>
+        <p className="font-sans text-xs font-semibold text-white">{t("global.player.stats.title")}</p>
         <button
           type="button"
           onClick={onClose}
           ref={closeRef}
-          aria-label="Close statistics"
+          aria-label={t("global.player.stats.close")}
           className="flex size-6 items-center justify-center rounded text-white/80 hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
         >
           <Icon.X className="size-3.5" />
@@ -151,7 +156,7 @@ export function StatsPanel({
           ))}
         </dl>
       ) : (
-        <p className="text-white/60">Collecting…</p>
+        <p className="text-white/60">{t("global.player.stats.collecting")}</p>
       )}
     </div>
   );

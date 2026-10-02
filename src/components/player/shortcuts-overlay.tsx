@@ -2,51 +2,56 @@
 
 import { useEffect, useId, useRef, type KeyboardEvent } from "react";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
+import type { MessageKey } from "@/i18n/catalog";
 import { KeyboardIcon } from "./player-icons";
 
+type PlayerKey = Extract<MessageKey<"learning">, `global.player.${string}`>;
+
 export interface ShortcutItem {
-  keys: string[];
-  label: string;
+  /** Key names; named keys (Space, Home, End, Esc) are message keys, the rest are shown as written. */
+  keys: (string | PlayerKey)[];
+  label: PlayerKey;
 }
 
 export interface ShortcutGroup {
-  title: string;
+  title: PlayerKey;
   items: ShortcutItem[];
 }
 
 /** Keyboard shortcuts of the player, filtered to the features this instance offers. */
 export function playerShortcuts(features: { captions: boolean; pip: boolean; theater: boolean; fullscreen: boolean }): ShortcutGroup[] {
   const playback: ShortcutItem[] = [
-    { keys: ["Space", "K"], label: "Play or pause" },
-    { keys: ["J"], label: "Back 10 seconds" },
-    { keys: ["L"], label: "Forward 10 seconds" },
-    { keys: ["←"], label: "Back 5 seconds" },
-    { keys: ["→"], label: "Forward 5 seconds" },
-    { keys: ["<", ","], label: "Slower playback" },
-    { keys: [">", "."], label: "Faster playback" },
+    { keys: ["global.player.keys.space", "K"], label: "global.player.keys.playPause" },
+    { keys: ["J"], label: "global.player.keys.back10" },
+    { keys: ["L"], label: "global.player.keys.forward10" },
+    { keys: ["←"], label: "global.player.keys.back5" },
+    { keys: ["→"], label: "global.player.keys.forward5" },
+    { keys: ["<", ","], label: "global.player.keys.slower" },
+    { keys: [">", "."], label: "global.player.keys.faster" },
   ];
   const navigation: ShortcutItem[] = [
-    { keys: ["0–9"], label: "Jump to 0%–90% of the video" },
-    { keys: ["Home"], label: "Go to the start" },
-    { keys: ["End"], label: "Go to the end" },
+    { keys: ["0–9"], label: "global.player.keys.jump" },
+    { keys: ["global.player.keys.home"], label: "global.player.keys.goStart" },
+    { keys: ["global.player.keys.end"], label: "global.player.keys.goEnd" },
   ];
   const sound: ShortcutItem[] = [
-    { keys: ["↑"], label: "Volume up" },
-    { keys: ["↓"], label: "Volume down" },
-    { keys: ["M"], label: "Mute or unmute" },
+    { keys: ["↑"], label: "global.player.keys.volumeUp" },
+    { keys: ["↓"], label: "global.player.keys.volumeDown" },
+    { keys: ["M"], label: "global.player.keys.mute" },
   ];
   const view: ShortcutItem[] = [];
-  if (features.fullscreen) view.push({ keys: ["F"], label: "Fullscreen" });
-  if (features.theater) view.push({ keys: ["T"], label: "Theater mode" });
-  if (features.pip) view.push({ keys: ["P"], label: "Picture in picture" });
-  if (features.captions) view.push({ keys: ["C"], label: "Captions on or off" });
-  view.push({ keys: ["?"], label: "Show or hide these shortcuts" });
-  view.push({ keys: ["Esc"], label: "Close menus and this panel" });
+  if (features.fullscreen) view.push({ keys: ["F"], label: "global.player.keys.fullscreen" });
+  if (features.theater) view.push({ keys: ["T"], label: "global.player.keys.theater" });
+  if (features.pip) view.push({ keys: ["P"], label: "global.player.keys.pip" });
+  if (features.captions) view.push({ keys: ["C"], label: "global.player.keys.captions" });
+  view.push({ keys: ["?"], label: "global.player.keys.toggleHelp" });
+  view.push({ keys: ["global.player.keys.esc"], label: "global.player.keys.closeMenus" });
   return [
-    { title: "Playback", items: playback },
-    { title: "Sound", items: sound },
-    { title: "Navigation", items: navigation },
-    { title: "View", items: view },
+    { title: "global.player.keys.groupPlayback", items: playback },
+    { title: "global.player.keys.groupSound", items: sound },
+    { title: "global.player.keys.groupNavigation", items: navigation },
+    { title: "global.player.keys.groupView", items: view },
   ];
 }
 
@@ -56,6 +61,8 @@ export function playerShortcuts(features: { captions: boolean; pip: boolean; the
  * Tab cycles inside it and Escape (or `?`) closes it and returns focus.
  */
 export function ShortcutsOverlay({ groups, onClose }: { groups: ShortcutGroup[]; onClose: () => void }) {
+  const t = useT("learning");
+  const keyName = (k: string) => (k.startsWith("global.player.keys.") ? t(k as PlayerKey) : k);
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -111,13 +118,13 @@ export function ShortcutsOverlay({ groups, onClose }: { groups: ShortcutGroup[];
       >
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
           <h2 id={titleId} className="flex items-center gap-2 text-sm font-semibold">
-            <KeyboardIcon className="size-4 text-white/70" /> Keyboard shortcuts
+            <KeyboardIcon className="size-4 text-white/70" /> {t("global.player.keys.title")}
           </h2>
           <button
             ref={closeRef}
             type="button"
             onClick={onClose}
-            aria-label="Close keyboard shortcuts"
+            aria-label={t("global.player.keys.close")}
             className="flex size-8 items-center justify-center rounded-md text-white/80 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           >
             <Icon.X className="size-4" />
@@ -125,17 +132,17 @@ export function ShortcutsOverlay({ groups, onClose }: { groups: ShortcutGroup[];
         </div>
         <div className="scrollbar-thin grid gap-x-6 gap-y-4 overflow-y-auto px-4 py-3 sm:grid-cols-2">
           {groups.map((group) => (
-            <section key={group.title} aria-label={group.title}>
-              <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">{group.title}</h3>
+            <section key={group.title} aria-label={t(group.title)}>
+              <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">{t(group.title)}</h3>
               <dl className="space-y-1">
                 {group.items.map((item) => (
                   <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
-                    <dt className="text-white/85">{item.label}</dt>
+                    <dt className="text-white/85">{t(item.label)}</dt>
                     <dd className="flex shrink-0 items-center gap-1">
                       {item.keys.map((k, i) => (
                         <span key={k} className="flex items-center gap-1">
-                          {i > 0 && <span className="text-xs text-white/40">or</span>}
-                          <kbd className="min-w-6 rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-center font-sans text-xs text-white">{k}</kbd>
+                          {i > 0 && <span className="text-xs text-white/40">{t("global.player.keys.or")}</span>}
+                          <kbd className="min-w-6 rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-center font-sans text-xs text-white">{keyName(k)}</kbd>
                         </span>
                       ))}
                     </dd>

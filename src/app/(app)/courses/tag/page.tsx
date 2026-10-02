@@ -14,20 +14,23 @@ import { JsonLd } from "@/components/seo/json-ld";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
-import { pluralize } from "@/lib/utils";
+import { getLocale, getT } from "@/i18n/server";
 
 const PATH = "/courses/tag";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const settings = await getSettings();
+  const [settings, t, locale] = await Promise.all([getSettings(), getT("public"), getLocale()]);
   const tags = settings.features.courses ? await getCourseTags() : [];
   return pageMetadata(
     {
-      title: "Course topics",
+      title: t("topics.title"),
       description: [
-        `Find ${settings.brand.name} courses by topic${tags.length ? `: ${tags.slice(0, 8).map((t) => t.label).join(", ")} and more` : ""}. Each topic lists every course that covers it.`,
+        tags.length
+          ? t("topics.meta.descriptionWithList", { brand: settings.brand.name, list: tags.slice(0, 8).map((tag) => tag.label).join(", ") })
+          : t("topics.meta.description", { brand: settings.brand.name }),
       ],
       path: PATH,
+      locale,
       noindex: tags.length === 0 || !catalogIsPublic(settings),
       follow: true,
     },
@@ -48,7 +51,7 @@ function groupByLetter<T extends { label: string }>(tags: T[]): { letter: string
 
 export default async function TagIndexPage() {
   await requireCatalogAccess(PATH);
-  const [tags, categories] = await Promise.all([getCourseTags(), getCategoryDirectory()]);
+  const [tags, categories, tr] = await Promise.all([getCourseTags(), getCategoryDirectory(), getT("public")]);
   const popular = tags.slice(0, 12);
   const groups = groupByLetter(tags);
   const indexable = tags.filter((t) => isTagIndexable(t.count));
@@ -59,31 +62,29 @@ export default async function TagIndexPage() {
       {indexable.length > 0 && <JsonLd data={itemListJsonLd("Course topics", indexable.map((t) => ({ name: t.label, path: tagPath(t.slug) })), { origin: siteOrigin() })} />}
 
       <header className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Course topics</h1>
-        <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted">
-          {tags.length > 0 ? `${pluralize(tags.length, "topic")} taught across the catalog. ` : ""}Pick a topic to see every course that covers it.
-        </p>
+        <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{tr("topics.title")}</h1>
+        <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted">{tags.length > 0 ? tr("topics.indexIntroWithCount", { count: tags.length }) : tr("topics.indexIntro")}</p>
       </header>
 
       {tags.length === 0 ? (
         <EmptyState
           icon={<Icon.Hash />}
-          title="No topics yet"
-          description="Topics come from the tags of published courses and will be listed here."
-          action={<ButtonLink href="/courses">Browse all courses</ButtonLink>}
+          title={tr("topics.emptyTitle")}
+          description={tr("topics.emptyDescription")}
+          action={<ButtonLink href="/courses">{tr("landing.browseAll")}</ButtonLink>}
         />
       ) : (
         <>
           <section aria-labelledby="topics-popular-heading">
             <h2 id="topics-popular-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-              Most popular
+              {tr("topics.mostPopular")}
             </h2>
-            <ChipLinks label="Most popular topics" items={popular.map((t) => ({ href: tagPath(t.slug), label: t.label, count: t.count }))} />
+            <ChipLinks label={tr("topics.mostPopularLabel")} items={popular.map((t) => ({ href: tagPath(t.slug), label: t.label, count: t.count }))} />
           </section>
 
           <section aria-labelledby="topics-all-heading" className="mt-12">
             <h2 id="topics-all-heading" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-              All topics A–Z
+              {tr("topics.allAz")}
             </h2>
             <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
               {groups.map((group) => (
@@ -109,9 +110,9 @@ export default async function TagIndexPage() {
       {categories.length > 0 && (
         <section aria-labelledby="topics-categories-heading" className="mt-12">
           <h2 id="topics-categories-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-            Browse by category
+            {tr("home.categories.title")}
           </h2>
-          <ChipLinks label="Course categories" items={categories.map((c) => ({ href: categoryPath(c.slug), label: c.name, count: c.courseCount }))} />
+          <ChipLinks label={tr("categories.title")} items={categories.map((c) => ({ href: categoryPath(c.slug), label: c.name, count: c.courseCount }))} />
         </section>
       )}
     </div>

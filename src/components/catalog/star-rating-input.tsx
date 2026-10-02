@@ -3,8 +3,10 @@
 import { useId, useState } from "react";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
-export const ratingLabels = ["", "Poor", "Fair", "Good", "Very good", "Excellent"] as const;
+/** Message keys of the 1–5 rating labels ("Poor" … "Excellent"). */
+export const ratingLabelKeys = ["", "shared.rating.label1", "shared.rating.label2", "shared.rating.label3", "shared.rating.label4", "shared.rating.label5"] as const;
 
 /**
  * Accessible 1–5 star picker built on a native radio group, so it works with
@@ -25,8 +27,13 @@ export function StarRatingInput({
   describedBy?: string;
   size?: "md" | "lg";
 }) {
+  const t = useT("public");
   const id = useId();
   const [hover, setHover] = useState(0);
+  const ratingLabel = (n: number): string => {
+    const key = ratingLabelKeys[n];
+    return key ? t(key) : "";
+  };
   const shown = hover || value;
   const starClass = size === "lg" ? "size-8" : "size-6";
 
@@ -34,7 +41,7 @@ export function StarRatingInput({
     <div className="flex flex-wrap items-center gap-3">
       <div
         role="radiogroup"
-        aria-label="Rating"
+        aria-label={t("reviews.form.rating")}
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
         className="flex items-center gap-1"
@@ -60,16 +67,14 @@ export function StarRatingInput({
                 className="flex cursor-pointer rounded-md p-0.5 transition-transform hover:scale-110 peer-focus-visible:ring-2 peer-focus-visible:ring-accent motion-reduce:transition-none motion-reduce:hover:scale-100"
               >
                 <Icon.StarFilled className={cn(starClass, active ? "text-warning" : "text-surface-3")} aria-hidden="true" />
-                <span className="sr-only">
-                  {n} {n === 1 ? "star" : "stars"} – {ratingLabels[n]}
-                </span>
+                <span className="sr-only">{t("shared.rating.starsOption", { count: n, label: ratingLabel(n) })}</span>
               </label>
             </span>
           );
         })}
       </div>
       <span className="min-w-20 text-sm font-medium text-ink-muted" aria-hidden="true">
-        {shown ? ratingLabels[shown] : "Select a rating"}
+        {shown ? ratingLabel(shown) : t("shared.rating.select")}
       </span>
     </div>
   );

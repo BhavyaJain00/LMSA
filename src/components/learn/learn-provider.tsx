@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useT } from "@/i18n/client";
 import { FocusExitIcon } from "./learn-icons";
 
 /**
@@ -46,6 +47,7 @@ export function useLearnPrefs(): LearnPrefs {
 const OPEN_LAYER_SELECTOR = "dialog[open], [role='menu'], [role='toolbar'][data-selection-toolbar], [data-lesson-sheet-open]";
 
 export function LearnProvider({ children }: { children: ReactNode }) {
+  const t = useT("learning");
   const [zen, setZenState] = useState(false);
   const [theater, setTheater] = useState(false);
   const [zenPanel, setZenPanel] = useState(false);
@@ -134,7 +136,7 @@ export function LearnProvider({ children }: { children: ReactNode }) {
           className="fixed right-3 top-3 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-surface-1/90 px-3 py-1.5 text-xs font-medium text-ink-muted shadow-card backdrop-blur transition-colors hover:text-ink animate-fade-in"
         >
           <FocusExitIcon className="size-4" />
-          Exit zen mode
+          {t("learn.zen.exit")}
           <kbd className="hidden rounded border border-border px-1 text-[10px] text-ink-faint sm:inline">Esc</kbd>
         </button>
       )}

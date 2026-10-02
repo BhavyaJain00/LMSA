@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function QuizLoading() {
+export default async function QuizLoading() {
+  const t = await getT("learning");
   return (
     <div className="mx-auto w-full max-w-3xl animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading quiz…</span>
+      <span className="sr-only">{t("quiz.page.loading")}</span>
       <Skeleton className="h-4 w-48" />
       <Skeleton className="mt-3 h-7 w-72 max-w-full" />
       <div className="mt-6 rounded-card border border-border bg-surface-1 p-6">

@@ -1,9 +1,14 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getCourseBySlug } from "@/lib/data/courses";
 import { getLearnContext, pickResumeLesson } from "@/lib/data/lessons";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Continue learning" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("learning");
+  return { title: t("learn.meta.continue") };
+}
 
 /**
  * /courses/[slug]/learn → the lesson the viewer should continue with: the one

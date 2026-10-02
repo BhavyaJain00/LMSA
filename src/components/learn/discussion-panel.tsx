@@ -4,7 +4,7 @@ import { useActionState, useRef, useState, useTransition } from "react";
 import type { ActionResult } from "@/lib/types";
 import { createReplyAction, createTopicAction, deleteReplyAction, deleteTopicAction, updateReplyAction, updateTopicAction } from "@/lib/actions/discussions";
 import { Markdown } from "@/lib/markdown";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Icon } from "@/components/ui/icons";
 import { Field, FormError, Input, Textarea } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { useFormatter, useT } from "@/i18n/client";
 import { MessageQuestionIcon } from "./learn-icons";
 import { MentionTextarea } from "./mention-textarea";
 import type { MentionOption, ReplyItem, TopicItem } from "./types";
@@ -34,10 +35,12 @@ export interface DiscussionPanelProps {
 
 /** Discussion tab: questions about this lesson, threads, replies and @mentions. */
 export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closedReason, mentionables, initialTopicId }: DiscussionPanelProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(() => (initialTopicId && topics.some((t) => t.id === initialTopicId) ? initialTopicId : null));
+  const t = useT("learning");
+  const f = useFormatter();
+  const [selectedId, setSelectedId] = useState<string | null>(() => (initialTopicId && topics.some((x) => x.id === initialTopicId) ? initialTopicId : null));
   const [awaitingId, setAwaitingId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const selected = selectedId ? (topics.find((t) => t.id === selectedId) ?? null) : null;
+  const selected = selectedId ? (topics.find((x) => x.id === selectedId) ?? null) : null;
 
   if (closedReason) {
     return (
@@ -45,7 +48,7 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
         <div className="flex items-start gap-3 rounded-xl border border-dashed border-border-strong bg-surface-2/60 p-4">
           <Icon.Lock className="mt-0.5 size-5 shrink-0 text-ink-faint" />
           <div>
-            <p className="text-sm font-medium text-ink">Discussions are closed on this lesson</p>
+            <p className="text-sm font-medium text-ink">{t("learn.discuss.closedTitle")}</p>
             <p className="mt-0.5 text-sm text-ink-muted">{closedReason}</p>
           </div>
         </div>
@@ -83,12 +86,12 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
     <div className="p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-ink">Questions</h2>
-          <p className="text-xs text-ink-muted">Ask about this lesson. Instructors are notified.</p>
+          <h2 className="text-sm font-semibold text-ink">{t("learn.discuss.title")}</h2>
+          <p className="text-xs text-ink-muted">{t("learn.discuss.intro")}</p>
         </div>
         {canPost && (
           <Button size="sm" leftIcon={<Icon.Plus className="size-4" />} onClick={() => setNewOpen(true)}>
-            New question
+            {t("learn.discuss.newQuestion")}
           </Button>
         )}
       </div>
@@ -96,10 +99,10 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
       {topics.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border px-4 py-8 text-center">
           <Icon.MessageSquare className="size-7 text-ink-faint" />
-          <p className="text-sm text-ink-muted">Ask a question to get help from the community.</p>
+          <p className="text-sm text-ink-muted">{t("learn.discuss.empty")}</p>
           {canPost && (
             <Button variant="outline" size="sm" onClick={() => setNewOpen(true)} className="mt-1">
-              Ask a question
+              {t("learn.discuss.ask")}
             </Button>
           )}
         </div>
@@ -113,27 +116,27 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
                 <button
                   type="button"
                   onClick={() => setSelectedId(topic.id)}
-                  className="flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2"
+                  className="flex w-full items-start gap-3 px-3 py-3 text-start transition-colors hover:bg-surface-2 focus-visible:bg-surface-2"
                 >
-                  <Avatar name={topic.author?.name ?? "Deleted user"} src={topic.author?.avatarUrl} size="sm" />
+                  <Avatar name={topic.author?.name ?? t("learn.discuss.deletedUser")} src={topic.author?.avatarUrl} size="sm" />
                   <span className="min-w-0 flex-1">
                     <span className="line-clamp-2 text-sm font-medium text-ink">{topic.title}</span>
                     <span className="mt-0.5 block truncate text-xs text-ink-muted">
-                      {topic.author?.name ?? "Deleted user"} · <span suppressHydrationWarning>{relativeTime(topic.updatedAt)}</span>
+                      {topic.author?.name ?? t("learn.discuss.deletedUser")} · <span suppressHydrationWarning>{f.relative(topic.updatedAt)}</span>
                     </span>
                     <span className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
                       <span className="inline-flex items-center gap-1">
                         <Icon.MessageSquare className="size-3.5" />
-                        {replyCount} {replyCount === 1 ? "reply" : "replies"}
+                        {t("learn.discuss.replies", { count: replyCount })}
                       </span>
                       {instructorReplied && (
                         <Badge tone="success" size="xs">
-                          Instructor replied
+                          {t("learn.discuss.instructorReplied")}
                         </Badge>
                       )}
                     </span>
                   </span>
-                  <Icon.ChevronRight className="mt-1 size-4 shrink-0 text-ink-faint" />
+                  <Icon.ChevronRight className="mt-1 size-4 shrink-0 text-ink-faint rtl:rotate-180" />
                 </button>
               </li>
             );
@@ -141,7 +144,7 @@ export function DiscussionPanel({ lessonId, topics, canPost, canModerate, closed
         </ul>
       )}
 
-      {!canPost && <p className="mt-3 text-xs text-ink-muted">Enroll in this course to ask questions and reply.</p>}
+      {!canPost && <p className="mt-3 text-xs text-ink-muted">{t("learn.discuss.enrollToAsk")}</p>}
 
       <NewTopicDialog
         open={newOpen}
@@ -176,12 +179,14 @@ function NewTopicDialog({
   onCreated: (id: string) => void;
 }) {
   const toast = useToast();
+  const t = useT("learning");
+  const common = useT("common");
   const [formKey, setFormKey] = useState(0);
   const [details, setDetails] = useState("");
   const [state, formAction, pending] = useActionState<ActionResult<{ topicId: string }> | null, FormData>(async (prev, formData) => {
     const res = await createTopicAction(prev, formData);
     if (res.ok) {
-      toast.success("Question posted", "The instructors have been notified.");
+      toast.success(t("learn.discuss.posted"), t("learn.discuss.postedHint"));
       setFormKey((k) => k + 1);
       setDetails("");
       onCreated(res.data.topicId);
@@ -191,20 +196,20 @@ function NewTopicDialog({
   const errors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
 
   return (
-    <Dialog open={open} onClose={onClose} title="New question" description="Describe what you are stuck on. Markdown is supported." size="lg">
+    <Dialog open={open} onClose={onClose} title={t("learn.discuss.newQuestion")} description={t("learn.discuss.newDescription")} size="lg">
       <form key={formKey} action={formAction} className="space-y-4" noValidate>
         <input type="hidden" name="lessonId" value={lessonId} />
         <FormError message={state && !state.ok && !state.fieldErrors ? state.error : null} />
-        <Field label="Title" htmlFor="topic-title" error={errors.title} required>
-          <Input id="topic-title" name="title" maxLength={160} placeholder="e.g. Why does map return undefined here?" invalid={!!errors.title} autoComplete="off" />
+        <Field label={t("learn.discuss.titleLabel")} htmlFor="topic-title" error={errors.title} required>
+          <Input id="topic-title" name="title" maxLength={160} placeholder={t("learn.discuss.titlePlaceholder")} invalid={!!errors.title} autoComplete="off" />
         </Field>
-        <Field label="Details" htmlFor="topic-content" error={errors.content} hint="Include what you tried and any error messages. Type @ to mention someone." required>
+        <Field label={t("learn.discuss.details")} htmlFor="topic-content" error={errors.content} hint={t("learn.discuss.detailsHint")} required>
           <MentionTextarea
             id="topic-content"
             name="content"
             rows={6}
             maxLength={10000}
-            placeholder="Explain your question…"
+            placeholder={t("learn.discuss.detailsPlaceholder")}
             invalid={!!errors.content}
             value={details}
             onValueChange={setDetails}
@@ -214,10 +219,10 @@ function NewTopicDialog({
         </Field>
         <div className="flex justify-end gap-2 border-t border-border pt-4">
           <Button variant="outline" onClick={onClose} disabled={pending}>
-            Cancel
+            {common("actions.cancel")}
           </Button>
           <Button type="submit" loading={pending}>
-            Post
+            {t("learn.discuss.post")}
           </Button>
         </div>
       </form>
@@ -245,24 +250,26 @@ function TopicThread({
   onDeleted: () => void;
 }) {
   const toast = useToast();
+  const t = useT("learning");
+  const f = useFormatter();
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, startDelete] = useTransition();
   const canDeleteTopic = topic.isOwn || canModerate;
 
   const topicMenu: DropdownItem[] = [];
-  if (topic.isOwn) topicMenu.push({ label: "Edit title", icon: <Icon.Edit />, onClick: () => setRenaming(true) });
-  if (canDeleteTopic) topicMenu.push({ label: "Delete question", icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmDelete(true) });
+  if (topic.isOwn) topicMenu.push({ label: t("learn.discuss.editTitle"), icon: <Icon.Edit />, onClick: () => setRenaming(true) });
+  if (canDeleteTopic) topicMenu.push({ label: t("learn.discuss.deleteQuestion"), icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmDelete(true) });
 
   const removeTopic = () => {
     startDelete(async () => {
       const res = await deleteTopicAction(topic.id);
       if (!res.ok) {
-        toast.error("Could not delete the question", res.error);
+        toast.error(t("learn.discuss.deleteQuestionFailed"), res.error);
         return;
       }
       setConfirmDelete(false);
-      toast.success("Question deleted");
+      toast.success(t("learn.discuss.questionDeleted"));
       onDeleted();
     });
   };
@@ -270,15 +277,15 @@ function TopicThread({
   return (
     <div className="flex min-h-full flex-col">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface-1/95 px-3 py-2 backdrop-blur">
-        <Button variant="ghost" size="xs" leftIcon={<Icon.ChevronLeft className="size-4" />} onClick={onBack}>
-          All questions
+        <Button variant="ghost" size="xs" leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />} onClick={onBack}>
+          {t("learn.discuss.allQuestions")}
         </Button>
         {topicMenu.length > 0 && (
           <Dropdown
             trigger={
               <span className="flex size-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-2 hover:text-ink">
                 <Icon.MoreHorizontal className="size-4" />
-                <span className="sr-only">Question actions</span>
+                <span className="sr-only">{t("learn.discuss.questionActions")}</span>
               </span>
             }
             items={topicMenu}
@@ -293,7 +300,11 @@ function TopicThread({
           <h3 className="text-base font-semibold leading-snug text-ink">{topic.title}</h3>
         )}
         <p className="mt-1 text-xs text-ink-muted">
-          Asked by {topic.author?.name ?? "Deleted user"} · <span suppressHydrationWarning>{relativeTime(topic.createdAt)}</span>
+          {t.rich("learn.discuss.askedBy", {
+            name: topic.author?.name ?? t("learn.discuss.deletedUser"),
+            when: f.relative(topic.createdAt),
+            time: (chunks) => <span suppressHydrationWarning>{chunks}</span>,
+          })}
         </p>
       </div>
 
@@ -308,16 +319,16 @@ function TopicThread({
       {canPost ? (
         <ReplyComposer topicId={topic.id} mentionables={mentionables} />
       ) : (
-        <p className="m-4 rounded-lg bg-surface-2 p-3 text-xs text-ink-muted">Enroll in this course to reply.</p>
+        <p className="m-4 rounded-lg bg-surface-2 p-3 text-xs text-ink-muted">{t("learn.discuss.enrollToReply")}</p>
       )}
 
       <ConfirmDialog
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         onConfirm={removeTopic}
-        title="Delete this question?"
-        description="The question and all of its replies will be removed. This cannot be undone."
-        confirmLabel="Delete question"
+        title={t("learn.discuss.confirmDeleteQuestion")}
+        description={t("learn.discuss.confirmDeleteQuestionBody")}
+        confirmLabel={t("learn.discuss.deleteQuestion")}
         destructive
         loading={deleting}
       />
@@ -327,10 +338,12 @@ function TopicThread({
 
 function RenameTopicForm({ topic, onDone }: { topic: TopicItem; onDone: () => void }) {
   const toast = useToast();
+  const t = useT("learning");
+  const common = useT("common");
   const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(async (prev, formData) => {
     const res = await updateTopicAction(prev, formData);
     if (res.ok) {
-      toast.success("Question updated");
+      toast.success(t("learn.discuss.questionUpdated"));
       onDone();
     }
     return res;
@@ -340,16 +353,16 @@ function RenameTopicForm({ topic, onDone }: { topic: TopicItem; onDone: () => vo
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="topicId" value={topic.id} />
       <label htmlFor={`rename-${topic.id}`} className="sr-only">
-        Question title
+        {t("learn.discuss.questionTitle")}
       </label>
       <Input id={`rename-${topic.id}`} name="title" defaultValue={topic.title} maxLength={160} invalid={!!error} autoFocus />
       {error && <p className="text-xs text-danger">{error}</p>}
       <div className="flex justify-end gap-1.5">
         <Button variant="ghost" size="xs" onClick={onDone} disabled={pending}>
-          Cancel
+          {common("actions.cancel")}
         </Button>
         <Button type="submit" size="xs" loading={pending}>
-          Save
+          {common("actions.save")}
         </Button>
       </div>
     </form>
@@ -358,24 +371,27 @@ function RenameTopicForm({ topic, onDone }: { topic: TopicItem; onDone: () => vo
 
 function ReplyRow({ reply, isQuestion, canModerate, onTopicDeleted }: { reply: ReplyItem; isQuestion: boolean; canModerate: boolean; onTopicDeleted: () => void }) {
   const toast = useToast();
+  const t = useT("learning");
+  const common = useT("common");
+  const f = useFormatter();
   const [editing, setEditing] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, startDelete] = useTransition();
   const canDelete = reply.isOwn || canModerate;
 
   const items: DropdownItem[] = [];
-  if (reply.isOwn) items.push({ label: "Edit", icon: <Icon.Edit />, onClick: () => setEditing(true) });
-  if (canDelete) items.push({ label: "Delete", icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmOpen(true) });
+  if (reply.isOwn) items.push({ label: common("actions.edit"), icon: <Icon.Edit />, onClick: () => setEditing(true) });
+  if (canDelete) items.push({ label: common("actions.delete"), icon: <Icon.Trash />, destructive: true, onClick: () => setConfirmOpen(true) });
 
   const remove = () => {
     startDelete(async () => {
       const res = await deleteReplyAction(reply.id);
       if (!res.ok) {
-        toast.error("Could not delete", res.error);
+        toast.error(t("learn.discuss.deleteFailed"), res.error);
         return;
       }
       setConfirmOpen(false);
-      toast.success(res.message ?? "Reply deleted");
+      toast.success(res.data.topicDeleted ? t("learn.discuss.questionDeleted") : t("learn.discuss.replyDeleted"));
       if (res.data.topicDeleted) onTopicDeleted();
     });
   };
@@ -383,24 +399,24 @@ function ReplyRow({ reply, isQuestion, canModerate, onTopicDeleted }: { reply: R
   return (
     <article className={cn("rounded-xl border p-3", reply.isInstructor ? "border-accent/30 bg-accent/5" : "border-border bg-surface-1")}>
       <header className="flex items-center gap-2">
-        <Avatar name={reply.author?.name ?? "Deleted user"} src={reply.author?.avatarUrl} size="xs" />
+        <Avatar name={reply.author?.name ?? t("learn.discuss.deletedUser")} src={reply.author?.avatarUrl} size="xs" />
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="truncate text-sm font-medium text-ink">{reply.author?.name ?? "Deleted user"}</span>
+          <span className="truncate text-sm font-medium text-ink">{reply.author?.name ?? t("learn.discuss.deletedUser")}</span>
           {reply.isInstructor && (
             <Badge tone="accent" size="xs">
-              Instructor
+              {t("learn.mention.instructor")}
             </Badge>
           )}
           {isQuestion && (
             <Badge tone="neutral" size="xs">
-              Question
+              {t("learn.discuss.question")}
             </Badge>
           )}
           <span className="text-xs text-ink-faint">
             <time dateTime={reply.createdAt} suppressHydrationWarning>
-              {relativeTime(reply.createdAt)}
+              {f.relative(reply.createdAt)}
             </time>
-            {reply.edited && " · edited"}
+            {reply.edited && ` · ${t("learn.discuss.edited")}`}
           </span>
         </div>
         {items.length > 0 && (
@@ -408,7 +424,7 @@ function ReplyRow({ reply, isQuestion, canModerate, onTopicDeleted }: { reply: R
             trigger={
               <span className="flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-surface-2 hover:text-ink">
                 <Icon.MoreHorizontal className="size-4" />
-                <span className="sr-only">Reply actions</span>
+                <span className="sr-only">{t("learn.discuss.replyActions")}</span>
               </span>
             }
             items={items}
@@ -426,9 +442,9 @@ function ReplyRow({ reply, isQuestion, canModerate, onTopicDeleted }: { reply: R
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={remove}
-        title={isQuestion ? "Delete this question?" : "Delete this reply?"}
-        description={isQuestion ? "This is the opening post, so the whole question and its replies will be removed." : "The reply will be removed permanently."}
-        confirmLabel="Delete"
+        title={isQuestion ? t("learn.discuss.confirmDeleteQuestion") : t("learn.discuss.confirmDeleteReply")}
+        description={isQuestion ? t("learn.discuss.confirmDeleteOpening") : t("learn.discuss.confirmDeleteReplyBody")}
+        confirmLabel={common("actions.delete")}
         destructive
         loading={deleting}
       />
@@ -438,10 +454,11 @@ function ReplyRow({ reply, isQuestion, canModerate, onTopicDeleted }: { reply: R
 
 function EditReplyForm({ reply, onDone }: { reply: ReplyItem; onDone: () => void }) {
   const toast = useToast();
+  const t = useT("learning");
   const [state, formAction, pending] = useActionState<ActionResult | null, FormData>(async (prev, formData) => {
     const res = await updateReplyAction(prev, formData);
     if (res.ok) {
-      toast.success("Reply updated");
+      toast.success(t("learn.discuss.replyUpdated"));
       onDone();
     }
     return res;
@@ -451,16 +468,16 @@ function EditReplyForm({ reply, onDone }: { reply: ReplyItem; onDone: () => void
     <form action={formAction} className="mt-2 space-y-2">
       <input type="hidden" name="replyId" value={reply.id} />
       <label htmlFor={`edit-reply-${reply.id}`} className="sr-only">
-        Edit reply
+        {t("learn.discuss.editReply")}
       </label>
       <Textarea id={`edit-reply-${reply.id}`} name="content" rows={4} defaultValue={reply.content} maxLength={10000} invalid={!!error} autoFocus />
       {error && <p className="text-xs text-danger">{error}</p>}
       <div className="flex justify-end gap-1.5">
         <Button variant="ghost" size="xs" onClick={onDone} disabled={pending}>
-          Discard
+          {t("learn.discuss.discard")}
         </Button>
         <Button type="submit" size="xs" loading={pending}>
-          Post
+          {t("learn.discuss.post")}
         </Button>
       </div>
     </form>
@@ -469,13 +486,14 @@ function EditReplyForm({ reply, onDone }: { reply: ReplyItem; onDone: () => void
 
 function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionables: MentionOption[] }) {
   const toast = useToast();
+  const t = useT("learning");
   const formRef = useRef<HTMLFormElement>(null);
   const [text, setText] = useState("");
   const [state, formAction, pending] = useActionState<ActionResult<{ replyId: string }> | null, FormData>(async (prev, formData) => {
     const res = await createReplyAction(prev, formData);
     if (res.ok) {
       setText("");
-      toast.success("Reply posted");
+      toast.success(t("learn.discuss.replyPosted"));
     }
     return res;
   }, null);
@@ -486,7 +504,7 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
     const area = formRef.current?.querySelector<HTMLTextAreaElement>("textarea");
     const mention = `@${username} `;
     if (!area) {
-      setText((t) => `${t}${t && !/\s$/.test(t) ? " " : ""}${mention}`);
+      setText((prev) => `${prev}${prev && !/\s$/.test(prev) ? " " : ""}${mention}`);
       return;
     }
     const start = area.selectionStart ?? text.length;
@@ -506,7 +524,7 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
     <form ref={formRef} action={formAction} className="sticky bottom-0 mt-4 space-y-2 border-t border-border bg-surface-1 p-3">
       <input type="hidden" name="topicId" value={topicId} />
       <label htmlFor={`reply-${topicId}`} className="sr-only">
-        Your reply
+        {t("learn.discuss.yourReply")}
       </label>
       <MentionTextarea
         id={`reply-${topicId}`}
@@ -515,7 +533,7 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
         value={text}
         onValueChange={setText}
         mentionables={mentionables}
-        placeholder="Type your reply here..."
+        placeholder={t("learn.discuss.replyPlaceholder")}
         maxLength={10000}
         invalid={!!error}
         onKeyDown={(e) => {
@@ -530,14 +548,14 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
         {mentionables.length > 0 ? (
           <div className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-ink-muted">
             <MessageQuestionIcon className="size-3.5" />
-            <span>{quickPicks.length > 0 ? "Type @ to mention, or:" : "Type @ to mention someone"}</span>
+            <span>{quickPicks.length > 0 ? t("learn.discuss.mentionOr") : t("learn.discuss.mentionHint")}</span>
             {quickPicks.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => insertMention(m.username)}
                 className="rounded-full bg-surface-2 px-2 py-0.5 font-medium text-ink-muted transition-colors hover:bg-accent/10 hover:text-accent"
-                title={`Mention ${m.name}`}
+                title={t("learn.discuss.mentionName", { name: m.name })}
               >
                 @{m.username}
               </button>
@@ -546,8 +564,8 @@ function ReplyComposer({ topicId, mentionables }: { topicId: string; mentionable
         ) : (
           <span />
         )}
-        <Button type="submit" size="sm" loading={pending} disabled={!text.trim()} rightIcon={<Icon.Send className="size-3.5" />}>
-          Post
+        <Button type="submit" size="sm" loading={pending} disabled={!text.trim()} rightIcon={<Icon.Send className="size-3.5 rtl:-scale-x-100" />}>
+          {t("learn.discuss.post")}
         </Button>
       </div>
     </form>

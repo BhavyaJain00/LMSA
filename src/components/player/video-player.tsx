@@ -8,7 +8,7 @@ import { Icon } from "@/components/ui/icons";
 import { loadPlayerPrefs, savePlayerPrefs, useVideoPlayer } from "./use-video-player";
 import { ControlBar, PLAYBACK_RATES } from "./controls";
 import type { SeekChapter, SeekMarker } from "./seek-bar";
-import { useMediaSource } from "./use-media-source";
+import { useMediaSource, type MediaFailureReason } from "./use-media-source";
 import { bucketOf, useSeekThumbnails } from "./use-seek-thumbnails";
 import { ThumbnailPreview } from "./thumbnail-preview";
 import { Watermark } from "./watermark";
@@ -20,6 +20,7 @@ import { DockReturnIcon } from "./player-icons";
 import { detectHlsSupport, type HlsSupport } from "./hls/support";
 import { useHls } from "./use-hls";
 import { StatsPanel, type PlaybackMode } from "./stats-panel";
+import { useT } from "@/i18n/client";
 
 export interface HeartbeatPayload {
   /** Current playback position in seconds. */
@@ -146,7 +147,7 @@ export function VideoPlayer({
   src,
   poster,
   captionsUrl,
-  captionsLabel = "English",
+  captionsLabel,
   captionsLang = "en",
   title,
   chapters,
@@ -160,7 +161,7 @@ export function VideoPlayer({
   onEnded,
   onMarker,
   onNext,
-  nextLabel = "Next lesson",
+  nextLabel,
   theater,
   onToggleTheater,
   className,
@@ -175,10 +176,11 @@ export function VideoPlayer({
   seekThumbnails,
   autoplayNext,
   nextTitle,
-  countdownLabel = "Next lesson",
+  countdownLabel,
   miniPlayer,
   hlsUrl,
 }: VideoPlayerProps) {
+  const t = useT("learning");
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
@@ -197,7 +199,8 @@ export function VideoPlayer({
   const reducedMotion = usePrefersReducedMotion();
 
   /* ------------------------------ quality ------------------------------ */
-  const qualityOptions = useMemo(() => buildQualityOptions(src, sources, sourceLabel), [src, sources, sourceLabel]);
+  const mainLabel = sourceLabel ?? t("global.player.qualityOriginal");
+  const qualityOptions = useMemo(() => buildQualityOptions(src, sources, mainLabel), [src, sources, mainLabel]);
   const hasQualityChoice = qualityOptions.length > 1;
   // Same initial state on the server and during hydration; the saved preference is applied after mount.
   const [quality, setQuality] = useState<{ pref: string; activeId: string | null }>(() =>
@@ -802,10 +805,47 @@ export function VideoPlayer({
     ) : undefined;
 
   /* -------------------------------- render -------------------------------- */
-  const mediaMessage = activeMedia.status === "denied" || (activeMedia.status === "error" && !activeMedia.url) ? activeMedia.message : null;
+  const failureText = (reason: MediaFailureReason | null): string | null => {
+    switch (reason) {
+      case "signIn":
+        return t("global.player.error.signIn");
+      case "forbidden":
+        return t("global.player.error.forbidden");
+      case "notFound":
+        return t("global.player.error.notFound");
+      case "rateLimited":
+        return t("global.player.error.rateLimited");
+      case "unavailable":
+        return t("global.player.error.serviceDown");
+      case "failed":
+        return t("global.player.error.loadFailed");
+      case "network":
+        return t("global.player.error.offline");
+      default:
+        return null;
+    }
+  };
+  const playbackError = (): string | null => {
+    if (!state.error) return null;
+    switch (state.errorCode) {
+      case 1:
+        return t("global.player.error.interrupted");
+      case 2:
+        return t("global.player.error.network");
+      case 3:
+        return t("global.player.error.decode");
+      case 4:
+        return t("global.player.error.unsupported");
+      default:
+        return t("global.player.error.generic");
+    }
+  };
+  const mediaMessage =
+    activeMedia.status === "denied" || (activeMedia.status === "error" && !activeMedia.url) ? (failureText(activeMedia.reason) ?? activeMedia.message) : null;
   // HLS failed and there is no progressive file to fall back to.
-  const noFallback = playback === "progressive" && !src && !sources?.length ? "This video is not available right now." : null;
-  const errorMessage = mediaMessage ?? noFallback ?? (recoveryFailed ? (media.message ?? "The video link expired and could not be renewed.") : state.error);
+  const noFallback = playback === "progressive" && !src && !sources?.length ? t("global.player.error.unavailable") : null;
+  const errorMessage =
+    mediaMessage ?? noFallback ?? (recoveryFailed ? (failureText(media.reason) ?? media.message ?? t("global.player.error.linkExpired")) : playbackError());
   const resolving = (activeMedia.status === "resolving" || playback === "pending") && !errorMessage;
   const showBigPlay = !resolving && !errorMessage && (!state.started || (!state.playing && !state.ended && !state.waiting));
   const shortcutGroups = shortcutsOpen
@@ -817,7 +857,8 @@ export function VideoPlayer({
       ref={containerRef}
       tabIndex={0}
       role="region"
-      aria-label={title ? `Video player: ${title}` : "Video player"}
+      aria-label={title ? t("global.player.regionNamed", { title }) : t("global.player.region")}
+      dir="ltr"
       className={cn(
         "ll-player group/player relative isolate w-full overflow-hidden bg-black text-white outline-none focus-visible:ring-2 focus-visible:ring-accent",
         !state.fullscreen && "aspect-video",
@@ -846,8 +887,8 @@ export function VideoPlayer({
         controlsList="nodownload noremoteplayback"
         disablePictureInPicture={!pipAllowed || undefined}
       >
-        {captionsUrl && <track key={captionsUrl} kind="subtitles" src={captionsUrl} srcLang={captionsLang} label={captionsLabel} default={state.captionsOn} />}
-        Your browser does not support HTML5 video.
+        {captionsUrl && <track key={captionsUrl} kind="subtitles" src={captionsUrl} srcLang={captionsLang} label={captionsLabel ?? t("global.player.captionsLanguage")} default={state.captionsOn} />}
+        {t("global.player.noSupport")}
       </video>
 
       {/* Hidden second video that renders seek-bar previews. */}
@@ -870,7 +911,9 @@ export function VideoPlayer({
       {/* Title (top gradient) */}
       {title && !docked && (
         <div className={cn("pointer-events-none absolute inset-x-0 top-0 z-10 bg-linear-to-b from-black/70 to-transparent px-4 pb-8 pt-3 transition-opacity", controlsShown ? "opacity-100" : "opacity-0")}>
-          <p className="truncate text-sm font-medium drop-shadow">{title}</p>
+          <p className="truncate text-sm font-medium drop-shadow" dir="auto">
+            {title}
+          </p>
         </div>
       )}
 
@@ -880,8 +923,8 @@ export function VideoPlayer({
           <button
             type="button"
             onClick={() => mini.returnToSlot(!reducedMotion)}
-            aria-label="Back to the lesson video"
-            title="Back to the lesson video"
+            aria-label={t("global.player.backToLesson")}
+            title={t("global.player.backToLesson")}
             className="flex size-8 items-center justify-center rounded-md bg-black/60 text-white/90 hover:bg-black/80 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           >
             <DockReturnIcon className="size-4" />
@@ -892,8 +935,8 @@ export function VideoPlayer({
               rawActions.pause();
               mini.close();
             }}
-            aria-label="Close mini player"
-            title="Close mini player"
+            aria-label={t("global.player.closeMini")}
+            title={t("global.player.closeMini")}
             className="flex size-8 items-center justify-center rounded-md bg-black/60 text-white/90 hover:bg-black/80 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           >
             <Icon.X className="size-4" />
@@ -905,7 +948,7 @@ export function VideoPlayer({
       {showBigPlay && (
         <button
           type="button"
-          aria-label="Play"
+          aria-label={t("global.player.play")}
           onClick={() => void actions.play()}
           className={cn(
             "absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-(--player-accent) text-white shadow-lg transition hover:scale-105",
@@ -920,7 +963,7 @@ export function VideoPlayer({
       {(resolving || state.waiting) && !errorMessage && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center" role="status">
           <Icon.Loader className="size-12 animate-spin-slow text-white/90" />
-          <span className="sr-only">Loading video</span>
+          <span className="sr-only">{t("global.player.loading")}</span>
         </div>
       )}
 
@@ -935,7 +978,7 @@ export function VideoPlayer({
       {/* Resume chip */}
       {showResume && (
         <div className="absolute bottom-20 left-3 z-10 flex items-center gap-2 rounded-lg bg-black/75 px-3 py-2 text-xs shadow animate-fade-in">
-          <Icon.Clock className="size-4" /> Resumed from {formatTime(startAt ?? 0)}
+          <Icon.Clock className="size-4" /> {t("global.player.resumedFrom", { time: formatTime(startAt ?? 0) })}
           <button
             type="button"
             className="ml-1 font-medium text-(--player-accent) hover:underline"
@@ -944,7 +987,7 @@ export function VideoPlayer({
               setResumeDismissed(true);
             }}
           >
-            Start over
+            {t("global.player.startOver")}
           </button>
         </div>
       )}
@@ -952,7 +995,7 @@ export function VideoPlayer({
       {/* Skip blocked notice */}
       {skipBlocked && (
         <div className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-black/80 px-3 py-2 text-xs shadow animate-fade-in">
-          <Icon.Lock className="mr-1 inline size-3.5" /> Skipping ahead is disabled for this lesson
+          <Icon.Lock className="mr-1 inline size-3.5" /> {t("global.player.skipBlocked")}
         </div>
       )}
 
@@ -960,10 +1003,12 @@ export function VideoPlayer({
       {errorMessage && (
         <div role="alert" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center">
           <Icon.AlertTriangle className={docked ? "size-6 text-warning" : "size-10 text-warning"} />
-          <p className="max-w-sm text-sm">{errorMessage}</p>
+          <p className="max-w-sm text-sm" dir="auto">
+            {errorMessage}
+          </p>
           {media.status !== "denied" && (
             <button type="button" onClick={actions.retry} className="rounded-lg bg-white/15 px-4 py-2 text-sm font-medium hover:bg-white/25">
-              Try again
+              {t("global.player.tryAgain")}
             </button>
           )}
         </div>
@@ -979,9 +1024,9 @@ export function VideoPlayer({
             void actions.play();
           }}
           onNext={onNext}
-          nextLabel={nextLabel}
+          nextLabel={nextLabel ?? t("global.player.nextLesson")}
           nextTitle={nextTitle}
-          countdownLabel={countdownLabel}
+          countdownLabel={countdownLabel ?? t("global.player.nextLesson")}
           autoplay={!!autoplayNext && !!onNext}
           reducedMotion={reducedMotion}
         />
@@ -1041,7 +1086,7 @@ export function VideoPlayer({
       {docked && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border-strong text-center text-sm text-ink-muted">
           <DockReturnIcon className="size-6 text-ink-faint" />
-          Playing in the mini player
+          {t("global.player.inMiniPlayer")}
         </div>
       )}
       {player}

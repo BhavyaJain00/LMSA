@@ -1,10 +1,12 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 /** Lesson skeleton: content column + outline sidebar. */
-export default function LessonLoading() {
+export default async function LessonLoading() {
+  const t = await getT("learning");
   return (
     <div className="flex-1 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(320px,30%)]" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading lesson…</span>
+      <span className="sr-only">{t("learn.loading")}</span>
       <div className="min-w-0 px-4 pb-24 pt-6 sm:px-6 lg:px-10 lg:pt-8">
         <div className="mx-auto w-full max-w-4xl animate-fade-in">
           <Skeleton className="h-4 w-64 max-w-full" />
@@ -24,7 +26,7 @@ export default function LessonLoading() {
           <Skeleton className="mt-8 h-32 w-full rounded-xl" />
         </div>
       </div>
-      <aside className="hidden border-l border-border bg-surface-1 lg:block" aria-hidden="true">
+      <aside className="hidden border-s border-border bg-surface-1 lg:block" aria-hidden="true">
         <div className="border-b border-border px-5 py-4">
           <Skeleton className="h-5 w-3/4" />
           <Skeleton className="mt-4 h-2 w-full rounded-full" />
@@ -34,7 +36,7 @@ export default function LessonLoading() {
             <div key={i} className="space-y-2.5">
               <Skeleton className="h-4 w-2/3" />
               {Array.from({ length: 3 }).map((__, j) => (
-                <div key={j} className="flex items-center gap-2 pl-6">
+                <div key={j} className="flex items-center gap-2 ps-6">
                   <Skeleton className="size-4 rounded-full" />
                   <Skeleton className="h-3 flex-1" />
                 </div>

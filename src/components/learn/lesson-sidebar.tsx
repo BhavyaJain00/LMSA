@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
+import { useT } from "@/i18n/client";
 import { CourseOutlineNav } from "./course-outline-nav";
 import { useOptionalLessonRuntime } from "./lesson-runtime";
 import type { CourseProgressInfo, OutlineChapterItem, SidebarTab } from "./types";
@@ -61,6 +62,8 @@ export function LessonSidebar({
   aiPanel,
 }: LessonSidebarProps) {
   const rt = useOptionalLessonRuntime();
+  const t = useT("learning");
+  const common = useT("common");
   const [localTab, setLocalTab] = useState<SidebarTab>("outline");
   const [localOpen, setLocalOpen] = useState(false);
   const isDesktop = useIsDesktop();
@@ -74,12 +77,12 @@ export function LessonSidebar({
   const setOpen = rt?.setMobileSidebarOpen ?? setLocalOpen;
 
   const tabs: { value: SidebarTab; label: string; count?: number; icon: ReactNode }[] = [
-    { value: "outline", label: "Outline", icon: <Icon.Layers className="size-4" /> },
+    { value: "outline", label: t("learn.sidebar.outline"), icon: <Icon.Layers className="size-4" /> },
   ];
-  if (notesPanel) tabs.push({ value: "notes", label: "Notes", count: noteCount, icon: <Icon.Note className="size-4" /> });
-  if (discussionPanel) tabs.push({ value: "discussion", label: "Discussion", count: topicCount, icon: <Icon.MessageSquare className="size-4" /> });
-  if (aiPanel) tabs.push({ value: "ai", label: "Ask AI", icon: <Icon.Sparkles className="size-4" /> });
-  const tab: SidebarTab = tabs.some((t) => t.value === rawTab) ? rawTab : "outline";
+  if (notesPanel) tabs.push({ value: "notes", label: t("learn.sidebar.notes"), count: noteCount, icon: <Icon.Note className="size-4" /> });
+  if (discussionPanel) tabs.push({ value: "discussion", label: t("learn.sidebar.discussion"), count: topicCount, icon: <Icon.MessageSquare className="size-4" /> });
+  if (aiPanel) tabs.push({ value: "ai", label: t("learn.sidebar.askAi"), icon: <Icon.Sparkles className="size-4" /> });
+  const tab: SidebarTab = tabs.some((x) => x.value === rawTab) ? rawTab : "outline";
   // Four labels with icons don't fit the narrowest sidebar (320px), so the icons go first.
   const showTabIcons = tabs.length <= 3;
 
@@ -153,7 +156,7 @@ export function LessonSidebar({
         id="lesson-sidebar"
         role={modalSheet ? "dialog" : undefined}
         aria-modal={modalSheet ? true : undefined}
-        aria-label={modalSheet ? undefined : "Course outline, notes and discussion"}
+        aria-label={modalSheet ? undefined : t("learn.sidebar.label")}
         aria-labelledby={modalSheet ? "lesson-sheet-title" : undefined}
         data-lesson-sheet-open={modalSheet ? "" : undefined}
         inert={hiddenSheet}
@@ -163,7 +166,7 @@ export function LessonSidebar({
           "fixed inset-x-0 bottom-0 z-50 h-[85dvh] rounded-t-2xl border-t border-border shadow-pop transition-transform duration-300 ease-out",
           open ? "translate-y-0" : "translate-y-full",
           // Desktop sticky column
-          "lg:sticky lg:inset-x-auto lg:bottom-auto lg:top-14 lg:z-10 lg:h-[calc(100dvh-3.5rem)] lg:translate-y-0 lg:rounded-none lg:border-l lg:border-t-0 lg:shadow-none lg:transition-none",
+          "lg:sticky lg:inset-x-auto lg:bottom-auto lg:top-14 lg:z-10 lg:h-[calc(100dvh-3.5rem)] lg:translate-y-0 lg:rounded-none lg:border-s lg:border-t-0 lg:shadow-none lg:transition-none",
         )}
       >
         {/* Mobile sheet header */}
@@ -172,7 +175,7 @@ export function LessonSidebar({
           <p id="lesson-sheet-title" className="min-w-0 flex-1 truncate text-base font-semibold text-ink">
             {courseTitle}
           </p>
-          <button ref={closeRef} type="button" onClick={() => setOpen(false)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label="Close">
+          <button ref={closeRef} type="button" onClick={() => setOpen(false)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label={common("actions.close")}>
             <Icon.X className="size-5" />
           </button>
         </div>
@@ -184,13 +187,13 @@ export function LessonSidebar({
             <div className="mt-3">
               <div className="mb-1.5 flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5 text-ink-muted">
-                  <Icon.TrendingUp className="size-3.5" /> Completed {progress.percent}%
+                  <Icon.TrendingUp className="size-3.5" /> {t("learn.sidebar.completedPercent", { percent: progress.percent })}
                 </span>
                 <span className="tabular-nums text-ink-faint">
-                  {progress.completed}/{progress.total} lessons
+                  {t("learn.topBar.lessonsCount", { completed: progress.completed, total: progress.total })}
                 </span>
               </div>
-              <ProgressBar value={progress.percent} size="sm" tone="success" label="Course progress" />
+              <ProgressBar value={progress.percent} size="sm" tone="success" label={t("learn.sidebar.courseProgress")} />
             </div>
           )}
         </div>
@@ -199,29 +202,29 @@ export function LessonSidebar({
         {progress && (
           <div className="border-b border-border px-4 py-2.5 lg:hidden">
             <div className="mb-1 flex justify-between text-xs text-ink-muted">
-              <span>Completed {progress.percent}%</span>
+              <span>{t("learn.sidebar.completedPercent", { percent: progress.percent })}</span>
               <span className="tabular-nums">
                 {progress.completed}/{progress.total}
               </span>
             </div>
-            <ProgressBar value={progress.percent} size="xs" tone="success" label="Course progress" />
+            <ProgressBar value={progress.percent} size="xs" tone="success" label={t("learn.sidebar.courseProgress")} />
           </div>
         )}
 
         {tabs.length > 1 && (
-          <div role="tablist" aria-label="Sidebar sections" className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2">
-            {tabs.map((t) => {
-              const active = t.value === tab;
+          <div role="tablist" aria-label={t("learn.sidebar.sections")} className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2">
+            {tabs.map((item) => {
+              const active = item.value === tab;
               return (
                 <button
-                  key={t.value}
-                  id={`sidebar-tab-${t.value}`}
+                  key={item.value}
+                  id={`sidebar-tab-${item.value}`}
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  aria-controls={`sidebar-panel-${t.value}`}
+                  aria-controls={`sidebar-panel-${item.value}`}
                   tabIndex={active ? 0 : -1}
-                  onClick={() => setTab(t.value)}
+                  onClick={() => setTab(item.value)}
                   onKeyDown={(e) => {
                     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
                     e.preventDefault();
@@ -237,10 +240,10 @@ export function LessonSidebar({
                     active ? "border-accent text-ink" : "border-transparent text-ink-muted hover:text-ink",
                   )}
                 >
-                  {showTabIcons && t.icon}
-                  {t.label}
-                  {t.count !== undefined && t.count > 0 && (
-                    <span className={cn("rounded-full px-1.5 text-[11px] tabular-nums", active ? "bg-accent/15 text-accent" : "bg-surface-3 text-ink-muted")}>{t.count}</span>
+                  {showTabIcons && item.icon}
+                  {item.label}
+                  {item.count !== undefined && item.count > 0 && (
+                    <span className={cn("rounded-full px-1.5 text-[11px] tabular-nums", active ? "bg-accent/15 text-accent" : "bg-surface-3 text-ink-muted")}>{item.count}</span>
                   )}
                 </button>
               );
@@ -285,10 +288,10 @@ export function LessonSidebar({
           }}
           aria-controls="lesson-sidebar"
           aria-expanded={open}
-          aria-label="Ask AI"
-          title="Ask AI"
+          aria-label={t("learn.sidebar.askAi")}
+          title={t("learn.sidebar.askAi")}
           className={cn(
-            "fixed bottom-17 right-4 z-30 inline-flex size-11 items-center justify-center rounded-full border border-border-strong bg-surface-1 text-accent shadow-pop transition-colors hover:bg-surface-2 lg:hidden",
+            "fixed bottom-17 inset-e-4 z-30 inline-flex size-11 items-center justify-center rounded-full border border-border-strong bg-surface-1 text-accent shadow-pop transition-colors hover:bg-surface-2 lg:hidden",
             open && "hidden",
           )}
         >
@@ -307,12 +310,12 @@ export function LessonSidebar({
         aria-controls="lesson-sidebar"
         aria-expanded={open}
         className={cn(
-          "fixed bottom-4 right-4 z-30 inline-flex h-11 items-center gap-2 rounded-full border border-border-strong bg-surface-1 px-4 text-sm font-medium text-ink shadow-pop transition-colors hover:bg-surface-2 lg:hidden",
+          "fixed bottom-4 inset-e-4 z-30 inline-flex h-11 items-center gap-2 rounded-full border border-border-strong bg-surface-1 px-4 text-sm font-medium text-ink shadow-pop transition-colors hover:bg-surface-2 lg:hidden",
           open && "hidden",
         )}
       >
         <Icon.Layers className="size-4" />
-        Chapters
+        {t("learn.sidebar.chapters")}
       </button>
     </>
   );

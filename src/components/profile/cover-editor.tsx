@@ -8,6 +8,7 @@ import { FileUpload } from "@/components/ui/file-upload";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 /**
  * "Edit cover" control on the profile cover. Opens a small popover to upload
@@ -19,6 +20,7 @@ export function CoverEditor({ userId, hasCover, className }: { userId: string; h
   const [pending, startTransition] = useTransition();
   const ref = useRef<HTMLDivElement>(null);
   const toast = useToast();
+  const t = useT("account");
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +44,7 @@ export function CoverEditor({ userId, hasCover, className }: { userId: string; h
     startTransition(async () => {
       const res = await updateCoverImageAction(userId, url);
       if (res.ok) {
-        toast.success(res.message ?? "Cover updated");
+        toast.success(res.message ?? t("profile.cover.updated"));
         setOpen(false);
         setConfirmRemove(false);
       } else {
@@ -62,16 +64,16 @@ export function CoverEditor({ userId, hasCover, className }: { userId: string; h
         leftIcon={<Icon.Camera className="size-4" />}
         className="bg-surface-1/90 backdrop-blur"
       >
-        Edit cover
+        {t("profile.cover.edit")}
       </Button>
       {open && (
-        <div role="dialog" aria-label="Change cover image" className="absolute right-0 z-30 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-surface-1 p-3 shadow-pop animate-scale-in">
-          <p className="mb-2 text-sm font-medium text-ink">Cover image</p>
+        <div role="dialog" aria-label={t("profile.cover.change")} className="absolute end-0 z-30 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-surface-1 p-3 shadow-pop animate-scale-in">
+          <p className="mb-2 text-sm font-medium text-ink">{t("profile.cover.title")}</p>
           <FileUpload
             kind="image"
             accept="image/png,image/jpeg"
             preview={false}
-            hint="JPG or PNG, at least 1500 × 400 px looks best."
+            hint={t("profile.cover.hint")}
             disabled={pending}
             onChange={(url) => {
               if (url) save(url);
@@ -86,7 +88,7 @@ export function CoverEditor({ userId, hasCover, className }: { userId: string; h
               loading={pending}
               leftIcon={<Icon.Trash className="size-4" />}
             >
-              Remove cover
+              {t("profile.cover.remove")}
             </Button>
           )}
         </div>
@@ -97,9 +99,9 @@ export function CoverEditor({ userId, hasCover, className }: { userId: string; h
         onConfirm={() => save("")}
         loading={pending}
         destructive
-        title="Remove cover image?"
-        description="Your profile will show a colour gradient instead. You can upload a new image at any time."
-        confirmLabel="Remove"
+        title={t("profile.cover.removeTitle")}
+        description={t("profile.cover.removeBody")}
+        confirmLabel={t("profile.cover.removeConfirm")}
       />
     </div>
   );

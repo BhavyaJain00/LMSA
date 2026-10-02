@@ -3,6 +3,7 @@
 import Link, { useLinkStatus } from "next/link";
 import { Spinner } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface CatalogTabLink {
   value: string;
@@ -38,8 +39,9 @@ function TabInner({ tab }: { tab: CatalogTabLink }) {
 
 /** Segmented tab strip for the catalog (Live / Upcoming / New / Enrolled / Created / Unpublished). */
 export function CatalogTabs({ tabs }: { tabs: CatalogTabLink[] }) {
+  const t = useT("public");
   return (
-    <nav aria-label="Course lists" className="no-scrollbar -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+    <nav aria-label={t("catalog.tabs.label")} className="no-scrollbar -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
       <ul className="inline-flex min-w-max gap-1 rounded-xl bg-surface-2 p-1">
         {tabs.map((tab) => (
           <li key={tab.value}>

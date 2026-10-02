@@ -9,7 +9,8 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
-import { cn, formatDate, formatDuration, formatPrice } from "@/lib/utils";
+import { cn, formatPrice } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 import { UnlockLabel } from "@/components/learn/unlock-time";
 import { resolveCourseAccess } from "@/lib/commerce/access";
 import { getBillingItem, itemCurrencies, priceItemIn } from "@/lib/data/commerce";
@@ -24,7 +25,7 @@ import { toPlanView, type InstallmentPlanView } from "@/lib/commerce/installment
 import { InstallmentNotice, orderPath } from "@/components/commerce/installment-plan-card";
 import { GiveGiftLink } from "@/components/commerce/give-gift-link";
 import { ClaimCertificateButton, EnrollButton, LeaveCourseButton } from "./enroll-actions";
-import { enrolledTier, plural } from "./format";
+import { enrolledTier } from "./format";
 import { isPaidCourse, PriceTag } from "./price-tag";
 import { PrerequisiteList } from "./prerequisite-list";
 
@@ -90,13 +91,14 @@ function IncludeRow({ icon, children }: { icon: ReactNode; children: ReactNode }
   );
 }
 
-function CertificateLinks({ props }: { props: EnrollCardProps }) {
+async function CertificateLinks({ props }: { props: EnrollCardProps }) {
   const { course, enrollment, certificate, certificationsEnabled, manager } = props;
   if (!enrollment || !certificationsEnabled || manager) return null;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   if (certificate) {
     return (
       <ButtonLink href={`/certificates/${certificate.code}`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-        View Certificate
+        {t("enroll.viewCertificate")}
       </ButtonLink>
     );
   }
@@ -104,13 +106,13 @@ function CertificateLinks({ props }: { props: EnrollCardProps }) {
     if (enrollment.purchasedCertificate) {
       return (
         <ButtonLink href={`/courses/${course.slug}/certification`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-          Get Certified
+          {t("enroll.getCertified")}
         </ButtonLink>
       );
     }
     return (
       <ButtonLink href={`/billing/certificate/${course.id}`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-        Get Certified · {formatPrice(course.certificatePrice, course.currency)}
+        {t("enroll.getCertifiedFor", { price: f.price(course.certificatePrice, course.currency) })}
       </ButtonLink>
     );
   }
@@ -119,7 +121,7 @@ function CertificateLinks({ props }: { props: EnrollCardProps }) {
     return (
       <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-muted">
         <Icon.Award className="mt-px size-4 shrink-0 text-ink-faint" aria-hidden="true" />
-        Finish every lesson to earn your certificate of completion.
+        {t("enroll.finishForCertificate")}
       </p>
     );
   }
@@ -148,86 +150,105 @@ interface CardExtras {
 }
 
 /** "or 3 payments of $17.00" under the buy button of a course sold in installments. */
-function InstallmentOfferLine({ courseId, offer }: { courseId: string; offer: CardExtras["installmentOffer"] }) {
+async function InstallmentOfferLine({ courseId, offer }: { courseId: string; offer: CardExtras["installmentOffer"] }) {
   if (!offer) return null;
+  const t = await getT("public");
   return (
     <p className="text-center text-xs text-ink-muted">
-      or{" "}
-      <Link href={`/billing/course/${courseId}?pay=installments`} className="font-medium text-accent hover:underline">
-        {offer.count} payments of {offer.partLabel}
-      </Link>
+      {t.rich("enroll.installmentOffer", {
+        count: offer.count,
+        amount: offer.partLabel,
+        link: (chunks) => (
+          <Link href={`/billing/course/${courseId}?pay=installments`} className="font-medium text-accent hover:underline">
+            {chunks}
+          </Link>
+        ),
+      })}
     </p>
   );
 }
 
 /** "Also in a bundle" line under the buy button of a paid course. */
-function BundleOfferLine({ offer }: { offer: CardExtras["bundleOffer"] }) {
+async function BundleOfferLine({ offer }: { offer: CardExtras["bundleOffer"] }) {
   if (!offer) return null;
-  return (
-    <p className="text-center text-xs text-ink-muted">
-      Also in{" "}
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
+  const vars = {
+    count: offer.courseCount,
+    price: f.price(offer.price, offer.currency),
+    savings: offer.savingsPercent,
+    link: () => (
       <Link href={`/bundles/${offer.slug}`} className="font-medium text-accent hover:underline">
         {offer.title}
       </Link>
-      : {offer.courseCount} courses for {formatPrice(offer.price, offer.currency)}
-      {offer.savingsPercent > 0 && ` (save ${offer.savingsPercent}%)`}
+    ),
+  };
+  return (
+    <p className="text-center text-xs text-ink-muted">
+      {offer.savingsPercent > 0 ? t.rich("enroll.bundleOfferSave", vars) : t.rich("enroll.bundleOffer", vars)}
     </p>
   );
 }
 
 /** "Or join a membership" line under the buy button of a paid course. */
-function MembershipOffer({ offer }: { offer: CardExtras["planOffer"] }) {
+async function MembershipOffer({ offer }: { offer: CardExtras["planOffer"] }) {
   if (!offer) return null;
+  const t = await getT("public");
   return (
     <p className="text-center text-xs text-ink-muted">
-      Or get it with {offer.name} for{" "}
-      <Link href="/pricing" className="font-medium text-accent hover:underline">
-        {offer.priceLabel}
-      </Link>
+      {t.rich("enroll.membershipOffer", {
+        plan: offer.name,
+        link: () => (
+          <Link href="/pricing" className="font-medium text-accent hover:underline">
+            {offer.priceLabel}
+          </Link>
+        ),
+      })}
     </p>
   );
 }
 
 /** "Next scheduled lesson" line for enrolled learners. */
-function NextUnlockNote({ drip }: { drip: DripOverview | null }) {
+async function NextUnlockNote({ drip }: { drip: DripOverview | null }) {
   const next = drip?.nextUnlock;
   if (!next) return null;
+  const t = await getT("public");
   return (
     <p className="flex items-start gap-2 rounded-lg bg-accent/8 px-3 py-2 text-xs text-ink-muted">
       <Icon.Clock className="mt-px size-4 shrink-0 text-accent" aria-hidden="true" />
       <span className="min-w-0">
         <span className="block truncate font-medium text-ink" title={next.title}>
-          Next scheduled: {next.title}
+          {t("enroll.nextScheduled", { title: next.title })}
         </span>
         <UnlockLabel at={next.unlocksAt} className="text-accent" />
-        {drip.scheduledCount > 1 && <span> · {drip.scheduledCount - 1} more scheduled</span>}
+        {drip.scheduledCount > 1 && <span> · {t("enroll.moreScheduled", { count: drip.scheduledCount - 1 })}</span>}
       </span>
     </p>
   );
 }
 
-function PrerequisitesBlock({ status, loggedIn, manager }: { status: PrerequisiteStatus; loggedIn: boolean; manager: boolean }) {
+async function PrerequisitesBlock({ status, loggedIn, manager }: { status: PrerequisiteStatus; loggedIn: boolean; manager: boolean }) {
   if (!status.items.length) return null;
+  const t = await getT("public");
   const allDone = loggedIn && !status.missing.length;
   const description = manager
-    ? "Learners must complete these courses before they can enroll."
+    ? t("enroll.prerequisites.manager")
     : !loggedIn
-      ? "Complete these courses before enrolling. Log in to see your progress."
+      ? t("enroll.prerequisites.guest")
       : allDone
-        ? "You've completed every prerequisite."
+        ? t("enroll.prerequisites.allDone")
         : status.blocking
-          ? `Complete ${status.missing.length === 1 ? "this course" : `these ${status.missing.length} courses`} to unlock enrollment.`
-          : "Recommended before you start.";
+          ? t("enroll.prerequisites.blocking", { count: status.missing.length })
+          : t("enroll.prerequisites.recommended");
   return (
     <section aria-labelledby="prerequisites-heading" className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <h2 id="prerequisites-heading" className="flex items-center gap-1.5 text-sm font-semibold text-ink">
           <Icon.ListChecks className="size-4 text-ink-faint" aria-hidden="true" />
-          Prerequisites
+          {t("enroll.prerequisites.title")}
         </h2>
         {loggedIn && !manager && (
           <Badge tone={allDone ? "success" : "warning"} size="xs">
-            {status.items.length - status.missing.length}/{status.items.length} done
+            {t("enroll.prerequisites.done", { done: status.items.length - status.missing.length, total: status.items.length })}
           </Badge>
         )}
       </div>
@@ -238,30 +259,32 @@ function PrerequisitesBlock({ status, loggedIn, manager }: { status: Prerequisit
 }
 
 /** Opens the course's AI tutor (full page). */
-function AskAiLink({ href }: { href: string }) {
+async function AskAiLink({ href }: { href: string }) {
+  const t = await getT("public");
   return (
     <ButtonLink href={href} variant="outline" className="w-full" leftIcon={<Icon.Sparkles className="size-4" />}>
-      Ask AI about this course
+      {t("enroll.askAi")}
     </ButtonLink>
   );
 }
 
-function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExtras }) {
+async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExtras }) {
   const { course, manager, enrollment, nextLesson, firstLessonHref, alreadyPaid, batches } = props;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
 
   if (manager) {
     return (
       <div className="space-y-2">
         <ButtonLink href={`/admin/courses/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.Edit className="size-4" />}>
-          Edit course
+          {t("enroll.editCourse")}
         </ButtonLink>
         {firstLessonHref && (
           <ButtonLink href={enrollment && nextLesson ? nextLesson.href : firstLessonHref} variant="outline" className="w-full" leftIcon={<Icon.Eye className="size-4" />}>
-            {enrollment ? "Continue learning" : "View lessons"}
+            {enrollment ? t("enroll.continueLearning") : t("enroll.viewLessons")}
           </ButtonLink>
         )}
         {props.askAiHref && <AskAiLink href={props.askAiHref} />}
-        <p className="text-center text-xs text-ink-muted">You can manage this course, so every lesson is unlocked for you.</p>
+        <p className="text-center text-xs text-ink-muted">{t("enroll.managerNote")}</p>
       </div>
     );
   }
@@ -272,14 +295,11 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
       <div className="space-y-3">
         <p role="status" className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
           <Icon.Lock className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-          <span>
-            Your membership has ended, so the lessons are locked again. Your progress ({enrollment.completedLessons} of {enrollment.totalLessons}{" "}
-            {plural(enrollment.totalLessons, "lesson")}) is saved.
-          </span>
+          <span>{t("enroll.membershipLapsed", { done: enrollment.completedLessons, total: enrollment.totalLessons })}</span>
         </p>
         {extras.planOffer && (
           <ButtonLink href="/pricing" size="lg" className="w-full" leftIcon={<Icon.Star className="size-4" />}>
-            Rejoin the membership
+            {t("enroll.rejoinMembership")}
           </ButtonLink>
         )}
         {canBuy && (
@@ -290,7 +310,7 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
             className="w-full"
             leftIcon={<Icon.CreditCard className="size-4" />}
           >
-            Buy this course · {formatPrice(course.price, course.currency)}
+            {t("enroll.buyFor", { price: f.price(course.price, course.currency) })}
           </ButtonLink>
         )}
       </div>
@@ -303,12 +323,10 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
     return (
       <div className="space-y-3">
         <InstallmentNotice plan={extras.paymentPlan} compact />
-        <p className="text-xs text-ink-muted">
-          Your progress ({enrollment.completedLessons} of {enrollment.totalLessons} {plural(enrollment.totalLessons, "lesson")}) is saved.
-        </p>
+        <p className="text-xs text-ink-muted">{t("enroll.progressSaved", { done: enrollment.completedLessons, total: enrollment.totalLessons })}</p>
         {canBuy && (
           <ButtonLink href={`/billing/course/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
-            Buy this course · {formatPrice(course.price, course.currency)}
+            {t("enroll.buyFor", { price: f.price(course.price, course.currency) })}
           </ButtonLink>
         )}
       </div>
@@ -317,14 +335,12 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
 
   if (enrollment) {
     const started = enrollment.completedLessons > 0 || enrollment.progress > 0;
-    const label = enrollment.completed ? "Review course" : started ? "Continue learning" : "Start learning";
+    const label = enrollment.completed ? t("enroll.reviewCourse") : started ? t("enroll.continueLearning") : t("enroll.startLearning");
     return (
       <div className="space-y-3">
         <div>
-          <ProgressBar value={enrollment.progress} size="sm" tone={enrollment.completed ? "success" : "accent"} label="Your progress" showLabel />
-          <p className="mt-1.5 text-xs text-ink-muted">
-            {enrollment.completedLessons} of {enrollment.totalLessons} {plural(enrollment.totalLessons, "lesson")} completed
-          </p>
+          <ProgressBar value={enrollment.progress} size="sm" tone={enrollment.completed ? "success" : "accent"} label={t("enroll.yourProgress")} showLabel />
+          <p className="mt-1.5 text-xs text-ink-muted">{t("enroll.lessonsCompleted", { done: enrollment.completedLessons, total: enrollment.totalLessons })}</p>
         </div>
         {nextLesson ? (
           <div>
@@ -333,14 +349,14 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
             </ButtonLink>
             {!enrollment.completed && (
               <p className="mt-1.5 truncate text-center text-xs text-ink-muted" title={nextLesson.title}>
-                Up next: {nextLesson.title}
+                {t("enroll.upNext", { title: nextLesson.title })}
               </p>
             )}
           </div>
         ) : extras.drip?.nextUnlock ? (
           <div>
             <Button size="lg" className="w-full" disabled leftIcon={<Icon.Clock className="size-4" />}>
-              Next lesson is scheduled
+              {t("enroll.nextLessonScheduled")}
             </Button>
             <p className="mt-1.5 text-center text-xs text-ink-muted">
               <span className="font-medium text-ink">{extras.drip.nextUnlock.title}</span> · <UnlockLabel at={extras.drip.nextUnlock.unlocksAt} />
@@ -348,7 +364,7 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
           </div>
         ) : (
           <Button size="lg" className="w-full" disabled>
-            Lessons coming soon
+            {t("enroll.lessonsComingSoon")}
           </Button>
         )}
         {nextLesson && !enrollment.completed && <NextUnlockNote drip={extras.drip} />}
@@ -356,10 +372,16 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
         {extras.paymentPlan && <InstallmentNotice plan={extras.paymentPlan} compact />}
         {extras.paymentPlan?.status === "on_track" && extras.paymentPlan.next?.dueAt && (
           <p className="text-center text-xs text-ink-muted">
-            Payment plan: {extras.paymentPlan.paidCount} of {extras.paymentPlan.total} paid ·{" "}
-            <Link href={orderPath(extras.paymentPlan.key)} className="font-medium text-accent hover:underline">
-              next payment {formatDate(extras.paymentPlan.next.dueAt)}
-            </Link>
+            {t.rich("enroll.paymentPlan", {
+              paid: extras.paymentPlan.paidCount,
+              total: extras.paymentPlan.total,
+              date: f.date(extras.paymentPlan.next.dueAt),
+              link: (chunks) => (
+                <Link href={orderPath(extras.paymentPlan!.key)} className="font-medium text-accent hover:underline">
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
         )}
       </div>
@@ -370,9 +392,9 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
     return (
       <div className="space-y-2">
         <Button size="lg" className="w-full" disabled leftIcon={<Icon.Clock className="size-4" />}>
-          Coming soon
+          {t("card.comingSoon")}
         </Button>
-        <p className="text-center text-xs text-ink-muted">Enrollment opens when this course launches.</p>
+        <p className="text-center text-xs text-ink-muted">{t("enroll.opensAtLaunch")}</p>
       </div>
     );
   }
@@ -382,9 +404,9 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
     return (
       <div className="space-y-2">
         <ButtonLink href={single ? `/batches/${single.slug}` : "/batches"} size="lg" className="w-full" leftIcon={<Icon.Users className="size-4" />}>
-          Available through a batch
+          {t("enroll.viaBatchOnly")}
         </ButtonLink>
-        <p className="rounded-lg bg-info/10 px-3 py-2 text-center text-xs font-medium text-info">Contact the Administrator to enroll for this course</p>
+        <p className="rounded-lg bg-info/10 px-3 py-2 text-center text-xs font-medium text-info">{t("enroll.askAdmin")}</p>
       </div>
     );
   }
@@ -393,22 +415,20 @@ function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExt
     return (
       <div className="space-y-2">
         <Button size="lg" className="w-full" disabled leftIcon={<Icon.Lock className="size-4" />}>
-          {isPaidCourse(course) ? "Complete prerequisites to buy" : "Complete prerequisites to enroll"}
+          {isPaidCourse(course) ? t("enroll.prerequisites.toBuy") : t("enroll.prerequisites.toEnroll")}
         </Button>
-        <p className="text-center text-xs text-ink-muted">
-          Finish the {extras.prerequisites.missing.length === 1 ? "course" : "courses"} listed below first. Enrollment unlocks automatically.
-        </p>
+        <p className="text-center text-xs text-ink-muted">{t("enroll.prerequisites.finishFirst", { count: extras.prerequisites.missing.length })}</p>
       </div>
     );
   }
 
   if (isPaidCourse(course)) {
-    if (alreadyPaid) return <EnrollButton slug={course.slug} label="Start course" icon={<Icon.Play className="size-4" />} />;
+    if (alreadyPaid) return <EnrollButton slug={course.slug} label={t("enroll.startCourse")} icon={<Icon.Play className="size-4" />} />;
     if (extras.memberPlanName) return <MembershipCourseButton slug={course.slug} planName={extras.memberPlanName} />;
     return (
       <div className="space-y-2">
         <ButtonLink href={`/billing/course/${course.id}`} size="lg" className="w-full" leftIcon={<Icon.CreditCard className="size-4" />}>
-          Buy this course
+          {t("enroll.buy")}
         </ButtonLink>
         <InstallmentOfferLine courseId={course.id} offer={extras.installmentOffer} />
         <MembershipOffer offer={extras.planOffer} />
@@ -436,7 +456,7 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
   const showPrice = !enrollment && !manager;
   const certificate = certificationsEnabled && (listedCourse.enableCertification || listedCourse.paidCertificate);
 
-  const [viewer, db] = await Promise.all([getCurrentUser(), getDb()]);
+  const [viewer, db, t, f] = await Promise.all([getCurrentUser(), getDb(), getT("public"), getFormatter()]);
   // Commerce (round 3): the course price in the visitor's currency (as checkout charges it) when the
   // course has a fixed price in it. The certificate keeps its own price and currency.
   const course = showPrice && isPaidCourse(listedCourse) ? await inViewerCurrency(listedCourse, db.settings) : listedCourse;
@@ -458,7 +478,7 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
   const planLocked = !!enrollment && (access?.blocked === "installment_overdue" || access?.blocked === "installment_cancelled");
   const livePlan = !!enrollment && !!access?.installments && (planLocked || access.via === "installments") ? access.installments : null;
   const extras: CardExtras = {
-    installmentOffer: split ? { count: split.count, partLabel: formatPrice(split.partAmount, course.currency) } : null,
+    installmentOffer: split ? { count: split.count, partLabel: f.price(split.partAmount, course.currency) } : null,
     paymentPlan: livePlan ? toPlanView(livePlan, fullCourse, db.settings.commerce.paymentGateway) : null,
     planLocked,
     bundleOffer: buying ? await bestBundleFor(course.id) : null,
@@ -467,7 +487,7 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
     drip,
     memberPlanName: access?.membership && !enrollment ? access.membership.plan.name : null,
     membershipLapsed: !!enrollment && access?.blocked === "membership_lapsed",
-    planOffer: offerPlan ? { name: offerPlan.name, priceLabel: `${formatPrice(offerPlan.price, offerPlan.currency)}${intervalSuffix(offerPlan.interval)}` } : null,
+    planOffer: offerPlan ? { name: offerPlan.name, priceLabel: `${formatPrice(offerPlan.price, offerPlan.currency, undefined, f.locale)}${intervalSuffix(offerPlan.interval)}` } : null,
   };
   const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
   // Commerce (round 3): gifts. Anyone may buy a paid course on sale for someone else.
@@ -479,12 +499,12 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
         {showPrice && (
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{course.upcoming ? "Launching soon" : "Price"}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{course.upcoming ? t("enroll.launchingSoon") : t("enroll.price")}</p>
               <PriceTag course={course} size="xl" className="mt-0.5 block" />
             </div>
             {course.paidCertificate && certificationsEnabled && course.certificatePrice > 0 && (
               <Badge tone="neutral" size="sm">
-                Certificate {formatPrice(course.certificatePrice, listedCourse.currency)}
+                {t("enroll.certificatePrice", { price: f.price(course.certificatePrice, listedCourse.currency) })}
               </Badge>
             )}
           </div>
@@ -492,9 +512,9 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
         {enrollment && !manager && (
           <div className="flex items-center gap-2">
             <Badge tone={extras.membershipLapsed || extras.planLocked ? "warning" : enrollment.completed ? "success" : "accent"} dot>
-              {extras.membershipLapsed || extras.planLocked ? "Access paused" : enrollment.completed ? "Completed" : "Enrolled"}
+              {extras.membershipLapsed || extras.planLocked ? t("enroll.accessPaused") : enrollment.completed ? t("card.completed") : t("enroll.enrolled")}
             </Badge>
-            {enrollment.viaBatch && <span className="text-xs text-ink-muted">via a batch</span>}
+            {enrollment.viaBatch && <span className="text-xs text-ink-muted">{t("enroll.viaBatch")}</span>}
           </div>
         )}
 
@@ -519,44 +539,33 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
       </div>
 
       <div className="border-t border-border bg-surface-2/40 p-5">
-        <p className="text-sm font-semibold text-ink">This course includes:</p>
+        <p className="text-sm font-semibold text-ink">{t("enroll.includes.title")}</p>
         <ul className="mt-3 space-y-2.5">
-          {includes.enrolledCount > 0 && <IncludeRow icon={<Icon.Users />}>{enrolledTier(includes.enrolledCount)} enrolled</IncludeRow>}
+          {includes.enrolledCount > 0 && <IncludeRow icon={<Icon.Users />}>{t("enroll.includes.enrolled", { amount: enrolledTier(includes.enrolledCount) })}</IncludeRow>}
           {includes.hasVideo && (
             <IncludeRow icon={<Icon.Monitor />}>
-              {includes.videoSeconds > 0 ? `${formatDuration(includes.videoSeconds)} of on-demand video` : "On demand course video"}
+              {includes.videoSeconds > 0 ? t("enroll.includes.video", { duration: f.duration(includes.videoSeconds) }) : t("enroll.includes.videoPlain")}
             </IncludeRow>
           )}
           {includes.lessonCount > 0 && (
             <IncludeRow icon={<Icon.BookOpen />}>
-              {includes.lessonCount} {plural(includes.lessonCount, "Lesson")}
-              {includes.totalDurationSeconds > 0 && ` · ${formatDuration(includes.totalDurationSeconds)} total`}
+              {includes.totalDurationSeconds > 0
+                ? t("enroll.includes.lessonsTotal", { count: includes.lessonCount, duration: f.duration(includes.totalDurationSeconds) })
+                : t("enroll.includes.lessons", { count: includes.lessonCount })}
             </IncludeRow>
           )}
-          {includes.quizCount > 0 && (
-            <IncludeRow icon={<Icon.Question />}>
-              {includes.quizCount} {plural(includes.quizCount, "Quiz topic", "Quiz topics")}
-            </IncludeRow>
-          )}
+          {includes.quizCount > 0 && <IncludeRow icon={<Icon.Question />}>{t("enroll.includes.quizzes", { count: includes.quizCount })}</IncludeRow>}
           {includes.assignmentCount > 0 && (
-            <IncludeRow icon={<Icon.ClipboardList />}>
-              {includes.assignmentCount} {plural(includes.assignmentCount, "Assignment")}
-            </IncludeRow>
+            <IncludeRow icon={<Icon.ClipboardList />}>{t("enroll.includes.assignments", { count: includes.assignmentCount })}</IncludeRow>
           )}
-          {includes.exerciseCount > 0 && (
-            <IncludeRow icon={<Icon.Code />}>
-              {includes.exerciseCount} {plural(includes.exerciseCount, "Coding exercise")}
-            </IncludeRow>
-          )}
+          {includes.exerciseCount > 0 && <IncludeRow icon={<Icon.Code />}>{t("enroll.includes.exercises", { count: includes.exerciseCount })}</IncludeRow>}
           {includes.previewCount > 0 && !enrollment && !manager && (
-            <IncludeRow icon={<Icon.Eye />}>
-              {includes.previewCount} free preview {plural(includes.previewCount, "lesson")}
-            </IncludeRow>
+            <IncludeRow icon={<Icon.Eye />}>{t("enroll.includes.previews", { count: includes.previewCount })}</IncludeRow>
           )}
           {certificate && (
-            <IncludeRow icon={<Icon.Award />}>{course.paidCertificate ? "Certificate after an evaluation" : "Certificate of completion"}</IncludeRow>
+            <IncludeRow icon={<Icon.Award />}>{course.paidCertificate ? t("enroll.includes.certificateEvaluation") : t("enroll.includes.certificateCompletion")}</IncludeRow>
           )}
-          {includes.lessonCount === 0 && <IncludeRow icon={<Icon.Clock />}>Lessons are being prepared</IncludeRow>}
+          {includes.lessonCount === 0 && <IncludeRow icon={<Icon.Clock />}>{t("enroll.includes.preparing")}</IncludeRow>}
         </ul>
       </div>
     </Card>

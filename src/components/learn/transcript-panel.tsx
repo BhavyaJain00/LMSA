@@ -36,6 +36,7 @@ import {
   type TranscriptView,
 } from "@/lib/transcripts/panel";
 import type { TranscriptSearchResult } from "@/lib/transcripts/search";
+import { useT } from "@/i18n/client";
 
 /* ------------------------------------------------------------------ */
 /* Loading a video's transcript                                         */
@@ -45,7 +46,8 @@ export type LessonTranscriptState =
   | { status: "loading" }
   /** The viewer may not read it (or the video is gone): nothing is shown. */
   | { status: "hidden" }
-  | { status: "error"; message: string }
+  /** Loading failed (network or server error); the panel offers a retry. */
+  | { status: "error" }
   | {
       status: "ready";
       /** Null when the video has no transcript. */
@@ -102,7 +104,7 @@ export function useLessonTranscript(lessonId: string, blockId: string, opts: { c
       })
       .catch(() => {
         if (controller.signal.aborted) return;
-        setLoaded({ key, state: { status: "error", message: "The transcript could not be loaded. Check your connection and try again." } });
+        setLoaded({ key, state: { status: "error" } });
       });
     return () => {
       controller.abort();
@@ -145,12 +147,14 @@ const FRAME = "mt-3 rounded-lg border border-border bg-surface-1";
  * managers, who get a pointer to the transcript editor.
  */
 export function TranscriptPanel({ lessonId, blockId, state, onReload, expected, getVideo, onSeek }: TranscriptPanelProps) {
+  const t = useT("learning");
+  const common = useT("common");
   if (state.status === "hidden") return null;
 
   if (state.status === "loading") {
     if (!expected) return null;
     return (
-      <div className={cn(FRAME, "flex items-center gap-2 px-3 py-2.5")} role="status" aria-label="Loading transcript">
+      <div className={cn(FRAME, "flex items-center gap-2 px-3 py-2.5")} role="status" aria-label={t("learn.transcript.loading")}>
         <Skeleton className="size-4 rounded" />
         <Skeleton className="h-4 w-28" />
       </div>
@@ -162,10 +166,10 @@ export function TranscriptPanel({ lessonId, blockId, state, onReload, expected, 
       <div className={cn(FRAME, "flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm text-ink-muted")} role="alert">
         <span className="flex min-w-0 items-center gap-2">
           <Icon.AlertTriangle className="size-4 shrink-0 text-warning" />
-          {state.message}
+          {t("learn.transcript.loadFailed")}
         </span>
         <Button size="xs" variant="outline" onClick={onReload} leftIcon={<Icon.Refresh className="size-3.5" />}>
-          Try again
+          {common("actions.tryAgain")}
         </Button>
       </div>
     );
@@ -178,10 +182,10 @@ export function TranscriptPanel({ lessonId, blockId, state, onReload, expected, 
       <div className={cn(FRAME, "flex flex-wrap items-center justify-between gap-2 border-dashed px-3 py-2 text-sm text-ink-muted")}>
         <span className="flex min-w-0 items-center gap-2" role={state.pending ? "status" : undefined}>
           {state.pending ? <Icon.Loader className="size-4 shrink-0 animate-spin-slow" /> : <Icon.Captions className="size-4 shrink-0" />}
-          {state.pending ? "A transcript is being generated for this video. It appears here as soon as it is ready." : "This video has no transcript or captions yet."}
+          {state.pending ? t("learn.transcript.pending") : t("learn.transcript.none")}
         </span>
         <Link href={state.editHref} className="shrink-0 text-sm font-medium text-accent underline-offset-4 hover:underline">
-          {state.pending ? "Open the transcript editor" : "Add a transcript"}
+          {state.pending ? t("learn.transcript.openEditor") : t("learn.transcript.add")}
         </Link>
       </div>
     );
@@ -285,6 +289,7 @@ interface CueRowProps {
 }
 
 const CueRow = memo(function CueRow({ index, cue, active, tabbable, marks, currentMark, lazy, onActivate, onKeyDown, onFocus }: CueRowProps) {
+  const t = useT("learning");
   return (
     <li data-cue={index} className={lazy ? "[contain-intrinsic-size:auto_2.25rem] [content-visibility:auto]" : undefined}>
       <button
@@ -295,12 +300,12 @@ const CueRow = memo(function CueRow({ index, cue, active, tabbable, marks, curre
         onKeyDown={(e) => onKeyDown(e, index)}
         onFocus={() => onFocus(index)}
         className={cn(
-          "flex w-full items-start gap-3 rounded-md border-l-2 px-2 py-1.5 text-left text-sm leading-relaxed transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+          "flex w-full items-start gap-3 rounded-md border-s-2 px-2 py-1.5 text-start text-sm leading-relaxed transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
           active ? "border-accent bg-accent/10 text-ink" : "border-transparent text-ink-muted hover:bg-surface-2 hover:text-ink",
         )}
       >
-        <span className="w-12 shrink-0 pt-0.5 font-mono text-xs tabular-nums text-accent">
-          <span className="sr-only">Play from </span>
+        <span className="w-12 shrink-0 pt-0.5 font-mono text-xs tabular-nums text-accent" dir="ltr">
+          <span className="sr-only">{t("learn.transcript.playFrom")} </span>
           {formatTime(cue.start)}
         </span>
         <span dir="auto" className="min-w-0 flex-1 break-words">
@@ -320,15 +325,15 @@ const RESUME_FOLLOW_MS = 5000;
 /** Rows beyond this count are rendered lazily. */
 const LAZY_ROWS_FROM = 400;
 const DOWNLOADS = [
-  { format: "txt", label: "Text", title: "Download the transcript as plain text (.txt)" },
-  { format: "vtt", label: "WebVTT", title: "Download the transcript as WebVTT captions (.vtt)" },
-  { format: "srt", label: "SubRip", title: "Download the transcript as SubRip captions (.srt)" },
+  { format: "txt", label: "learn.transcript.formatText", title: "learn.transcript.downloadTxt" },
+  { format: "vtt", label: null, name: "WebVTT", title: "learn.transcript.downloadVtt" },
+  { format: "srt", label: null, name: "SubRip", title: "learn.transcript.downloadSrt" },
 ] as const;
 
 type CourseSearch =
   | { status: "idle" }
   | { status: "loading"; query: string }
-  | { status: "error"; query: string; message: string }
+  | { status: "error"; query: string; network: boolean }
   | { status: "ready"; query: string; results: TranscriptSearchResult[] };
 
 interface TranscriptBodyProps {
@@ -342,6 +347,8 @@ interface TranscriptBodyProps {
 }
 
 function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, getVideo, onSeek }: TranscriptBodyProps) {
+  const t = useT("learning");
+  const common = useT("common");
   const { cues } = transcript;
   const bodyId = useId();
   const scrollerRef = useRef<HTMLOListElement>(null);
@@ -395,14 +402,14 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
           const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; results?: TranscriptSearchResult[] } | null;
           if (controller.signal.aborted) return;
           if (!res.ok || !body?.ok) {
-            setCourse({ status: "error", query, message: body?.error ?? "The search could not be completed. Try again." });
+            setCourse({ status: "error", query, network: false });
             return;
           }
           // This video's own matches are already highlighted above.
           setCourse({ status: "ready", query, results: (body.results ?? []).filter((r) => !(r.lessonId === lessonId && r.blockId === blockId)) });
         })
         .catch(() => {
-          if (!controller.signal.aborted) setCourse({ status: "error", query, message: "The search could not be completed. Check your connection and try again." });
+          if (!controller.signal.aborted) setCourse({ status: "error", query, network: true });
         });
     },
     [courseId, lessonId, blockId],
@@ -530,23 +537,27 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
     }
   };
 
-  const matchLabel = !searching ? "Keep typing…" : !matches.length ? "No matches" : `${matchIndex + 1} of ${matches.length}${truncated ? "+" : ""}`;
+  const matchLabel = !searching
+    ? t("learn.transcript.keepTyping")
+    : !matches.length
+      ? t("learn.transcript.noMatches")
+      : t(truncated ? "learn.transcript.matchPositionMore" : "learn.transcript.matchPosition", { index: matchIndex + 1, total: matches.length });
   const language = languageLabel(transcript.language);
   const lazy = cues.length > LAZY_ROWS_FROM;
   const downloadBase = `/api/transcripts/${encodeURIComponent(lessonId)}/${encodeURIComponent(blockId)}`;
 
   return (
-    <section className={FRAME} aria-label="Transcript">
+    <section className={FRAME} aria-label={t("learn.transcript.title")}>
       <h3>
         <button
           type="button"
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={toggleOpen}
-          className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+          className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-start text-sm font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
         >
           <span className="flex min-w-0 items-center gap-2">
-            <Icon.FileText className="size-4 shrink-0 text-ink-muted" /> Transcript
+            <Icon.FileText className="size-4 shrink-0 text-ink-muted" /> {t("learn.transcript.title")}
             <span className="truncate rounded-full bg-surface-2 px-1.5 text-xs font-normal text-ink-muted">{language}</span>
           </span>
           <Icon.ChevronDown className={cn("size-4 shrink-0 text-ink-faint transition-transform", open && "rotate-180")} />
@@ -569,24 +580,24 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
                   maxLength={MAX_QUERY_LENGTH}
                   onChange={(e) => changeQuery(e.target.value)}
                   onKeyDown={onSearchKeyDown}
-                  placeholder="Search this transcript"
-                  aria-label="Search this transcript"
+                  placeholder={t("learn.transcript.search")}
+                  aria-label={t("learn.transcript.search")}
                   leftAddon={<Icon.Search className="size-4" />}
                 />
               </div>
               {search.query && (
                 <div className="flex shrink-0 items-center gap-0.5">
-                  <span aria-live="polite" className="mr-1 min-w-14 text-right text-xs tabular-nums text-ink-muted">
+                  <span aria-live="polite" className="me-1 min-w-14 text-end text-xs tabular-nums text-ink-muted">
                     {matchLabel}
                   </span>
-                  <IconButton label="Previous match (Shift+Enter)" size="icon-sm" disabled={!matches.length || course.status !== "idle"} onClick={() => stepBy(-1)}>
+                  <IconButton label={t("learn.transcript.previousMatch")} size="icon-sm" disabled={!matches.length || course.status !== "idle"} onClick={() => stepBy(-1)}>
                     <Icon.ChevronUp className="size-4" />
                   </IconButton>
-                  <IconButton label="Next match (Enter)" size="icon-sm" disabled={!matches.length || course.status !== "idle"} onClick={() => stepBy(1)}>
+                  <IconButton label={t("learn.transcript.nextMatch")} size="icon-sm" disabled={!matches.length || course.status !== "idle"} onClick={() => stepBy(1)}>
                     <Icon.ChevronDown className="size-4" />
                   </IconButton>
                   <IconButton
-                    label="Clear search"
+                    label={t("learn.transcript.clearSearch")}
                     size="icon-sm"
                     onClick={() => {
                       changeQuery("");
@@ -604,7 +615,7 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
                 <ol
                   ref={scrollerRef}
                   lang={transcript.language}
-                  aria-label="Transcript lines. Choose a line to play the video from there."
+                  aria-label={t("learn.transcript.lines")}
                   onScroll={() => {
                     if (performance.now() >= ownScrollUntil.current) pauseFollowing();
                   }}
@@ -634,7 +645,7 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
                 {!following && !searching && activeIndex >= 0 && (
                   <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
                     <Button size="xs" variant="secondary" className="pointer-events-auto shadow-pop" onClick={resumeFollowing} leftIcon={<Icon.ChevronsUpDown className="size-3.5" />}>
-                      Jump to current line
+                      {t("learn.transcript.jumpToCurrent")}
                     </Button>
                   </div>
                 )}
@@ -653,24 +664,31 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border px-3 py-2 text-xs text-ink-muted">
               {searching && course.status === "idle" && (
                 <button type="button" onClick={() => searchCourse(search.query.trim())} className="inline-flex items-center gap-1.5 font-medium text-accent underline-offset-4 hover:underline">
-                  <Icon.Search className="size-3.5" /> Search every lesson of this course
+                  <Icon.Search className="size-3.5" /> {t("learn.transcript.searchCourse")}
                 </button>
               )}
               <span className="inline-flex items-center gap-1.5">
                 <Icon.Download className="size-3.5" aria-hidden="true" />
-                <span>Download</span>
+                <span>{common("actions.download")}</span>
                 {DOWNLOADS.map((d) => (
-                  <a key={d.format} href={`${downloadBase}?format=${d.format}`} download title={d.title} aria-label={d.title} className="font-medium text-ink underline-offset-4 hover:text-accent hover:underline">
-                    {d.label}
+                  <a
+                    key={d.format}
+                    href={`${downloadBase}?format=${d.format}`}
+                    download
+                    title={t(d.title)}
+                    aria-label={t(d.title)}
+                    className="font-medium text-ink underline-offset-4 hover:text-accent hover:underline"
+                  >
+                    {d.label ? t(d.label) : d.name}
                   </a>
                 ))}
               </span>
               {editHref && (
                 <Link href={editHref} className="inline-flex items-center gap-1.5 font-medium text-ink underline-offset-4 hover:text-accent hover:underline">
-                  <Icon.Edit className="size-3.5" /> Edit transcript
+                  <Icon.Edit className="size-3.5" /> {t("learn.transcript.edit")}
                 </Link>
               )}
-              {transcript.source === "auto" && <span className="basis-full text-ink-faint sm:ml-auto sm:basis-auto">Generated automatically, so it may contain mistakes.</span>}
+              {transcript.source === "auto" && <span className="basis-full text-ink-faint sm:ms-auto sm:basis-auto">{t("learn.transcript.auto")}</span>}
             </div>
           </>
         )}
@@ -684,20 +702,22 @@ function TranscriptBody({ lessonId, blockId, transcript, courseId, editHref, get
 /* ------------------------------------------------------------------ */
 
 function CourseResults({ search, onRetry, onBack }: { search: Exclude<CourseSearch, { status: "idle" }>; onRetry: () => void; onBack: () => void }) {
+  const t = useT("learning");
+  const common = useT("common");
   const lessons = search.status === "ready" ? search.results.length : 0;
   return (
     <div className="border-t border-border">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <p className="min-w-0 truncate text-xs font-medium text-ink-muted" aria-live="polite">
-          {search.status === "ready" && lessons > 0 ? `${lessons} other ${lessons === 1 ? "video mentions" : "videos mention"} “${search.query}”` : `“${search.query}” in the rest of this course`}
+          {search.status === "ready" && lessons > 0 ? t("learn.transcript.otherVideos", { count: lessons, query: search.query }) : t("learn.transcript.inCourse", { query: search.query })}
         </p>
-        <Button size="xs" variant="ghost" onClick={onBack} leftIcon={<Icon.ArrowLeft className="size-3.5" />}>
-          Back to transcript
+        <Button size="xs" variant="ghost" onClick={onBack} leftIcon={<Icon.ArrowLeft className="size-3.5 rtl:rotate-180" />}>
+          {t("learn.transcript.back")}
         </Button>
       </div>
 
       {search.status === "loading" && (
-        <div className="space-y-2 px-3 pb-3" role="status" aria-label="Searching the course">
+        <div className="space-y-2 px-3 pb-3" role="status" aria-label={t("learn.transcript.searchingCourse")}>
           <Skeleton className="h-4 w-2/5" />
           <Skeleton className="h-4 w-4/5" />
           <Skeleton className="h-4 w-3/5" />
@@ -708,16 +728,16 @@ function CourseResults({ search, onRetry, onBack }: { search: Exclude<CourseSear
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3 text-sm text-ink-muted" role="alert">
           <span className="flex min-w-0 items-center gap-2">
             <Icon.AlertTriangle className="size-4 shrink-0 text-warning" />
-            {search.message}
+            {search.network ? t("learn.transcript.searchFailedNetwork") : t("learn.transcript.searchFailed")}
           </span>
           <Button size="xs" variant="outline" onClick={onRetry}>
-            Try again
+            {common("actions.tryAgain")}
           </Button>
         </div>
       )}
 
       {search.status === "ready" && lessons === 0 && (
-        <p className="px-3 pb-3 text-sm text-ink-muted">No other video you can open in this course mentions “{search.query}”.</p>
+        <p className="px-3 pb-3 text-sm text-ink-muted">{t("learn.transcript.noCourseResults", { query: search.query })}</p>
       )}
 
       {search.status === "ready" && lessons > 0 && (
@@ -729,14 +749,14 @@ function CourseResults({ search, onRetry, onBack }: { search: Exclude<CourseSear
                   {result.lessonTitle}
                 </Link>
                 <span className="shrink-0 text-xs tabular-nums text-ink-faint">
-                  {result.totalMatches} {result.totalMatches === 1 ? "match" : "matches"}
+                  {t("learn.transcript.matches", { count: result.totalMatches })}
                 </span>
               </p>
               <ul className="mt-0.5 space-y-0.5">
                 {result.matches.map((match) => (
                   <li key={match.start}>
                     <Link href={match.href} className="flex items-start gap-3 rounded-md px-2 py-1.5 text-sm leading-relaxed text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink">
-                      <span className="w-12 shrink-0 pt-0.5 font-mono text-xs tabular-nums text-accent">{formatTime(match.start)}</span>
+                      <span className="w-12 shrink-0 pt-0.5 font-mono text-xs tabular-nums text-accent" dir="ltr">{formatTime(match.start)}</span>
                       <span dir="auto" className="min-w-0 flex-1 break-words">
                         {highlight(
                           match.snippet,

@@ -480,23 +480,47 @@ export function localTimeZoneName(ms: number): string {
   }
 }
 
+/** Which relative unlock label applies (the interface language words it; see `formatUnlockLabel`). */
+export type UnlockLabelKind = "now" | "lessThanMinute" | "minutes" | "hours" | "tomorrow" | "days" | "on";
+
+/** The relative unlock label as a kind and a count, for translated labels. */
+export function unlockLabelParts(unlockMs: number, now: number): { kind: UnlockLabelKind; count: number } {
+  const diff = unlockMs - now;
+  if (diff <= 0) return { kind: "now", count: 0 };
+  if (diff < 60_000) return { kind: "lessThanMinute", count: 0 };
+  if (diff < 3_600_000) return { kind: "minutes", count: Math.ceil(diff / 60_000) };
+  if (diff < DAY_MS) return { kind: "hours", count: Math.round(diff / 3_600_000) };
+  const unlockDay = new Date(unlockMs);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (diff < 2 * DAY_MS && unlockDay.toDateString() === tomorrow.toDateString()) return { kind: "tomorrow", count: 1 };
+  if (diff < 7 * DAY_MS) return { kind: "days", count: Math.max(1, Math.round(diff / DAY_MS)) };
+  return { kind: "on", count: 0 };
+}
+
 /**
- * Relative unlock label for outline rows (local time):
+ * Relative unlock label for outline rows (local time, English):
  * "Unlocks in 12 minutes", "Unlocks in 5 hours", "Unlocks tomorrow",
  * "Unlocks in 3 days", "Unlocks on Oct 4".
  */
 export function formatUnlockLabel(unlockMs: number, now: number): string {
-  const diff = unlockMs - now;
-  if (diff <= 0) return "Unlocking now";
-  if (diff < 60_000) return "Unlocks in less than a minute";
-  if (diff < 3_600_000) return `Unlocks in ${plural(Math.ceil(diff / 60_000), "minute")}`;
-  if (diff < DAY_MS) return `Unlocks in ${plural(Math.round(diff / 3_600_000), "hour")}`;
-  const unlockDay = new Date(unlockMs);
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  if (diff < 2 * DAY_MS && unlockDay.toDateString() === tomorrow.toDateString()) return "Unlocks tomorrow";
-  if (diff < 7 * DAY_MS) return `Unlocks in ${plural(Math.max(1, Math.round(diff / DAY_MS)), "day")}`;
-  return `Unlocks on ${formatLocalDate(unlockMs, now)}`;
+  const { kind, count } = unlockLabelParts(unlockMs, now);
+  switch (kind) {
+    case "now":
+      return "Unlocking now";
+    case "lessThanMinute":
+      return "Unlocks in less than a minute";
+    case "minutes":
+      return `Unlocks in ${plural(count, "minute")}`;
+    case "hours":
+      return `Unlocks in ${plural(count, "hour")}`;
+    case "tomorrow":
+      return "Unlocks tomorrow";
+    case "days":
+      return `Unlocks in ${plural(count, "day")}`;
+    case "on":
+      return `Unlocks on ${formatLocalDate(unlockMs, now)}`;
+  }
 }
 
 /** Server-safe unlock label (UTC date) shown until the browser renders local time. */
@@ -550,7 +574,7 @@ export function describeReleaseRule(rule: ReleaseRule | null | undefined, subjec
 export function lockExplanation(lock: LessonLock): string {
   switch (lock.reason) {
     case "order":
-      return "Complete the previous lesson to unlock this one";
+      return "Finish the lesson before this one to open it";
     case "prerequisite":
       return "Complete the prerequisite courses, then enroll to unlock this lesson";
     case "enroll":

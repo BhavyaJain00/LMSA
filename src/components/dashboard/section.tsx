@@ -1,14 +1,15 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 import { cn } from "@/lib/utils";
 
 /** Titled dashboard block with an optional "See all" link (mirrors Frappe's home sections). */
-export function DashboardSection({
+export async function DashboardSection({
   title,
   description,
   href,
-  linkLabel = "See all",
+  linkLabel,
   actions,
   children,
   className,
@@ -24,6 +25,7 @@ export function DashboardSection({
   id?: string;
 }) {
   const headingId = id ? `${id}-title` : undefined;
+  const t = await getT("account");
   return (
     <section className={cn("min-w-0", className)} aria-labelledby={headingId} id={id}>
       <div className="mb-3 flex items-end justify-between gap-3">
@@ -37,7 +39,7 @@ export function DashboardSection({
           {actions}
           {href && (
             <Link href={href} className="inline-flex items-center gap-1 text-xs font-medium text-ink-muted transition-colors hover:text-accent">
-              {linkLabel}
+              {linkLabel ?? t("dashboard.section.seeAll")}
               <Icon.ArrowRight className="size-3.5 rtl:rotate-180" />
             </Link>
           )}

@@ -4,54 +4,49 @@ import type { Settings } from "@/lib/types";
 import { saveGamificationSettingsAction } from "@/lib/actions/gamification";
 import { Input, Switch } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
-import { CONFIGURABLE_REASONS, MAX_REASON_POINTS, REASON_META } from "@/components/gamification/reasons";
+import { CONFIGURABLE_REASONS, DISCUSSION_REPLY_DAILY_CAP, MAX_REASON_POINTS, REASON_META } from "@/components/gamification/reasons";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export type GamificationValues = Settings["gamification"];
 
 /** Points, leaderboard visibility and the value of every activity (admin). */
 export function GamificationSettingsForm({ initial, guestAccess }: { initial: GamificationValues; guestAccess: boolean }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveGamificationSettingsAction);
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Points & leaderboard">
+      <SettingsSection title={t("gamificationForm.section.title")}>
         <SettingsSwitchRow>
           <Switch
             name="enabled"
             defaultChecked={initial.enabled}
-            label="Enable points and levels"
-            description="Members earn points for learning activity and level up as they go. When turned off, no points are awarded and points, levels and the leaderboard are hidden everywhere."
+            label={t("gamificationForm.enabled.label")}
+            description={t("gamificationForm.enabled.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="showLeaderboard"
             defaultChecked={initial.showLeaderboard}
-            label="Show the leaderboard"
-            description={
-              guestAccess
-                ? "Adds a Leaderboard page with weekly, monthly and all-time rankings. Guests can see it too because guest access is on."
-                : "Adds a Leaderboard page with weekly, monthly and all-time rankings for signed-in members."
-            }
+            label={t("gamificationForm.leaderboard.label")}
+            description={guestAccess ? t("gamificationForm.leaderboard.descriptionGuests") : t("gamificationForm.leaderboard.description")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="excludeStaff"
             defaultChecked={initial.excludeStaff}
-            label="Leave staff out of rankings"
-            description="Admins, moderators, instructors (course creators) and evaluators still earn points and levels for their own learning, but they are not ranked on leaderboards. Nobody earns points for courses, quizzes, assignments or exercises they manage, or for results they grade or issue themselves."
+            label={t("gamificationForm.excludeStaff.label")}
+            description={t("gamificationForm.excludeStaff.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SettingsSection
-        title="Points per activity"
-        description="Set an activity to 0 to stop awarding points for it. New values apply to future activity; recalculate below to apply them to past activity too."
-      >
+      <SettingsSection title={t("gamificationForm.points.title")} description={t("gamificationForm.points.description")}>
         {CONFIGURABLE_REASONS.map((reason) => {
           const meta = REASON_META[reason];
           const IconCmp = Icon[meta.icon];
@@ -63,10 +58,10 @@ export function GamificationSettingsForm({ initial, guestAccess }: { initial: Ga
               label={
                 <span className="inline-flex items-center gap-2">
                   <IconCmp className="size-4 text-ink-faint" aria-hidden="true" />
-                  {meta.label}
+                  {t(`pointsReasons.${reason}.label`)}
                 </span>
               }
-              description={meta.description}
+              description={t(`pointsReasons.${reason}.description`, { cap: DISCUSSION_REPLY_DAILY_CAP })}
               error={errors[name]}
               required
             >
@@ -80,7 +75,7 @@ export function GamificationSettingsForm({ initial, guestAccess }: { initial: Ga
                 step={1}
                 defaultValue={initial.points[reason]}
                 invalid={!!errors[name]}
-                rightAddon={<span className="text-xs">pts</span>}
+                rightAddon={<span className="text-xs">{t("gamificationForm.points.unit")}</span>}
               />
             </SettingsRow>
           );

@@ -1,6 +1,9 @@
+"use client";
+
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
-import { lessonKindLabels, type LessonKind } from "./format";
+import { useT } from "@/i18n/client";
+import type { LessonKind } from "./format";
 
 const icons: Record<LessonKind, (props: { className?: string }) => React.ReactNode> = {
   video: (p) => <Icon.Video {...p} aria-hidden="true" />,
@@ -12,11 +15,13 @@ const icons: Record<LessonKind, (props: { className?: string }) => React.ReactNo
 
 /** Content-type icon for an outline row (video / quiz / assignment / exercise / text). */
 export function LessonKindIcon({ kind, className }: { kind: LessonKind; className?: string }) {
+  const t = useT("public");
   const render = icons[kind];
+  const label = t(`shared.lessonKind.${kind}`);
   return (
-    <span className="inline-flex shrink-0" title={lessonKindLabels[kind]}>
+    <span className="inline-flex shrink-0" title={label}>
       {render({ className: cn("size-4", className) })}
-      <span className="sr-only">{lessonKindLabels[kind]}:</span>
+      <span className="sr-only">{t("shared.lessonKind.srLabel", { kind: label })}</span>
     </span>
   );
 }

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { useT } from "@/i18n/client";
 
 /**
  * Protects a dirty manual-save form (Frappe: "Discard changes?" dialog).
@@ -15,6 +16,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
  */
 export function UnsavedChangesGuard({ when }: { when: boolean }) {
   const router = useRouter();
+  const t = useT("admin");
   const [target, setTarget] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,10 +60,10 @@ export function UnsavedChangesGuard({ when }: { when: boolean }) {
         if (href) router.push(href);
       }}
       destructive
-      title="Discard changes?"
-      description="This form has unsaved changes. Leaving now discards them."
-      confirmLabel="Discard"
-      cancelLabel="Keep editing"
+      title={t("global.unsavedGuard.title")}
+      description={t("global.unsavedGuard.description")}
+      confirmLabel={t("global.unsavedGuard.confirm")}
+      cancelLabel={t("global.unsavedGuard.keepEditing")}
     />
   );
 }

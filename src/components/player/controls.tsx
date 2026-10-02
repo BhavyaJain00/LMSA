@@ -8,6 +8,7 @@ import type { PlayerActions, PlayerState } from "./use-video-player";
 import { SeekBar, chapterAt, type SeekChapter, type SeekMarker } from "./seek-bar";
 import { KeyboardIcon, QualityIcon } from "./player-icons";
 import { PLAYBACK_RATES } from "@/lib/media/playback";
+import { useT } from "@/i18n/client";
 
 /** Shared with the server, which bounds heartbeats by the fastest rate. */
 export { PLAYBACK_RATES };
@@ -34,6 +35,7 @@ function ControlButton({ label, onClick, children, active, className }: { label:
 /* --------------------------------- Volume --------------------------------- */
 
 export function VolumeControl({ state, actions }: { state: PlayerState; actions: PlayerActions }) {
+  const t = useT("learning");
   const level = state.muted ? 0 : state.volume;
   const VolIcon = level === 0 ? Icon.VolumeMute : level < 0.5 ? Icon.VolumeLow : Icon.VolumeHigh;
   return (
@@ -44,7 +46,7 @@ export function VolumeControl({ state, actions }: { state: PlayerState; actions:
         actions.setVolume(level + (e.deltaY < 0 ? 0.05 : -0.05));
       }}
     >
-      <ControlButton label={state.muted ? "Unmute (m)" : "Mute (m)"} onClick={actions.toggleMute}>
+      <ControlButton label={state.muted ? t("global.player.unmute") : t("global.player.mute")} onClick={actions.toggleMute}>
         <VolIcon />
       </ControlButton>
       <div className="flex w-0 items-center overflow-hidden transition-[width] duration-200 group-hover/vol:w-20 group-focus-within/vol:w-20">
@@ -55,7 +57,7 @@ export function VolumeControl({ state, actions }: { state: PlayerState; actions:
           step={0.02}
           value={level}
           onChange={(e) => actions.setVolume(Number(e.target.value))}
-          aria-label="Volume"
+          aria-label={t("global.player.volume")}
           className="ll-range mx-1 h-1 w-16 cursor-pointer"
           style={{ background: `linear-gradient(to right, #fff ${level * 100}%, rgba(255,255,255,0.3) ${level * 100}%)` }}
         />
@@ -70,7 +72,7 @@ type MenuPage = "root" | "speed" | "captions" | "chapters" | "quality";
 
 function MenuRow({ label, value, onClick, icon }: { label: string; value?: ReactNode; onClick: () => void; icon?: ReactNode }) {
   return (
-    <button type="button" role="menuitem" onClick={onClick} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none">
+    <button type="button" role="menuitem" onClick={onClick} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-start text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none">
       <span className="flex items-center gap-2">
         {icon}
         {label}
@@ -92,7 +94,7 @@ function MenuOption({ label, hint, selected, onClick }: { label: string; hint?: 
       role="menuitemradio"
       aria-checked={selected}
       onClick={onClick}
-      className={cn("flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none", selected ? "text-white" : "text-white/80")}
+      className={cn("flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-start text-sm hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none", selected ? "text-white" : "text-white/80")}
     >
       <span className="flex size-4 items-center justify-center">{selected && <Icon.Check className="size-4" />}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -139,6 +141,7 @@ export function SettingsMenu({
   onShowShortcuts?: () => void;
   onShowStats?: () => void;
 }) {
+  const t = useT("learning");
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<MenuPage>("root");
   const [maxHeight, setMaxHeight] = useState<number | null>(null);
@@ -168,12 +171,19 @@ export function SettingsMenu({
   const goRoot = () => setPage("root");
   const hasQuality = !!quality && quality.options.length > 1;
   const playingOption = quality?.options.find((o) => o.id === quality.playingId);
-  const qualityValue = !quality ? "" : quality.selected === AUTO_QUALITY ? `Auto${playingOption ? ` (${playingOption.label})` : ""}` : (playingOption?.label ?? "");
+  const qualityValue = !quality
+    ? ""
+    : quality.selected === AUTO_QUALITY
+      ? playingOption
+        ? t("global.player.qualityAutoPlaying", { quality: playingOption.label })
+        : t("global.player.qualityAuto")
+      : (playingOption?.label ?? "");
+  const speedLabel = (rate: number) => (rate === 1 ? t("global.player.speedNormal") : `${rate}×`);
 
   return (
     <div ref={ref} className="relative">
       <ControlButton
-        label="Settings"
+        label={t("global.player.settings")}
         active={open}
         onClick={() => {
           // Fit the menu inside the player (small embeds, docked mini-player).
@@ -188,31 +198,31 @@ export function SettingsMenu({
       {open && (
         <div
           role="menu"
-          aria-label="Player settings"
+          aria-label={t("global.player.settingsMenu")}
           style={maxHeight ? { maxHeight } : undefined}
           className="absolute bottom-full right-0 z-30 mb-2 w-64 max-w-[calc(100cqw-1.5rem)] overflow-y-auto rounded-lg bg-black/90 p-1.5 text-white shadow-lg backdrop-blur scrollbar-thin animate-scale-in"
         >
           {page === "root" && (
             <>
-              <MenuRow label="Playback speed" value={state.rate === 1 ? "Normal" : `${state.rate}×`} onClick={() => setPage("speed")} icon={<Icon.Speed className="size-4 text-white/70" />} />
+              <MenuRow label={t("global.player.speed")} value={speedLabel(state.rate)} onClick={() => setPage("speed")} icon={<Icon.Speed className="size-4 text-white/70" />} />
               {hasQuality && (
                 <MenuRow
-                  label="Quality"
+                  label={t("global.player.quality")}
                   value={<span className="max-w-24 truncate">{qualityValue}</span>}
                   onClick={() => setPage("quality")}
                   icon={<QualityIcon className="size-4 text-white/70" />}
                 />
               )}
-              {state.hasCaptions && <MenuRow label="Captions" value={state.captionsOn ? "On" : "Off"} onClick={() => setPage("captions")} icon={<Icon.Captions className="size-4 text-white/70" />} />}
+              {state.hasCaptions && <MenuRow label={t("global.player.captions")} value={state.captionsOn ? t("global.player.on") : t("global.player.off")} onClick={() => setPage("captions")} icon={<Icon.Captions className="size-4 text-white/70" />} />}
               {chapters && chapters.length > 0 && (
                 <MenuRow
-                  label="Chapters"
+                  label={t("global.player.chapters")}
                   value={<span className="max-w-20 truncate">{currentChapter?.title ?? ""}</span>}
                   onClick={() => setPage("chapters")}
                   icon={<Icon.ListChecks className="size-4 text-white/70" />}
                 />
               )}
-              <MenuRow label="Loop" value={loop ? "On" : "Off"} onClick={onToggleLoop} icon={<Icon.Replay className="size-4 text-white/70" />} />
+              <MenuRow label={t("global.player.loop")} value={loop ? t("global.player.on") : t("global.player.off")} onClick={onToggleLoop} icon={<Icon.Replay className="size-4 text-white/70" />} />
               {onShowStats && (
                 <button
                   type="button"
@@ -221,9 +231,9 @@ export function SettingsMenu({
                     setOpen(false);
                     onShowStats();
                   }}
-                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-start text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
                 >
-                  <Icon.BarChart className="size-4 text-white/70" /> Stats for nerds
+                  <Icon.BarChart className="size-4 text-white/70" /> {t("global.player.statsForNerds")}
                 </button>
               )}
               {onShowShortcuts && (
@@ -234,10 +244,10 @@ export function SettingsMenu({
                     setOpen(false);
                     onShowShortcuts();
                   }}
-                  className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
+                  className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-start text-sm text-white hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
                 >
                   <span className="flex items-center gap-2">
-                    <KeyboardIcon className="size-4 text-white/70" /> Keyboard shortcuts
+                    <KeyboardIcon className="size-4 text-white/70" /> {t("global.player.keyboardShortcuts")}
                   </span>
                   <kbd className="rounded border border-white/20 px-1.5 font-sans text-xs text-white/70">?</kbd>
                 </button>
@@ -246,11 +256,11 @@ export function SettingsMenu({
           )}
           {page === "speed" && (
             <>
-              <MenuBack title="Playback speed" onClick={goRoot} />
+              <MenuBack title={t("global.player.speed")} onClick={goRoot} />
               {PLAYBACK_RATES.map((r) => (
                 <MenuOption
                   key={r}
-                  label={r === 1 ? "Normal" : `${r}×`}
+                  label={speedLabel(r)}
                   selected={state.rate === r}
                   onClick={() => {
                     actions.setRate(r);
@@ -262,9 +272,9 @@ export function SettingsMenu({
           )}
           {page === "quality" && quality && (
             <>
-              <MenuBack title="Quality" onClick={goRoot} />
+              <MenuBack title={t("global.player.quality")} onClick={goRoot} />
               <MenuOption
-                label="Auto"
+                label={t("global.player.qualityAuto")}
                 hint={quality.selected === AUTO_QUALITY && playingOption ? playingOption.label : undefined}
                 selected={quality.selected === AUTO_QUALITY}
                 onClick={() => {
@@ -288,14 +298,14 @@ export function SettingsMenu({
           )}
           {page === "captions" && (
             <>
-              <MenuBack title="Captions" onClick={goRoot} />
-              <MenuOption label="Off" selected={!state.captionsOn} onClick={() => state.captionsOn && actions.toggleCaptions()} />
-              <MenuOption label="On" selected={state.captionsOn} onClick={() => !state.captionsOn && actions.toggleCaptions()} />
+              <MenuBack title={t("global.player.captions")} onClick={goRoot} />
+              <MenuOption label={t("global.player.off")} selected={!state.captionsOn} onClick={() => state.captionsOn && actions.toggleCaptions()} />
+              <MenuOption label={t("global.player.on")} selected={state.captionsOn} onClick={() => !state.captionsOn && actions.toggleCaptions()} />
             </>
           )}
           {page === "chapters" && chapters && (
             <>
-              <MenuBack title="Chapters" onClick={goRoot} />
+              <MenuBack title={t("global.player.chapters")} onClick={goRoot} />
               <div className="max-h-64 overflow-y-auto scrollbar-thin">
                 {chapters.map((c, i) => (
                   <button
@@ -305,7 +315,7 @@ export function SettingsMenu({
                       actions.seek(c.time);
                       setOpen(false);
                     }}
-                    className={cn("flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-left text-sm hover:bg-white/10", currentChapter === c ? "text-(--player-accent)" : "text-white/85")}
+                    className={cn("flex w-full items-center gap-3 rounded-md px-3 py-1.5 text-start text-sm hover:bg-white/10", currentChapter === c ? "text-(--player-accent)" : "text-white/85")}
                   >
                     <span className="w-12 shrink-0 font-mono text-xs text-white/60">{formatTime(c.time)}</span>
                     <span className="truncate">{c.title}</span>
@@ -369,6 +379,7 @@ export function ControlBar({
   onHoverTime?: (time: number | null) => void;
   preview?: ReactNode;
 }) {
+  const t = useT("learning");
   const [showRemaining, setShowRemaining] = useState(false);
   const currentChapter = chapterAt(chapters, state.currentTime);
   const pipSupported = allowPip && typeof document !== "undefined" && "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
@@ -398,15 +409,15 @@ export function ControlBar({
         preview={compact ? undefined : preview}
       />
       <div className="flex items-center gap-0.5">
-        <ControlButton label={state.playing ? "Pause (k)" : "Play (k)"} onClick={actions.toggle}>
+        <ControlButton label={state.playing ? t("global.player.pauseKey") : t("global.player.playKey")} onClick={actions.toggle}>
           {state.ended ? <Icon.Replay /> : state.playing ? <Icon.Pause /> : <Icon.Play />}
         </ControlButton>
         {!compact && (
           <>
-            <ControlButton label="Rewind 10 seconds (j)" onClick={() => actions.skip(-10)} className="hidden sm:flex">
+            <ControlButton label={t("global.player.rewind")} onClick={() => actions.skip(-10)} className="hidden sm:flex">
               <Icon.Rewind10 />
             </ControlButton>
-            <ControlButton label="Forward 10 seconds (l)" onClick={() => actions.skip(10)} className="hidden sm:flex">
+            <ControlButton label={t("global.player.forward")} onClick={() => actions.skip(10)} className="hidden sm:flex">
               <Icon.Forward10 />
             </ControlButton>
             <VolumeControl state={state} actions={actions} />
@@ -416,7 +427,7 @@ export function ControlBar({
           type="button"
           onClick={() => setShowRemaining((v) => !v)}
           className="ml-1 rounded px-1.5 font-mono text-xs tabular-nums text-white/90 hover:bg-white/10"
-          title="Toggle remaining time"
+          title={t("global.player.toggleRemaining")}
         >
           {showRemaining ? `-${formatTime(Math.max(0, state.duration - state.currentTime))}` : formatTime(state.currentTime)}
           <span className="text-white/60"> / {formatTime(state.duration)}</span>
@@ -429,7 +440,7 @@ export function ControlBar({
         {!compact && (
           <div className="ml-auto flex items-center gap-0.5">
             {state.hasCaptions && (
-              <ControlButton label={state.captionsOn ? "Turn off captions (c)" : "Turn on captions (c)"} active={state.captionsOn} onClick={actions.toggleCaptions}>
+              <ControlButton label={state.captionsOn ? t("global.player.captionsOff") : t("global.player.captionsOn")} active={state.captionsOn} onClick={actions.toggleCaptions}>
                 <Icon.Captions />
               </ControlButton>
             )}
@@ -445,16 +456,16 @@ export function ControlBar({
               onShowStats={onShowStats}
             />
             {pipSupported && (
-              <ControlButton label="Picture in picture (p)" active={state.pip} onClick={actions.togglePip} className="hidden sm:flex">
+              <ControlButton label={t("global.player.pip")} active={state.pip} onClick={actions.togglePip} className="hidden sm:flex">
                 <Icon.PictureInPicture />
               </ControlButton>
             )}
             {onToggleTheater && (
-              <ControlButton label="Theater mode (t)" active={theater} onClick={onToggleTheater} className="hidden lg:flex">
+              <ControlButton label={t("global.player.theater")} active={theater} onClick={onToggleTheater} className="hidden lg:flex">
                 <Icon.Theater />
               </ControlButton>
             )}
-            <ControlButton label={state.fullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"} onClick={actions.toggleFullscreen}>
+            <ControlButton label={state.fullscreen ? t("global.player.exitFullscreen") : t("global.player.fullscreen")} onClick={actions.toggleFullscreen}>
               {state.fullscreen ? <Icon.ExitFullscreen /> : <Icon.Fullscreen />}
             </ControlButton>
           </div>

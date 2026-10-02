@@ -49,7 +49,7 @@ const auth: Translation<typeof en> = {
 
   "reset.metaTitle": "Choisir un nouveau mot de passe",
   "reset.title": "Choisissez un nouveau mot de passe",
-  "reset.subtitle": "Pour votre compte {brand} <email>{email}</email>.",
+  "reset.subtitle": "Pour votre compte {brand} <b>{email}</b>.",
   "reset.usedTitle": "Ce lien a déjà été utilisé",
   "reset.usedBody": "Chaque lien de réinitialisation ne fonctionne qu'une fois. Si vous devez encore changer votre mot de passe, demandez un nouveau lien.",
   "reset.expiredTitle": "Ce lien a expiré",
@@ -64,7 +64,7 @@ const auth: Translation<typeof en> = {
 
   "twoFactor.metaTitle": "Validation en deux étapes",
   "twoFactor.title": "Validation en deux étapes",
-  "twoFactor.subtitle": "Connexion à {brand} en tant que <email>{email}</email>.",
+  "twoFactor.subtitle": "Connexion à {brand} en tant que <b>{email}</b>.",
   "twoFactor.expiredTitle": "Votre tentative de connexion a expiré",
   "twoFactor.expiredBody": "Pour votre sécurité, l'étape de validation expire au bout de 10 minutes. Reconnectez-vous pour continuer.",
   "twoFactor.codeLabel": "Code d'authentification",

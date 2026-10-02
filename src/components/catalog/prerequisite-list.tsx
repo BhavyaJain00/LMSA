@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 import type { PrerequisiteItem } from "@/components/learn/drip-shared";
 
 function StateIcon({ item }: { item: PrerequisiteItem }) {
@@ -9,25 +12,27 @@ function StateIcon({ item }: { item: PrerequisiteItem }) {
   return <Icon.Circle className="size-4.5 shrink-0 text-ink-faint" aria-hidden="true" />;
 }
 
-function stateLabel(item: PrerequisiteItem): string | null {
-  switch (item.state) {
-    case "completed":
-      return "Completed";
-    case "in_progress":
-      return `In progress · ${item.progress}%`;
-    case "not_started":
-      return "Not started";
-    default:
-      return null;
-  }
-}
-
 /**
  * Prerequisite courses with the viewer's status and links (course page card,
- * locked lesson page). Works in Server and Client Components.
+ * locked lesson page). A Client Component usable from Server and Client
+ * Components; its labels are `global.` keys because the locked lesson page
+ * belongs to another group.
  */
 export function PrerequisiteList({ items, className, compact = false }: { items: PrerequisiteItem[]; className?: string; compact?: boolean }) {
+  const t = useT("public");
   if (!items.length) return null;
+  const stateLabel = (item: PrerequisiteItem): string | null => {
+    switch (item.state) {
+      case "completed":
+        return t("global.prerequisites.completed");
+      case "in_progress":
+        return t("global.prerequisites.inProgress", { percent: item.progress });
+      case "not_started":
+        return t("global.prerequisites.notStarted");
+      default:
+        return null;
+    }
+  };
   return (
     <ul className={cn("space-y-1.5", className)}>
       {items.map((item) => {
@@ -46,12 +51,15 @@ export function PrerequisiteList({ items, className, compact = false }: { items:
                 <span className="block truncate text-sm font-medium text-ink group-hover:text-accent">{item.title}</span>
                 {label && (
                   <span className={cn("block text-xs", item.state === "completed" ? "text-success" : "text-ink-muted")}>
-                    <span className="sr-only">Status: </span>
+                    <span className="sr-only">{t("global.prerequisites.status")} </span>
                     {label}
                   </span>
                 )}
               </span>
-              <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+              <Icon.ChevronRight
+                className="size-4 shrink-0 text-ink-faint transition-transform group-hover:translate-x-0.5 rtl:rotate-180 rtl:group-hover:-translate-x-0.5"
+                aria-hidden="true"
+              />
             </Link>
           </li>
         );

@@ -9,19 +9,20 @@ import { Icon } from "@/components/ui/icons";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 const { watermarkOpacity: OPACITY, signedUrlMinutes: MINUTES } = VIDEO_SETTINGS_LIMITS;
 
-function formatMinutes(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes <= 0) return "";
-  if (minutes < 60) return `${minutes} minutes`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${h} ${h === 1 ? "hour" : "hours"}${m ? ` ${m} min` : ""}`;
-}
-
 /** Settings → Video: protected uploads, watermark, seek previews, autoplay next. */
 export function VideoSettingsForm({ initial, sampleText }: { initial: Settings["video"]; sampleText: string }) {
+  const t = useT("admin");
+  const formatMinutes = (minutes: number): string => {
+    if (!Number.isFinite(minutes) || minutes <= 0) return "";
+    if (minutes < 60) return t("videoForm.lifetime.minutes", { minutes });
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? t("videoForm.lifetime.hoursMinutes", { hours, minutes: rest }) : t("videoForm.lifetime.hours", { hours });
+  };
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveVideoSettingsAction);
   const [protect, setProtect] = useState(initial.protectUploads);
   const [watermark, setWatermark] = useState(initial.watermark);
@@ -30,19 +31,19 @@ export function VideoSettingsForm({ initial, sampleText }: { initial: Settings["
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Protected uploads" description="Keep uploaded lesson videos from being shared or downloaded with a plain link.">
+      <SettingsSection title={t("videoForm.protect.title")} description={t("videoForm.protect.description")}>
         <SettingsSwitchRow>
           <Switch
             name="protectUploads"
             checked={protect}
             onChange={(e) => setProtect(e.target.checked)}
-            label="Protect uploaded videos"
-            description="Videos uploaded to this site play only through signed links that expire and work for one signed-in account. A copied link does not play for anyone else. Links to videos hosted elsewhere are not affected."
+            label={t("videoForm.protect.label")}
+            description={t("videoForm.protect.help")}
           />
         </SettingsSwitchRow>
         <SettingsRow
-          label="Signed link lifetime (minutes)"
-          description="How long a video link stays valid. The player renews it automatically before it expires, so learners are never interrupted."
+          label={t("videoForm.lifetime.label")}
+          description={t("videoForm.lifetime.description")}
           htmlFor="signedUrlMinutes"
           error={errors.signedUrlMinutes}
           required
@@ -61,33 +62,35 @@ export function VideoSettingsForm({ initial, sampleText }: { initial: Settings["
             aria-describedby="signedUrlMinutes-hint"
           />
           <p id="signedUrlMinutes-hint" className="mt-1.5 text-xs text-ink-muted">
-            {MINUTES.min}–{MINUTES.max} minutes{formatMinutes(Number(minutes)) ? ` · ${formatMinutes(Number(minutes))}` : ""}
-            {!protect && " · applies when protection is on"}
+            {t("videoForm.lifetime.range", { min: MINUTES.min, max: MINUTES.max })}
+            {formatMinutes(Number(minutes)) ? ` · ${formatMinutes(Number(minutes))}` : ""}
+            {!protect && ` · ${t("videoForm.lifetime.whenProtected")}`}
           </p>
         </SettingsRow>
         <div className="flex items-start gap-2.5 px-4 py-3.5 text-xs leading-relaxed text-ink-muted sm:px-5">
           <Icon.Info className="mt-0.5 size-4 shrink-0 text-info" />
           <p>
-            New uploads are stored in a private videos folder. Videos uploaded before this feature existed keep working with their current links. Signing requires a
-            long random <code className="rounded bg-surface-2 px-1 font-mono text-[11px]">APP_SECRET</code> in your <code className="rounded bg-surface-2 px-1 font-mono text-[11px]">.env</code> file in
-            production.
+            {t.rich("videoForm.protect.note", {
+              secret: () => <code className="rounded bg-surface-2 px-1 font-mono text-[11px]">APP_SECRET</code>,
+              env: () => <code className="rounded bg-surface-2 px-1 font-mono text-[11px]">.env</code>,
+            })}
           </p>
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Watermark" description="Discourage screen recording by showing who is watching.">
+      <SettingsSection title={t("videoForm.watermark.title")} description={t("videoForm.watermark.description")}>
         <SettingsSwitchRow>
           <Switch
             name="watermark"
             checked={watermark}
             onChange={(e) => setWatermark(e.target.checked)}
-            label="Show a viewer watermark"
-            description="Overlays the signed-in learner's email on lesson videos and moves it to a new spot every few seconds, also in fullscreen. Visitors who are not signed in see no watermark. Picture-in-picture is turned off while the watermark is shown."
+            label={t("videoForm.watermark.label")}
+            description={t("videoForm.watermark.help")}
           />
         </SettingsSwitchRow>
         <SettingsRow
-          label="Watermark opacity"
-          description="Lower values are less distracting; higher values are harder to crop out of recordings."
+          label={t("videoForm.opacity.label")}
+          description={t("videoForm.opacity.description")}
           htmlFor="watermarkOpacity"
           error={errors.watermarkOpacity}
           stacked
@@ -112,12 +115,12 @@ export function VideoSettingsForm({ initial, sampleText }: { initial: Settings["
                 </output>
               </div>
               <p className="mt-1.5 text-xs text-ink-muted">
-                {Math.round(OPACITY.min * 100)}% to {Math.round(OPACITY.max * 100)}%
+                {t("videoForm.opacity.range", { min: Math.round(OPACITY.min * 100), max: Math.round(OPACITY.max * 100) })}
               </p>
             </div>
             <div
               className="relative aspect-video overflow-hidden rounded-lg bg-linear-to-br from-slate-700 via-slate-800 to-slate-950 ring-1 ring-border"
-              aria-label="Watermark preview"
+              aria-label={t("videoForm.opacity.preview")}
               role="img"
             >
               <span className="absolute inset-0 flex items-center justify-center">
@@ -131,27 +134,27 @@ export function VideoSettingsForm({ initial, sampleText }: { initial: Settings["
               >
                 {sampleText}
               </span>
-              {!watermark && <span className="absolute inset-x-0 bottom-2 text-center text-[11px] text-white/60">Watermark is off</span>}
+              {!watermark && <span className="absolute inset-x-0 bottom-2 text-center text-[11px] text-white/60">{t("videoForm.opacity.off")}</span>}
             </div>
           </div>
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Player">
+      <SettingsSection title={t("videoForm.player.title")}>
         <SettingsSwitchRow>
           <Switch
             name="seekThumbnails"
             defaultChecked={initial.seekThumbnails}
-            label="Seek-bar previews"
-            description="Show a preview frame when hovering the timeline. Frames are generated in the learner's browser; videos hosted on other sites without cross-origin access show the time only."
+            label={t("videoForm.player.seekLabel")}
+            description={t("videoForm.player.seekDescription")}
           />
         </SettingsSwitchRow>
         <SettingsSwitchRow>
           <Switch
             name="autoplayNext"
             defaultChecked={initial.autoplayNext}
-            label="Autoplay the next lesson"
-            description="When the last video of a lesson ends, count down five seconds and open the next lesson. Learners can cancel the countdown."
+            label={t("videoForm.player.autoplayLabel")}
+            description={t("videoForm.player.autoplayDescription")}
           />
         </SettingsSwitchRow>
       </SettingsSection>

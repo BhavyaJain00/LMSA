@@ -99,6 +99,16 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/*
+ * Interface languages (src/i18n): Arabic is a cursive script and Devanagari
+ * joins letters into conjuncts, so letter-spacing (Tailwind `tracking-*` on
+ * labels and headings) would break words apart. Text the content author
+ * marked with another `lang` keeps its own spacing.
+ */
+:where(:lang(ar), :lang(hi)) {
+  letter-spacing: normal !important;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
 }

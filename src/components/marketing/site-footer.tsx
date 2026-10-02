@@ -3,6 +3,7 @@ import { getFooterData, type FooterData } from "@/lib/data/seo";
 import { socialLabel } from "@/lib/seo/footer";
 import { CookieSettingsLink } from "@/components/legal/cookie-settings-link";
 import { Icon } from "@/components/ui/icons";
+import { LanguageSelect } from "@/components/layout/language-switcher";
 import { FooterGate } from "./footer-gate";
 import { LeadForm } from "./lead-form";
 
@@ -61,6 +62,9 @@ function LegalLine({ data, className }: { data: FooterData; className?: string }
           <Link href="/sitemap" className={linkClass}>
             Sitemap
           </Link>
+        </li>
+        <li>
+          <LanguageSelect />
         </li>
       </ul>
     </div>

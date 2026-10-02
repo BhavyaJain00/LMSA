@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ProgressStatus } from "@/lib/types";
 import { completeLessonAction } from "@/lib/actions/progress";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 import type { LessonNeighbor, NoteItem, SidebarTab } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -155,6 +156,7 @@ export function LessonRuntimeProvider({
 }: LessonRuntimeProviderProps) {
   const router = useRouter();
   const toast = useToast();
+  const t = useT("learning");
 
   const [completedLocally, setCompletedLocally] = useState(false);
   const status: ProgressStatus = completedLocally ? "complete" : serverStatus;
@@ -190,7 +192,7 @@ export function LessonRuntimeProvider({
           pendingDwell.current = 0;
           const res = await completeLessonAction({ lessonId, dwellDelta });
           if (!res.ok) {
-            if (!silent) toast.error("Could not complete the lesson", res.error);
+            if (!silent) toast.error(t("learn.runtime.completeFailed"), res.error);
             return false;
           }
           if (res.data.completed) {
@@ -201,14 +203,14 @@ export function LessonRuntimeProvider({
               if (res.data.courseCompleted) {
                 const code = res.data.certificateCode;
                 toast.toast({
-                  title: "You completed the course!",
-                  description: code ? "Your certificate is ready." : "Congratulations on finishing every lesson.",
+                  title: t("learn.runtime.courseDone"),
+                  description: code ? t("learn.runtime.certificateReady") : t("learn.runtime.courseDoneBody"),
                   tone: "success",
                   duration: 8000,
-                  action: code ? { label: "View certificate", onClick: () => router.push(`/certificates/${code}`) } : undefined,
+                  action: code ? { label: t("learn.viewCertificate"), onClick: () => router.push(`/certificates/${code}`) } : undefined,
                 });
               } else {
-                toast.success("Lesson completed", `Course progress: ${res.data.courseProgress}%`);
+                toast.success(t("learn.completion.doneTitle"), t("learn.runtime.courseProgress", { percent: res.data.courseProgress }));
               }
             }
             return true;
@@ -216,7 +218,7 @@ export function LessonRuntimeProvider({
           if (!silent) setMissing(res.data.missing);
           return false;
         } catch {
-          if (!silent) toast.error("We could not save your progress", "Check your connection and try again.");
+          if (!silent) toast.error(t("learn.runtime.saveFailed"), t("learn.runtime.saveFailedHint"));
           return false;
         } finally {
           setCompleting(false);
@@ -226,7 +228,7 @@ export function LessonRuntimeProvider({
       inFlight.current = run;
       return run;
     },
-    [tracking, lessonId, toast, router],
+    [tracking, lessonId, toast, router, t],
   );
 
   /* --------------------------- dwell heartbeat --------------------------- */
@@ -314,14 +316,14 @@ export function LessonRuntimeProvider({
     if (tracking && statusRef.current !== "complete") {
       const done = await attemptComplete({ silent: !next.locked });
       if (next.locked && !done) {
-        toast.toast({ title: "Complete this lesson to unlock the next one", tone: "warning" });
+        toast.toast({ title: t("learn.nav.lockedHint"), tone: "warning" });
         document.getElementById("lesson-completion")?.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
     }
     setNavigating(true);
     router.push(next.href);
-  }, [next, nextUnlocksOnComplete, tracking, attemptComplete, router, courseHref, toast]);
+  }, [next, nextUnlocksOnComplete, tracking, attemptComplete, router, courseHref, toast, t]);
 
   // ← / → move between lessons when focus is not in a field or the player.
   useEffect(() => {
@@ -400,9 +402,9 @@ export function LessonRuntimeProvider({
     (text: string) => {
       if (!window.matchMedia(DESKTOP_QUERY).matches) setMobileSidebarOpen(false);
       const found = quoteFocus.current?.(text) ?? false;
-      if (!found) toast.toast({ title: "This passage is no longer in the lesson", tone: "info" });
+      if (!found) toast.toast({ title: t("learn.runtime.passageGone"), tone: "info" });
     },
-    [toast],
+    [toast, t],
   );
 
   const dismissMissing = useCallback(() => setMissing(null), []);

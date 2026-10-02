@@ -3,11 +3,12 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { cn, formatDate, gradientFor } from "@/lib/utils";
-import { cardGradients, roleLabels } from "@/lib/config";
+import { cn, gradientFor } from "@/lib/utils";
+import { cardGradients } from "@/lib/config";
+import { getFormatter, getT } from "@/i18n/server";
 import { ProfileLevel } from "@/components/gamification/profile-level";
 import { CoverEditor } from "./cover-editor";
-import { OpenToBadge, openToOptions } from "./open-to-badge";
+import { OpenToBadge, openToValues } from "./open-to-badge";
 import { SocialLinks } from "./social-icons";
 
 function coverGradient(seed: string): string {
@@ -25,16 +26,18 @@ const roleTone: Record<string, "accent" | "info" | "success" | "warning" | "dark
 };
 
 /** Cover, avatar, name, headline, roles, social links and the Edit button. */
-export function ProfileHeader({ view }: { view: ProfileView }) {
+export async function ProfileHeader({ view }: { view: ProfileView }) {
+  const [t, ts, f] = await Promise.all([getT("account"), getT("shell"), getFormatter()]);
   const { user, isSelf, canEdit, stats } = view;
   const roles = user.roles.filter((r) => r !== "student" || user.roles.length === 1);
   const statItems = [
-    { label: stats.enrolled === 1 ? "course" : "courses", value: stats.enrolled },
-    { label: "completed", value: stats.completed },
-    { label: stats.certificates === 1 ? "certificate" : "certificates", value: stats.certificates },
-    { label: stats.badges === 1 ? "badge" : "badges", value: stats.badges },
+    { key: "courses", label: t("profile.header.courses", { count: stats.enrolled }), value: stats.enrolled },
+    { key: "completed", label: t("profile.header.completed", { count: stats.completed }), value: stats.completed },
+    { key: "certificates", label: t("profile.header.certificates", { count: stats.certificates }), value: stats.certificates },
+    { key: "badges", label: t("profile.header.badges", { count: stats.badges }), value: stats.badges },
   ];
-  if (stats.teaching > 0) statItems.unshift({ label: "teaching", value: stats.teaching });
+  if (stats.teaching > 0) statItems.unshift({ key: "teaching", label: t("profile.header.teaching", { count: stats.teaching }), value: stats.teaching });
+  const openTo = user.openTo && openToValues.includes(user.openTo) ? user.openTo : null;
 
   return (
     <header>
@@ -48,7 +51,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
           )}
         </div>
         {canEdit && (
-          <div className="absolute right-3 top-3 z-20 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+          <div className="absolute end-3 top-3 z-20 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100 [@media(hover:none)]:opacity-100">
             <CoverEditor userId={user.id} hasCover={!!user.coverImageUrl} />
           </div>
         )}
@@ -57,7 +60,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
       <div className="relative px-1 sm:px-6">
         <div className="-mt-12 flex flex-col gap-4 sm:-mt-14 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:gap-5">
-            <span className="relative inline-flex w-fit shrink-0" title={openToOptions.find((o) => o.value === user.openTo)?.description}>
+            <span className="relative inline-flex w-fit shrink-0" title={openTo ? t(`profile.openTo.${openTo}.description`) : undefined}>
               <Avatar name={user.name} src={user.avatarUrl} size="2xl" className="size-24 shadow-card ring-4 ring-surface sm:size-28" />
               <OpenToBadge value={user.openTo} overlay />
             </span>
@@ -71,17 +74,17 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
             <SocialLinks socials={user.socials} name={user.name} />
             {stats.teaching > 0 && (
               <ButtonLink href={`/instructors/${user.username}`} variant="ghost" size="sm" leftIcon={<Icon.Presentation className="size-4" />}>
-                Instructor page
+                {t("profile.header.instructorPage")}
               </ButtonLink>
             )}
             {canEdit && (
               <ButtonLink href={`/user/${user.username}/edit`} variant={isSelf ? "primary" : "outline"} size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                Edit Profile
+                {t("profile.header.editProfile")}
               </ButtonLink>
             )}
             {isSelf && (
               <ButtonLink href="/settings" variant="ghost" size="sm" leftIcon={<Icon.Settings className="size-4" />}>
-                Settings
+                {t("profile.header.settings")}
               </ButtonLink>
             )}
           </div>
@@ -93,7 +96,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
             <span className="flex flex-wrap gap-1.5">
               {roles.map((r) => (
                 <Badge key={r} tone={roleTone[r] ?? "neutral"} size="sm">
-                  {roleLabels[r] ?? r}
+                  {ts(`roles.${r}`)}
                 </Badge>
               ))}
             </span>
@@ -106,7 +109,7 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
           )}
           <span className="inline-flex items-center gap-1.5">
             <Icon.Calendar className="size-4 text-ink-faint" />
-            Joined {formatDate(user.createdAt, { day: undefined })}
+            {t("profile.header.joined", { date: f.date(user.createdAt, { day: undefined }) })}
           </span>
           {view.canSeeEmail && user.email && (
             <a href={`mailto:${user.email}`} className="inline-flex items-center gap-1.5 hover:text-ink">
@@ -116,14 +119,14 @@ export function ProfileHeader({ view }: { view: ProfileView }) {
           )}
           {!user.enabled && (
             <Badge tone="danger" dot>
-              Disabled
+              {t("profile.header.disabled")}
             </Badge>
           )}
         </div>
 
         <dl className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm">
           {statItems.map((s) => (
-            <div key={s.label} className="flex items-baseline gap-1.5">
+            <div key={s.key} className="flex items-baseline gap-1.5">
               <dt className="sr-only">{s.label}</dt>
               <dd className="font-semibold tabular-nums text-ink">{s.value}</dd>
               <span className="text-ink-muted" aria-hidden="true">
