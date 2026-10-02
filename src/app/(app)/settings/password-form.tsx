@@ -8,6 +8,7 @@ import { Icon } from "@/components/ui/icons";
 import { Field, FormError, FormSuccess, Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { PasswordStrengthMeter } from "@/components/security/password-strength-meter";
+import { useT } from "@/i18n/client";
 
 /**
  * Change password (current + new + confirm) using the shared auth action.
@@ -16,13 +17,14 @@ import { PasswordStrengthMeter } from "@/components/security/password-strength-m
  */
 export function PasswordForm({ minLength, context = [] }: { minLength: number; context?: string[] }) {
   const toast = useToast();
+  const t = useT("account");
   const [values, setValues] = useState({ current: "", password: "", confirm: "" });
   const [show, setShow] = useState(false);
   const [state, action, pending] = useActionState<ActionResult | null, FormData>(async (prev, fd) => {
     const res = await changePasswordAction(prev, fd);
     if (res.ok) {
       setValues({ current: "", password: "", confirm: "" });
-      toast.success(res.message ?? "Password updated.");
+      toast.success(res.message ?? t("settings.password.updated"));
     }
     return res;
   }, null);
@@ -33,8 +35,8 @@ export function PasswordForm({ minLength, context = [] }: { minLength: number; c
   return (
     <form action={action} className="space-y-4">
       <FormError message={state && !state.ok ? state.error : null} />
-      {state?.ok && <FormSuccess message={state.message ?? "Password updated."} />}
-      <Field label="Current password" htmlFor="current" required error={errors.current}>
+      {state?.ok && <FormSuccess message={state.message ?? t("settings.password.updated")} />}
+      <Field label={t("settings.password.current")} htmlFor="current" required error={errors.current}>
         <Input
           id="current"
           name="current"
@@ -47,7 +49,7 @@ export function PasswordForm({ minLength, context = [] }: { minLength: number; c
         />
       </Field>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="New password" htmlFor="password" required error={errors.password}>
+        <Field label={t("settings.password.new")} htmlFor="password" required error={errors.password}>
           <Input
             id="password"
             name="password"
@@ -62,7 +64,7 @@ export function PasswordForm({ minLength, context = [] }: { minLength: number; c
           />
           <PasswordStrengthMeter id="settings-password-strength" password={values.password} minLength={minLength} context={context} />
         </Field>
-        <Field label="Confirm new password" htmlFor="confirm" required error={errors.confirm ?? (mismatch ? "Passwords do not match" : undefined)}>
+        <Field label={t("settings.password.confirm")} htmlFor="confirm" required error={errors.confirm ?? (mismatch ? t("settings.password.mismatch") : undefined)}>
           <Input
             id="confirm"
             name="confirm"
@@ -78,10 +80,10 @@ export function PasswordForm({ minLength, context = [] }: { minLength: number; c
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button type="button" onClick={() => setShow((s) => !s)} className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-muted hover:text-ink">
           {show ? <Icon.EyeOff className="size-4" /> : <Icon.Eye className="size-4" />}
-          {show ? "Hide passwords" : "Show passwords"}
+          {show ? t("settings.password.hide") : t("settings.password.show")}
         </button>
         <Button type="submit" loading={pending} disabled={!values.current || !values.password || !values.confirm || mismatch}>
-          Update password
+          {t("settings.password.submit")}
         </Button>
       </div>
     </form>

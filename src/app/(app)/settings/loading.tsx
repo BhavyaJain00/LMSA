@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 function CardPlaceholder({ rows, children }: { rows: number; children?: ReactNode }) {
   return (
@@ -21,10 +22,11 @@ function CardPlaceholder({ rows, children }: { rows: number; children?: ReactNod
   );
 }
 
-export default function SettingsLoading() {
+export default async function SettingsLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-3xl">
-      <span className="sr-only">Loading account settings…</span>
+      <span className="sr-only">{t("settings.loading")}</span>
       <div className="mb-6 space-y-2">
         <Skeleton className="h-8 w-52" />
         <Skeleton className="h-4 w-96 max-w-full" />

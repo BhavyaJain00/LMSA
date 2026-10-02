@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function CalendarSettingsLoading() {
+export default async function CalendarSettingsLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-3xl">
-      <span className="sr-only">Loading calendar settings…</span>
+      <span className="sr-only">{t("settings.calendar.loading")}</span>
       <div className="mb-6 space-y-2">
         <Skeleton className="h-4 w-44" />
         <Skeleton className="h-8 w-40" />

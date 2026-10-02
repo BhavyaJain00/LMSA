@@ -1,13 +1,15 @@
 import Link from "next/link";
-import { cn, gradientFor, pluralize } from "@/lib/utils";
+import { cn, gradientFor } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
 import { Icon } from "@/components/ui/icons";
 import { InstructorNames } from "./batch-meta";
 import type { BatchCourseItem } from "./types";
+import { getT } from "@/i18n/server";
 
-function CourseCover({ course }: { course: BatchCourseItem }) {
+async function CourseCover({ course }: { course: BatchCourseItem }) {
+  const t = await getT("public");
   return (
     <div className="relative aspect-video w-full overflow-hidden bg-surface-2">
       {course.imageUrl ? (
@@ -20,7 +22,7 @@ function CourseCover({ course }: { course: BatchCourseItem }) {
       )}
       {course.completed && (
         <Badge tone="success" className="absolute right-3 top-3 bg-surface-1/90 backdrop-blur">
-          <Icon.CheckCircle className="size-3" /> Completed
+          <Icon.CheckCircle className="size-3" /> {t("card.completed")}
         </Badge>
       )}
     </div>
@@ -31,17 +33,18 @@ function CourseCover({ course }: { course: BatchCourseItem }) {
  * Course cards for a batch. With `showProgress`, enrolled learners see their
  * progress and a Continue link to the next lesson.
  */
-export function BatchCourseGrid({ courses, showProgress = false, className }: { courses: BatchCourseItem[]; showProgress?: boolean; className?: string }) {
+export async function BatchCourseGrid({ courses, showProgress = false, className }: { courses: BatchCourseItem[]; showProgress?: boolean; className?: string }) {
+  const t = await getT("public");
   return (
     <div className={cn("grid gap-5 sm:grid-cols-2 lg:grid-cols-3", className)}>
       {courses.map((course) => {
         const cta = !showProgress
           ? null
           : !course.enrolled
-            ? { href: `/courses/${course.slug}`, label: "View course", variant: "outline" as const }
+            ? { href: `/courses/${course.slug}`, label: t("certification.viewCourse"), variant: "outline" as const }
             : course.completed
-              ? { href: course.continueHref ?? `/courses/${course.slug}`, label: "Review course", variant: "outline" as const }
-              : { href: course.continueHref ?? `/courses/${course.slug}`, label: (course.progress ?? 0) > 0 ? "Continue" : "Start course", variant: "primary" as const };
+              ? { href: course.continueHref ?? `/courses/${course.slug}`, label: t("enroll.reviewCourse"), variant: "outline" as const }
+              : { href: course.continueHref ?? `/courses/${course.slug}`, label: (course.progress ?? 0) > 0 ? t("batches.courses.continue") : t("enroll.startCourse"), variant: "primary" as const };
         return (
           <article key={course.id} className="flex flex-col overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
             <Link href={`/courses/${course.slug}`} className="group block" aria-label={course.title}>
@@ -54,25 +57,25 @@ export function BatchCourseGrid({ courses, showProgress = false, className }: { 
               {course.shortIntroduction && <p className="mt-1 line-clamp-2 text-sm text-ink-muted">{course.shortIntroduction}</p>}
               <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
                 <span className="inline-flex items-center gap-1">
-                  <Icon.BookOpen className="size-3.5" /> {pluralize(course.lessonCount, "lesson")}
+                  <Icon.BookOpen className="size-3.5" /> {t("catalog.lessonCount", { count: course.lessonCount })}
                 </span>
-                {!course.published && <Badge tone="warning" size="xs">Unpublished</Badge>}
+                {!course.published && <Badge tone="warning" size="xs">{t("card.unpublished")}</Badge>}
               </div>
               {course.instructors.length > 0 && <InstructorNames users={course.instructors} className="mt-3" />}
               {showProgress && (
                 <div className="mt-auto space-y-3 pt-4">
                   {course.enrolled ? (
-                    <ProgressBar value={course.progress ?? 0} showLabel label="Progress" size="sm" tone={course.completed ? "success" : "accent"} />
+                    <ProgressBar value={course.progress ?? 0} showLabel label={t("enroll.yourProgress")} size="sm" tone={course.completed ? "success" : "accent"} />
                   ) : (
-                    <p className="text-xs text-ink-muted">You are not enrolled in this course yet.</p>
+                    <p className="text-xs text-ink-muted">{t("batches.courses.notEnrolled")}</p>
                   )}
                   {course.enrolled && course.nextLessonTitle && !course.completed && (
                     <p className="truncate text-xs text-ink-muted">
-                      Next: <span className="text-ink">{course.nextLessonTitle}</span>
+                      {t.rich("batches.courses.next", { title: course.nextLessonTitle, b: (chunks) => <span className="text-ink">{chunks}</span> })}
                     </p>
                   )}
                   {cta && (
-                    <ButtonLink href={cta.href} variant={cta.variant} size="sm" className="w-full" rightIcon={<Icon.ArrowRight className="size-4" />}>
+                    <ButtonLink href={cta.href} variant={cta.variant} size="sm" className="w-full" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                       {cta.label}
                     </ButtonLink>
                   )}

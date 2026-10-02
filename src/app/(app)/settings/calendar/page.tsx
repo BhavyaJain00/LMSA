@@ -11,36 +11,46 @@ import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { PwaIcon } from "@/components/pwa/icons";
+import { getT } from "@/i18n/server";
+import type { MessageKey } from "@/i18n/catalog";
 import { FeedPanel } from "./feed-panel";
 import { UpcomingEvents, type UpcomingEventView } from "./upcoming-events";
 
-export const metadata = { title: "Calendar" };
+export async function generateMetadata() {
+  return { title: (await getT("account"))("settings.calendar.metaTitle") };
+}
 
-const INCLUDED: { icon: ReactNode; title: string; text: string }[] = [
-  { icon: <Icon.Video />, title: "Live classes", text: "With the join link and a reminder 15 minutes before." },
-  { icon: <Icon.Calendar />, title: "Batch timetable", text: "Sessions, lessons, deadlines and milestones." },
-  { icon: <Icon.GraduationCap />, title: "Evaluations", text: "Ones you booked, and ones you run as an evaluator." },
-  { icon: <Icon.Users />, title: "Batch dates", text: "When each of your batches starts and ends." },
+type AccountKey = MessageKey<"account">;
+
+const INCLUDED: { icon: ReactNode; title: AccountKey; text: AccountKey }[] = [
+  { icon: <Icon.Video />, title: "settings.calendar.included.liveClasses", text: "settings.calendar.included.liveClassesBody" },
+  { icon: <Icon.Calendar />, title: "settings.calendar.included.timetable", text: "settings.calendar.included.timetableBody" },
+  { icon: <Icon.GraduationCap />, title: "settings.calendar.included.evaluations", text: "settings.calendar.included.evaluationsBody" },
+  { icon: <Icon.Users />, title: "settings.calendar.included.batchDates", text: "settings.calendar.included.batchDatesBody" },
 ];
 
-const HOW_TO: { app: string; steps: string[] }[] = [
+/** App names are product names and stay as they are; the steps are translated. */
+const HOW_TO: { id: string; app: string; steps: AccountKey[] }[] = [
   {
+    id: "google",
     app: "Google Calendar",
-    steps: ["Choose “Google Calendar” below, or open Google Calendar on the web.", "Next to “Other calendars”, pick “From URL” and paste your link.", "Google refreshes subscribed calendars every few hours."],
+    steps: ["settings.calendar.howto.google.step1", "settings.calendar.howto.google.step2", "settings.calendar.howto.google.step3"],
   },
   {
+    id: "apple",
     app: "Apple Calendar",
-    steps: ["On iPhone, iPad or Mac, choose “Calendar app”.", "Confirm the subscription. Set Auto-refresh to “Every hour” on a Mac.", "On iPhone you can also go to Settings → Calendar → Accounts → Add Subscribed Calendar."],
+    steps: ["settings.calendar.howto.apple.step1", "settings.calendar.howto.apple.step2", "settings.calendar.howto.apple.step3"],
   },
   {
+    id: "outlook",
     app: "Outlook",
-    steps: ["Choose “Outlook.com” or “Microsoft 365”, or in Outlook pick Add calendar → Subscribe from web.", "Paste your link and give the calendar a name.", "Outlook usually syncs subscribed calendars within a few hours."],
+    steps: ["settings.calendar.howto.outlook.step1", "settings.calendar.howto.outlook.step2", "settings.calendar.howto.outlook.step3"],
   },
 ];
 
 export default async function CalendarSettingsPage() {
   const user = await requireUser("/settings/calendar");
-  const [db, settings, baseUrl] = await Promise.all([getDb(), getSettings(), getPublicBaseUrl()]);
+  const [db, settings, baseUrl, t] = await Promise.all([getDb(), getSettings(), getPublicBaseUrl(), getT("account")]);
 
   let feedUrl: string | null = null;
   let feedError = false;
@@ -66,7 +76,7 @@ export default async function CalendarSettingsPage() {
     startDate: ev.startDate,
     endDate: ev.endDate,
     path: ev.path,
-    label: ev.kind === "timetable" ? (ev.categories[0] ?? "Event") : undefined,
+    label: ev.kind === "timetable" ? (ev.categories[0] ?? t("settings.calendar.event")) : undefined,
     batchTitle: ev.batchTitle,
     milestone: ev.milestone,
     icsHref: icsPathFor(ev),
@@ -78,21 +88,21 @@ export default async function CalendarSettingsPage() {
   return (
     <div className="mx-auto max-w-3xl animate-fade-in">
       <PageHeader
-        title="Calendar"
-        description={`Keep your ${brand} classes, schedule and evaluations in the calendar app you already use.`}
+        title={t("settings.calendar.metaTitle")}
+        description={t("settings.calendar.description", { brand })}
         breadcrumbs={
-          <nav aria-label="Breadcrumb" className="mb-2">
+          <nav aria-label={t("settings.breadcrumb")} className="mb-2">
             <ol className="flex items-center gap-1 text-sm text-ink-muted">
               <li>
                 <Link href="/settings" className="hover:text-ink hover:underline">
-                  Account settings
+                  {t("settings.metaTitle")}
                 </Link>
               </li>
               <li aria-hidden="true">
-                <Icon.ChevronRight className="size-3.5 text-ink-faint" />
+                <Icon.ChevronRight className="size-3.5 text-ink-faint rtl:rotate-180" />
               </li>
               <li className="font-medium text-ink" aria-current="page">
-                Calendar
+                {t("settings.calendar.metaTitle")}
               </li>
             </ol>
           </nav>
@@ -102,8 +112,8 @@ export default async function CalendarSettingsPage() {
       <div className="space-y-6">
         <Card>
           <CardHeader
-            title="Subscribe to your schedule"
-            description="Your personal calendar link stays up to date on its own: new classes, changes and cancellations appear in your calendar automatically."
+            title={t("settings.calendar.subscribe.title")}
+            description={t("settings.calendar.subscribe.description")}
           />
           <CardBody className="space-y-6">
             <ul className="grid gap-3 sm:grid-cols-2">
@@ -111,8 +121,8 @@ export default async function CalendarSettingsPage() {
                 <li key={item.title} className="flex items-start gap-3 rounded-lg border border-border bg-surface px-3 py-2.5">
                   <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent [&>svg]:size-4">{item.icon}</span>
                   <span className="min-w-0">
-                    <span className="block text-sm font-medium text-ink">{item.title}</span>
-                    <span className="block text-xs text-ink-muted">{item.text}</span>
+                    <span className="block text-sm font-medium text-ink">{t(item.title)}</span>
+                    <span className="block text-xs text-ink-muted">{t(item.text)}</span>
                   </span>
                 </li>
               ))}
@@ -120,7 +130,7 @@ export default async function CalendarSettingsPage() {
             {feedError ? (
               <div role="alert" className="flex items-start gap-3 rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-ink">
                 <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
-                <p>Calendar links are unavailable because the server is missing its secret key (APP_SECRET). Ask an administrator to configure it.</p>
+                <p>{t("settings.calendar.feedError")}</p>
               </div>
             ) : (
               <FeedPanel initialFeedUrl={feedUrl} calendarName={brand} publiclyReachable={reachable} />
@@ -129,7 +139,7 @@ export default async function CalendarSettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Coming up" description="The next events in your calendar, shown in your local time." />
+          <CardHeader title={t("settings.calendar.comingUp.title")} description={t("settings.calendar.comingUp.description")} />
           <CardBody>
             {events.length ? (
               <UpcomingEvents events={events} />
@@ -137,12 +147,12 @@ export default async function CalendarSettingsPage() {
               <EmptyState
                 compact
                 icon={<PwaIcon.CalendarPlus />}
-                title="Nothing scheduled yet"
-                description="When you join a batch, get a live class or book an evaluation, it shows up here and in your subscribed calendar."
+                title={t("settings.calendar.empty.title")}
+                description={t("settings.calendar.empty.body")}
                 action={
                   settings.features.batches ? (
                     <ButtonLink href="/batches" variant="outline" size="sm" leftIcon={<Icon.Users className="size-4" />}>
-                      Browse batches
+                      {t("settings.calendar.empty.browseBatches")}
                     </ButtonLink>
                   ) : undefined
                 }
@@ -152,17 +162,17 @@ export default async function CalendarSettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="How to subscribe" description="A subscription keeps syncing; importing a downloaded file only copies today's events." />
+          <CardHeader title={t("settings.calendar.howto.title")} description={t("settings.calendar.howto.description")} />
           <CardBody>
             <div className="grid gap-5 md:grid-cols-3">
               {HOW_TO.map((section) => (
-                <section key={section.app} aria-labelledby={`howto-${section.app}`}>
-                  <h3 id={`howto-${section.app}`} className="text-sm font-semibold text-ink">
+                <section key={section.id} aria-labelledby={`howto-${section.id}`}>
+                  <h3 id={`howto-${section.id}`} className="text-sm font-semibold text-ink">
                     {section.app}
                   </h3>
-                  <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-sm text-ink-muted marker:text-ink-faint">
+                  <ol className="mt-2 list-decimal space-y-1.5 ps-4 text-sm text-ink-muted marker:text-ink-faint">
                     {section.steps.map((step) => (
-                      <li key={step}>{step}</li>
+                      <li key={step}>{t(step)}</li>
                     ))}
                   </ol>
                 </section>
@@ -170,8 +180,7 @@ export default async function CalendarSettingsPage() {
             </div>
             <p className="mt-5 flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-xs text-ink-muted">
               <Icon.Lock className="mt-0.5 size-3.5 shrink-0 text-ink-faint" />
-              Your link is private: anyone who has it can see your schedule, including meeting links. If you shared it by mistake, create a new link
-              and the old one stops working right away.
+              {t("settings.calendar.howto.privateNote")}
             </p>
           </CardBody>
         </Card>

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 import { QuestionEditor, QuestionReadOnly } from "./question-editor";
 import { Notice } from "./shared";
 import { emptyQuestionInput, validateQuestionInput, type QuestionInput, type UiQuestionType } from "./types";
@@ -25,6 +26,8 @@ export interface QuestionDialogProps {
 
 /** "New question" / "Edit question" dialog around the QuestionEditor. Mount with a `key` per question. */
 export function QuestionDialog({ open, onClose, initial, canEdit, authorName, usedIn, allowedTypes, onSaved }: QuestionDialogProps) {
+  const t = useT("learning");
+  const tc = useT("common");
   const { toast } = useToast();
   const [value, setValue] = useState<QuestionInput>(() => initial ?? emptyQuestionInput(allowedTypes?.[0] ?? "single"));
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
@@ -43,15 +46,15 @@ export function QuestionDialog({ open, onClose, initial, canEdit, authorName, us
     try {
       const res = await saveQuestionAction(value);
       if (res.ok) {
-        toast({ title: res.message ?? (isNew ? "Question created successfully" : "Question updated successfully"), tone: "success" });
+        toast({ title: isNew ? t("quizAdmin.question.created") : t("quizAdmin.question.updated"), tone: "success" });
         onSaved?.(res.data.question, isNew);
         onClose();
       } else {
         setServerErrors(res.fieldErrors ?? {});
-        toast({ title: res.error || "Error saving question", tone: "error" });
+        toast({ title: res.error || t("quizAdmin.question.saveFailed"), tone: "error" });
       }
     } catch {
-      toast({ title: "Error saving question", tone: "error" });
+      toast({ title: t("quizAdmin.question.saveFailed"), tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -63,12 +66,12 @@ export function QuestionDialog({ open, onClose, initial, canEdit, authorName, us
     try {
       const res = await duplicateQuestionAction(initial.id);
       if (res.ok) {
-        toast({ title: "Question duplicated", description: "The copy is yours to edit.", tone: "success" });
+        toast({ title: t("quizAdmin.question.duplicated"), description: t("quizAdmin.question.duplicatedHint"), tone: "success" });
         onSaved?.(res.data.question, true);
         onClose();
       } else toast({ title: res.error, tone: "error" });
     } catch {
-      toast({ title: "Could not duplicate the question.", tone: "error" });
+      toast({ title: t("quizAdmin.question.duplicateFailed"), tone: "error" });
     } finally {
       setDuplicating(false);
     }
@@ -79,30 +82,30 @@ export function QuestionDialog({ open, onClose, initial, canEdit, authorName, us
       open={open}
       onClose={() => (saving ? undefined : onClose())}
       size="xl"
-      title={isNew ? "New question" : canEdit ? "Edit question" : "View question"}
-      description={!isNew && authorName ? `Written by ${authorName}` : undefined}
+      title={isNew ? t("quizAdmin.question.new") : canEdit ? t("quizAdmin.question.edit") : t("quizAdmin.question.view")}
+      description={!isNew && authorName ? t("quizAdmin.question.writtenBy", { name: authorName }) : undefined}
       footer={
         canEdit ? (
           <>
             {!isNew && (
-              <Button variant="ghost" className="mr-auto" onClick={() => void duplicate()} loading={duplicating} leftIcon={<Icon.Copy className="size-4" />}>
-                Duplicate
+              <Button variant="ghost" className="me-auto" onClick={() => void duplicate()} loading={duplicating} leftIcon={<Icon.Copy className="size-4" />}>
+                {t("quizAdmin.question.duplicate")}
               </Button>
             )}
             <Button variant="outline" onClick={onClose} disabled={saving}>
-              Cancel
+              {tc("actions.cancel")}
             </Button>
             <Button onClick={() => void save()} loading={saving} disabled={attempted && !valid} leftIcon={<Icon.Check className="size-4" />}>
-              Save
+              {tc("actions.save")}
             </Button>
           </>
         ) : (
           <>
             <Button variant="outline" onClick={onClose}>
-              Close
+              {tc("actions.close")}
             </Button>
             <Button onClick={() => void duplicate()} loading={duplicating} leftIcon={<Icon.Copy className="size-4" />}>
-              Duplicate to edit
+              {t("quizAdmin.question.duplicateToEdit")}
             </Button>
           </>
         )
@@ -124,7 +127,7 @@ export function QuestionDialog({ open, onClose, initial, canEdit, authorName, us
           />
         ) : (
           <div className="space-y-4">
-            <Notice tone="info">Only the author or a moderator can edit this question. Duplicate it to make your own copy.</Notice>
+            <Notice tone="info">{t("quizAdmin.question.readOnly")}</Notice>
             <QuestionReadOnly value={value} />
           </div>
         )}

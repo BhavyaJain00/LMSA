@@ -2,11 +2,13 @@ import Link from "next/link";
 import { Fragment } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 
 /** Simple breadcrumb trail; the last item is the current page. */
-export function Breadcrumbs({ items, className }: { items: { label: string; href?: string }[]; className?: string }) {
+export async function Breadcrumbs({ items, className }: { items: { label: string; href?: string }[]; className?: string }) {
+  const t = await getT("public");
   return (
-    <nav aria-label="Breadcrumb" className={cn("mb-3 min-w-0", className)}>
+    <nav aria-label={t("shared.breadcrumb")} className={cn("mb-3 min-w-0", className)}>
       <ol className="flex min-w-0 flex-wrap items-center gap-1 text-sm text-ink-muted">
         {items.map((item, i) => {
           const last = i === items.length - 1;
@@ -25,7 +27,7 @@ export function Breadcrumbs({ items, className }: { items: { label: string; href
               </li>
               {!last && (
                 <li aria-hidden="true" className="text-ink-faint">
-                  <Icon.ChevronRight className="size-3.5" />
+                  <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
                 </li>
               )}
             </Fragment>

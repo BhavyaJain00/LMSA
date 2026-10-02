@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { BatchFeedback } from "@/lib/types";
-import { cn, formatDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { submitBatchFeedbackAction } from "@/lib/actions/batch-feedback";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -14,11 +14,15 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useActionForm } from "./hooks";
 import { Stars } from "./stars";
 import type { FeedbackAverages, FeedbackView } from "./types";
+import { useFormatter, useT } from "@/i18n/client";
 
-const labels = ["Poor", "Fair", "Good", "Very good", "Excellent"];
+// `global.` keys throughout: the feedback summary is also shown on the admin batch page.
+const LABEL_KEYS = ["shared.rating.label1", "shared.rating.label2", "shared.rating.label3", "shared.rating.label4", "shared.rating.label5"] as const;
 
 /** Keyboard-accessible 1–5 star input (radio group) that submits with the form. */
 export function StarRatingInput({ name, label, error }: { name: string; label: string; error?: string }) {
+  const t = useT("public");
+  const labels = LABEL_KEYS.map((key) => t(key));
   const [value, setValue] = useState(0);
   const [hover, setHover] = useState(0);
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
@@ -45,7 +49,7 @@ export function StarRatingInput({ name, label, error }: { name: string; label: s
               type="button"
               role="radio"
               aria-checked={value === n}
-              aria-label={`${n} star${n > 1 ? "s" : ""} – ${labels[i]}`}
+              aria-label={t("shared.rating.starsOption", { count: n, label: labels[i] })}
               tabIndex={value === n || (value === 0 && n === 1) ? 0 : -1}
               onClick={() => setValue(n)}
               onMouseEnter={() => setHover(n)}
@@ -70,7 +74,7 @@ export function StarRatingInput({ name, label, error }: { name: string; label: s
             </button>
           );
         })}
-        <span className="ml-2 text-xs text-ink-muted">{shown ? labels[shown - 1] : "Not rated"}</span>
+        <span className="ms-2 text-xs text-ink-muted">{shown ? labels[shown - 1] : t("certificates.stars.notRated")}</span>
       </div>
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </fieldset>
@@ -78,13 +82,15 @@ export function StarRatingInput({ name, label, error }: { name: string; label: s
 }
 
 function ReadOnlyFeedback({ feedback }: { feedback: Pick<BatchFeedback, "contentRating" | "instructorsRating" | "valueRating" | "feedback" | "createdAt"> }) {
+  const t = useT("public");
+  const f = useFormatter();
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/60 p-4">
       {(
         [
-          ["Content", feedback.contentRating],
-          ["Instructors", feedback.instructorsRating],
-          ["Value", feedback.valueRating],
+          [t("global.batchFeedback.content"), feedback.contentRating],
+          [t("global.batchFeedback.instructors"), feedback.instructorsRating],
+          [t("global.batchFeedback.value"), feedback.valueRating],
         ] as const
       ).map(([label, v]) => (
         <div key={label} className="flex items-center justify-between gap-3 text-sm">
@@ -93,13 +99,14 @@ function ReadOnlyFeedback({ feedback }: { feedback: Pick<BatchFeedback, "content
         </div>
       ))}
       {feedback.feedback && <p className="whitespace-pre-line border-t border-border pt-3 text-sm text-ink">{feedback.feedback}</p>}
-      <p className="text-xs text-ink-faint">Submitted {formatDate(feedback.createdAt)}</p>
+      <p className="text-xs text-ink-faint">{t("global.batchFeedback.submittedOn", { date: f.date(feedback.createdAt) })}</p>
     </div>
   );
 }
 
 /** Student feedback block: the form after the batch ends, or the learner's own feedback. */
 export function BatchFeedbackForm({ batchId, existing }: { batchId: string; existing: BatchFeedback | null }) {
+  const t = useT("public");
   const [showOwn, setShowOwn] = useState(false);
   const { onSubmit, pending, error, fieldErrors } = useActionForm(submitBatchFeedbackAction);
 
@@ -109,9 +116,9 @@ export function BatchFeedbackForm({ batchId, existing }: { batchId: string; exis
         <p className="flex items-start gap-2 text-sm text-ink">
           <Icon.CheckCircle className="mt-0.5 size-4 shrink-0 text-success" />
           <span>
-            Thank you for providing your feedback.{" "}
+            {t("global.batchFeedback.thanks")}{" "}
             <button type="button" onClick={() => setShowOwn((v) => !v)} className="font-medium text-accent hover:underline" aria-expanded={showOwn}>
-              {showOwn ? "Hide your feedback." : "Click here to view your feedback."}
+              {showOwn ? t("global.batchFeedback.hideOwn") : t("global.batchFeedback.showOwn")}
             </button>
           </span>
         </p>
@@ -123,18 +130,18 @@ export function BatchFeedbackForm({ batchId, existing }: { batchId: string; exis
   return (
     <form onSubmit={onSubmit} className="space-y-5">
       <input type="hidden" name="batchId" value={batchId} />
-      <p className="text-sm text-ink-muted">Help us improve by providing your feedback.</p>
+      <p className="text-sm text-ink-muted">{t("global.batchFeedback.intro")}</p>
       <FormError message={error} />
       <div className="grid gap-5 sm:grid-cols-3">
-        <StarRatingInput name="contentRating" label="Content" error={fieldErrors.contentRating} />
-        <StarRatingInput name="instructorsRating" label="Instructors" error={fieldErrors.instructorsRating} />
-        <StarRatingInput name="valueRating" label="Value" error={fieldErrors.valueRating} />
+        <StarRatingInput name="contentRating" label={t("global.batchFeedback.content")} error={fieldErrors.contentRating} />
+        <StarRatingInput name="instructorsRating" label={t("global.batchFeedback.instructors")} error={fieldErrors.instructorsRating} />
+        <StarRatingInput name="valueRating" label={t("global.batchFeedback.value")} error={fieldErrors.valueRating} />
       </div>
-      <Field label="Feedback" htmlFor="batch-feedback" error={fieldErrors.feedback} hint="What worked well? What should we change for the next cohort?">
+      <Field label={t("global.batchFeedback.title")} htmlFor="batch-feedback" error={fieldErrors.feedback} hint={t("global.batchFeedback.hint")}>
         <Textarea id="batch-feedback" name="feedback" rows={6} maxLength={5000} invalid={!!fieldErrors.feedback} />
       </Field>
       <Button type="submit" loading={pending} leftIcon={<Icon.Send className="size-4" />}>
-        Submit Feedback
+        {t("global.batchFeedback.submit")}
       </Button>
     </form>
   );
@@ -142,72 +149,74 @@ export function BatchFeedbackForm({ batchId, existing }: { batchId: string; exis
 
 /** Admin summary: average ratings and a dialog listing every submission. */
 export function FeedbackSummaryCard({ averages, feedback, className }: { averages: FeedbackAverages; feedback: FeedbackView[]; className?: string }) {
+  const t = useT("public");
+  const f = useFormatter();
   const [open, setOpen] = useState(false);
   return (
     <Card className={className}>
       <CardHeader
-        title="Feedback"
-        description={averages.count ? `Average Feedback Received · ${averages.count} response${averages.count > 1 ? "s" : ""}` : undefined}
+        title={t("global.batchFeedback.title")}
+        description={averages.count ? t("global.batchFeedback.average", { count: averages.count }) : undefined}
         actions={
           averages.count > 0 ? (
             <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-              View all feedback
+              {t("global.batchFeedback.viewAll")}
             </Button>
           ) : null
         }
       />
       <CardBody>
         {averages.count === 0 ? (
-          <p className="text-sm text-ink-muted">No feedback received yet.</p>
+          <p className="text-sm text-ink-muted">{t("global.batchFeedback.empty")}</p>
         ) : (
           <div className="space-y-3">
             {(
               [
-                ["Content", averages.content],
-                ["Instructors", averages.instructors],
-                ["Value", averages.value],
+                [t("global.batchFeedback.content"), averages.content],
+                [t("global.batchFeedback.instructors"), averages.instructors],
+                [t("global.batchFeedback.value"), averages.value],
               ] as const
             ).map(([label, v]) => (
               <div key={label} className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-ink-muted">{label}</span>
                 <span className="flex items-center gap-2">
                   <Stars value={v} />
-                  <span className="w-8 text-right font-medium tabular-nums text-ink">{v?.toFixed(1)}</span>
+                  <span className="w-8 text-end font-medium tabular-nums text-ink">{v === null ? "" : f.number(v, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span>
                 </span>
               </div>
             ))}
           </div>
         )}
       </CardBody>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Training Feedback" size="xl">
+      <Dialog open={open} onClose={() => setOpen(false)} title={t("global.batchFeedback.dialogTitle")} size="xl">
         <Table>
           <THead>
             <tr>
-              <TH>Member</TH>
-              <TH>Feedback</TH>
-              <TH>Content</TH>
-              <TH>Instructors</TH>
-              <TH>Value</TH>
+              <TH>{t("global.batchFeedback.member")}</TH>
+              <TH>{t("global.batchFeedback.title")}</TH>
+              <TH>{t("global.batchFeedback.content")}</TH>
+              <TH>{t("global.batchFeedback.instructors")}</TH>
+              <TH>{t("global.batchFeedback.value")}</TH>
             </tr>
           </THead>
           <TBody>
-            {feedback.map((f) => (
-              <TR key={f.id}>
+            {feedback.map((entry) => (
+              <TR key={entry.id}>
                 <TD>
                   <span className="flex min-w-36 items-center gap-2">
-                    <Avatar name={f.user?.name ?? "Former student"} src={f.user?.avatarUrl} size="xs" />
-                    <span className="truncate">{f.user?.name ?? "Former student"}</span>
+                    <Avatar name={entry.user?.name ?? t("global.batchFeedback.formerStudent")} src={entry.user?.avatarUrl} size="xs" />
+                    <span className="truncate">{entry.user?.name ?? t("global.batchFeedback.formerStudent")}</span>
                   </span>
                 </TD>
-                <TD className={cn("min-w-56 text-sm", !f.feedback && "text-ink-faint")}>{f.feedback || "—"}</TD>
+                <TD className={cn("min-w-56 text-sm", !entry.feedback && "text-ink-faint")}>{entry.feedback || "—"}</TD>
                 <TD>
-                  <Stars value={f.contentRating} size="xs" />
+                  <Stars value={entry.contentRating} size="xs" />
                 </TD>
                 <TD>
-                  <Stars value={f.instructorsRating} size="xs" />
+                  <Stars value={entry.instructorsRating} size="xs" />
                 </TD>
                 <TD>
-                  <Stars value={f.valueRating} size="xs" />
+                  <Stars value={entry.valueRating} size="xs" />
                 </TD>
               </TR>
             ))}
