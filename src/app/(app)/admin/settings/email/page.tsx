@@ -9,48 +9,56 @@ import { EmailSettingsForm } from "@/components/admin/settings/email-settings-fo
 import { SendTestEmailForm } from "@/components/admin/emails/send-test-email";
 import { VerifyConnection } from "@/components/admin/emails/verify-connection";
 import { CopyField } from "@/components/admin/emails/copy-field";
-import { formatNumber, relativeTime } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Email settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.email.metaTitle") };
+}
 
 function Value({ children, muted }: { children: React.ReactNode; muted?: boolean }) {
   return <span className={muted ? "text-sm text-ink-muted" : "break-all text-sm text-ink"}>{children}</span>;
 }
 
 export default async function EmailSettingsPage() {
+  const t = await getT("admin");
   const admin = await requireRole(["admin"], "/admin/settings/email");
   const settings = await getSettings();
   const transport = getTransportStatus(settings);
   const counts = await getOutboxCounts();
   const delivery = getDeliveryState();
   const cron = cronUrl();
+  const f = await getFormatter();
+  const formatNumber = (n: number) => f.number(n);
 
   return (
     <>
       <SettingsPanelHeader
-        title="Email"
-        description="How the platform sends email: delivery status, sender identity, which notifications are emailed and scheduled delivery."
+        title={t("pages.settings.email.title")}
+        description={t("pages.settings.email.description")}
         actions={
           <ButtonLink href="/admin/emails" variant="outline" size="sm" leftIcon={<Icon.Send className="size-4" />}>
-            Open outbox
+            {t("pages.settings.email.openOutbox")}
           </ButtonLink>
         }
       />
 
       <div className="space-y-6">
         <SettingsSection
-          title="Delivery"
-          description="Configured in the server's .env file (MAIL_TRANSPORT, MAIL_FROM, SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_REQUIRE_TLS, SMTP_USER, SMTP_PASS)."
+          title={t("pages.settings.email.delivery.title")}
+          description={t("pages.settings.email.delivery.description")}
           actions={
             transport.transport === "log" ? (
-              <Badge tone="info">Log only</Badge>
+              <Badge tone="info">{t("pages.settings.email.delivery.logOnly")}</Badge>
             ) : transport.ready ? (
               <Badge tone="success" dot>
-                SMTP ready
+                {t("pages.settings.email.delivery.smtpReady")}
               </Badge>
             ) : (
               <Badge tone="danger" dot>
-                Needs attention
+                {t("pages.settings.email.delivery.needsAttention")}
               </Badge>
             )
           }
@@ -60,7 +68,7 @@ export default async function EmailSettingsPage() {
               {delivery.configError && (
                 <p role="alert" className="flex gap-2 text-sm text-danger">
                   <Icon.XCircle className="mt-0.5 size-4 shrink-0" />
-                  Delivery is paused: {delivery.configError}
+                  {t("pages.settings.email.delivery.paused", { error: delivery.configError })}
                 </p>
               )}
               {transport.problems.map((p) => (
@@ -77,42 +85,42 @@ export default async function EmailSettingsPage() {
               ))}
             </div>
           )}
-          <SettingsRow label="Transport" description="“log” records emails without sending them; “smtp” delivers them.">
-            <Value>{transport.transport === "smtp" ? "SMTP" : "Log (MAIL_TRANSPORT=log)"}</Value>
+          <SettingsRow label={t("pages.settings.email.delivery.transport")} description={t("pages.settings.email.delivery.transportHint")}>
+            <Value>{transport.transport === "smtp" ? "SMTP" : t("pages.settings.email.delivery.logValue")}</Value>
           </SettingsRow>
           {transport.transport === "smtp" && (
             <>
-              <SettingsRow label="Server" description="Host and port (the host is partly hidden).">
-                <Value>{transport.host ? `${transport.host}:${transport.port}` : "SMTP_HOST missing"}</Value>
+              <SettingsRow label={t("pages.settings.email.delivery.server")} description={t("pages.settings.email.delivery.serverHint")}>
+                <Value>{transport.host ? <span dir="ltr">{`${transport.host}:${transport.port}`}</span> : t("pages.settings.email.delivery.hostMissing")}</Value>
               </SettingsRow>
               <SettingsRow
-                label="Encryption"
-                description="Implicit TLS (SMTP_SECURE=true, usually port 465) or STARTTLS. Unencrypted delivery is refused unless SMTP_REQUIRE_TLS=false or the server is on this machine."
+                label={t("pages.settings.email.delivery.encryption")}
+                description={t("pages.settings.email.delivery.encryptionHint")}
               >
-                <Value>{transport.security === "STARTTLS" ? (transport.tlsRequired ? "STARTTLS (required)" : "STARTTLS if offered (not required)") : transport.security}</Value>
+                <Value>{transport.security === "STARTTLS" ? (transport.tlsRequired ? t("pages.settings.email.delivery.starttlsRequired") : t("pages.settings.email.delivery.starttlsOptional")) : transport.security}</Value>
               </SettingsRow>
-              <SettingsRow label="Sign-in" description="Credentials are only ever sent over an encrypted connection.">
+              <SettingsRow label={t("pages.settings.email.delivery.signIn")} description={t("pages.settings.email.delivery.signInHint")}>
                 <span className="flex flex-wrap items-center gap-2 text-sm">
-                  <Value>{transport.user || "No SMTP_USER"}</Value>
+                  <Value>{transport.user || t("pages.settings.email.delivery.noUser")}</Value>
                   {transport.user &&
                     (transport.passSet ? (
                       <Badge tone="success" size="xs">
-                        SMTP_PASS set
+                        {t("pages.settings.email.delivery.passSet")}
                       </Badge>
                     ) : (
                       <Badge tone="danger" size="xs">
-                        SMTP_PASS missing
+                        {t("pages.settings.email.delivery.passMissing")}
                       </Badge>
                     ))}
                 </span>
               </SettingsRow>
             </>
           )}
-          <SettingsRow label="Sender address" description={transport.sender?.source === "default" ? "No MAIL_FROM set — a placeholder address is used in log mode." : "From MAIL_FROM (or SMTP_USER)."}>
-            <Value muted={!transport.sender}>{transport.sender ? `${settings.email.fromName || transport.sender.name} <${transport.sender.address}>` : "Not configured"}</Value>
+          <SettingsRow label={t("pages.settings.email.delivery.sender")} description={transport.sender?.source === "default" ? t("pages.settings.email.delivery.senderDefault") : t("pages.settings.email.delivery.senderFrom")}>
+            <Value muted={!transport.sender}>{transport.sender ? <span dir="ltr">{`${settings.email.fromName || transport.sender.name} <${transport.sender.address}>`}</span> : t("pages.settings.email.delivery.notConfigured")}</Value>
           </SettingsRow>
           {transport.transport === "smtp" && (
-            <SettingsRow label="Connection check" description="Connects, negotiates TLS and signs in without sending an email.">
+            <SettingsRow label={t("pages.settings.email.delivery.check")} description={t("pages.settings.email.delivery.checkHint")}>
               <VerifyConnection disabled={!transport.ready} />
             </SettingsRow>
           )}
@@ -120,34 +128,39 @@ export default async function EmailSettingsPage() {
 
         <EmailSettingsForm initial={settings.email} senderAddress={transport.sender?.address ?? null} />
 
-        <SettingsSection title="Send a test email" description="Delivers a branded test message right away and shows the result.">
+        <SettingsSection title={t("pages.settings.email.test.title")} description={t("pages.settings.email.test.description")}>
           <div className="px-4 py-4 sm:px-5">
             <SendTestEmailForm defaultTo={admin.email} />
           </div>
         </SettingsSection>
 
         <SettingsSection
-          title="Scheduled delivery"
-          description="Emails are sent in the background as soon as they are queued, and retried automatically (1 min, 5 min, 30 min, 2 h, 12 h; failed after 6 attempts). Call this URL every minute from a scheduler so retries also happen after restarts."
+          title={t("pages.settings.email.cron.title")}
+          description={t("pages.settings.email.cron.description")}
         >
-          <SettingsRow label="Cron URL" description="Keep it secret: anyone with the URL can trigger delivery. It changes when APP_SECRET changes." stacked>
-            <CopyField value={cron} label="Cron URL" secret />
-            <p className="mt-2 font-mono text-[11px] text-ink-muted">* * * * * curl -fsS &quot;&lt;cron URL&gt;&quot; &gt; /dev/null</p>
+          <SettingsRow label={t("pages.settings.email.cron.url")} description={t("pages.settings.email.cron.urlHint")} stacked>
+            <CopyField value={cron} label={t("pages.settings.email.cron.url")} secret />
+            <p dir="ltr" className="mt-2 font-mono text-[11px] text-ink-muted">* * * * * curl -fsS &quot;&lt;cron URL&gt;&quot; &gt; /dev/null</p>
           </SettingsRow>
-          <SettingsRow label="Outbox" description="Messages currently in the outbox.">
+          <SettingsRow label={t("pages.settings.email.cron.outbox")} description={t("pages.settings.email.cron.outboxHint")}>
             <span className="flex flex-wrap gap-1.5">
-              <Badge tone="warning">{formatNumber(counts.queued)} queued</Badge>
-              <Badge tone="success">{formatNumber(counts.sent)} sent</Badge>
-              <Badge tone={counts.failed ? "danger" : "neutral"}>{formatNumber(counts.failed)} failed</Badge>
+              <Badge tone="warning">{t("pages.settings.email.cron.queued", { count: counts.queued })}</Badge>
+              <Badge tone="success">{t("pages.settings.email.cron.sent", { count: counts.sent })}</Badge>
+              <Badge tone={counts.failed ? "danger" : "neutral"}>{t("pages.settings.email.cron.failed", { count: counts.failed })}</Badge>
             </span>
           </SettingsRow>
-          <SettingsRow label="Last delivery run" description="In this server process.">
+          <SettingsRow label={t("pages.settings.email.cron.lastRun")} description={t("pages.settings.email.cron.lastRunHint")}>
             <Value muted={!delivery.lastRun}>
               {delivery.running
-                ? "Running now"
+                ? t("pages.settings.email.cron.running")
                 : delivery.lastRun
-                  ? `${relativeTime(delivery.lastRun.startedAt)} · ${delivery.lastRun.sent} sent, ${delivery.lastRun.retried} to retry, ${delivery.lastRun.failed} failed${delivery.lastRun.error ? ` · ${delivery.lastRun.error}` : ""}`
-                  : "No run since the server started"}
+                  ? `${t("pages.settings.email.cron.runSummary", {
+                      when: f.relative(delivery.lastRun.startedAt),
+                      sent: delivery.lastRun.sent,
+                      retried: delivery.lastRun.retried,
+                      failed: delivery.lastRun.failed,
+                    })}${delivery.lastRun.error ? ` · ${delivery.lastRun.error}` : ""}`
+                  : t("pages.settings.email.cron.noRun")}
             </Value>
           </SettingsRow>
         </SettingsSection>

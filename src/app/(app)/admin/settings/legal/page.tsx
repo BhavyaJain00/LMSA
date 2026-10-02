@@ -9,13 +9,21 @@ import { Icon } from "@/components/ui/icons";
 import { SettingsPanelHeader, SettingsSection } from "@/components/admin/settings/settings-ui";
 import { LegalSettingsForm } from "@/components/legal/legal-settings-form";
 import { NewLegalPageDialog } from "@/components/legal/new-legal-page-dialog";
-import { cn, formatDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Legal pages" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.legal.metaTitle") };
+}
 
 export default async function LegalSettingsPage() {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/legal");
   const [settings, pages, db] = await Promise.all([getSettings(), listLegalPages(), getDb()]);
+  const f = await getFormatter();
   const storedSlugs = new Set(db.legalPages.map((p) => p.slug));
   const corePages = pages.filter((p) => isCoreLegalSlug(p.slug));
   const unpublishedCore = CORE_LEGAL_SLUGS.filter((slug) => !corePages.find((p) => p.slug === slug)?.published);
@@ -24,8 +32,8 @@ export default async function LegalSettingsPage() {
   return (
     <>
       <SettingsPanelHeader
-        title="Legal pages"
-        description="Privacy policy, terms, refund and cookie policies, plus any custom pages. Published pages appear in the footer, at sign-up and at checkout."
+        title={t("pages.settings.legal.title")}
+        description={t("pages.settings.legal.description")}
         actions={<NewLegalPageDialog />}
       />
 
@@ -33,18 +41,17 @@ export default async function LegalSettingsPage() {
         <div role="status" className="mb-6 flex gap-3 rounded-card border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-ink">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <div>
-            <p className="font-semibold">Not ready for launch</p>
+            <p className="font-semibold">{t("pages.settings.legal.notReady")}</p>
             <p className="mt-0.5 text-ink-muted">
-              {unpublishedCore.map((slug) => CORE_LEGAL_META[slug].title).join(", ")} {unpublishedCore.length === 1 ? "is" : "are"} not published yet. Sign-up and checkout mention
-              these pages, so review the starter templates (ideally with a lawyer) and publish them before taking real members or payments.
+              {t("pages.settings.legal.notReadyDetail", { pages: f.list(unpublishedCore.map((slug) => CORE_LEGAL_META[slug].title)), count: unpublishedCore.length })}
             </p>
           </div>
         </div>
       )}
 
       <SettingsSection
-        title="Pages"
-        description={needsReview ? `${needsReview} ${needsReview === 1 ? "page still carries" : "pages still carry"} the starter-template notice.` : "Every page has been reviewed."}
+        title={t("pages.settings.legal.pages")}
+        description={needsReview ? t("pages.settings.legal.needsReview", { count: needsReview }) : t("pages.settings.legal.allReviewed")}
       >
         <ul className="divide-y divide-border">
           {pages.map((page) => {
@@ -61,36 +68,36 @@ export default async function LegalSettingsPage() {
                     <Link href={`/admin/settings/legal/${page.slug}`} className="block truncate text-sm font-medium text-ink hover:underline">
                       {page.title}
                     </Link>
-                    <p className="truncate font-mono text-xs text-ink-faint">{legalHref(page.slug)}</p>
+                    <p dir="ltr" className="truncate text-start font-mono text-xs text-ink-faint">{legalHref(page.slug)}</p>
                     {core && <p className="mt-0.5 text-xs text-ink-muted">{CORE_LEGAL_META[page.slug as keyof typeof CORE_LEGAL_META].description}</p>}
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {page.published ? (
                         <Badge tone="success" dot>
-                          Published · v{page.version}
+                          {t("pages.settings.legal.published", { version: page.version })}
                         </Badge>
                       ) : stored ? (
                         <Badge tone="warning" dot>
-                          Draft
+                          {t("pages.settings.legal.draft")}
                         </Badge>
                       ) : (
                         <Badge tone="neutral" dot>
-                          Starter template
+                          {t("pages.settings.legal.starter")}
                         </Badge>
                       )}
-                      {template && <Badge tone="warning">Review with a lawyer</Badge>}
-                      {!core && <Badge tone="outline">Custom</Badge>}
-                      {stored && <span className="text-xs text-ink-muted">Updated {formatDate(page.updatedAt)}</span>}
+                      {template && <Badge tone="warning">{t("pages.settings.legal.lawyer")}</Badge>}
+                      {!core && <Badge tone="outline">{t("pages.settings.legal.custom")}</Badge>}
+                      {stored && <span className="text-xs text-ink-muted">{t("pages.settings.legal.updated", { date: f.date(page.updatedAt) })}</span>}
                     </div>
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-2 pl-12 sm:pl-0">
+                <div className="flex shrink-0 gap-2 ps-12 sm:ps-0">
                   {page.published && (
                     <ButtonLink href={legalHref(page.slug)} variant="ghost" size="sm" target="_blank" rightIcon={<Icon.ExternalLink className="size-3.5" />}>
-                      View
+                      {t("pages.settings.legal.view")}
                     </ButtonLink>
                   )}
                   <ButtonLink href={`/admin/settings/legal/${page.slug}`} variant="outline" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                    Edit
+                    {t("pages.settings.legal.edit")}
                   </ButtonLink>
                 </div>
               </li>

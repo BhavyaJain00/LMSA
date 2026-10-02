@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /**
  * Coupon box on the checkout page. The coupon is carried in the URL
@@ -14,6 +15,7 @@ import { Icon } from "@/components/ui/icons";
  */
 export function CouponForm({ basePath, appliedCode, error, submittedCode, keep = "" }: { basePath: string; appliedCode: string | null; error: string | null; submittedCode: string; keep?: string }) {
   const router = useRouter();
+  const t = useT("account");
   const [code, setCode] = useState(appliedCode ?? submittedCode);
   const [localError, setLocalError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -21,7 +23,7 @@ export function CouponForm({ basePath, appliedCode, error, submittedCode, keep =
   const apply = () => {
     const value = code.trim().toUpperCase();
     if (!value) {
-      setLocalError("Please enter a coupon code");
+      setLocalError(t("commerce.coupon.empty"));
       return;
     }
     setLocalError(null);
@@ -39,9 +41,9 @@ export function CouponForm({ basePath, appliedCode, error, submittedCode, keep =
   const shownError = localError ?? (appliedCode ? null : error);
 
   return (
-    <section aria-label="Coupon" className="rounded-card border border-border bg-surface-2 p-5">
+    <section aria-label={t("commerce.coupon.label")} className="rounded-card border border-border bg-surface-2 p-5">
       <label htmlFor="coupon-code" className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-        Enter a coupon code:
+        {t("commerce.coupon.enter")}
       </label>
       <form
         className="mt-2 flex gap-2"
@@ -61,15 +63,16 @@ export function CouponForm({ basePath, appliedCode, error, submittedCode, keep =
           autoComplete="off"
           spellCheck={false}
           className="font-mono uppercase tracking-wide"
+          dir="ltr"
           aria-describedby={shownError ? "coupon-error" : appliedCode ? "coupon-applied" : undefined}
         />
         {appliedCode ? (
-          <IconButton label="Remove coupon" variant="outline" onClick={remove} disabled={pending}>
+          <IconButton label={t("commerce.coupon.remove")} variant="outline" onClick={remove} disabled={pending}>
             <Icon.X className="size-4" />
           </IconButton>
         ) : (
           <Button type="submit" variant="outline" loading={pending}>
-            Apply
+            {t("commerce.coupon.apply")}
           </Button>
         )}
       </form>
@@ -81,7 +84,7 @@ export function CouponForm({ basePath, appliedCode, error, submittedCode, keep =
       {appliedCode && (
         <p id="coupon-applied" className="mt-2 flex items-center gap-1.5 text-xs font-medium text-success">
           <Icon.CheckCircle className="size-4" />
-          Coupon {appliedCode} applied
+          {t("commerce.coupon.applied", { code: appliedCode })}
         </p>
       )}
     </section>

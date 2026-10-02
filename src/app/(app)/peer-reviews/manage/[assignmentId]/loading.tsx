@@ -1,5 +1,7 @@
 import { ListPageSkeleton } from "@/components/assessments/list-skeleton";
+import { getT } from "@/i18n/server";
 
-export default function Loading() {
-  return <ListPageSkeleton columns={3} filters={2} label="Loading peer reviews…" />;
+export default async function Loading() {
+  const t = await getT("learning");
+  return <ListPageSkeleton columns={3} filters={2} label={t("peer.loading")} />;
 }

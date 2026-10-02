@@ -6,15 +6,18 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ButtonLink, type ButtonSize } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
-import { cn, formatDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
+import type { Formatters } from "@/i18n/formatters";
 import { money } from "./order-summary";
 import { ResumePaymentButton } from "./resume-payment-button";
+import { INSTALLMENT_STATUS_KEYS, type AccountTranslator } from "./labels";
 
 /**
  * A learner's payment plan: where it stands, the schedule of its payments and
  * the "Pay installment" button for the part that is due next. Shown on the
  * order page of every part, in the order history and (as `InstallmentNotice`)
- * on the course page. Server-safe; only the pay button is a client component.
+ * on the course page. Server components; only the pay button is a client component.
  */
 
 const STATUS_TONE: Record<InstallmentPlanStatus, BadgeTone> = {
@@ -33,11 +36,13 @@ export const orderPath = (orderId: string) => `/billing/success/${encodeURICompo
  * installment"), or the payment instructions when payments are confirmed by
  * hand. Nothing while Stripe is about to charge the part by itself.
  */
-export function InstallmentPayAction({ plan, size = "md", className, hereOrderId }: { plan: InstallmentPlanView; size?: ButtonSize; className?: string; hereOrderId?: string }) {
+export async function InstallmentPayAction({ plan, size = "md", className, hereOrderId }: { plan: InstallmentPlanView; size?: ButtonSize; className?: string; hereOrderId?: string }) {
   const next = plan.next;
   if (!next || (plan.status !== "on_track" && plan.status !== "overdue" && plan.status !== "paused")) return null;
   if (plan.autoCharge && plan.status === "on_track") return null;
-  const label = `Pay ${money(next.amount, plan.currency)}`;
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
+  const amount = money(next.amount, plan.currency, f.locale);
+  const label = t("commerce.plan.pay", { amount });
   if (plan.payGateway === "stripe" || plan.payGateway === "razorpay") {
     return <ResumePaymentButton installment orderId={next.orderId} gateway={plan.payGateway} label={label} size={size} className={className} />;
   }
@@ -45,65 +50,53 @@ export function InstallmentPayAction({ plan, size = "md", className, hereOrderId
   if (hereOrderId === next.orderId) return null;
   return (
     <ButtonLink href={orderPath(next.orderId)} size={size} className={className} leftIcon={<Icon.Receipt className="size-4" />}>
-      {label} · how to pay
+      {t("commerce.plan.payHowTo", { amount })}
     </ButtonLink>
   );
 }
 
-function headline(plan: InstallmentPlanView): { tone: "info" | "warning" | "danger" | "success" | "neutral"; icon: ReactNode; text: ReactNode } | null {
+const bold = (text: ReactNode) => <strong className="text-ink">{text}</strong>;
+
+function headline(plan: InstallmentPlanView, t: AccountTranslator, f: Formatters): { tone: "info" | "warning" | "danger" | "success" | "neutral"; icon: ReactNode; text: ReactNode } | null {
   const next = plan.next;
-  const amount = next ? money(next.amount, plan.currency) : "";
-  const due = next?.dueAt ? formatDate(next.dueAt) : "";
-  const pauses = plan.pausesAt ? formatDate(plan.pausesAt) : "";
+  const amount = next ? money(next.amount, plan.currency, f.locale) : "";
+  const due = next?.dueAt ? f.date(next.dueAt) : "";
+  const pauses = plan.pausesAt ? f.date(plan.pausesAt) : "";
+  const vars = { number: next?.number ?? 0, total: plan.total, amount };
   switch (plan.status) {
     case "on_track":
       if (!next) return null;
       return {
         tone: "info",
         icon: <Icon.Calendar className="size-4" />,
-        text: plan.autoCharge ? (
-          <>
-            Payment {next.number} of {plan.total} ({amount}) is charged to your card automatically on <strong className="text-ink">{due}</strong>. There is nothing you need to do.
-          </>
-        ) : (
-          <>
-            Payment {next.number} of {plan.total} ({amount}) is due on <strong className="text-ink">{due}</strong>. We&apos;ll remind you, and you can pay it early at any time.
-          </>
-        ),
+        text: plan.autoCharge
+          ? t.rich("commerce.plan.onTrackAuto", { ...vars, date: due, b: bold })
+          : t.rich("commerce.plan.onTrackManual", { ...vars, date: due, b: bold }),
       };
     case "overdue":
       if (!next) return null;
       return {
         tone: "warning",
         icon: <Icon.AlertTriangle className="size-4" />,
-        text: (
-          <>
-            Payment {next.number} of {plan.total} ({amount}) was due on {due}. Pay by <strong className="text-ink">{pauses}</strong> to keep your access without interruption.
-          </>
-        ),
+        text: t.rich("commerce.plan.overdue", { ...vars, date: due, pauses, b: bold }),
       };
     case "paused":
       if (!next) return null;
       return {
         tone: "danger",
         icon: <Icon.Lock className="size-4" />,
-        text: (
-          <>
-            Payment {next.number} of {plan.total} ({amount}) is more than {INSTALLMENT_GRACE_DAYS} days overdue, so the lessons are locked. Your progress is saved and everything unlocks as soon
-            as it is paid.
-          </>
-        ),
+        text: t("commerce.plan.paused", { ...vars, days: INSTALLMENT_GRACE_DAYS }),
       };
     case "completed":
-      return { tone: "success", icon: <Icon.CheckCircle className="size-4" />, text: <>Every payment is complete. The course is yours for good.</> };
+      return { tone: "success", icon: <Icon.CheckCircle className="size-4" />, text: t("commerce.plan.completed") };
     case "cancelled":
       return {
         tone: "neutral",
         icon: <Icon.XCircle className="size-4" />,
-        text: <>This payment plan was cancelled, so nothing more is due. The lessons stay locked unless you buy the course; your progress is saved.</>,
+        text: t("commerce.plan.cancelled"),
       };
     default:
-      return { tone: "warning", icon: <Icon.Clock className="size-4" />, text: <>The plan starts as soon as the first payment is confirmed.</> };
+      return { tone: "warning", icon: <Icon.Clock className="size-4" />, text: t("commerce.plan.awaitingFirst") };
   }
 }
 
@@ -117,24 +110,24 @@ const HEADLINE_BOX = {
 
 const HEADLINE_ICON = { info: "text-info", warning: "text-warning", danger: "text-danger", success: "text-success", neutral: "text-ink-muted" };
 
-function partState(part: InstallmentPartView): { label: string; tone: BadgeTone } {
+function partState(part: InstallmentPartView, t: AccountTranslator, f: Formatters): { label: string; tone: BadgeTone } {
   switch (part.status) {
     case "paid":
-      return { label: part.paidAt ? `Paid ${formatDate(part.paidAt)}` : "Paid", tone: "success" };
+      return { label: part.paidAt ? t("commerce.plan.part.paidOn", { date: f.date(part.paidAt) }) : t("commerce.plan.part.paid"), tone: "success" };
     case "waived":
-      return { label: "Waived", tone: "success" };
+      return { label: t("commerce.plan.part.waived"), tone: "success" };
     case "refunded":
-      return { label: "Refunded", tone: "danger" };
+      return { label: t("commerce.plan.part.refunded"), tone: "danger" };
     case "cancelled":
-      return { label: "Cancelled", tone: "neutral" };
+      return { label: t("commerce.plan.part.cancelled"), tone: "neutral" };
     case "overdue":
-      return { label: part.dueAt ? `Overdue since ${formatDate(part.dueAt)}` : "Overdue", tone: "warning" };
+      return { label: part.dueAt ? t("commerce.plan.part.overdueSince", { date: f.date(part.dueAt) }) : t("commerce.plan.part.overdue"), tone: "warning" };
     default:
-      return { label: part.dueAt ? `Due ${formatDate(part.dueAt)}` : "Scheduled", tone: "outline" };
+      return { label: part.dueAt ? t("commerce.plan.part.due", { date: f.date(part.dueAt) }) : t("commerce.plan.part.scheduled"), tone: "outline" };
   }
 }
 
-export function InstallmentPlanCard({
+export async function InstallmentPlanCard({
   plan,
   own,
   currentOrderId,
@@ -150,7 +143,9 @@ export function InstallmentPlanCard({
   showCourse?: boolean;
   className?: string;
 }) {
-  const top = headline(plan);
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
+  const m = (cents: number) => money(cents, plan.currency, f.locale);
+  const top = headline(plan, t, f);
   const percentPaid = plan.total > 0 ? Math.round((plan.paidCount / plan.total) * 100) : 0;
   const headingId = `plan-${plan.key}`;
   return (
@@ -158,7 +153,7 @@ export function InstallmentPlanCard({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 id={headingId} className="text-base font-semibold text-ink">
-            Payment plan
+            {t("commerce.plan.title")}
             {showCourse && (
               <>
                 {" · "}
@@ -173,12 +168,13 @@ export function InstallmentPlanCard({
             )}
           </h2>
           <p className="mt-0.5 text-sm text-ink-muted">
-            {plan.paidCount} of {plan.total} payments made · {money(plan.paidAmount, plan.currency)} paid
-            {plan.outstandingAmount > 0 && ` · ${money(plan.outstandingAmount, plan.currency)} to go`}
+            {plan.outstandingAmount > 0
+              ? t("commerce.plan.progressToGo", { paid: plan.paidCount, total: plan.total, amount: m(plan.paidAmount), outstanding: m(plan.outstandingAmount) })
+              : t("commerce.plan.progress", { paid: plan.paidCount, total: plan.total, amount: m(plan.paidAmount) })}
           </p>
         </div>
         <Badge tone={STATUS_TONE[plan.status]} dot>
-          {plan.statusLabel}
+          {t(INSTALLMENT_STATUS_KEYS[plan.status])}
         </Badge>
       </div>
 
@@ -198,9 +194,9 @@ export function InstallmentPlanCard({
         </div>
       )}
 
-      <ol className="mt-5 divide-y divide-border rounded-lg border border-border" aria-label="Payment schedule">
+      <ol className="mt-5 divide-y divide-border rounded-lg border border-border" aria-label={t("commerce.plan.schedule")}>
         {plan.parts.map((part) => {
-          const state = partState(part);
+          const state = partState(part, t, f);
           const current = part.orderId === currentOrderId;
           return (
             <li key={part.number} className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm", current && "bg-accent/5")} aria-current={current ? "true" : undefined}>
@@ -216,8 +212,8 @@ export function InstallmentPlanCard({
                 </span>
                 <div className="min-w-0">
                   <p className="font-medium text-ink">
-                    Payment {part.number} of {plan.total}
-                    {current && <span className="ml-1.5 text-xs font-normal text-ink-muted">(this order)</span>}
+                    {t("commerce.plan.partTitle", { number: part.number, total: plan.total })}
+                    {current && <span className="ms-1.5 text-xs font-normal text-ink-muted">{t("commerce.plan.thisOrder")}</span>}
                   </p>
                   {current ? (
                     <p className="font-mono text-xs text-ink-muted">{part.orderId}</p>
@@ -232,7 +228,7 @@ export function InstallmentPlanCard({
                 <Badge tone={state.tone} size="xs">
                   {state.label}
                 </Badge>
-                <span className="w-20 text-right font-medium tabular-nums text-ink">{part.status === "waived" ? "—" : money(part.amount, plan.currency)}</span>
+                <span className="w-20 text-end font-medium tabular-nums text-ink">{part.status === "waived" ? "—" : m(part.amount)}</span>
               </div>
             </li>
           );
@@ -240,7 +236,7 @@ export function InstallmentPlanCard({
       </ol>
       {(plan.status === "on_track" || plan.status === "overdue") && (
         <p className="mt-3 text-xs text-ink-muted">
-          If a payment is more than {INSTALLMENT_GRACE_DAYS} days late, the lessons lock until it is paid. Your progress is always kept.
+          {t("commerce.plan.lateNote", { days: INSTALLMENT_GRACE_DAYS })}
         </p>
       )}
     </section>
@@ -252,9 +248,10 @@ export function InstallmentPlanCard({
  * access is paused, or the plan was cancelled) with the pay action. Renders
  * nothing for plans that are on track or complete.
  */
-export function InstallmentNotice({ plan, compact = false, className }: { plan: InstallmentPlanView; compact?: boolean; className?: string }) {
+export async function InstallmentNotice({ plan, compact = false, className }: { plan: InstallmentPlanView; compact?: boolean; className?: string }) {
   if (plan.status !== "overdue" && plan.status !== "paused" && plan.status !== "cancelled") return null;
-  const top = headline(plan);
+  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
+  const top = headline(plan, t, f);
   if (!top) return null;
   return (
     <div role={plan.status === "cancelled" ? "status" : "alert"} className={cn("rounded-lg border px-3 py-2.5 text-sm text-ink-muted", HEADLINE_BOX[top.tone], className)}>
@@ -267,11 +264,11 @@ export function InstallmentNotice({ plan, compact = false, className }: { plan: 
           {top.text}
         </p>
       </div>
-      <div className={cn("mt-2.5 flex flex-wrap items-center gap-2 empty:hidden", !compact && "pl-6")}>
+      <div className={cn("mt-2.5 flex flex-wrap items-center gap-2 empty:hidden", !compact && "ps-6")}>
         <InstallmentPayAction plan={plan} size={compact ? "md" : "sm"} />
         {!compact && plan.status !== "cancelled" && (
           <ButtonLink href={orderPath(plan.key)} variant="ghost" size="sm">
-            View payment plan
+            {t("commerce.plan.viewPlan")}
           </ButtonLink>
         )}
       </div>

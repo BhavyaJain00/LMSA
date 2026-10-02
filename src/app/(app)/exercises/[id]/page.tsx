@@ -19,11 +19,12 @@ import { Icon } from "@/components/ui/icons";
 import { ExerciseRunner } from "@/components/assessments/exercise-runner";
 import { Breadcrumbs, type Crumb } from "@/components/assessments/breadcrumbs";
 import { LANGUAGE_LABELS, lessonQuery, param } from "@/components/assessments/shared";
+import { getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/exercises/[id]">): Promise<Metadata> {
   const { id } = await props.params;
-  const exercise = await getExercise(id);
-  return { title: exercise ? exercise.title : "Programming exercise" };
+  const [exercise, t] = await Promise.all([getExercise(id), getT("learning")]);
+  return { title: exercise ? exercise.title : t("exercise.eyebrow") };
 }
 
 export default async function ExercisePage(props: PageProps<"/exercises/[id]">) {
@@ -33,7 +34,7 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
   const courseIdParam = param(sp.course);
   const user = await requireUser(`/exercises/${id}${lessonQuery(lessonParam, courseIdParam)}`);
 
-  const exercise = await getExercise(id);
+  const [exercise, t] = await Promise.all([getExercise(id), getT("learning")]);
   if (!exercise) notFound();
   const db = await getDb();
   const staff = canManageAssessments(user);
@@ -42,9 +43,9 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
     return (
       <EmptyState
         icon={<Icon.Code />}
-        title="Programming exercises are turned off"
-        description="An administrator has disabled programming exercises on this site."
-        action={<ButtonLink href="/courses">Browse courses</ButtonLink>}
+        title={t("learn.exercisesOff.title")}
+        description={t("learn.exercisesOff.body")}
+        action={<ButtonLink href="/courses">{t("quiz.page.browseCourses")}</ButtonLink>}
       />
     );
   }
@@ -59,14 +60,14 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
     return (
       <div className="animate-fade-in">
         <PageHeader
-          breadcrumbs={<Breadcrumbs items={[{ label: "Programming Exercise Submissions", href: "/exercises/submissions" }, { label: exercise.title }]} />}
+          breadcrumbs={<Breadcrumbs items={[{ label: t("exercise.page.crumbSubmissions"), href: "/exercises/submissions" }, { label: exercise.title }]} />}
           title={exercise.title}
         />
         <EmptyState
           icon={<Icon.Lock />}
-          title="This exercise is locked"
+          title={t("exercise.page.locked")}
           description={gate.message}
-          action={<ButtonLink href={gate.courseHref ?? "/courses"}>{gate.courseHref ? "View course" : "Browse courses"}</ButtonLink>}
+          action={<ButtonLink href={gate.courseHref ?? "/courses"}>{gate.courseHref ? t("quiz.page.viewCourse") : t("quiz.page.browseCourses")}</ButtonLink>}
         />
       </div>
     );
@@ -79,8 +80,8 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
   const runner = toRunnerExercise(exercise, { revealHidden: staff });
 
   const crumbs: Crumb[] = staff
-    ? [{ label: "Programming Exercises", href: "/admin/exercises" }, { label: exercise.title }]
-    : [{ label: "Programming Exercise Submissions", href: "/exercises/submissions" }, { label: exercise.title }];
+    ? [{ label: t("exercise.page.crumbExercises"), href: "/admin/exercises" }, { label: exercise.title }]
+    : [{ label: t("exercise.page.crumbSubmissions"), href: "/exercises/submissions" }, { label: exercise.title }];
 
   return (
     <div className="animate-fade-in">
@@ -92,17 +93,17 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
             <Badge tone="outline">{LANGUAGE_LABELS[exercise.language]}</Badge>
           </span>
         }
-        description={course ? `Programming exercise for ${course.title}` : "Programming exercise"}
+        description={course ? t("exercise.page.forCourse", { course: course.title }) : t("exercise.eyebrow")}
         actions={
           <>
             {back && (
-              <ButtonLink href={back.href} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
-                {back.label}
+              <ButtonLink href={back.href} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
+                {t("assignment.page.backTo", { title: back.label.replace(/^Back to /, "") })}
               </ButtonLink>
             )}
             {staff && (
               <ButtonLink href={`/admin/exercises/${exercise.id}`} variant="ghost" leftIcon={<Icon.Edit className="size-4" />}>
-                Edit exercise
+                {t("exercise.detail.edit")}
               </ButtonLink>
             )}
           </>
@@ -111,7 +112,7 @@ export default async function ExercisePage(props: PageProps<"/exercises/[id]">) 
       {!db.settings.features.programmingExercises && (
         <p className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           <Icon.AlertTriangle className="size-4 shrink-0" />
-          Programming exercises are turned off for learners. You can still test this exercise.
+          {t("exercise.page.offForLearners")}
         </p>
       )}
       <ExerciseRunner

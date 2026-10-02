@@ -9,15 +9,18 @@ import { Icon } from "@/components/ui/icons";
 import { Breadcrumbs } from "@/components/assessments/breadcrumbs";
 import { LocalDateTime } from "@/components/assessments/client-time";
 import { SubmissionAnswer } from "@/components/assessments/submission-answer";
-import { ASSIGNMENT_TYPE_LABELS } from "@/components/assessments/shared";
 import { PeerReviewForm } from "@/components/teaching/peer-review-form";
+import { getT } from "@/i18n/server";
 
-export const metadata: Metadata = { title: "Peer review" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("learning");
+  return { title: t("peer.review.metaTitle") };
+}
 
 export default async function PeerReviewPage(props: PageProps<"/peer-reviews/[id]">) {
   const { id } = await props.params;
   const user = await requireUser(`/peer-reviews/${id}`);
-  const task = await getReviewerTask(id, user.id);
+  const [task, t] = await Promise.all([getReviewerTask(id, user.id), getT("learning")]);
   if (!task) notFound();
 
   const { review, assignment, submission, rubric } = task;
@@ -26,21 +29,21 @@ export default async function PeerReviewPage(props: PageProps<"/peer-reviews/[id
   return (
     <div className="animate-fade-in">
       <PageHeader
-        breadcrumbs={<Breadcrumbs items={[{ label: "Peer reviews", href: "/peer-reviews" }, { label: assignment.title }]} />}
-        title={`Review: ${assignment.title}`}
+        breadcrumbs={<Breadcrumbs items={[{ label: t("peer.title"), href: "/peer-reviews" }, { label: assignment.title }]} />}
+        title={t("peer.review.title", { title: assignment.title })}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
             {task.courseTitle && <span>{task.courseTitle} ·</span>}
             {submitted ? (
               <Badge tone="success" dot>
-                Submitted
+                {t("peer.submitted")}
               </Badge>
             ) : (
               <Badge tone={task.overdue ? "danger" : "warning"} dot>
-                {task.overdue ? "Overdue" : "Due"} <LocalDateTime iso={task.dueAt} />
+                {t.rich(task.overdue ? "peer.review.overdueSince" : "peer.dueOn", { time: <LocalDateTime iso={task.dueAt} /> })}
               </Badge>
             )}
-            {task.config.anonymous && <Badge tone="outline">Anonymous</Badge>}
+            {task.config.anonymous && <Badge tone="outline">{t("peer.anonymous")}</Badge>}
           </span>
         }
       />
@@ -48,18 +51,16 @@ export default async function PeerReviewPage(props: PageProps<"/peer-reviews/[id
         <div className="min-w-0 space-y-6">
           <Card className="p-5 sm:p-6">
             <h2 className="mb-3 flex flex-wrap items-center gap-2 font-semibold text-ink">
-              Work by {task.authorLabel}
-              <Badge tone="outline">{ASSIGNMENT_TYPE_LABELS[submission.type]}</Badge>
+              {t("peer.review.workBy", { name: task.authorLabel })}
+              <Badge tone="outline">{t(`global.assess.type.${submission.type}`)}</Badge>
             </h2>
             <SubmissionAnswer type={submission.type} answer={submission.answer} attachmentUrl={submission.attachmentUrl} />
-            <p className="mt-3 text-xs text-ink-muted">
-              Submitted <LocalDateTime iso={submission.submittedAt} />
-            </p>
+            <p className="mt-3 text-xs text-ink-muted">{t.rich("peer.submittedOn", { time: <LocalDateTime iso={submission.submittedAt} /> })}</p>
           </Card>
           <Card className="p-5 sm:p-6">
             <details className="group">
               <summary className="flex cursor-pointer select-none items-center justify-between gap-2 font-semibold text-ink">
-                The assignment
+                {t("peer.review.assignment")}
                 <Icon.ChevronDown className="size-4 text-ink-muted transition-transform group-open:rotate-180" aria-hidden="true" />
               </summary>
               <div className="mt-4">

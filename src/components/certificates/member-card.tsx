@@ -4,9 +4,11 @@ import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
 import { RelativeTime } from "@/components/assessments/client-time";
 import { formatShortDate } from "./time";
+import { getLocale, getT } from "@/i18n/server";
 
 /** Directory card: avatar, name, headline (or join date), certificate count and latest issue date. */
-export function CertifiedMemberCard({ member }: { member: CertifiedMember }) {
+export async function CertifiedMemberCard({ member }: { member: CertifiedMember }) {
+  const [t, locale] = await Promise.all([getT("public"), getLocale()]);
   const { user } = member;
   const body = (
     <>
@@ -24,7 +26,7 @@ export function CertifiedMemberCard({ member }: { member: CertifiedMember }) {
                 }
               >
                 <Icon.CheckCircle className="size-3" />
-                {user.openTo === "work" ? "Open to Work" : "Hiring"}
+                {user.openTo === "work" ? t("members.openToWork") : t("members.hiring")}
               </span>
             )}
           </p>
@@ -33,30 +35,30 @@ export function CertifiedMemberCard({ member }: { member: CertifiedMember }) {
               user.headline
             ) : (
               <>
-                Joined <RelativeTime iso={user.createdAt} />
+                {t.rich("members.joined", { time: <RelativeTime iso={user.createdAt} /> })}
               </>
             )}
           </p>
         </div>
       </div>
       {member.titles.length > 0 && (
-        <ul className="mt-4 flex flex-wrap gap-1.5" aria-label="Certificates">
+        <ul className="mt-4 flex flex-wrap gap-1.5" aria-label={t("members.certificates")}>
           {member.titles.slice(0, 3).map((t) => (
             <li key={t} className="max-w-full truncate rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-ink-muted">
               {t}
             </li>
           ))}
-          {member.titles.length > 3 && <li className="rounded-md px-1 py-0.5 text-xs text-ink-faint">+{member.titles.length - 3} more</li>}
+          {member.titles.length > 3 && <li className="rounded-md px-1 py-0.5 text-xs text-ink-faint">{t("programs.card.more", { count: member.titles.length - 3 })}</li>}
         </ul>
       )}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-4">
         <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/12 px-2.5 py-1 text-sm font-medium text-accent">
           <Icon.GraduationCap className="size-4" />
-          {member.certificateCount} {member.certificateCount === 1 ? "certificate" : "certificates"}
+          {t("members.certificateCount", { count: member.certificateCount })}
         </span>
         <span className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
           <Icon.Calendar className="size-3.5" />
-          {formatShortDate(member.latestIssueDate)}
+          {formatShortDate(member.latestIssueDate, locale)}
         </span>
       </div>
     </>

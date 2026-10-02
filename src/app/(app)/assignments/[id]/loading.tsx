@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function AssignmentLoading() {
+export default async function AssignmentLoading() {
+  const t = await getT("learning");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading assignment…</span>
+      <span className="sr-only">{t("assignment.page.loading")}</span>
       <Skeleton className="h-4 w-48" />
       <Skeleton className="mt-3 h-7 w-72 max-w-full" />
       <Skeleton className="mt-2 h-4 w-56" />

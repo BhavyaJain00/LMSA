@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { getT } from "@/i18n/server";
 
 export interface PaymentOption {
   /** Checkout URL with this option selected. */
@@ -19,10 +20,11 @@ export interface PaymentOption {
  * sold in installments. The choice lives in the URL (`?pay=installments`), so
  * the server prices the order summary for it; each option is a link.
  */
-export function PaymentOptionPicker({ options, className }: { options: PaymentOption[]; className?: string }) {
+export async function PaymentOptionPicker({ options, className }: { options: PaymentOption[]; className?: string }) {
+  const t = await getT("account");
   return (
-    <nav aria-label="How would you like to pay?" className={cn("rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6", className)}>
-      <h2 className="text-lg font-semibold text-ink">How would you like to pay?</h2>
+    <nav aria-label={t("commerce.payOption.title")} className={cn("rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6", className)}>
+      <h2 className="text-lg font-semibold text-ink">{t("commerce.payOption.title")}</h2>
       <ul className="mt-4 grid gap-3 sm:grid-cols-2">
         {options.map((option) => (
           <li key={option.href}>
@@ -45,7 +47,7 @@ export function PaymentOptionPicker({ options, className }: { options: PaymentOp
                   {option.active && (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-accent">
                       <Icon.CheckCircle className="size-3.5" aria-hidden="true" />
-                      Selected
+                      {t("commerce.payOption.selected")}
                     </span>
                   )}
                 </span>

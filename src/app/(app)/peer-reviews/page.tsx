@@ -12,10 +12,16 @@ import { Icon } from "@/components/ui/icons";
 import { LocalDateTime } from "@/components/assessments/client-time";
 import { ListFooter } from "@/components/assessments/list-controls";
 import { param, parsePaging } from "@/components/assessments/shared";
+import { getT } from "@/i18n/server";
 
-export const metadata: Metadata = { title: "Peer reviews" };
+type Translate = Awaited<ReturnType<typeof getT<"learning">>>;
 
-function ReviewCard({ row }: { row: ReviewerQueueRow }) {
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("learning");
+  return { title: t("peer.title") };
+}
+
+function ReviewCard({ row, t }: { row: ReviewerQueueRow; t: Translate }) {
   const open = row.status === "assigned";
   return (
     <li>
@@ -27,38 +33,32 @@ function ReviewCard({ row }: { row: ReviewerQueueRow }) {
             </Link>
             {open ? (
               <Badge tone={row.overdue ? "danger" : "warning"} dot>
-                {row.overdue ? "Overdue" : "To do"}
+                {row.overdue ? t("peer.overdue") : t("peer.toDo")}
               </Badge>
             ) : (
               <Badge tone="success" dot>
-                Submitted
+                {t("peer.submitted")}
               </Badge>
             )}
-            {row.usesRubric && <Badge tone="outline">Rubric</Badge>}
-            {row.anonymous && <Badge tone="outline">Anonymous</Badge>}
+            {row.usesRubric && <Badge tone="outline">{t("peer.rubric")}</Badge>}
+            {row.anonymous && <Badge tone="outline">{t("peer.anonymous")}</Badge>}
           </div>
           <p className="mt-1 text-sm text-ink-muted">
             {row.courseTitle ? `${row.courseTitle} · ` : ""}
-            {open ? (
-              <>
-                Due <LocalDateTime iso={row.dueAt} />
-              </>
-            ) : (
-              <>
-                Submitted <LocalDateTime iso={row.submittedAt ?? row.assignedAt} />
-              </>
-            )}
+            {open
+              ? t.rich("peer.dueOn", { time: <LocalDateTime iso={row.dueAt} /> })
+              : t.rich("peer.submittedOn", { time: <LocalDateTime iso={row.submittedAt ?? row.assignedAt} /> })}
           </p>
         </div>
         <ButtonLink href={`/peer-reviews/${row.id}`} variant={open ? "primary" : "outline"} size="sm" className="self-start sm:self-auto">
-          {open ? "Write review" : "View review"}
+          {open ? t("peer.write") : t("peer.view")}
         </ButtonLink>
       </Card>
     </li>
   );
 }
 
-function FeedbackCard({ row }: { row: ReceivedFeedbackRow }) {
+function FeedbackCard({ row, t }: { row: ReceivedFeedbackRow; t: Translate }) {
   return (
     <li>
       <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -69,26 +69,20 @@ function FeedbackCard({ row }: { row: ReceivedFeedbackRow }) {
             </Link>
             {row.received > 0 ? (
               <Badge tone={row.received >= row.expected ? "success" : "info"} dot>
-                {row.received} of {Math.max(row.expected, row.received)} received
+                {t("peer.received", { received: row.received, expected: Math.max(row.expected, row.received) })}
               </Badge>
             ) : (
-              <Badge tone="neutral">{row.expected > 0 ? "Reviewers at work" : "Waiting for reviewers"}</Badge>
+              <Badge tone="neutral">{row.expected > 0 ? t("peer.reviewersAtWork") : t("peer.waitingForReviewers")}</Badge>
             )}
-            {row.averagePercent !== null && <Badge tone="accent">Peer average {row.averagePercent}%</Badge>}
+            {row.averagePercent !== null && <Badge tone="accent">{t("peer.average", { percent: row.averagePercent })}</Badge>}
           </div>
           <p className="mt-1 text-sm text-ink-muted">
             {row.courseTitle ? `${row.courseTitle} · ` : ""}
-            {row.lastReceivedAt ? (
-              <>
-                Latest feedback <LocalDateTime iso={row.lastReceivedAt} />
-              </>
-            ) : (
-              "You'll get a notification when feedback arrives."
-            )}
+            {row.lastReceivedAt ? t.rich("peer.latestFeedback", { time: <LocalDateTime iso={row.lastReceivedAt} /> }) : t("peer.notifyHint")}
           </p>
         </div>
         <ButtonLink href={row.href} variant={row.received > 0 ? "primary" : "outline"} size="sm" className="self-start sm:self-auto">
-          {row.received > 0 ? "Read feedback" : "Open assignment"}
+          {row.received > 0 ? t("peer.readFeedback") : t("peer.openAssignment")}
         </ButtonLink>
       </Card>
     </li>
@@ -98,6 +92,7 @@ function FeedbackCard({ row }: { row: ReceivedFeedbackRow }) {
 export default async function PeerReviewsPage(props: PageProps<"/peer-reviews">) {
   const user = await requireUser("/peer-reviews");
   await runPeerReviewSweep();
+  const t = await getT("learning");
   const sp = await props.searchParams;
   const requested = param(sp.tab);
   const tab = requested === "done" || requested === "received" ? requested : "todo";
@@ -113,16 +108,18 @@ export default async function PeerReviewsPage(props: PageProps<"/peer-reviews">)
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Peer reviews"
+        title={t("peer.title")}
         description={
           todo.length
-            ? `You have ${todo.length} ${todo.length === 1 ? "review" : "reviews"} to write${overdue ? `, ${overdue} overdue` : ""}.`
-            : "Give classmates feedback on their assignments. New reviews show up here when they're handed out."
+            ? overdue
+              ? t("peer.toWriteOverdue", { count: todo.length, overdue })
+              : t("peer.toWrite", { count: todo.length })
+            : t("peer.intro")
         }
         actions={
           canManageAssessments(user) ? (
             <ButtonLink href="/peer-reviews/manage" variant="outline" leftIcon={<Icon.Settings className="size-4" />}>
-              Manage peer reviews
+              {t("peer.manage")}
             </ButtonLink>
           ) : undefined
         }
@@ -130,25 +127,19 @@ export default async function PeerReviewsPage(props: PageProps<"/peer-reviews">)
       <Tabs
         className="mb-5"
         items={[
-          { label: "To do", value: "todo", count: todo.length },
-          { label: "Submitted", value: "done", count: done.length },
-          { label: "Feedback for me", value: "received", count: feedback.reduce((n, r) => n + r.received, 0) },
+          { label: t("peer.tabTodo"), value: "todo", count: todo.length },
+          { label: t("peer.tabDone"), value: "done", count: done.length },
+          { label: t("peer.tabReceived"), value: "received", count: feedback.reduce((n, r) => n + r.received, 0) },
         ]}
       />
       {total === 0 ? (
         <EmptyState
           icon={tab === "done" ? <Icon.CheckCircle /> : tab === "received" ? <Icon.MessageSquare /> : <Icon.Inbox />}
-          title={tab === "done" ? "No submitted reviews yet" : tab === "received" ? "No feedback yet" : "You're all caught up"}
-          description={
-            tab === "done"
-              ? "Reviews you submit are listed here. You can update one until the instructor grades that work."
-              : tab === "received"
-                ? "Feedback classmates give on your assignments is collected here."
-                : "When you submit an assignment with peer review, you'll be asked to review a few classmates' work here."
-          }
+          title={tab === "done" ? t("peer.emptyDoneTitle") : tab === "received" ? t("peer.emptyReceivedTitle") : t("peer.emptyTodoTitle")}
+          description={tab === "done" ? t("peer.emptyDoneBody") : tab === "received" ? t("peer.emptyReceivedBody") : t("peer.emptyTodoBody")}
           action={
             <ButtonLink href="/dashboard" variant="outline">
-              Back to dashboard
+              {t("peer.backToDashboard")}
             </ButtonLink>
           }
         />
@@ -156,10 +147,10 @@ export default async function PeerReviewsPage(props: PageProps<"/peer-reviews">)
         <>
           <ul className="space-y-3">
             {tab === "received"
-              ? feedback.slice(0, limit).map((row) => <FeedbackCard key={row.assignmentId} row={row} />)
-              : list.slice(0, limit).map((row) => <ReviewCard key={row.id} row={row} />)}
+              ? feedback.slice(0, limit).map((row) => <FeedbackCard key={row.assignmentId} row={row} t={t} />)
+              : list.slice(0, limit).map((row) => <ReviewCard key={row.id} row={row} t={t} />)}
           </ul>
-          <ListFooter shown={Math.min(limit, total)} total={total} size={size} pages={pages} noun={tab === "received" ? "assignments" : "reviews"} />
+          <ListFooter shown={Math.min(limit, total)} total={total} size={size} pages={pages} />
         </>
       )}
     </div>

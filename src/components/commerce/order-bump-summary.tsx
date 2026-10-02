@@ -2,6 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /**
  * Whether the checkout's order-bump box is ticked, shared between the
@@ -37,6 +38,7 @@ export function useOrderBumpTicked(): boolean {
  */
 export function OrderBumpSummary({ title, priceLabel, totalWithBumpLabel }: { title: string; priceLabel: string; totalWithBumpLabel: string }) {
   const on = useOrderBumpTicked();
+  const t = useT("account");
   // A new checkout page starts unticked (the state is module-wide in the browser).
   useEffect(() => () => setOrderBumpTicked(false), []);
   return (
@@ -47,14 +49,14 @@ export function OrderBumpSummary({ title, priceLabel, totalWithBumpLabel }: { ti
             <dt className="flex min-w-0 items-start gap-2 text-ink">
               <Icon.Plus className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
               <span className="min-w-0">
-                <span className="block text-xs font-medium uppercase tracking-wide text-ink-muted">Added to this order</span>
+                <span className="block text-xs font-medium uppercase tracking-wide text-ink-muted">{t("commerce.bump.added")}</span>
                 <span className="block font-medium">{title}</span>
               </span>
             </dt>
             <dd className="shrink-0 tabular-nums text-ink">{priceLabel}</dd>
           </div>
           <div className="flex items-center justify-between gap-3 border-t border-border-strong pt-2">
-            <dt className="text-xs font-semibold uppercase tracking-wide text-ink">Total today:</dt>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink">{t("commerce.bump.totalToday")}</dt>
             <dd className="text-lg font-bold tabular-nums text-ink">{totalWithBumpLabel}</dd>
           </div>
         </dl>

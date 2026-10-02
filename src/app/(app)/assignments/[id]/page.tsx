@@ -19,11 +19,12 @@ import { AssignmentPanel } from "@/components/assessments/assignment-panel";
 import { Breadcrumbs, type Crumb } from "@/components/assessments/breadcrumbs";
 import { lessonQuery, param } from "@/components/assessments/shared";
 import { AssignmentFeedback } from "@/components/teaching/assignment-feedback";
+import { getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/assignments/[id]">): Promise<Metadata> {
   const { id } = await props.params;
-  const assignment = await getAssignment(id);
-  return { title: assignment ? assignment.title : "Assignment" };
+  const [assignment, t] = await Promise.all([getAssignment(id), getT("learning")]);
+  return { title: assignment ? assignment.title : t("assignment.page.metaTitle") };
 }
 
 export default async function AssignmentPage(props: PageProps<"/assignments/[id]">) {
@@ -33,7 +34,7 @@ export default async function AssignmentPage(props: PageProps<"/assignments/[id]
   const courseIdParam = param(sp.course);
   const user = await requireUser(`/assignments/${id}${lessonQuery(lessonParam, courseIdParam)}`);
 
-  const assignment = await getAssignment(id);
+  const [assignment, t] = await Promise.all([getAssignment(id), getT("learning")]);
   if (!assignment) notFound();
 
   const db = await getDb();
@@ -48,14 +49,18 @@ export default async function AssignmentPage(props: PageProps<"/assignments/[id]
     return (
       <div className="animate-fade-in">
         <PageHeader
-          breadcrumbs={<Breadcrumbs items={[course ? { label: course.title, href: `/courses/${course.slug}` } : { label: "Courses", href: "/courses" }, { label: assignment.title }]} />}
+          breadcrumbs={
+            <Breadcrumbs
+              items={[course ? { label: course.title, href: `/courses/${course.slug}` } : { label: t("quiz.page.crumbCourses"), href: "/courses" }, { label: assignment.title }]}
+            />
+          }
           title={assignment.title}
         />
         <EmptyState
           icon={<Icon.Lock />}
-          title="This assignment is locked"
+          title={t("assignment.page.locked")}
           description={gate.message}
-          action={<ButtonLink href={gate.courseHref ?? "/courses"}>{gate.courseHref ? "View course" : "Browse courses"}</ButtonLink>}
+          action={<ButtonLink href={gate.courseHref ?? "/courses"}>{gate.courseHref ? t("quiz.page.viewCourse") : t("quiz.page.browseCourses")}</ButtonLink>}
         />
       </div>
     );
@@ -68,22 +73,22 @@ export default async function AssignmentPage(props: PageProps<"/assignments/[id]
 
   const crumbs: Crumb[] = privileged
     ? [
-        { label: "Assignments", href: "/admin/assignments" },
-        { label: "Submissions", href: `/admin/assignments/submissions?assignment=${assignment.id}` },
+        { label: t("assignment.page.crumbAssignments"), href: "/admin/assignments" },
+        { label: t("quiz.page.submissions"), href: `/admin/assignments/submissions?assignment=${assignment.id}` },
         { label: assignment.title },
       ]
-    : [...(course ? [{ label: course.title, href: `/courses/${course.slug}` }] : [{ label: "Courses", href: "/courses" }]), { label: assignment.title }];
+    : [...(course ? [{ label: course.title, href: `/courses/${course.slug}` }] : [{ label: t("quiz.page.crumbCourses"), href: "/courses" }]), { label: assignment.title }];
 
   return (
     <div className="animate-fade-in">
       <PageHeader
         breadcrumbs={<Breadcrumbs items={crumbs} />}
         title={assignment.title}
-        description={course ? `Assignment for ${course.title}` : "Assignment"}
+        description={course ? t("assignment.page.forCourse", { course: course.title }) : t("assignment.page.metaTitle")}
         actions={
           back ? (
-            <ButtonLink href={back.href} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
-              {back.label}
+            <ButtonLink href={back.href} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
+              {t("assignment.page.backTo", { title: back.label.replace(/^Back to /, "") })}
             </ButtonLink>
           ) : undefined
         }

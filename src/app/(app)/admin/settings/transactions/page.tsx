@@ -12,15 +12,20 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { TransactionFilters } from "@/components/commerce/transaction-filters";
 import { TransactionsTable, type TransactionView } from "@/components/commerce/transactions-table";
-import { money } from "@/components/commerce/order-summary";
 import { NewTransactionButton, SendRemindersButton } from "@/components/commerce/transaction-tools";
-import { formatNumber, relativeTime } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Transactions" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.transactions.metaTitle") };
+}
 
 const PAGE_SIZE = 25;
 
 export default async function TransactionsSettingsPage(props: PageProps<"/admin/settings/transactions">) {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/transactions");
   const sp = await props.searchParams;
   const filter = parseTransactionFilter(sp);
@@ -38,6 +43,9 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
     countRemindableOrders(),
     getReminderActivity(),
   ]);
+  const f = await getFormatter();
+  const formatNumber = (n: number) => f.number(n);
+  const money = (cents: number, currency: string) => (cents !== 0 ? f.price(cents, currency) : f.number(0, { style: "currency", currency }));
   const stats = summarizeTransactions(rows);
   const totalPayments = db.payments.length;
 
@@ -107,15 +115,15 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
   return (
     <>
       <SettingsPanelHeader
-        title="Transactions"
-        description="Every order placed at checkout. Confirm manual payments, refund orders (through Stripe or Razorpay when they paid online), open invoices and export records."
+        title={t("pages.settings.transactions.title")}
+        description={t("pages.settings.transactions.description")}
         actions={
           <>
             {db.settings.commerce.sendPaymentReminders && <SendRemindersButton count={remindable} />}
             {totalPayments > 0 && (
               <a href={exportHref} className={buttonClasses({ variant: "outline", size: "sm" })} download>
                 <Icon.Download className="size-4" />
-                Export CSV
+                {t("pages.shared.exportCsv")}
               </a>
             )}
             <NewTransactionButton members={members} items={items} coupons={coupons} currencies={currencyOptions} defaultCurrency={db.settings.commerce.defaultCurrency} />
@@ -126,12 +134,12 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
         <p className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-ink-muted">
           <Icon.Bell className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <span>
-            Automatic reminders are on: learners with an unpaid order from the last 7 days get one reminder a day until they pay.{" "}
+            {t("pages.settings.transactions.reminders.on")}{" "}
             {reminders.lastSentAt
-              ? `${formatNumber(reminders.remindedToday)} ${reminders.remindedToday === 1 ? "order" : "orders"} reminded today, last reminder ${relativeTime(reminders.lastSentAt)}.`
-              : "No reminders have been sent yet."}{" "}
+              ? t("pages.settings.transactions.reminders.today", { count: reminders.remindedToday, when: f.relative(reminders.lastSentAt) })
+              : t("pages.settings.transactions.reminders.none")}{" "}
             <Link href="/admin/settings/payments" className="font-medium text-accent hover:underline">
-              Change in Payments
+              {t("pages.settings.transactions.reminders.change")}
             </Link>
           </span>
         </p>
@@ -139,16 +147,16 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
       {totalPayments === 0 ? (
         <EmptyState
           icon={<Icon.Receipt />}
-          title="No Transactions Found"
-          description="Orders appear here as soon as learners check out a paid course, batch or certificate. Use New to record a payment received outside checkout."
+          title={t("pages.settings.transactions.empty.title")}
+          description={t("pages.settings.transactions.empty.description")}
         />
       ) : (
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard label="Net revenue" value={<span className="text-xl sm:text-2xl">{revenueLabel}</span>} hint={refundedLabel ? `After ${refundedLabel} refunded` : "Paid orders in view"} icon={<Icon.TrendingUp className="size-5" />} />
-            <StatCard label="Paid" value={formatNumber(stats.paidCount)} icon={<Icon.CheckCircle className="size-5" />} />
-            <StatCard label="Awaiting payment" value={formatNumber(stats.pendingCount)} icon={<Icon.Clock className="size-5" />} />
-            <StatCard label="Refunded" value={formatNumber(stats.refundedCount)} hint={stats.failedCount ? `${stats.failedCount} cancelled or failed` : undefined} icon={<Icon.Refresh className="size-5" />} />
+            <StatCard label={t("pages.settings.transactions.stats.net")} value={<span className="text-xl sm:text-2xl">{revenueLabel}</span>} hint={refundedLabel ? t("pages.settings.transactions.stats.afterRefunds", { amount: refundedLabel }) : t("pages.settings.transactions.stats.inView")} icon={<Icon.TrendingUp className="size-5" />} />
+            <StatCard label={t("pages.settings.transactions.stats.paid")} value={formatNumber(stats.paidCount)} icon={<Icon.CheckCircle className="size-5" />} />
+            <StatCard label={t("pages.settings.transactions.stats.awaiting")} value={formatNumber(stats.pendingCount)} icon={<Icon.Clock className="size-5" />} />
+            <StatCard label={t("pages.settings.transactions.stats.refunded")} value={formatNumber(stats.refundedCount)} hint={stats.failedCount ? t("pages.settings.transactions.stats.failed", { count: stats.failedCount }) : undefined} icon={<Icon.Refresh className="size-5" />} />
           </div>
           <TransactionFilters values={{ status: filter.status, type: filter.type, from: filter.from ?? "", to: filter.to ?? "", search: filter.search ?? "" }} />
           <TransactionsTable rows={views} total={rows.length} loadMoreHref={loadMoreHref} />

@@ -15,6 +15,20 @@ import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { BILLING_SOURCES, COUNTRIES, INDIAN_STATES } from "./countries";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
 import { setOrderBumpTicked } from "./order-bump-summary";
+import { useT } from "@/i18n/client";
+import type { MessageKey } from "@/i18n/catalog";
+
+/** Labels of the stored "where did you hear about us" values (the values stay English). */
+const SOURCE_KEYS: Record<(typeof BILLING_SOURCES)[number], MessageKey<"account">> = {
+  "Search engine": "commerce.billing.sources.search",
+  "Social media": "commerce.billing.sources.social",
+  "Friend or colleague": "commerce.billing.sources.friend",
+  Newsletter: "commerce.billing.sources.newsletter",
+  "Blog or article": "commerce.billing.sources.blog",
+  "Event or webinar": "commerce.billing.sources.event",
+  Advertisement: "commerce.billing.sources.ad",
+  Other: "commerce.billing.sources.other",
+};
 
 export interface BillingDefaults {
   billingName: string;
@@ -38,7 +52,7 @@ export interface MembershipCheckoutTerms {
   recurring: boolean;
   /** Free days before the first charge for this buyer (0 = charged now). */
   trialDays: number;
-  /** Price per period, e.g. "$19.00/month" (the plain price for lifetime plans). */
+  /** Price per period, e.g. "$19.00/month" (the plain price for lifetime plans), already in the buyer's language. */
   periodLabel: string;
   /** "month", "year" or "lifetime". */
   intervalNoun: string;
@@ -52,7 +66,7 @@ export interface MembershipCheckoutTerms {
 export interface InstallmentCheckoutTerms {
   /** Number of payments. */
   count: number;
-  /** "every 30 days", "every week". */
+  /** "every 30 days", "every week", already in the buyer's language. */
   interval: string;
   /** Stripe charges the remaining payments by itself; otherwise the buyer pays each one from a reminder. */
   automatic: boolean;
@@ -74,7 +88,8 @@ export interface OrderBumpView {
   totalWithBumpLabel: string;
 }
 
-const GATEWAY_NAME: Record<Gateway, string> = { none: "", manual: "Manual payment", stripe: "Stripe", razorpay: "Razorpay" };
+/** Brand names of the gateways that open a checkout (the manual and free flows never launch one). */
+const GATEWAY_NAME: Record<Gateway, string | null> = { none: null, manual: null, stripe: "Stripe", razorpay: "Razorpay" };
 
 type CheckoutAction = (prev: ActionResult<CheckoutNext> | null, formData: FormData) => Promise<ActionResult<CheckoutNext>>;
 
@@ -140,6 +155,7 @@ export function BillingForm({
   /** The order is a gift for someone else: changes the payment wording. */
   gift?: boolean;
 }) {
+  const t = useT("account");
   const [country, setCountry] = useState(defaults.country);
   const router = useRouter();
   const pathname = usePathname();
@@ -166,54 +182,58 @@ export function BillingForm({
   usePreloadRazorpay(!free && gateway === "razorpay" && gatewayReady);
   const india = country === "India";
   const busy = pending || launcher.busy || repricing;
-  const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] || "payment");
+  const statusLabel = launchStatusLabel(launcher.status, GATEWAY_NAME[gateway], t);
   // What the order charges today, with the order bump when it is ticked.
   const payLabel = bumped ? bump.totalWithBumpLabel : totalLabel;
   const trial = !!membership && membership.trialDays > 0 && !free;
   const renews = !!membership?.recurring;
   const later = installments ? installments.count - 1 : 0;
   const installmentLine = installments
-    ? `${totalLabel} today, then ${later} more payment${later === 1 ? "" : "s"} of ${totalLabel} ${installments.interval}${
-        installments.automatic ? ", charged to the same card automatically" : ". We remind you before each one is due"
-      }.`
+    ? t(installments.automatic ? "commerce.billing.installmentsAuto" : "commerce.billing.installmentsManual", { amount: totalLabel, count: later, interval: installments.interval })
     : null;
   // What the gateway collects, in the buyer's words.
   const chargeLine = trial
-    ? `Nothing is charged today. Your ${membership.trialDays}-day free trial runs until ${membership.firstChargeOn}, then ${membership.periodLabel}.`
+    ? t("commerce.billing.trialLine", { days: membership.trialDays, date: membership.firstChargeOn ?? "", period: membership.periodLabel })
     : renews
-      ? `${totalLabel} now, then ${membership.periodLabel} until you cancel.`
+      ? t("commerce.billing.renewLine", { amount: totalLabel, period: membership.periodLabel })
       : installments?.automatic
         ? installmentLine
         : null;
   const submitLabel = gift
     ? free
-      ? "Send the gift"
+      ? t("commerce.billing.submit.sendGift")
       : gateway === "manual"
-        ? `Place gift order · ${payLabel}`
+        ? t("commerce.billing.submit.placeGift", { amount: payLabel })
         : gateway === "stripe"
-          ? `Continue to payment · ${payLabel}`
-          : `Pay ${payLabel}`
+          ? t("commerce.billing.submit.continue", { amount: payLabel })
+          : t("commerce.billing.submit.pay", { amount: payLabel })
     : installments && !free
-    ? gateway === "manual"
-      ? `Place order · ${totalLabel} today`
-      : gateway === "stripe"
-        ? `Continue to payment · ${totalLabel} today`
-        : `Pay ${totalLabel} today`
-    : free
-    ? membership
-      ? "Start membership"
-      : "Enroll for Free"
-    : trial
-      ? `Start ${membership.trialDays}-day free trial`
-      : renews
-        ? gateway === "manual"
-          ? `Place order · ${membership.periodLabel}`
-          : `Subscribe · ${membership.periodLabel}`
-        : gateway === "manual"
-          ? `Place order · ${payLabel}`
-          : gateway === "stripe"
-            ? `Continue to payment · ${payLabel}`
-            : `Pay ${payLabel}`;
+      ? gateway === "manual"
+        ? t("commerce.billing.submit.placeToday", { amount: totalLabel })
+        : gateway === "stripe"
+          ? t("commerce.billing.submit.continueToday", { amount: totalLabel })
+          : t("commerce.billing.submit.payToday", { amount: totalLabel })
+      : free
+        ? membership
+          ? t("commerce.billing.submit.startMembership")
+          : t("commerce.billing.submit.enrollFree")
+        : trial
+          ? t("commerce.billing.submit.startTrial", { days: membership.trialDays })
+          : renews
+            ? gateway === "manual"
+              ? t("commerce.billing.submit.placeOrder", { amount: membership.periodLabel })
+              : t("commerce.billing.submit.subscribe", { amount: membership.periodLabel })
+            : gateway === "manual"
+              ? t("commerce.billing.submit.placeOrder", { amount: payLabel })
+              : gateway === "stripe"
+                ? t("commerce.billing.submit.continue", { amount: payLabel })
+                : t("commerce.billing.submit.pay", { amount: payLabel });
+  const bold = (text: ReactNode) => <strong className="text-ink">{text}</strong>;
+  const mailLink = (text: ReactNode) => (
+    <a href={`mailto:${contactEmail}`} className="font-medium text-accent hover:underline" dir="ltr">
+      {text}
+    </a>
+  );
 
   return (
     <form onSubmit={onSubmit} noValidate aria-labelledby="billing-address-heading">
@@ -234,7 +254,7 @@ export function BillingForm({
 
       <div className={`rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6${extraFields ? " mt-5" : ""}`}>
         <h2 id="billing-address-heading" className="text-lg font-semibold text-ink">
-          {gift ? "Your billing address" : "Address"}
+          {gift ? t("commerce.billing.yourAddress") : t("commerce.billing.address")}
         </h2>
         {formError && !Object.keys(errors).length && (
           <div className="mt-4">
@@ -243,26 +263,26 @@ export function BillingForm({
         )}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div className="space-y-4">
-            <Field label="Billing Name" htmlFor="billingName" error={errors.billingName} required>
+            <Field label={t("commerce.billing.billingName")} htmlFor="billingName" error={errors.billingName} required>
               <Input id="billingName" name="billingName" defaultValue={defaults.billingName} autoComplete="name" maxLength={140} invalid={!!errors.billingName} />
             </Field>
-            <Field label="Address Line 1" htmlFor="line1" error={errors.line1} required>
+            <Field label={t("commerce.billing.line1")} htmlFor="line1" error={errors.line1} required>
               <Input id="line1" name="line1" defaultValue={defaults.line1} autoComplete="address-line1" maxLength={200} invalid={!!errors.line1} />
             </Field>
-            <Field label="Address Line 2" htmlFor="line2" error={errors.line2}>
+            <Field label={t("commerce.billing.line2")} htmlFor="line2" error={errors.line2}>
               <Input id="line2" name="line2" defaultValue={defaults.line2} autoComplete="address-line2" maxLength={200} invalid={!!errors.line2} />
             </Field>
-            <Field label="City" htmlFor="city" error={errors.city} required>
+            <Field label={t("commerce.billing.city")} htmlFor="city" error={errors.city} required>
               <Input id="city" name="city" defaultValue={defaults.city} autoComplete="address-level2" maxLength={100} invalid={!!errors.city} />
             </Field>
-            <Field label="State/Province" htmlFor="state" error={errors.state} required={india}>
+            <Field label={t("commerce.billing.state")} htmlFor="state" error={errors.state} required={india}>
               {india ? (
                 <Select
                   key="state-india"
                   id="state"
                   name="state"
                   defaultValue={INDIAN_STATES.find((s) => s.toLowerCase() === defaults.state.toLowerCase()) ?? ""}
-                  placeholder="Select a state"
+                  placeholder={t("commerce.billing.selectState")}
                   options={INDIAN_STATES.map((s) => ({ value: s, label: s }))}
                   invalid={!!errors.state}
                 />
@@ -272,13 +292,13 @@ export function BillingForm({
             </Field>
           </div>
           <div className="space-y-4">
-            <Field label="Country" htmlFor="country" error={errors.country} required>
+            <Field label={t("commerce.billing.country")} htmlFor="country" error={errors.country} required>
               <Select
                 id="country"
                 name="country"
                 value={country}
                 onChange={(e) => changeCountry(e.target.value)}
-                placeholder="Select your country"
+                placeholder={t("commerce.billing.selectCountry")}
                 options={COUNTRIES.map((c) => ({ value: c, label: c }))}
                 autoComplete="country-name"
                 invalid={!!errors.country}
@@ -288,29 +308,29 @@ export function BillingForm({
             {repriceOnCountry && (
               <p id="country-tax-note" className="-mt-2 flex items-center gap-1.5 text-xs text-ink-muted" aria-live="polite">
                 {repricing ? <Icon.Refresh className="size-3.5 animate-spin" aria-hidden="true" /> : <Icon.Info className="size-3.5" aria-hidden="true" />}
-                {repricing ? "Updating the tax for this country…" : "Tax is calculated for the country of your billing address."}
+                {repricing ? t("commerce.billing.updatingTax") : t("commerce.billing.taxByCountry")}
               </p>
             )}
-            <Field label="Postal Code" htmlFor="pincode" error={errors.pincode}>
+            <Field label={t("commerce.billing.postalCode")} htmlFor="pincode" error={errors.pincode}>
               <Input id="pincode" name="pincode" defaultValue={defaults.pincode} autoComplete="postal-code" maxLength={12} invalid={!!errors.pincode} />
             </Field>
-            <Field label="Where did you hear about us?" htmlFor="source" error={errors.source} required>
+            <Field label={t("commerce.billing.source")} htmlFor="source" error={errors.source} required>
               <Select
                 id="source"
                 name="source"
                 defaultValue={defaults.source}
-                placeholder="Select an option"
-                options={BILLING_SOURCES.map((s) => ({ value: s, label: s }))}
+                placeholder={t("commerce.billing.selectOption")}
+                options={BILLING_SOURCES.map((s) => ({ value: s, label: t(SOURCE_KEYS[s]) }))}
                 invalid={!!errors.source}
               />
             </Field>
             {applyTax && (
               <>
-                <Field label="GST Number" htmlFor="gstin" error={errors.gstin} hint={errors.gstin ? undefined : `Optional. Add it to claim ${taxLabel} input credit.`}>
-                  <Input id="gstin" name="gstin" defaultValue={defaults.gstin} maxLength={15} className="font-mono uppercase" invalid={!!errors.gstin} />
+                <Field label={t("commerce.billing.gst")} htmlFor="gstin" error={errors.gstin} hint={errors.gstin ? undefined : t("commerce.billing.gstHint", { tax: taxLabel })}>
+                  <Input id="gstin" name="gstin" defaultValue={defaults.gstin} maxLength={15} className="font-mono uppercase" dir="ltr" invalid={!!errors.gstin} />
                 </Field>
-                <Field label="PAN Number" htmlFor="pan" error={errors.pan} hint={errors.pan ? undefined : "Required when you enter a GST number."}>
-                  <Input id="pan" name="pan" defaultValue={defaults.pan} maxLength={10} className="font-mono uppercase" invalid={!!errors.pan} />
+                <Field label={t("commerce.billing.pan")} htmlFor="pan" error={errors.pan} hint={errors.pan ? undefined : t("commerce.billing.panHint")}>
+                  <Input id="pan" name="pan" defaultValue={defaults.pan} maxLength={10} className="font-mono uppercase" dir="ltr" invalid={!!errors.pan} />
                 </Field>
               </>
             )}
@@ -320,87 +340,64 @@ export function BillingForm({
 
       <div className="mt-5 rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-ink">Payment</h2>
+          <h2 className="text-lg font-semibold text-ink">{t("commerce.billing.payment")}</h2>
           {online && gatewayReady && gatewayMode === "test" && (
             <Badge tone="warning" dot>
-              Test mode
+              {t("commerce.billing.testMode")}
             </Badge>
           )}
         </div>
         {free ? (
           <p className="mt-2 flex items-start gap-2 text-sm text-ink-muted">
             <Icon.Gift className="mt-0.5 size-4 shrink-0 text-success" />
-            {membership
-              ? "No payment is collected for this membership. It starts as soon as you confirm."
-              : expectedTotal <= 0
-                ? "Your discount covers the full price — no payment is needed."
-                : "No payment is collected for this order. You'll get access right away."}
+            {membership ? t("commerce.billing.freeMembership") : expectedTotal <= 0 ? t("commerce.billing.freeDiscount") : t("commerce.billing.freeOrder")}
           </p>
         ) : gateway === "manual" ? (
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
               <Icon.Receipt className="mt-0.5 size-4 shrink-0 text-accent" />
               {trial ? (
-                <span>
-                  Your free trial starts as soon as you place the order, and we&apos;ll share the payment details on the next page. Pay{" "}
-                  <strong className="text-ink">{totalLabel}</strong> before {membership.firstChargeOn} to keep your membership running.
-                </span>
+                <span>{t.rich("commerce.billing.manualTrial", { amount: totalLabel, date: membership.firstChargeOn ?? "", b: bold })}</span>
               ) : (
                 <span>
-                  Place your order and we&apos;ll share the payment details on the next page. {gift ? "Your gift is sent" : membership ? "Your membership starts" : "Your access is activated"} as soon as
-                  an administrator confirms the {installments ? "first " : ""}payment of <strong className="text-ink">{payLabel}</strong>.
+                  {t.rich(
+                    gift ? "commerce.billing.manualGift" : membership ? "commerce.billing.manualMembership" : installments ? "commerce.billing.manualFirst" : "commerce.billing.manualAccess",
+                    { amount: payLabel, b: bold },
+                  )}
                   {installmentLine && <> {installmentLine}</>}
                 </span>
               )}
             </p>
             {contactEmail && (
-              <p className="pl-6 text-xs">
-                Questions? Write to{" "}
-                <a href={`mailto:${contactEmail}`} className="font-medium text-accent hover:underline">
-                  {contactEmail}
-                </a>
-                .
-              </p>
+              <p className="ps-6 text-xs">{t.rich("commerce.billing.questions", { email: contactEmail, link: mailLink })}</p>
             )}
           </div>
         ) : unavailable ? (
           <div role="alert" className="mt-2 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-ink">
             <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
-            <span>
-              Online payments are unavailable right now. Please try again later
-              {contactEmail ? (
-                <>
-                  {" "}
-                  or write to{" "}
-                  <a href={`mailto:${contactEmail}`} className="font-medium text-accent hover:underline">
-                    {contactEmail}
-                  </a>
-                </>
-              ) : null}
-              .
-            </span>
+            <span>{contactEmail ? t.rich("commerce.billing.unavailableContact", { email: contactEmail, link: mailLink }) : t("commerce.billing.unavailable")}</span>
           </div>
         ) : gateway === "stripe" ? (
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
               <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
               {chargeLine ? (
-                <span>
-                  You&apos;ll continue to Stripe&apos;s secure checkout to {trial ? "save a payment method" : "pay by card or wallet"}.{" "}
-                  <strong className="text-ink">{chargeLine}</strong> Card details never touch our servers.
-                </span>
+                <span>{t.rich(trial ? "commerce.billing.stripeSave" : "commerce.billing.stripePayCharge", { charge: chargeLine, b: bold })}</span>
               ) : (
-                <span>
-                  You&apos;ll continue to Stripe&apos;s secure checkout to pay <strong className="text-ink">{payLabel}</strong> by card or wallet. Card details never touch our
-                  servers.
-                </span>
+                <span>{t.rich("commerce.billing.stripePay", { amount: payLabel, b: bold })}</span>
               )}
             </p>
             {gatewayMode === "test" && (
               <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
                 <Icon.Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
                 <span>
-                  Test mode: no real money moves. Pay with card <span className="font-mono">4242 4242 4242 4242</span>, any future expiry date and any CVC.
+                  {t.rich("commerce.billing.stripeTest", {
+                    code: (text) => (
+                      <span className="font-mono" dir="ltr">
+                        {text}
+                      </span>
+                    ),
+                  })}
                 </span>
               </p>
             )}
@@ -410,14 +407,10 @@ export function BillingForm({
             <p className="flex items-start gap-2">
               <Icon.Lock className="mt-0.5 size-4 shrink-0 text-success" />
               {chargeLine && !installments ? (
-                <span>
-                  A secure Razorpay window opens to {trial ? "authorize your payment method" : "pay and authorize future renewals"} — cards or UPI AutoPay.{" "}
-                  <strong className="text-ink">{chargeLine}</strong>
-                </span>
+                <span>{t.rich(trial ? "commerce.billing.razorpayTrial" : "commerce.billing.razorpayRenew", { charge: chargeLine, b: bold })}</span>
               ) : (
                 <span>
-                  Pay <strong className="text-ink">{payLabel}</strong> securely with Razorpay — cards, UPI, netbanking or wallets. A secure payment window opens after you
-                  place the order.
+                  {t.rich("commerce.billing.razorpayPay", { amount: payLabel, b: bold })}
                   {installmentLine && <strong className="text-ink"> {installmentLine}</strong>}
                 </span>
               )}
@@ -425,7 +418,7 @@ export function BillingForm({
             {gatewayMode === "test" && (
               <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
                 <Icon.Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                <span>Test mode: no real money moves. Use Razorpay&apos;s test cards or the &ldquo;success&rdquo; option in test UPI/netbanking.</span>
+                <span>{t("commerce.billing.razorpayTest")}</span>
               </p>
             )}
           </div>
@@ -448,17 +441,17 @@ export function BillingForm({
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-ink">{bump.headline}</span>
                 <span id="order-bump-details" className="mt-1 block text-sm text-ink-muted">
-                  Yes, add <strong className="text-ink">{bump.title}</strong> for <strong className="text-ink">{bump.priceLabel}</strong>
+                  {t.rich("commerce.billing.bumpAdd", { title: bump.title, price: bump.priceLabel, b: bold })}
                   {bump.listPriceLabel && (
                     <>
                       {" "}
                       <span className="line-through">{bump.listPriceLabel}</span>
-                      {bump.discountPercent > 0 && <span className="ml-1 font-medium text-success">({bump.discountPercent}% off)</span>}
+                      {bump.discountPercent > 0 && <span className="ms-1 font-medium text-success">{t("commerce.billing.bumpOff", { percent: bump.discountPercent })}</span>}
                     </>
                   )}
-                  . It&apos;s charged with this order, so it&apos;s one payment.{" "}
+                  . {t("commerce.billing.bumpOnePayment")}{" "}
                   <a href={bump.href} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">
-                    What&apos;s included
+                    {t("commerce.billing.whatsIncluded")}
                   </a>
                 </span>
               </span>
@@ -468,12 +461,12 @@ export function BillingForm({
 
         <div className="mt-6 flex flex-col gap-4 border-t border-border pt-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <Checkbox id="consent" name="consent" label="I consent to my personal information being stored for invoicing" aria-invalid={!!errors.consent || undefined} />
-            {errors.consent && <p className="mt-1.5 pl-6.5 text-xs text-danger">{errors.consent}</p>}
+            <Checkbox id="consent" name="consent" label={t("commerce.billing.consent")} aria-invalid={!!errors.consent || undefined} />
+            {errors.consent && <p className="mt-1.5 ps-6.5 text-xs text-danger">{errors.consent}</p>}
             <LegalAgreement
               documents={legal}
-              lead={membership ? "By starting this membership you agree to" : free && !gift ? "By enrolling you agree to" : "By placing your order you agree to"}
-              className="mt-2 pl-6.5"
+              lead={membership ? t("commerce.billing.leadMembership") : free && !gift ? t("commerce.billing.leadEnroll") : t("commerce.billing.leadOrder")}
+              className="mt-2 ps-6.5"
             />
           </div>
           <div className="flex flex-col items-stretch gap-1.5 sm:items-end">

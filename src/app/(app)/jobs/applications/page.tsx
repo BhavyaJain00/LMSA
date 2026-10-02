@@ -9,17 +9,22 @@ import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
-import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel, workModeTone } from "@/components/jobs/job-bits";
+import { CompanyLogo, formatJobLocation, workModeTone } from "@/components/jobs/job-bits";
+import { resolveWorkMode } from "@/components/jobs/work-mode";
 import { WithdrawApplicationButton } from "@/components/jobs/job-actions";
-import { formatDate, pluralize, relativeTime, truncate } from "@/lib/utils";
+import { truncate } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
-export const metadata = { title: "My applications" };
+export async function generateMetadata() {
+  const t = await getT("public");
+  return { title: t("jobs.myApplications.title") };
+}
 
 export default async function MyApplicationsPage() {
   const user = await requireUser("/jobs/applications");
   const settings = await getSettings();
   if (!settings.features.jobs) notFound();
-  const applications = await getMyApplications(user.id);
+  const [applications, t, f] = await Promise.all([getMyApplications(user.id), getT("public"), getFormatter()]);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -27,16 +32,16 @@ export default async function MyApplicationsPage() {
         breadcrumbs={
           <Breadcrumbs
             items={[
-              { label: "Jobs", href: "/jobs" },
-              { label: "My applications" },
+              { label: t("jobs.meta.title"), href: "/jobs" },
+              { label: t("jobs.myApplications.title") },
             ]}
           />
         }
-        title="My applications"
-        description={applications.length ? `You have applied to ${pluralize(applications.length, "job")}.` : "Jobs you apply to will be listed here."}
+        title={t("jobs.myApplications.title")}
+        description={applications.length ? t("jobs.myApplications.count", { count: applications.length }) : t("jobs.myApplications.description")}
         actions={
           <ButtonLink href="/jobs" variant="outline" leftIcon={<Icon.Briefcase className="size-4" />}>
-            Browse jobs
+            {t("jobs.myApplications.browse")}
           </ButtonLink>
         }
       />
@@ -44,9 +49,9 @@ export default async function MyApplicationsPage() {
       {applications.length === 0 ? (
         <EmptyState
           icon={<Icon.ClipboardList />}
-          title="No applications yet"
-          description="When you apply to a job, you can follow it here and withdraw the application if your plans change."
-          action={<ButtonLink href="/jobs">Find a job</ButtonLink>}
+          title={t("jobs.myApplications.emptyTitle")}
+          description={t("jobs.myApplications.emptyDescription")}
+          action={<ButtonLink href="/jobs">{t("jobs.myApplications.find")}</ButtonLink>}
         />
       ) : (
         <ul className="space-y-3">
@@ -64,35 +69,35 @@ export default async function MyApplicationsPage() {
                         {a.job.company} · {formatJobLocation(a.job)}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <Badge tone="accent">{JOB_TYPE_LABEL[a.job.type]}</Badge>
-                        <Badge tone={workModeTone(a.job)}>{workModeLabel(a.job)}</Badge>
+                        <Badge tone="accent">{t(`jobs.type.${a.job.type}`)}</Badge>
+                        <Badge tone={workModeTone(a.job)}>{t(`jobs.mode.${resolveWorkMode(a.job)}`)}</Badge>
                         {a.job.status === "closed" ? (
                           <Badge tone="neutral" dot>
-                            Closed
+                            {t("jobs.status.closed")}
                           </Badge>
                         ) : (
                           <Badge tone="success" dot>
-                            Open
+                            {t("jobs.status.open")}
                           </Badge>
                         )}
                       </div>
                     </>
                   ) : (
-                    <p className="font-medium text-ink-muted">This job opening has been removed.</p>
+                    <p className="font-medium text-ink-muted">{t("jobs.myApplications.removed")}</p>
                   )}
                   {a.coverLetter && <p className="mt-3 text-sm text-ink-muted">“{truncate(a.coverLetter, 220)}”</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
-                    <span title={formatDate(a.createdAt)}>Applied {relativeTime(a.createdAt)}</span>
+                    <span title={f.date(a.createdAt)}>{t("jobs.myApplications.applied", { time: f.relative(a.createdAt) })}</span>
                     {a.resumeUrl && (
                       <a href={a.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
                         <Icon.FileText className="size-3.5" />
-                        Resume
+                        {t("jobs.applications.resume")}
                       </a>
                     )}
                   </div>
                 </div>
                 <div className="sm:self-center">
-                  <WithdrawApplicationButton applicationId={a.id} jobTitle={a.job?.title ?? "this job"} />
+                  <WithdrawApplicationButton applicationId={a.id} jobTitle={a.job?.title ?? t("jobs.myApplications.thisJob")} />
                 </div>
               </div>
             </li>

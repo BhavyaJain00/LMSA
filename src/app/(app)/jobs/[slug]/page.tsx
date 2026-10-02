@@ -15,21 +15,28 @@ import { jobTrail } from "@/lib/seo/breadcrumbs";
 import { getJobJsonLd } from "@/lib/data/seo";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
-import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel, workModeTone } from "@/components/jobs/job-bits";
+import { CompanyLogo, formatJobLocation, workModeTone } from "@/components/jobs/job-bits";
+import { resolveWorkMode } from "@/components/jobs/work-mode";
 import { ApplyDialog } from "@/components/jobs/apply-dialog";
 import { JobStatusButton, WithdrawApplicationButton } from "@/components/jobs/job-actions";
-import { formatDate, pluralize, relativeTime } from "@/lib/utils";
+import { getFormatter, getLocale, getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/jobs/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [job, viewer, settings] = await Promise.all([getJobBySlug(slug), getCurrentUser(), getSettings()]);
-  if (!job) return notFoundMetadata("Job not found");
-  if (job.status === "closed" && !canManageJob(viewer, job) && !(await getUserApplication(viewer?.id, job.id))) return notFoundMetadata("Job not found");
+  const [job, viewer, settings, t, locale] = await Promise.all([getJobBySlug(slug), getCurrentUser(), getSettings(), getT("public"), getLocale()]);
+  if (!job) return notFoundMetadata(t("jobs.detail.notFound"));
+  if (job.status === "closed" && !canManageJob(viewer, job) && !(await getUserApplication(viewer?.id, job.id))) return notFoundMetadata(t("jobs.detail.notFound"));
   return pageMetadata(
     {
-      title: `${job.title} at ${job.company}`,
-      description: [job.description, `${job.company} is hiring: ${job.title}${job.location ? ` in ${job.location}` : ""}.`],
+      title: t("jobs.detail.metaTitle", { title: job.title, company: job.company }),
+      description: [
+        job.description,
+        job.location
+          ? t("jobs.detail.metaHiringIn", { company: job.company, title: job.title, location: job.location })
+          : t("jobs.detail.metaHiring", { company: job.company, title: job.title }),
+      ],
       path: jobPath(job.slug),
+      locale,
       generatedImage: true,
       // Closed openings stay reachable for applicants but leave the index (and Google job search).
       noindex: !isJobPublic(job) || !settings.features.jobs,
@@ -41,7 +48,7 @@ export async function generateMetadata(props: PageProps<"/jobs/[slug]">): Promis
 export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
   const { slug } = await props.params;
   await closeExpiredJobs();
-  const [settings, viewer, job] = await Promise.all([getSettings(), getCurrentUser(), getJobBySlug(slug)]);
+  const [settings, viewer, job, t, f] = await Promise.all([getSettings(), getCurrentUser(), getJobBySlug(slug), getT("public"), getFormatter()]);
   if (!settings.features.jobs || !job) notFound();
   if (!viewer && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/jobs/${slug}`)}`);
 
@@ -62,27 +69,27 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         {manager && job.applicantCount > 0 && (
           <ButtonLink href={`/jobs/${job.slug}/applications`} variant="subtle" leftIcon={<Icon.Users className="size-4" />}>
-            View Applications
+            {t("jobs.detail.viewApplications")}
           </ButtonLink>
         )}
         {manager && (
           <ButtonLink href={`/jobs/${job.slug}/edit`} variant="subtle" leftIcon={<Icon.Edit className="size-4" />}>
-            Edit
+            {t("jobs.detail.edit")}
           </ButtonLink>
         )}
         {manager && <JobStatusButton jobId={job.id} status={job.status} />}
         {website && (
           <ButtonLink href={website} variant="subtle" leftIcon={<Icon.ExternalLink className="size-4" />}>
-            Visit Website
+            {t("jobs.detail.website")}
           </ButtonLink>
         )}
         {!viewer ? (
           <ButtonLink href={`/login?next=${encodeURIComponent(`/jobs/${job.slug}`)}`} variant="subtle" leftIcon={<Icon.LogIn className="size-4" />}>
-            Login to apply
+            {t("jobs.detail.logInToApply")}
           </ButtonLink>
         ) : application ? (
           <Badge tone="success" size="md">
-            <Icon.Check className="size-4" /> You have applied
+            <Icon.Check className="size-4" /> {t("jobs.detail.applied")}
           </Badge>
         ) : job.status === "open" ? (
           <ApplyDialog jobId={job.id} jobTitle={job.title} company={job.company} />
@@ -93,12 +100,12 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
         {job.status === "closed" && (
           <p className="mb-5 flex items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm text-ink-muted">
             <Icon.Lock className="size-4 shrink-0" />
-            This job is closed and no longer accepting applications.
+            {t("jobs.detail.closed")}
           </p>
         )}
         <header className="flex items-start gap-4">
           {website ? (
-            <a href={website} target="_blank" rel="noopener noreferrer" aria-label={`${job.company} website`}>
+            <a href={website} target="_blank" rel="noopener noreferrer" aria-label={t("jobs.detail.companyWebsite", { company: job.company })}>
               <CompanyLogo company={job.company} logoUrl={job.companyLogoUrl} size="lg" />
             </a>
           ) : (
@@ -107,7 +114,7 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
           <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">{job.title}</h1>
             <p className="mt-1 text-sm font-medium text-ink-muted">
-              {job.company} - {formatJobLocation(job)}
+              {t("jobs.detail.companyLocation", { company: job.company, location: formatJobLocation(job) })}
             </p>
           </div>
         </header>
@@ -115,15 +122,15 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
         <div className="mt-5 flex flex-wrap gap-2">
           <Badge size="md">
             <Icon.Calendar className="size-4" />
-            {relativeTime(job.createdAt)}
+            {f.relative(job.createdAt)}
           </Badge>
           <Badge size="md" tone="accent">
             <Icon.ClipboardList className="size-4" />
-            {JOB_TYPE_LABEL[job.type]}
+            {t(`jobs.type.${job.type}`)}
           </Badge>
           <Badge size="md" tone={workModeTone(job)}>
             <Icon.Briefcase className="size-4" />
-            {workModeLabel(job)}
+            {t(`jobs.mode.${resolveWorkMode(job)}`)}
           </Badge>
           {job.salaryRange && (
             <Badge size="md">
@@ -134,7 +141,7 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
           {showApplicants && job.applicantCount > 0 && (
             <Badge size="md">
               <Icon.User className="size-4" />
-              {pluralize(job.applicantCount, "applicant")}
+              {t("jobs.applicantCount", { count: job.applicantCount })}
             </Badge>
           )}
         </div>
@@ -149,11 +156,15 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
 
         {job.poster && (
           <p className="mt-8 text-xs text-ink-muted">
-            Posted by{" "}
-            <Link href={`/user/${job.poster.username}`} className="font-medium text-ink hover:underline">
-              {job.poster.name}
-            </Link>{" "}
-            on {formatDate(job.createdAt)}
+            {t.rich("jobs.detail.postedBy", {
+              date: f.date(job.createdAt),
+              name: job.poster.name,
+              link: (chunks) => (
+                <Link href={`/user/${job.poster!.username}`} className="font-medium text-ink hover:underline">
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
         )}
       </article>
@@ -164,9 +175,9 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
             <div>
               <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
                 <Icon.CheckCircle className="size-5 text-success" />
-                Your application
+                {t("jobs.detail.yourApplication")}
               </h2>
-              <p className="mt-1 text-sm text-ink-muted">Submitted {formatDate(application.createdAt)}. The poster will reach out if you&apos;re a match.</p>
+              <p className="mt-1 text-sm text-ink-muted">{t("jobs.detail.submitted", { date: f.date(application.createdAt) })}</p>
             </div>
             <WithdrawApplicationButton applicationId={application.id} jobTitle={job.title} />
           </div>
@@ -174,12 +185,12 @@ export default async function JobDetailPage(props: PageProps<"/jobs/[slug]">) {
             {application.resumeUrl && (
               <a href={application.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
                 <Icon.FileText className="size-4" />
-                View resume
+                {t("jobs.detail.viewResume")}
               </a>
             )}
             <Link href="/jobs/applications" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
               <Icon.ClipboardList className="size-4" />
-              All my applications
+              {t("jobs.detail.allApplications")}
             </Link>
           </div>
           {application.coverLetter && <p className="mt-4 whitespace-pre-line rounded-lg bg-surface-1 p-3 text-sm text-ink">{application.coverLetter}</p>}

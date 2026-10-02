@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { confirmRazorpayMembershipAction, confirmRazorpayPaymentAction } from "@/lib/actions/payments";
 import type { CheckoutNext, RazorpayLaunchOptions } from "@/lib/payments/types";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
+import type { MessageKey } from "@/i18n/catalog";
+import type { Translator } from "@/i18n/translate";
 
 /**
  * Client side of checkout: follows the server's `CheckoutNext` instruction —
@@ -79,6 +82,7 @@ export type LaunchStatus = "idle" | "redirecting" | "paying" | "verifying";
 
 export function useCheckoutLauncher() {
   const toast = useToast();
+  const t = useT("account");
   const router = useRouter();
   const [status, setStatus] = useState<LaunchStatus>("idle");
   const settledRef = useRef(false);
@@ -114,7 +118,7 @@ export function useCheckoutLauncher() {
       try {
         Razorpay = await loadRazorpayScript();
       } catch (error) {
-        toast.error("Payment could not start", error instanceof Error ? error.message : undefined);
+        toast.error(t("global.checkout.couldNotStart"), error instanceof Error ? t("global.checkout.scriptFailed") : undefined);
         setStatus("idle");
         return;
       }
@@ -166,9 +170,9 @@ export function useCheckoutLauncher() {
                 navigate(res.data.redirectTo);
                 return;
               }
-              toast.error("We couldn't confirm the payment", res.error);
+              toast.error(t("global.checkout.confirmFailed"), res.error);
             } catch {
-              toast.error("We couldn't confirm the payment", "Your order is saved. Refresh the order page in a moment to see its status.");
+              toast.error(t("global.checkout.confirmFailed"), t("global.checkout.confirmFailedBody"));
             }
             navigate(`/billing/success/${encodeURIComponent(options.orderId)}`);
           })();
@@ -176,11 +180,11 @@ export function useCheckoutLauncher() {
       });
       rzp.on("payment.failed", (response) => {
         const description = response.error?.description;
-        toast.error("Payment failed", description ? `${description} You can try again or choose another method.` : "You can try again or choose another method.");
+        toast.error(t("global.checkout.failed"), description ? t("global.checkout.failedBody", { reason: description }) : t("global.checkout.failedBodyGeneric"));
       });
       rzp.open();
     },
-    [toast, navigate],
+    [toast, navigate, t],
   );
 
   const launch = useCallback(
@@ -199,14 +203,15 @@ export function useCheckoutLauncher() {
   return { launch, status, busy: status !== "idle", reset };
 }
 
-export function launchStatusLabel(status: LaunchStatus, gatewayName: string): string | null {
+/** What the checkout is doing, in the active language. `gatewayName` is a brand name ("Stripe") or null. */
+export function launchStatusLabel(status: LaunchStatus, gatewayName: string | null, t: Translator<MessageKey<"account">>): string | null {
   switch (status) {
     case "redirecting":
-      return `Redirecting to ${gatewayName}…`;
+      return gatewayName ? t("global.checkout.redirecting", { gateway: gatewayName }) : t("global.checkout.redirectingGeneric");
     case "paying":
-      return `Complete the payment in the ${gatewayName} window.`;
+      return gatewayName ? t("global.checkout.paying", { gateway: gatewayName }) : t("global.checkout.payingGeneric");
     case "verifying":
-      return "Confirming your payment…";
+      return t("global.checkout.verifying");
     default:
       return null;
   }

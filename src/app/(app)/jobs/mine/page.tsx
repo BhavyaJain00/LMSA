@@ -11,17 +11,21 @@ import { Tabs } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
-import { CompanyLogo, JOB_TYPE_LABEL, formatJobLocation, workModeLabel } from "@/components/jobs/job-bits";
+import { CompanyLogo, formatJobLocation } from "@/components/jobs/job-bits";
+import { resolveWorkMode } from "@/components/jobs/work-mode";
 import { JobRowActions } from "@/components/jobs/job-actions";
 import { SearchParamInput } from "@/components/jobs/search-param-input";
-import { formatDate } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
-export const metadata = { title: "My job posts" };
+export async function generateMetadata() {
+  const t = await getT("public");
+  return { title: t("jobs.mine.title") };
+}
 
 /** The jobs this member posted, open and closed, with their applicants (owner view). */
 export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
   const viewer = await requireUser("/jobs/mine");
-  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const [settings, sp, t, f] = await Promise.all([getSettings(), props.searchParams, getT("public"), getFormatter()]);
   if (!settings.features.jobs) notFound();
   await closeExpiredJobs();
 
@@ -41,27 +45,27 @@ export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
         breadcrumbs={
           <Breadcrumbs
             items={[
-              { label: "Jobs", href: "/jobs" },
-              { label: "My job posts" },
+              { label: t("jobs.meta.title"), href: "/jobs" },
+              { label: t("jobs.mine.title") },
             ]}
           />
         }
-        title="My job posts"
+        title={t("jobs.mine.title")}
         description={
           all.length
-            ? `${all.length} ${all.length === 1 ? "job" : "jobs"} posted, ${applicants} ${applicants === 1 ? "application" : "applications"} received. Openings close automatically after ${JOB_AUTO_CLOSE_DAYS} days without an update.`
-            : "Jobs you post appear here with their applications."
+            ? t("jobs.mine.summary", { jobs: all.length, applications: applicants, days: JOB_AUTO_CLOSE_DAYS })
+            : t("jobs.mine.description")
         }
         actions={
           <>
             {isModerator(viewer) && (
               <ButtonLink href="/admin/jobs" variant="outline" leftIcon={<Icon.Settings className="size-4" />}>
-                All job openings
+                {t("jobs.mine.allOpenings")}
               </ButtonLink>
             )}
             {canPost && (
               <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
-                Create
+                {t("catalog.create.button")}
               </ButtonLink>
             )}
           </>
@@ -71,12 +75,12 @@ export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
       {all.length === 0 ? (
         <EmptyState
           icon={<Icon.Briefcase />}
-          title="You haven't posted any jobs yet"
-          description="Hiring? Post an opening and members of the community can apply with their resume."
+          title={t("jobs.mine.emptyTitle")}
+          description={t("jobs.mine.emptyDescription")}
           action={
             canPost ? (
               <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
-                Post a job
+                {t("jobs.postJob")}
               </ButtonLink>
             ) : undefined
           }
@@ -86,33 +90,33 @@ export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <Tabs
               items={[
-                { label: "All", value: "all", count: all.length },
-                { label: "Open", value: "open", count: openCount },
-                { label: "Closed", value: "closed", count: all.length - openCount },
+                { label: t("jobs.mine.all"), value: "all", count: all.length },
+                { label: t("jobs.status.open"), value: "open", count: openCount },
+                { label: t("jobs.status.closed"), value: "closed", count: all.length - openCount },
               ]}
               param="status"
               variant="pills"
             />
             <div className="w-full sm:max-w-xs">
-              <SearchParamInput label="Search my jobs" placeholder="Search title, company or location" />
+              <SearchParamInput label={t("jobs.mine.search")} placeholder={t("jobs.mine.searchPlaceholder")} />
             </div>
           </div>
           <Table>
             <THead>
               <tr>
-                <TH>Job</TH>
-                <TH className="hidden md:table-cell">Type</TH>
-                <TH>Status</TH>
-                <TH className="hidden sm:table-cell">Applicants</TH>
-                <TH className="hidden lg:table-cell">Posted</TH>
+                <TH>{t("jobs.mine.job")}</TH>
+                <TH className="hidden md:table-cell">{t("jobs.form.type")}</TH>
+                <TH>{t("jobs.form.status")}</TH>
+                <TH className="hidden sm:table-cell">{t("jobs.mine.applicants")}</TH>
+                <TH className="hidden lg:table-cell">{t("jobs.mine.posted")}</TH>
                 <TH className="w-12">
-                  <span className="sr-only">Actions</span>
+                  <span className="sr-only">{t("jobs.applications.actions")}</span>
                 </TH>
               </tr>
             </THead>
             <TBody>
               {jobs.length === 0 ? (
-                <TableEmpty colSpan={6}>{search ? `No jobs match “${search}”.` : "No jobs match this filter."}</TableEmpty>
+                <TableEmpty colSpan={6}>{search ? t("jobs.mine.noMatchSearch", { search }) : t("jobs.mine.noMatchFilter")}</TableEmpty>
               ) : (
                 jobs.map((job) => (
                   <TR key={job.id}>
@@ -124,17 +128,17 @@ export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
                             {job.title}
                           </Link>
                           <p className="truncate text-xs text-ink-muted">
-                            {job.company} · {formatJobLocation(job)} · {workModeLabel(job)}
+                            {job.company} · {formatJobLocation(job)} · {t(`jobs.mode.${resolveWorkMode(job)}`)}
                           </p>
                           <p className="text-xs text-ink-muted sm:hidden">
                             <Link href={`/jobs/${job.slug}/applications`} className="text-accent hover:underline">
-                              {job.applicantCount} {job.applicantCount === 1 ? "applicant" : "applicants"}
+                              {t("jobs.applicantCount", { count: job.applicantCount })}
                             </Link>
                           </p>
                         </div>
                       </div>
                     </TD>
-                    <TD className="hidden text-ink-muted md:table-cell">{JOB_TYPE_LABEL[job.type]}</TD>
+                    <TD className="hidden text-ink-muted md:table-cell">{t(`jobs.type.${job.type}`)}</TD>
                     <TD>
                       <StatusBadge status={job.status} />
                     </TD>
@@ -143,8 +147,8 @@ export default async function MyJobPostsPage(props: PageProps<"/jobs/mine">) {
                         {job.applicantCount}
                       </Link>
                     </TD>
-                    <TD className="hidden whitespace-nowrap text-ink-muted lg:table-cell">{formatDate(job.createdAt)}</TD>
-                    <TD className="text-right">
+                    <TD className="hidden whitespace-nowrap text-ink-muted lg:table-cell">{f.date(job.createdAt)}</TD>
+                    <TD className="text-end">
                       <JobRowActions area="member" job={{ id: job.id, slug: job.slug, title: job.title, status: job.status, applicantCount: job.applicantCount }} />
                     </TD>
                   </TR>

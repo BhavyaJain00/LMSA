@@ -4,9 +4,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Input } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /** Debounced search box that writes `?search=` while keeping other query params. */
-export function SearchParamInput({ placeholder = "Search", label, param = "search" }: { placeholder?: string; label: string; param?: string }) {
+export function SearchParamInput({ placeholder, label, param = "search" }: { placeholder?: string; label: string; param?: string }) {
+  const common = useT("common");
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -32,7 +34,7 @@ export function SearchParamInput({ placeholder = "Search", label, param = "searc
     <Input
       type="search"
       aria-label={label}
-      placeholder={placeholder}
+      placeholder={placeholder ?? common("actions.search")}
       value={value}
       onChange={(e) => {
         const next = e.target.value;

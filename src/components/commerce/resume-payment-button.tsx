@@ -6,6 +6,7 @@ import { Button, type ButtonSize, type ButtonVariant } from "@/components/ui/but
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
+import { useT } from "@/i18n/client";
 
 const GATEWAY_NAME: Record<string, string> = { stripe: "Stripe", razorpay: "Razorpay" };
 
@@ -19,7 +20,7 @@ const GATEWAY_NAME: Record<string, string> = { stripe: "Stripe", razorpay: "Razo
 export function ResumePaymentButton({
   orderId,
   gateway,
-  label = "Complete payment",
+  label,
   variant = "primary",
   size = "md",
   className,
@@ -36,17 +37,18 @@ export function ResumePaymentButton({
   installment?: boolean;
 }) {
   const toast = useToast();
+  const t = useT("account");
   const launcher = useCheckoutLauncher();
   const [pending, startTransition] = useTransition();
   usePreloadRazorpay(gateway === "razorpay");
   const busy = pending || launcher.busy;
-  const statusLabel = showStatus ? launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] ?? "payment") : null;
+  const statusLabel = showStatus ? launchStatusLabel(launcher.status, GATEWAY_NAME[gateway] ?? null, t) : null;
 
   const resume = () => {
     startTransition(async () => {
       const res = installment ? await payInstallmentAction(orderId) : await resumeCheckoutAction(orderId);
       if (!res.ok) {
-        toast.error("Payment could not continue", res.error);
+        toast.error(t("global.checkout.couldNotContinue"), res.error);
         return;
       }
       if (res.message) toast.success(res.message);
@@ -57,7 +59,7 @@ export function ResumePaymentButton({
   return (
     <span className="inline-flex flex-col items-start gap-1">
       <Button variant={variant} size={size} className={className} loading={busy} onClick={resume} leftIcon={<Icon.CreditCard className="size-4" />}>
-        {label}
+        {label ?? t("global.checkout.completePayment")}
       </Button>
       {statusLabel && (
         <span className="text-xs text-ink-muted" role="status" aria-live="polite">

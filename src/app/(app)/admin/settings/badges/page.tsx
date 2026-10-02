@@ -5,10 +5,16 @@ import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { BadgesManager } from "@/components/admin/settings/badges-manager";
 import { BadgeAssignments } from "@/components/admin/settings/badge-assignments";
 import { toDateKey } from "@/lib/utils";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Badges" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.badges.metaTitle") };
+}
 
 export default async function BadgesSettingsPage(props: PageProps<"/admin/settings/badges">) {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/badges");
   const sp = await props.searchParams;
   const tab = sp.tab === "assignments" ? "assignments" : "badges";
@@ -44,14 +50,14 @@ export default async function BadgesSettingsPage(props: PageProps<"/admin/settin
   return (
     <>
       <SettingsPanelHeader
-        title="Badges"
-        description={db.settings.features.badges ? "Define badges and the rules that award them, or assign them by hand." : "Badges are currently turned off in Features — members won't see them until you enable the feature."}
+        title={t("pages.settings.badges.title")}
+        description={db.settings.features.badges ? t("pages.settings.badges.description") : t("pages.settings.badges.disabled")}
       />
       <Tabs
         className="mb-5"
         items={[
-          { label: "Badges", value: "badges", count: badges.length },
-          { label: "Assignments", value: "assignments", count: assignments.length },
+          { label: t("pages.settings.badges.tabs.badges"), value: "badges", count: badges.length },
+          { label: t("pages.settings.badges.tabs.assignments"), value: "assignments", count: assignments.length },
         ]}
       />
       {tab === "badges" ? (

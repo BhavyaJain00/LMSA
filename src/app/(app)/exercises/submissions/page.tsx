@@ -13,12 +13,17 @@ import { LinkRow } from "@/components/assessments/link-row";
 import { ExerciseStatusBadge } from "@/components/assessments/status-badges";
 import { RelativeTime } from "@/components/assessments/client-time";
 import { LANGUAGE_LABELS, param, parsePaging } from "@/components/assessments/shared";
+import { getT } from "@/i18n/server";
 
-export const metadata: Metadata = { title: "My exercise submissions" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("learning");
+  return { title: t("exercise.mine.metaTitle") };
+}
 
 export default async function MyExerciseSubmissionsPage(props: PageProps<"/exercises/submissions">) {
   const sp = await props.searchParams;
   const user = await requireUser("/exercises/submissions");
+  const t = await getT("learning");
   const exerciseId = param(sp.exercise);
   const status = param(sp.status);
   const { size, pages, limit } = parsePaging(sp.size, sp.pages);
@@ -30,28 +35,28 @@ export default async function MyExerciseSubmissionsPage(props: PageProps<"/exerc
   return (
     <div className="animate-fade-in">
       <PageHeader
-        breadcrumbs={<Breadcrumbs items={[{ label: "Programming Exercise Submissions" }]} />}
-        title="Submissions"
-        description="Your code submissions for programming exercises and their latest test results."
+        breadcrumbs={<Breadcrumbs items={[{ label: t("exercise.page.crumbSubmissions") }]} />}
+        title={t("exercise.mine.title")}
+        description={t("exercise.mine.description")}
         actions={
           canManageAssessments(user) ? (
             <ButtonLink href="/admin/exercises/submissions" variant="outline" leftIcon={<Icon.ClipboardList className="size-4" />}>
-              All learners&apos; submissions
+              {t("exercise.mine.allLearners")}
             </ButtonLink>
           ) : undefined
         }
       />
       <FilterBar
         filters={[
-          { param: "exercise", kind: "select", label: "Exercise", placeholder: "Filter by Exercise", options: exerciseOptions },
+          { param: "exercise", kind: "select", label: t("exercise.mine.exercise"), placeholder: t("exercise.mine.filterExercise"), options: exerciseOptions },
           {
             param: "status",
             kind: "select",
-            label: "Status",
-            placeholder: "Filter by Status",
+            label: t("exercise.mine.status"),
+            placeholder: t("exercise.mine.filterStatus"),
             options: [
-              { value: "passed", label: "Passed" },
-              { value: "failed", label: "Failed" },
+              { value: "passed", label: t("global.assess.passed") },
+              { value: "failed", label: t("global.assess.failed") },
             ],
           },
         ]}
@@ -59,24 +64,20 @@ export default async function MyExerciseSubmissionsPage(props: PageProps<"/exerc
       {rows.length === 0 ? (
         <EmptyState
           icon={<Icon.Code />}
-          title={filtered ? "No submissions match these filters" : "No Programming Exercise Submissions Found"}
-          description={
-            filtered
-              ? "Try clearing the filters to see all of your submissions."
-              : "There are no programming exercise submissions currently. Keep an eye out, fresh learning experiences are on the way!"
-          }
-          action={!filtered ? <ButtonLink href="/courses">Browse courses</ButtonLink> : undefined}
+          title={filtered ? t("exercise.mine.noMatchTitle") : t("exercise.mine.emptyTitle")}
+          description={filtered ? t("exercise.mine.noMatchBody") : t("exercise.mine.emptyBody")}
+          action={!filtered ? <ButtonLink href="/courses">{t("quiz.page.browseCourses")}</ButtonLink> : undefined}
         />
       ) : (
         <>
           <Table>
             <THead>
               <tr>
-                <TH>Exercise</TH>
-                <TH className="hidden sm:table-cell">Language</TH>
-                <TH>Status</TH>
-                <TH className="hidden sm:table-cell">Tests</TH>
-                <TH className="text-right">Modified</TH>
+                <TH>{t("exercise.mine.exercise")}</TH>
+                <TH className="hidden sm:table-cell">{t("exercise.mine.language")}</TH>
+                <TH>{t("exercise.mine.status")}</TH>
+                <TH className="hidden sm:table-cell">{t("exercise.mine.tests")}</TH>
+                <TH className="text-end">{t("exercise.mine.modified")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -94,14 +95,14 @@ export default async function MyExerciseSubmissionsPage(props: PageProps<"/exerc
                   <TD className="hidden text-ink-muted sm:table-cell">
                     {row.passedCount}/{row.totalCount}
                   </TD>
-                  <TD className="text-right text-xs text-ink-muted">
+                  <TD className="text-end text-xs text-ink-muted">
                     <RelativeTime iso={row.submittedAt} />
                   </TD>
                 </LinkRow>
               ))}
             </TBody>
           </Table>
-          <ListFooter shown={shown.length} total={rows.length} size={size} pages={pages} noun="submissions" />
+          <ListFooter shown={shown.length} total={rows.length} size={size} pages={pages} />
         </>
       )}
     </div>

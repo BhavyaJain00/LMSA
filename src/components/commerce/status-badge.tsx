@@ -1,5 +1,9 @@
+"use client";
+
 import type { PaymentStatus } from "@/lib/types";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { useT } from "@/i18n/client";
+import { paymentStatusKey } from "./labels";
 
 const TONES: Record<PaymentStatus, BadgeTone> = {
   paid: "success",
@@ -11,7 +15,7 @@ const TONES: Record<PaymentStatus, BadgeTone> = {
 /**
  * Wording for an order status. Failed orders with a gateway reason read
  * "Payment failed" (otherwise "Cancelled"); partial refunds are called out.
- * Mirrors `paymentStatusLabel` in `src/lib/data/commerce.ts`.
+ * Mirrors `paymentStatusLabel` in `src/lib/data/commerce.ts`. English, for exports and logs; the badge shows the translated label.
  */
 export function paymentStatusText(p: { status: PaymentStatus; failureReason?: string; refundedAmount?: number; amount?: number }, audience: "admin" | "learner" = "admin"): string {
   if (p.status === "failed") return p.failureReason ? "Payment failed" : "Cancelled";
@@ -22,7 +26,7 @@ export function paymentStatusText(p: { status: PaymentStatus; failureReason?: st
   return p.refundedAmount ? "Paid · part refunded" : "Paid";
 }
 
-/** Status pill for an order (server- and client-safe). */
+/** Status pill for an order, in the viewer's language (a client component, renders anywhere). */
 export function PaymentStatusBadge({
   status,
   failureReason,
@@ -36,10 +40,11 @@ export function PaymentStatusBadge({
   amount?: number;
   audience?: "admin" | "learner";
 }) {
+  const t = useT("account");
   const tone: BadgeTone = status === "failed" && failureReason ? "danger" : TONES[status];
   return (
     <Badge tone={tone} dot>
-      {paymentStatusText({ status, failureReason, refundedAmount, amount }, audience)}
+      {t(paymentStatusKey({ status, failureReason, refundedAmount, amount }, audience))}
     </Badge>
   );
 }

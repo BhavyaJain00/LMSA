@@ -18,22 +18,25 @@ import { Avatar } from "@/components/ui/avatar";
 import { Tag } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
-import { formatNumber, pluralize } from "@/lib/utils";
+import { getFormatter, getLocale, getT } from "@/i18n/server";
 import { MessageUserButton } from "@/components/messages/message-button";
 
 export async function generateMetadata(props: PageProps<"/instructors/[username]">): Promise<Metadata> {
-  const [{ username }, settings] = await Promise.all([props.params, getSettings()]);
+  const [{ username }, settings, t, locale] = await Promise.all([props.params, getSettings(), getT("public"), getLocale()]);
   const profile = settings.features.courses ? await getInstructorProfile(decodeSegment(username) ?? "") : null;
-  if (!profile) return notFoundMetadata("Instructor not found");
+  if (!profile) return notFoundMetadata(t("instructors.profile.notFound"));
   const { instructor, courses } = profile;
   return pageMetadata(
     {
-      title: instructor.headline ? `${instructor.name} — ${instructor.headline}` : `${instructor.name}, instructor`,
+      title: instructor.headline ? t("instructors.profile.metaTitleHeadline", { name: instructor.name, headline: instructor.headline }) : t("instructors.profile.metaTitle", { name: instructor.name }),
       description: [
         instructor.bio,
-        `${instructor.name} teaches ${pluralize(courses.length, "course")} on ${settings.brand.name}${courses.length ? `, including ${courses.slice(0, 3).map((c) => c.title).join(", ")}` : ""}.`,
+        courses.length
+          ? t("instructors.profile.metaTeachesIncluding", { name: instructor.name, count: courses.length, brand: settings.brand.name, titles: courses.slice(0, 3).map((c) => c.title).join(", ") })
+          : t("instructors.profile.metaTeaches", { name: instructor.name, count: courses.length, brand: settings.brand.name }),
       ],
       path: instructorPath(instructor.username),
+      locale,
       type: "profile",
       // The generated share card (./opengraph-image.tsx) shows the name, headline and numbers.
       generatedImage: true,
@@ -68,6 +71,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
   if (!profile) notFound();
 
   const { instructor, socials, courses, posts, colleagues, jsonLd } = profile;
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const firstName = instructor.name.split(/\s+/)[0] ?? instructor.name;
 
   return (
@@ -78,7 +82,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start">
         <Avatar name={instructor.name} src={instructor.avatarUrl} size="2xl" className="shrink-0" />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold uppercase tracking-wider text-ink-faint">Instructor</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{t("instructors.profile.eyebrow")}</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{instructor.name}</h1>
           {instructor.headline && <p className="mt-2 text-base text-ink-muted sm:text-lg">{instructor.headline}</p>}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-muted">
@@ -92,45 +96,50 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <ButtonLink href="#courses" size="sm">
-              See {firstName}&apos;s courses
+              {t("instructors.profile.seeCourses", { name: firstName })}
             </ButtonLink>
             <ButtonLink href={profilePath(instructor.username)} size="sm" variant="outline">
-              Full profile
+              {t("instructors.profile.fullProfile")}
             </ButtonLink>
-            <MessageUserButton userId={instructor.id} label="Message instructor" />
+            <MessageUserButton userId={instructor.id} label={t("course.instructors.message")} />
           </div>
         </div>
       </header>
 
       <dl className="mt-8 grid gap-3 sm:grid-cols-3">
-        <Stat icon={<Icon.BookOpen />} value={formatNumber(instructor.courseCount)} label={instructor.courseCount === 1 ? "Course" : "Courses"} />
-        <Stat icon={<Icon.Users />} value={formatNumber(instructor.learnerCount)} label={instructor.learnerCount === 1 ? "Learner" : "Learners"} />
+        <Stat icon={<Icon.BookOpen />} value={f.count(instructor.courseCount)} label={t("home.stats.courses", { count: instructor.courseCount })} />
+        <Stat icon={<Icon.Users />} value={f.count(instructor.learnerCount)} label={t("home.stats.learners", { count: instructor.learnerCount })} />
         {instructor.averageRating !== null ? (
-          <Stat icon={<Icon.StarFilled />} value={instructor.averageRating.toFixed(1)} label={`Average rating (${pluralize(instructor.reviewCount, "review")})`} />
+          <Stat
+            icon={<Icon.StarFilled />}
+            value={f.number(instructor.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+            label={t("instructors.profile.averageRating", { count: instructor.reviewCount })}
+          />
         ) : (
-          <Stat icon={<Icon.Tag />} value={formatNumber(instructor.categories.length)} label={instructor.categories.length === 1 ? "Subject area" : "Subject areas"} />
+          <Stat icon={<Icon.Tag />} value={f.count(instructor.categories.length)} label={t("instructors.profile.subjectAreas", { count: instructor.categories.length })} />
         )}
       </dl>
 
       <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <section aria-labelledby="instructor-about-heading" className="min-w-0">
           <h2 id="instructor-about-heading" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-            About {firstName}
+            {t("instructors.profile.about", { name: firstName })}
           </h2>
           {instructor.bio ? (
             <Markdown content={instructor.bio} />
           ) : (
             <p className="text-base leading-7 text-ink-muted">
-              {instructor.name} teaches {pluralize(courses.length, "course")}
-              {instructor.categories.length > 0 && <> in {instructor.categories.slice(0, 3).join(", ")}</>}. Browse the courses below to see what you can learn.
+              {instructor.categories.length > 0
+                ? t("instructors.profile.bioFallbackIn", { name: instructor.name, count: courses.length, subjects: f.list(instructor.categories.slice(0, 3)) })
+                : t("instructors.profile.bioFallback", { name: instructor.name, count: courses.length })}
             </p>
           )}
         </section>
         {(instructor.skills.length > 0 || instructor.categories.length > 0) && (
-          <aside aria-label={`What ${instructor.name} knows`} className="min-w-0 space-y-6">
+          <aside aria-label={t("instructors.profile.knows", { name: instructor.name })} className="min-w-0 space-y-6">
             {instructor.skills.length > 0 && (
               <div>
-                <h2 className="mb-2 text-sm font-semibold text-ink">Skills</h2>
+                <h2 className="mb-2 text-sm font-semibold text-ink">{t("instructors.profile.skills")}</h2>
                 <ul className="flex flex-wrap gap-2">
                   {instructor.skills.map((skill) => (
                     <li key={skill}>
@@ -142,7 +151,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
             )}
             {instructor.categories.length > 0 && (
               <div>
-                <h2 className="mb-2 text-sm font-semibold text-ink">Teaches</h2>
+                <h2 className="mb-2 text-sm font-semibold text-ink">{t("instructors.profile.teaches")}</h2>
                 <ul className="space-y-1 text-sm text-ink-muted">
                   {instructor.categories.map((name) => (
                     <li key={name} className="flex items-center gap-2">
@@ -159,7 +168,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
 
       <section id="courses" aria-labelledby="instructor-courses-heading" className="mt-12 scroll-mt-20">
         <h2 id="instructor-courses-heading" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-          Courses by {instructor.name}
+          {t("instructors.profile.coursesBy", { name: instructor.name })}
         </h2>
         <CourseGrid courses={courses} headingLevel="h3" />
       </section>
@@ -167,7 +176,7 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
       {posts.length > 0 && (
         <section aria-labelledby="instructor-articles-heading" className="mt-12">
           <h2 id="instructor-articles-heading" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-            Articles by {firstName}
+            {t("instructors.profile.articlesBy", { name: firstName })}
           </h2>
           <ArticleTeasers posts={posts} />
         </section>
@@ -177,10 +186,10 @@ export default async function InstructorPage(props: PageProps<"/instructors/[use
         <section aria-labelledby="instructor-more-heading" className="mt-12">
           <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h2 id="instructor-more-heading" className="text-xl font-semibold tracking-tight text-ink">
-              More instructors
+              {t("instructors.profile.more")}
             </h2>
             <Link href="/instructors" className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-              All instructors
+              {t("instructors.profile.all")}
               <Icon.ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
             </Link>
           </div>

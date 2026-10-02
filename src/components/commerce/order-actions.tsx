@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
+import { useT } from "@/i18n/client";
 
 /** Opens the browser's print dialog ("Save as PDF" is offered there). */
-export function PrintButton({ label = "Print / Save as PDF", variant = "outline" }: { label?: string; variant?: "outline" | "primary" }) {
+export function PrintButton({ label, variant = "outline" }: { label?: string; variant?: "outline" | "primary" }) {
+  const t = useT("account");
   return (
     <Button variant={variant} size="sm" leftIcon={<Icon.Download className="size-4" />} onClick={() => window.print()} className="print:hidden">
-      {label}
+      {label ?? t("commerce.order.print")}
     </Button>
   );
 }
@@ -19,11 +21,12 @@ export function PrintButton({ label = "Print / Save as PDF", variant = "outline"
 /** Lets the buyer cancel an order that is still awaiting payment. */
 export function CancelOrderButton({ orderId, online = false, gateway }: { orderId: string; online?: boolean; gateway?: string }) {
   const [open, setOpen] = useState(false);
+  const t = useT("account");
   const { submit, pending } = useFormAction(cancelOrderAction, { onSuccess: () => setOpen(false) });
   return (
     <>
       <Button variant="ghost" size="sm" className="text-danger print:hidden" onClick={() => setOpen(true)}>
-        Cancel order
+        {t("commerce.order.cancel")}
       </Button>
       <ConfirmDialog
         open={open}
@@ -35,16 +38,10 @@ export function CancelOrderButton({ orderId, online = false, gateway }: { orderI
         }}
         loading={pending}
         destructive
-        title="Cancel this order?"
-        description={
-          !online
-            ? "Only cancel if you haven't paid yet. You can place a new order at any time."
-            : gateway === "razorpay"
-              ? "Close any Razorpay payment window you still have open: Razorpay can't cancel it for us. If a payment still goes through, it is matched to this order. You can place a new order at any time."
-              : "The open payment page is closed so nothing can be charged for this order. You can place a new order at any time."
-        }
-        confirmLabel="Cancel order"
-        cancelLabel="Keep order"
+        title={t("commerce.order.cancelTitle")}
+        description={!online ? t("commerce.order.cancelManual") : gateway === "razorpay" ? t("commerce.order.cancelRazorpay") : t("commerce.order.cancelStripe")}
+        confirmLabel={t("commerce.order.cancel")}
+        cancelLabel={t("commerce.order.keep")}
       />
     </>
   );

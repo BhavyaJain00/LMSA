@@ -5,13 +5,17 @@ import { canPostJobs } from "@/lib/data/jobs";
 import { PageHeader } from "@/components/ui/card";
 import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { JobForm } from "@/components/jobs/job-form";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "New Job" };
+export async function generateMetadata() {
+  const t = await getT("public");
+  return { title: t("jobs.new.title") };
+}
 
 /** Any signed-in member can post a job while the board is on (Frappe: /job-opening/new/edit). */
 export default async function MemberNewJobPage() {
   const user = await requireUser("/jobs/new");
-  const settings = await getSettings();
+  const [settings, t] = await Promise.all([getSettings(), getT("public")]);
   if (!settings.features.jobs) notFound();
   if (!canPostJobs(user, settings.features.jobs)) redirect("/forbidden");
 
@@ -21,13 +25,13 @@ export default async function MemberNewJobPage() {
         breadcrumbs={
           <Breadcrumbs
             items={[
-              { label: "Jobs", href: "/jobs" },
-              { label: "New Job" },
+              { label: t("jobs.meta.title"), href: "/jobs" },
+              { label: t("jobs.new.title") },
             ]}
           />
         }
-        title="New Job"
-        description="Share an opening with the community. Members apply with their resume and you review applications from My job posts."
+        title={t("jobs.new.title")}
+        description={t("jobs.new.description")}
       />
       <JobForm job={null} cancelHref="/jobs" />
     </div>

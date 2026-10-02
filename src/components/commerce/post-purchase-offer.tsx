@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
+import { useT } from "@/i18n/client";
 
 export interface PostPurchaseOfferView {
   orderId: string;
@@ -32,19 +33,20 @@ const GATEWAY_NAME: Record<string, string> = { stripe: "Stripe", razorpay: "Razo
  */
 export function PostPurchaseOffer({ offer }: { offer: PostPurchaseOfferView }) {
   const toast = useToast();
+  const t = useT("account");
   const launcher = useCheckoutLauncher();
   const [pending, startTransition] = useTransition();
   const [hidden, setHidden] = useState(false);
   usePreloadRazorpay(offer.gateway === "razorpay");
   if (hidden) return null;
   const busy = pending || launcher.busy;
-  const status = launchStatusLabel(launcher.status, GATEWAY_NAME[offer.gateway] ?? "payment");
+  const status = launchStatusLabel(launcher.status, GATEWAY_NAME[offer.gateway] ?? null, t);
 
   const accept = () =>
     startTransition(async () => {
       const res = await acceptUpsellAction(offer.orderId);
       if (!res.ok) {
-        toast.error("The offer could not be added", res.error);
+        toast.error(t("commerce.offer.addFailed"), res.error);
         return;
       }
       if (res.message) toast.success(res.message);
@@ -67,11 +69,11 @@ export function PostPurchaseOffer({ offer }: { offer: PostPurchaseOfferView }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="accent" size="sm">
-              Just for you
+              {t("commerce.offer.justForYou")}
             </Badge>
             {offer.discountPercent > 0 && (
               <Badge tone="success" size="sm">
-                {offer.discountPercent}% off
+                {t("commerce.offer.percentOff", { percent: offer.discountPercent })}
               </Badge>
             )}
           </div>
@@ -88,17 +90,17 @@ export function PostPurchaseOffer({ offer }: { offer: PostPurchaseOfferView }) {
             <span className="text-2xl font-semibold tabular-nums text-ink">{offer.priceLabel}</span>
             {offer.listPriceLabel && (
               <span className="text-sm tabular-nums text-ink-muted line-through">
-                <span className="sr-only">Usually </span>
+                <span className="sr-only">{t("commerce.offer.usually")} </span>
                 {offer.listPriceLabel}
               </span>
             )}
           </p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button onClick={accept} loading={busy} leftIcon={<Icon.Plus className="size-4" />}>
-              Yes, add it · {offer.priceLabel}
+              {t("commerce.offer.accept", { price: offer.priceLabel })}
             </Button>
             <Button variant="ghost" onClick={() => setHidden(true)} disabled={busy}>
-              No thanks
+              {t("commerce.offer.noThanks")}
             </Button>
           </div>
           {status ? (
@@ -106,7 +108,7 @@ export function PostPurchaseOffer({ offer }: { offer: PostPurchaseOfferView }) {
               {status}
             </p>
           ) : (
-            <p className="mt-2 text-xs text-ink-muted">Uses the billing details of this order. This price is only offered here.</p>
+            <p className="mt-2 text-xs text-ink-muted">{t("commerce.offer.note")}</p>
           )}
         </div>
       </div>

@@ -2,12 +2,14 @@ import Link from "next/link";
 import type { JobOpening, JobType } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
-import { cn, initials, pluralize, relativeTime } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import { jobTypes } from "@/lib/config";
 import { WORK_MODE_LABEL, formatJobLocation, resolveWorkMode } from "./work-mode";
+import { getFormatter, getT } from "@/i18n/server";
 
 export const JOB_TYPE_LABEL: Record<JobType, string> = Object.fromEntries(jobTypes.map((t) => [t.value, t.label])) as Record<JobType, string>;
 
+/** English work mode label (admin lists); the public pages use `jobs.mode.*` messages. */
 export function workModeLabel(job: Pick<JobOpening, "remote" | "workMode">): string {
   return WORK_MODE_LABEL[resolveWorkMode(job)];
 }
@@ -23,10 +25,11 @@ export { formatJobLocation };
 const LOGO_SIZES = { sm: "size-10 text-sm rounded-lg", md: "size-12 text-base rounded-xl", lg: "size-16 text-lg rounded-2xl" } as const;
 
 /** Company logo, or the company's initials on a neutral tile. */
-export function CompanyLogo({ company, logoUrl, size = "md", className }: { company: string; logoUrl?: string; size?: keyof typeof LOGO_SIZES; className?: string }) {
+export async function CompanyLogo({ company, logoUrl, size = "md", className }: { company: string; logoUrl?: string; size?: keyof typeof LOGO_SIZES; className?: string }) {
   if (logoUrl) {
+    const t = await getT("public");
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={logoUrl} alt={`${company} logo`} className={cn("shrink-0 border border-border bg-surface-1 object-contain p-1", LOGO_SIZES[size], className)} />;
+    return <img src={logoUrl} alt={t("jobs.logoAlt", { company })} className={cn("shrink-0 border border-border bg-surface-1 object-contain p-1", LOGO_SIZES[size], className)} />;
   }
   return (
     <span className={cn("inline-flex shrink-0 items-center justify-center bg-accent/10 font-semibold text-accent", LOGO_SIZES[size], className)} aria-hidden="true">
@@ -40,7 +43,8 @@ export interface JobCardData extends Pick<JobOpening, "slug" | "title" | "compan
 }
 
 /** Job board card (Frappe: JobCard). Whole card is a link to the job. */
-export function JobCard({ job, showApplicants }: { job: JobCardData; showApplicants: boolean }) {
+export async function JobCard({ job, showApplicants }: { job: JobCardData; showApplicants: boolean }) {
+  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
     <Link
       href={`/jobs/${job.slug}`}
@@ -67,15 +71,15 @@ export function JobCard({ job, showApplicants }: { job: JobCardData; showApplica
         {showApplicants && job.applicantCount > 0 && (
           <p className="flex items-center gap-1.5">
             <Icon.User className="size-4 shrink-0 text-ink-faint" />
-            {pluralize(job.applicantCount, "applicant")}
+            {t("jobs.applicantCount", { count: job.applicantCount })}
           </p>
         )}
       </div>
       <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-4">
-        <Badge tone="accent">{JOB_TYPE_LABEL[job.type]}</Badge>
-        <Badge tone={workModeTone(job)}>{workModeLabel(job)}</Badge>
-        {job.status === "closed" && <Badge tone="danger">Closed</Badge>}
-        <span className="ml-auto text-xs text-ink-faint">{relativeTime(job.createdAt)}</span>
+        <Badge tone="accent">{t(`jobs.type.${job.type}`)}</Badge>
+        <Badge tone={workModeTone(job)}>{t(`jobs.mode.${resolveWorkMode(job)}`)}</Badge>
+        {job.status === "closed" && <Badge tone="danger">{t("jobs.status.closed")}</Badge>}
+        <span className="ms-auto text-xs text-ink-faint">{f.relative(job.createdAt)}</span>
       </div>
     </Link>
   );

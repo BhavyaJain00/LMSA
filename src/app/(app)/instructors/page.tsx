@@ -15,7 +15,7 @@ import { ButtonLink, buttonClasses } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/skeleton";
-import { pluralize } from "@/lib/utils";
+import { getLocale, getT } from "@/i18n/server";
 
 const PATH = "/instructors";
 
@@ -24,17 +24,16 @@ function searchTerm(value: string | string[] | undefined): string {
 }
 
 export async function generateMetadata(props: PageProps<"/instructors">): Promise<Metadata> {
-  const [sp, settings] = await Promise.all([props.searchParams, getSettings()]);
+  const [sp, settings, t, locale] = await Promise.all([props.searchParams, getSettings(), getT("public"), getLocale()]);
   const q = searchTerm(sp.q);
   const instructors = settings.features.courses ? await getInstructorDirectory() : [];
   const { noindex } = listingIndexing({ search: q, page: parsePageParam(sp.page) });
   return pageMetadata(
     {
-      title: q ? `Instructors matching “${q}”` : "Instructors",
-      description: [
-        `Meet the ${instructors.length > 1 ? `${instructors.length} ` : ""}instructors behind ${settings.brand.name}: their background, the courses they teach and what learners say about them.`,
-      ],
+      title: q ? t("instructors.meta.searchTitle", { search: q }) : t("instructors.title"),
+      description: [instructors.length > 1 ? t("instructors.meta.descriptionCount", { count: instructors.length, brand: settings.brand.name }) : t("instructors.meta.description", { brand: settings.brand.name })],
       path: PATH,
+      locale,
       noindex: noindex || instructors.length === 0 || !catalogIsPublic(settings),
       follow: true,
     },
@@ -43,7 +42,7 @@ export async function generateMetadata(props: PageProps<"/instructors">): Promis
 }
 
 export default async function InstructorsPage(props: PageProps<"/instructors">) {
-  const sp = await props.searchParams;
+  const [sp, t, common] = await Promise.all([props.searchParams, getT("public"), getT("common")]);
   const { settings } = await requireCatalogAccess(PATH);
   const q = searchTerm(sp.q);
   const instructors = await getInstructorDirectory(q);
@@ -52,46 +51,46 @@ export default async function InstructorsPage(props: PageProps<"/instructors">) 
 
   return (
     <div className="animate-fade-in pb-6">
-      <Breadcrumbs items={sectionTrail("Instructors")} />
+      <Breadcrumbs items={sectionTrail(t("instructors.title"))} />
       {canonicalView && paged.items.length > 0 && (
         <JsonLd data={itemListJsonLd("Instructors", paged.items.map((i) => ({ name: i.name, path: instructorPath(i.username), image: i.avatarUrl })), { origin: siteOrigin() })} />
       )}
 
       <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Instructors</h1>
-          <p className="mt-3 max-w-2xl text-base leading-7 text-ink-muted">The people who design and teach the courses on {settings.brand.name}. Open a profile to see their background and everything they teach.</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{t("instructors.title")}</h1>
+          <p className="mt-3 max-w-2xl text-base leading-7 text-ink-muted">{t("instructors.intro", { brand: settings.brand.name })}</p>
         </div>
         <form action={PATH} method="get" role="search" className="flex w-full gap-2 lg:w-auto">
-          <Input type="search" name="q" defaultValue={q} placeholder="Search by name, skill or subject" aria-label="Search instructors" leftAddon={<Icon.Search className="size-4" />} className="lg:w-72" />
+          <Input type="search" name="q" defaultValue={q} placeholder={t("instructors.searchPlaceholder")} aria-label={t("instructors.search")} leftAddon={<Icon.Search className="size-4" />} className="lg:w-72" />
           <button type="submit" className={buttonClasses({ variant: "outline" })}>
-            Search
+            {common("actions.search")}
           </button>
         </form>
       </header>
 
       <p className="mb-4 text-sm text-ink-muted" role="status">
-        {instructors.length === 0 ? "No instructors found" : q ? `${pluralize(instructors.length, "instructor")} matching “${q}”` : pluralize(instructors.length, "instructor")}
+        {instructors.length === 0 ? t("instructors.noneFound") : q ? t("instructors.countMatching", { count: instructors.length, search: q }) : t("landing.instructorCount", { count: instructors.length })}
       </p>
 
       {instructors.length === 0 ? (
         q ? (
           <EmptyState
             icon={<Icon.Search />}
-            title="No instructors match your search"
-            description="Try a name, a skill or a subject such as “design”."
+            title={t("instructors.noMatchTitle")}
+            description={t("instructors.noMatchDescription")}
             action={
               <ButtonLink href={PATH} variant="outline">
-                Show all instructors
+                {t("instructors.showAll")}
               </ButtonLink>
             }
           />
         ) : (
           <EmptyState
             icon={<Icon.Presentation />}
-            title="No instructors yet"
-            description="Instructors are listed here as soon as their first course is published."
-            action={<ButtonLink href="/courses">Browse courses</ButtonLink>}
+            title={t("instructors.emptyTitle")}
+            description={t("instructors.emptyDescription")}
+            action={<ButtonLink href="/courses">{t("catalog.browseCourses")}</ButtonLink>}
           />
         )
       ) : (
@@ -103,7 +102,7 @@ export default async function InstructorsPage(props: PageProps<"/instructors">) 
               </li>
             ))}
           </ul>
-          <PageLinks className="mt-6" page={paged.page} pageCount={paged.pages} hrefFor={(page) => landingHref(PATH, { q, page })} label="Instructor pages" />
+          <PageLinks className="mt-6" page={paged.page} pageCount={paged.pages} hrefFor={(page) => landingHref(PATH, { q, page })} label={t("instructors.pages")} />
         </>
       )}
     </div>

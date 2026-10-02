@@ -8,8 +8,13 @@ import { SettingsPanelHeader, SettingsSection } from "@/components/admin/setting
 import { PwaSettingsForm } from "@/components/admin/settings/pwa-settings-form";
 import { PwaDiagnostics } from "@/components/pwa/pwa-diagnostics";
 import { cn } from "@/lib/utils";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Installable app settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.pwa.metaTitle") };
+}
 
 type CheckState = "ok" | "warn" | "info";
 
@@ -43,6 +48,7 @@ function Check({ state, title, children }: { state: CheckState; title: string; c
 }
 
 export default async function PwaSettingsPage() {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/pwa");
   const [settings, baseUrl] = await Promise.all([getSettings(), getPublicBaseUrl()]);
   const { pwa, brand } = settings;
@@ -52,70 +58,77 @@ export default async function PwaSettingsPage() {
   return (
     <>
       <SettingsPanelHeader
-        title="Installable app"
-        description="Let members install the platform like an app and keep a helpful screen on hand when their connection drops."
+        title={t("pages.settings.pwa.title")}
+        description={t("pages.settings.pwa.description")}
         actions={
           <ButtonLink href="/offline" target="_blank" variant="outline" size="sm" leftIcon={<Icon.ExternalLink className="size-4" />}>
-            Preview offline page
+            {t("pages.settings.pwa.previewOffline")}
           </ButtonLink>
         }
       />
       <PwaSettingsForm initial={pwa} />
 
       <div className="mt-6 space-y-6">
-        <SettingsSection title="Readiness" description="What browsers need before they offer to install the app.">
+        <SettingsSection title={t("pages.settings.pwa.readiness.title")} description={t("pages.settings.pwa.readiness.description")}>
           <ul className="divide-y divide-border">
-            <Check state={secure ? "ok" : "warn"} title={secure ? "Served securely" : "HTTPS required"}>
+            <Check state={secure ? "ok" : "warn"} title={secure ? t("pages.settings.pwa.readiness.secure") : t("pages.settings.pwa.readiness.httpsRequired")}>
               {secure ? (
-                <>
-                  Service workers run on <span className="font-mono text-ink">{new URL(baseUrl).host}</span>.
-                </>
+                t.rich("pages.settings.pwa.readiness.secureDetail", {
+                  host: (
+                    <span dir="ltr" className="font-mono text-ink">
+                      {new URL(baseUrl).host}
+                    </span>
+                  ),
+                })
               ) : (
-                <>
-                  Browsers only allow service workers on HTTPS (or localhost). Serve the site over HTTPS and set <span className="font-mono">APP_URL</span>{" "}
-                  to its https address.
-                </>
+                t.rich("pages.settings.pwa.readiness.httpsDetail", { code: (chunks) => <span className="font-mono">{chunks}</span> })
               )}
             </Check>
-            <Check state={production ? "ok" : "info"} title={production ? "Production build" : "Development build"}>
+            <Check state={production ? "ok" : "info"} title={production ? t("pages.settings.pwa.readiness.production") : t("pages.settings.pwa.readiness.development")}>
               {production
-                ? "The service worker registers automatically for every visitor while the app is turned on."
-                : "The service worker only registers in production builds (next build, then next start), so development changes are never cached."}
+                ? t("pages.settings.pwa.readiness.productionDetail")
+                : t("pages.settings.pwa.readiness.developmentDetail")}
             </Check>
-            <Check state={pwa.enabled ? "ok" : "info"} title="Web app manifest">
+            <Check state={pwa.enabled ? "ok" : "info"} title={t("pages.settings.pwa.readiness.manifest")}>
               <a href="/manifest.webmanifest" target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">
                 /manifest.webmanifest
               </a>{" "}
-              {pwa.enabled ? "tells browsers the app's name, colors and icons." : "is served in browser mode while the app is off, so browsers don't offer installation."}
+              {pwa.enabled ? t("pages.settings.pwa.readiness.manifestOn") : t("pages.settings.pwa.readiness.manifestOff")}
             </Check>
-            <Check state="ok" title="App icons">
+            <Check state="ok" title={t("pages.settings.pwa.readiness.icons")}>
               <div className="mt-1.5 flex items-center gap-3">
                 {/* eslint-disable-next-line @next/next/no-img-element -- static public SVG icons */}
-                <img src="/images/icon-192.svg" alt="Standard app icon" className="size-10 rounded-lg" />
+                <img src="/images/icon-192.svg" alt={t("pages.settings.pwa.readiness.standardIcon")} className="size-10 rounded-lg" />
                 {/* eslint-disable-next-line @next/next/no-img-element -- static public SVG icons */}
-                <img src="/images/icon-maskable.svg" alt="Maskable app icon" className="size-10 rounded-full" />
-                <span>Standard and maskable (adaptive) icons in 192 and 512 px.</span>
+                <img src="/images/icon-maskable.svg" alt={t("pages.settings.pwa.readiness.maskableIcon")} className="size-10 rounded-full" />
+                <span>{t("pages.settings.pwa.readiness.iconsDetail")}</span>
               </div>
             </Check>
-            <Check state="ok" title="Theme color">
+            <Check state="ok" title={t("pages.settings.pwa.readiness.theme")}>
               <span className="inline-flex items-center gap-2">
                 <span className="size-4 rounded border border-border" style={{ backgroundColor: brand.accentColor }} aria-hidden="true" />
-                Uses your brand accent <span className="font-mono text-ink">{brand.accentColor}</span> for the title bar and splash screen.
+                {t.rich("pages.settings.pwa.readiness.themeDetail", {
+                  color: (
+                    <span dir="ltr" className="font-mono text-ink">
+                      {brand.accentColor}
+                    </span>
+                  ),
+                })}
               </span>
             </Check>
           </ul>
         </SettingsSection>
 
-        <SettingsSection title="This browser" description="Check the service worker in the browser you're using right now.">
+        <SettingsSection title={t("pages.settings.pwa.browser.title")} description={t("pages.settings.pwa.browser.description")}>
           <PwaDiagnostics enabled={pwa.enabled} />
         </SettingsSection>
 
-        <SettingsSection title="What gets stored on devices">
-          <ul className={cn("space-y-2 px-4 py-4 text-sm text-ink-muted sm:px-5", "list-disc pl-9 sm:pl-10")}>
-            <li>App files (scripts, styles, fonts) and recently seen images, so repeat visits load faster.</li>
-            <li>The offline page, downloaded without any member data.</li>
-            <li>Public pages visited while signed out, for reading offline. Pages rendered for signed-in members are never stored.</li>
-            <li>Never stored: API responses, form submissions, lesson videos and anything from admin or account pages.</li>
+        <SettingsSection title={t("pages.settings.pwa.storage.title")}>
+          <ul className={cn("space-y-2 px-4 py-4 text-sm text-ink-muted sm:px-5", "list-disc ps-9 sm:ps-10")}>
+            <li>{t("pages.settings.pwa.storage.files")}</li>
+            <li>{t("pages.settings.pwa.storage.offline")}</li>
+            <li>{t("pages.settings.pwa.storage.public")}</li>
+            <li>{t("pages.settings.pwa.storage.never")}</li>
           </ul>
         </SettingsSection>
       </div>

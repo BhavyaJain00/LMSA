@@ -6,6 +6,7 @@ import { setCurrencyAction } from "@/lib/actions/taxes";
 import { Select } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 /**
  * "Pay in" currency picker shown at checkout when the item has fixed prices
@@ -15,12 +16,13 @@ import { useToast } from "@/components/ui/toast";
 export function CurrencySwitcher({ currencies, current }: { currencies: string[]; current: string }) {
   const router = useRouter();
   const toast = useToast();
+  const t = useT("account");
   const [pending, startTransition] = useTransition();
   return (
     <div className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface-1 px-4 py-3 shadow-card">
       <label htmlFor="checkout-currency" className="flex items-center gap-2 text-sm font-medium text-ink">
         {pending ? <Spinner className="size-4" /> : <Icon.Globe className="size-4 text-ink-muted" aria-hidden="true" />}
-        Pay in
+        {t("global.currency.payIn")}
       </label>
       <Select
         id="checkout-currency"

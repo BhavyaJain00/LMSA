@@ -6,9 +6,14 @@ import { StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { VideoSettingsForm } from "@/components/admin/settings/video-settings-form";
-import { formatNumber } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Video settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.video.metaTitle") };
+}
 
 type VideoKind = "protected" | "legacy" | "external";
 
@@ -20,8 +25,10 @@ function classify(src: string, origins: string[]): VideoKind {
 }
 
 export default async function VideoSettingsPage() {
+  const t = await getT("admin");
   const admin = await requireRole(["admin"], "/admin/settings/video");
-  const db = await getDb();
+  const [db, f] = await Promise.all([getDb(), getFormatter()]);
+  const formatNumber = (n: number) => f.number(n);
   const settings = db.settings.video;
   const origins = siteOrigins();
 
@@ -40,26 +47,31 @@ export default async function VideoSettingsPage() {
 
   return (
     <>
-      <SettingsPanelHeader title="Video" description="Protect uploaded lesson videos, add a viewer watermark and tune the video player for everyone." />
+      <SettingsPanelHeader title={t("pages.settings.video.title")} description={t("pages.settings.video.description")} />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <StatCard
-          label="Protectable videos"
+          label={t("pages.settings.video.stats.protectable")}
           value={formatNumber(counts.protected)}
           icon={<Icon.ShieldCheck className="size-4" />}
-          hint={settings.protectUploads ? "Uploads served with signed links" : "Protection is off"}
+          hint={settings.protectUploads ? t("pages.settings.video.stats.protectedHint") : t("pages.settings.video.stats.protectionOff")}
         />
-        <StatCard label="Older uploads" value={formatNumber(counts.legacy)} icon={<Icon.Video className="size-4" />} hint="Uploaded before protection; public links keep working" />
-        <StatCard label="External links" value={formatNumber(counts.external)} icon={<Icon.Globe className="size-4" />} hint="Hosted elsewhere; not affected" />
+        <StatCard label={t("pages.settings.video.stats.legacy")} value={formatNumber(counts.legacy)} icon={<Icon.Video className="size-4" />} hint={t("pages.settings.video.stats.legacyHint")} />
+        <StatCard label={t("pages.settings.video.stats.external")} value={formatNumber(counts.external)} icon={<Icon.Globe className="size-4" />} hint={t("pages.settings.video.stats.externalHint")} />
       </div>
 
       {settings.protectUploads && !secretFromEnv && (
         <div role="status" className="mb-6 flex items-start gap-2.5 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-ink">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <p>
-            <span className="font-medium">APP_SECRET is not set.</span> Video links are signed with a key generated for this development machine. Set a long random{" "}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs">APP_SECRET</code> (at least 32 characters) in <code className="rounded bg-surface-2 px-1 font-mono text-xs">.env</code> before going
-            to production: without it there, protected videos cannot be signed and learners see them as unavailable.
+            {t.rich("pages.settings.video.noSecret", {
+              b: (chunks) => <span className="font-medium">{chunks}</span>,
+              code: (chunks) => (
+                <code dir="ltr" className="rounded bg-surface-2 px-1 font-mono text-xs">
+                  {chunks}
+                </code>
+              ),
+            })}
           </p>
         </div>
       )}
@@ -67,8 +79,7 @@ export default async function VideoSettingsPage() {
       <VideoSettingsForm initial={settings} sampleText={admin.email || admin.name} />
 
       <p className="mt-4 text-xs text-ink-muted">
-        Retention analytics are recorded for every lesson video automatically ({formatNumber(tracked)} {tracked === 1 ? "learner view has" : "learner views have"} detailed data so far). Open a course and
-        choose Video analytics to see them.
+        {t("pages.settings.video.retention", { count: tracked })}
       </p>
     </>
   );

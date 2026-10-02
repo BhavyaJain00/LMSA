@@ -21,9 +21,10 @@ import { Breadcrumbs } from "@/components/admin/settings/settings-ui";
 import { JobCard } from "@/components/jobs/job-bits";
 import { JobFilters } from "@/components/jobs/job-filters";
 import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
+import { getLocale, getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/jobs">): Promise<Metadata> {
-  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const [settings, sp, t, locale] = await Promise.all([getSettings(), props.searchParams, getT("public"), getLocale()]);
   const one = (k: string) => (typeof sp[k] === "string" ? (sp[k] as string) : "");
   const page = Number(one("page") || 1);
   // Status, search, type, mode, country and "load more" permutations canonicalise to the open-jobs list.
@@ -34,11 +35,10 @@ export async function generateMetadata(props: PageProps<"/jobs">): Promise<Metad
   });
   return pageMetadata(
     {
-      title: "Jobs",
-      description: [
-        `Open roles shared with the ${settings.brand.name} learning community: full-time, part-time, contract and remote jobs from companies hiring people with the skills our courses teach.`,
-      ],
+      title: t("jobs.meta.title"),
+      description: [t("jobs.meta.description", { brand: settings.brand.name })],
       path: "/jobs",
+      locale,
       noindex: noindex || !settings.features.jobs,
       follow,
     },
@@ -47,7 +47,7 @@ export async function generateMetadata(props: PageProps<"/jobs">): Promise<Metad
 }
 
 export default async function JobsPage(props: PageProps<"/jobs">) {
-  const [settings, viewer, sp] = await Promise.all([getSettings(), getCurrentUser(), props.searchParams]);
+  const [settings, viewer, sp, t] = await Promise.all([getSettings(), getCurrentUser(), props.searchParams, getT("public")]);
   if (!settings.features.jobs) notFound();
   if (!viewer && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent("/jobs")}`);
   await closeExpiredJobs();
@@ -83,24 +83,24 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
   return (
     <div>
       <PageHeader
-        breadcrumbs={<Breadcrumbs items={[{ label: "Jobs" }]} />}
-        title={`${jobs.length} ${status === "closed" ? "Closed" : "Open"} ${jobs.length === 1 ? "Job" : "Jobs"}`}
-        description="Opportunities shared with our learning community."
+        breadcrumbs={<Breadcrumbs items={[{ label: t("jobs.meta.title") }]} />}
+        title={status === "closed" ? t("jobs.board.closedTitle", { count: jobs.length }) : t("jobs.board.openTitle", { count: jobs.length })}
+        description={t("jobs.board.description")}
         actions={
           <>
             {viewer && (
               <ButtonLink href="/jobs/applications" variant="outline" leftIcon={<Icon.ClipboardList className="size-4" />}>
-                My applications
+                {t("jobs.myApplications.title")}
               </ButtonLink>
             )}
             {viewer && postedCount > 0 && (
               <ButtonLink href="/jobs/mine" variant="outline" leftIcon={<Icon.Briefcase className="size-4" />}>
-                My job posts
+                {t("jobs.mine.title")}
               </ButtonLink>
             )}
             {canPost && (
               <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
-                Create
+                {t("catalog.create.button")}
               </ButtonLink>
             )}
           </>
@@ -120,23 +120,23 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
           filtered ? (
             <EmptyState
               icon={<Icon.Search />}
-              title="No jobs match your filters"
-              description={viewer ? "Try a different search term, country, job type or work mode." : "Try a different search term, job type or work mode."}
+              title={t("jobs.board.noMatchTitle")}
+              description={viewer ? t("jobs.board.noMatchMember") : t("jobs.board.noMatchGuest")}
               action={
                 <ButtonLink href={status === "closed" ? "/jobs?status=closed" : "/jobs"} variant="outline">
-                  Clear filters
+                  {t("batches.clearFilters")}
                 </ButtonLink>
               }
             />
           ) : (
             <EmptyState
               icon={<Icon.Briefcase />}
-              title="No Job Openings Found"
-              description="There are no job openings currently. Keep an eye out, fresh learning experiences are on the way!"
+              title={t("jobs.board.emptyTitle")}
+              description={t("jobs.board.emptyDescription")}
               action={
                 canPost ? (
                   <ButtonLink href="/jobs/new" leftIcon={<Icon.Plus className="size-4" />}>
-                    Post a job
+                    {t("jobs.postJob")}
                   </ButtonLink>
                 ) : undefined
               }
@@ -157,7 +157,7 @@ export default async function JobsPage(props: PageProps<"/jobs">) {
             {jobs.length > visible.length && (
               <div className="mt-6 flex justify-center">
                 <ButtonLink href={`/jobs?${moreQuery}`} variant="outline">
-                  Load more
+                  {t("jobs.board.loadMore")}
                 </ButtonLink>
               </div>
             )}

@@ -8,9 +8,15 @@ import { StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { AiSettingsForm } from "@/components/admin/settings/ai-settings-form";
-import { formatNumber, percent } from "@/lib/utils";
+import { percent } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "AI tutor settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.ai.metaTitle") };
+}
 
 const DAY_MS = 86_400_000;
 
@@ -32,41 +38,43 @@ function tutorStats(messages: Database["aiMessages"], now = Date.now()) {
 }
 
 export default async function AiSettingsPage() {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/ai");
-  const db = await getDb();
+  const [db, f] = await Promise.all([getDb(), getFormatter()]);
+  const formatNumber = (n: number) => f.number(n);
   const site = aiSiteStatus(db.settings);
   const coursesOn = db.courses.filter((c) => c.aiTutorEnabled);
   const { answers, unknown, awaitingReview } = tutorStats(db.aiMessages);
 
-  const status = site.ready ? "Ready" : !site.enabled ? "Off" : "Key missing";
+  const status = site.ready ? t("pages.settings.ai.status.ready") : !site.enabled ? t("pages.settings.ai.status.off") : t("pages.settings.ai.status.keyMissing");
   const baseRules = buildSystemPrompt({ siteName: db.settings.brand.name, courseTitle: "<course title>", addition: null });
 
   return (
     <>
       <SettingsPanelHeader
-        title="AI tutor"
-        description="A teaching assistant that answers learners' questions using only each course's own material, with links to the lessons it used."
+        title={t("pages.settings.ai.title")}
+        description={t("pages.settings.ai.description")}
         actions={
           <ButtonLink href="/admin/ai" variant="outline" size="sm" leftIcon={<Icon.Sparkles className="size-4" />}>
-            Review queue
+            {t("pages.settings.ai.reviewQueue")}
           </ButtonLink>
         }
       />
       <div className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <StatCard
-          label="Status"
+          label={t("pages.settings.ai.stats.status")}
           value={status}
-          hint={site.ready ? "Learners can ask in enabled courses" : !site.enabled ? "Turn it on below" : "Add ANTHROPIC_API_KEY"}
+          hint={site.ready ? t("pages.settings.ai.stats.readyHint") : !site.enabled ? t("pages.settings.ai.stats.offHint") : t("pages.settings.ai.stats.keyHint")}
           icon={<Icon.Sparkles className="size-5" />}
         />
         <StatCard
-          label="Courses with the tutor"
+          label={t("pages.settings.ai.stats.courses")}
           value={`${formatNumber(coursesOn.length)}/${formatNumber(db.courses.length)}`}
-          hint="Switch it on in a course's Settings tab"
+          hint={t("pages.settings.ai.stats.coursesHint")}
           icon={<Icon.BookOpen className="size-5" />}
         />
-        <StatCard label="Answers (30 days)" value={formatNumber(answers)} hint={answers ? `${percent(unknown, answers)}% not covered by the course` : "No questions yet"} icon={<Icon.MessageSquare className="size-5" />} />
-        <StatCard label="Awaiting review" value={formatNumber(awaitingReview)} hint="Flagged or reported answers" icon={<Icon.AlertCircle className="size-5" />} />
+        <StatCard label={t("pages.settings.ai.stats.answers")} value={formatNumber(answers)} hint={answers ? t("pages.settings.ai.stats.notCovered", { rate: f.percent(percent(unknown, answers)) }) : t("pages.settings.ai.stats.noQuestions")} icon={<Icon.MessageSquare className="size-5" />} />
+        <StatCard label={t("pages.settings.ai.stats.awaiting")} value={formatNumber(awaitingReview)} hint={t("pages.settings.ai.stats.awaitingHint")} icon={<Icon.AlertCircle className="size-5" />} />
       </div>
       <AiSettingsForm initial={db.settings.ai} keyHint={aiKeyHint()} baseRules={baseRules} />
     </>

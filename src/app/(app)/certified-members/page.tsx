@@ -11,14 +11,15 @@ import { Breadcrumbs } from "@/components/assessments/breadcrumbs";
 import { FilterBar, ListFooter } from "@/components/assessments/list-controls";
 import { param, parsePaging } from "@/components/assessments/shared";
 import { CertifiedMemberCard } from "@/components/certificates/member-card";
+import { getLocale, getT } from "@/i18n/server";
 
-export const metadata: Metadata = {
-  title: "Certified Members",
-  description: "Learners who earned a certificate on this platform.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("public");
+  return { title: t("members.title"), description: t("members.metaDescription") };
+}
 
 export default async function CertifiedMembersPage(props: PageProps<"/certified-members">) {
-  const settings = await getSettings();
+  const [settings, t] = await Promise.all([getSettings(), getT("public")]);
   if (!settings.features.certifications || !settings.features.certifiedMembers) notFound();
   // The directory is for logged-in members; guests are sent to the course catalog.
   const viewer = await getCurrentUser();
@@ -37,37 +38,31 @@ export default async function CertifiedMembersPage(props: PageProps<"/certified-
   return (
     <div className="animate-fade-in">
       <PageHeader
-        breadcrumbs={<Breadcrumbs items={[{ label: "Certified Members" }]} />}
-        title={`${members.length} Certified ${members.length === 1 ? "Member" : "Members"}`}
-        description={`Learners who earned a certificate on ${settings.brand.name}. Click a card to view their profile.`}
+        breadcrumbs={<Breadcrumbs items={[{ label: t("members.title") }]} />}
+        title={t("members.count", { count: members.length })}
+        description={t("members.description", { brand: settings.brand.name })}
         actions={
           <ButtonLink href="/courses?certification=true" variant="outline" leftIcon={<Icon.GraduationCap className="size-4" />}>
-            Get Certified
+            {t("enroll.getCertified")}
           </ButtonLink>
         }
       />
       <FilterBar
         filters={[
-          { param: "name", kind: "search", label: "Search", placeholder: "Search" },
-          { param: "category", kind: "select", label: "Category", placeholder: "Category", options: categories.map((c) => ({ value: c, label: c })), className: "sm:w-72" },
-          { param: "open-to-work", kind: "toggle", label: "Open to Work", tone: "success" },
-          { param: "hiring", kind: "toggle", label: "Hiring", tone: "accent" },
+          { param: "name", kind: "search", label: t("members.search"), placeholder: t("members.search") },
+          { param: "category", kind: "select", label: t("catalog.filters.category"), placeholder: t("catalog.filters.category"), options: categories.map((c) => ({ value: c, label: c })), className: "sm:w-72" },
+          { param: "open-to-work", kind: "toggle", label: t("members.openToWork"), tone: "success" },
+          { param: "hiring", kind: "toggle", label: t("members.hiring"), tone: "accent" },
         ]}
       />
       {members.length === 0 ? (
         <EmptyState
           icon={<Icon.ShieldCheck />}
-          title={filtered ? "No certified members match these filters" : "No Certified Members Found"}
-          description={
-            filtered
-              ? openToWork || hiring
-                ? "Try another name or category, or turn off the Open to Work and Hiring filters."
-                : "Try another name or category."
-              : "There are no certified members currently. Keep an eye out, fresh learning experiences are on the way!"
-          }
+          title={filtered ? t("members.noMatchTitle") : t("members.emptyTitle")}
+          description={filtered ? (openToWork || hiring ? t("members.noMatchToggles") : t("members.noMatch")) : t("members.emptyDescription")}
           action={
             <ButtonLink href="/courses?certification=true" leftIcon={<Icon.GraduationCap className="size-4" />}>
-              Browse certificate courses
+              {t("certification.none.browse")}
             </ButtonLink>
           }
         />
@@ -80,7 +75,7 @@ export default async function CertifiedMembersPage(props: PageProps<"/certified-
               </li>
             ))}
           </ul>
-          <ListFooter shown={shown.length} total={members.length} size={size} pages={pages} noun="members" />
+          <ListFooter shown={shown.length} total={members.length} size={size} pages={pages} noun={t("members.noun")} />
         </>
       )}
     </div>

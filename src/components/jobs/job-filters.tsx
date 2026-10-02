@@ -8,6 +8,7 @@ import { Input, Select } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { WORK_MODES } from "./work-mode";
+import { useT } from "@/i18n/client";
 
 export interface JobFilterValues {
   status: "open" | "closed";
@@ -45,6 +46,7 @@ export function JobFilters({
   closedCount?: number;
   countries: string[] | null;
 }) {
+  const t = useT("public");
   const router = useRouter();
   const pathname = usePathname();
   const [pending, startTransition] = useTransition();
@@ -70,7 +72,7 @@ export function JobFilters({
   return (
     <div className="space-y-3">
       {showClosedTab && (
-        <div role="tablist" aria-label="Job status" className="inline-flex rounded-lg bg-surface-2 p-0.5">
+        <div role="tablist" aria-label={t("jobs.filters.status")} className="inline-flex rounded-lg bg-surface-2 p-0.5">
           {(["open", "closed"] as const).map((s) => {
             const active = values.status === s;
             const count = s === "open" ? openCount : closedCount;
@@ -83,8 +85,8 @@ export function JobFilters({
                 scroll={false}
                 className={cn("rounded-md px-3 py-1 text-sm font-medium transition-colors", active ? "bg-surface-1 text-ink shadow-sm" : "text-ink-muted hover:text-ink")}
               >
-                {s === "open" ? "Open" : "Closed"}
-                {count !== undefined && <span className="ml-1.5 text-xs text-ink-faint">{count}</span>}
+                {s === "open" ? t("jobs.status.open") : t("jobs.status.closed")}
+                {count !== undefined && <span className="ms-1.5 text-xs text-ink-faint">{count}</span>}
               </Link>
             );
           })}
@@ -97,8 +99,8 @@ export function JobFilters({
         <div className="sm:col-span-2 lg:col-span-1">
           <Input
             type="search"
-            aria-label="Search jobs"
-            placeholder="Search by title, company or location"
+            aria-label={t("jobs.filters.search")}
+            placeholder={t("jobs.filters.searchPlaceholder")}
             value={search}
             onChange={(e) => {
               const value = e.target.value;
@@ -110,8 +112,8 @@ export function JobFilters({
           />
         </div>
         {countries && (
-          <Select aria-label="Country" value={values.country} onChange={(e) => go({ country: e.target.value })}>
-            <option value="">Any country</option>
+          <Select aria-label={t("jobs.form.country")} value={values.country} onChange={(e) => go({ country: e.target.value })}>
+            <option value="">{t("jobs.filters.anyCountry")}</option>
             {values.country && !countries.includes(values.country) && <option value={values.country}>{values.country}</option>}
             {countries.map((c) => (
               <option key={c} value={c}>
@@ -120,19 +122,19 @@ export function JobFilters({
             ))}
           </Select>
         )}
-        <Select aria-label="Type" value={values.type} onChange={(e) => go({ type: e.target.value })}>
-          <option value="">All types</option>
-          {jobTypes.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
+        <Select aria-label={t("jobs.form.type")} value={values.type} onChange={(e) => go({ type: e.target.value })}>
+          <option value="">{t("jobs.filters.allTypes")}</option>
+          {jobTypes.map((type) => (
+            <option key={type.value} value={type.value}>
+              {t(`jobs.type.${type.value}`)}
             </option>
           ))}
         </Select>
-        <Select aria-label="Work Mode" value={values.mode} onChange={(e) => go({ mode: e.target.value })}>
-          <option value="">Any work mode</option>
+        <Select aria-label={t("jobs.form.workMode")} value={values.mode} onChange={(e) => go({ mode: e.target.value })}>
+          <option value="">{t("jobs.filters.anyMode")}</option>
           {WORK_MODES.map((m) => (
             <option key={m.value} value={m.value}>
-              {m.label}
+              {t(`jobs.mode.${m.value}`)}
             </option>
           ))}
         </Select>
