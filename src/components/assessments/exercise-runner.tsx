@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 import { CodeEditor } from "./code-editor";
 import { runTestsInBrowser } from "./js-runner";
 import { TestResultsList } from "./test-results";
@@ -19,8 +20,6 @@ import { ExerciseStatusBadge } from "./status-badges";
 import { LocalDateTime } from "./client-time";
 import {
   LANGUAGE_LABELS,
-  NOT_RUNNABLE_NOTICE,
-  TYPESCRIPT_NOTICE,
   isRunnableLanguage,
   lessonQuery,
   type ExerciseSubmissionView,
@@ -63,6 +62,8 @@ export function ExerciseRunner({
   loginHref = "/login",
   revealHidden = false,
 }: ExerciseRunnerProps) {
+  const t = useT("learning");
+  const tc = useT("common");
   const { toast } = useToast();
   const router = useRouter();
   const runnable = isRunnableLanguage(exercise.language);
@@ -116,7 +117,7 @@ export function ExerciseRunner({
         courseId,
       });
       if (!res.ok) {
-        toast({ title: "Failed to submit. Please try again.", description: res.error, tone: "error" });
+        toast({ title: t("exercise.submitFailed"), description: res.error, tone: "error" });
         return;
       }
       const saved = res.data.submission;
@@ -125,16 +126,16 @@ export function ExerciseRunner({
       else setResults(null);
       const summary = res.data.runnable
         ? saved.status === "passed"
-          ? "All tests passed."
-          : `${saved.passedCount} of ${saved.totalCount} tests passed.`
-        : "Your code was saved for instructor review.";
-      toast({ title: res.message ?? "Submission saved!", description: summary, tone: saved.status === "passed" ? "success" : res.data.runnable ? "warning" : "info" });
+          ? t("exercise.allPassed")
+          : t("exercise.somePassed", { passed: saved.passedCount, total: saved.totalCount })
+        : t("exercise.savedForReview");
+      toast({ title: t("exercise.saved"), description: summary, tone: saved.status === "passed" ? "success" : res.data.runnable ? "warning" : "info" });
       if (res.data.mismatch) {
-        setNotice({ tone: "warning", text: "The server check gave a different result than your browser run. The server result has been saved." });
+        setNotice({ tone: "warning", text: t("exercise.mismatch") });
       } else if (res.data.lessonCompleted) {
-        setNotice({ tone: "success", text: "Great work! This lesson is now marked as complete." });
+        setNotice({ tone: "success", text: t("exercise.lessonCompleted") });
       } else if (!res.data.runnable) {
-        setNotice({ tone: "info", text: NOT_RUNNABLE_NOTICE });
+        setNotice({ tone: "info", text: t("exercise.notRunnable") });
       }
       // A passing submission can complete the lesson: refresh so the lesson status and progress update at once.
       if (saved.status === "passed" || res.data.lessonCompleted) router.refresh();
@@ -150,26 +151,26 @@ export function ExerciseRunner({
         {submission && <ExerciseStatusBadge status={submission.status} />}
         {dirty && submission && (
           <Badge tone="warning" size="xs">
-            Unsubmitted changes
+            {t("exercise.unsubmitted")}
           </Badge>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <Button variant="ghost" size="sm" onClick={() => setConfirmReset(true)} disabled={busy || !canSubmit} leftIcon={<Icon.Refresh className="size-4" />}>
-          Reset
+          {t("exercise.reset")}
         </Button>
         {runnable && (
           <Button variant="outline" size="sm" onClick={() => void run()} loading={running} disabled={pending} leftIcon={<Icon.Play className="size-3.5" />}>
-            {running ? "Running" : "Run tests"}
+            {running ? t("exercise.running") : t("exercise.runTests")}
           </Button>
         )}
         {canSubmit ? (
-          <Button size="sm" onClick={submit} loading={pending} disabled={running} leftIcon={<Icon.Send className="size-4" />}>
-            Submit
+          <Button size="sm" onClick={submit} loading={pending} disabled={running} leftIcon={<Icon.Send className="size-4 rtl:-scale-x-100" />}>
+            {tc("actions.submit")}
           </Button>
         ) : (
-          <ButtonLink href={loginHref} size="sm" leftIcon={<Icon.LogIn className="size-4" />}>
-            Log in to submit
+          <ButtonLink href={loginHref} size="sm" leftIcon={<Icon.LogIn className="size-4 rtl:-scale-x-100" />}>
+            {t("assignment.loginToSubmit")}
           </ButtonLink>
         )}
       </div>
@@ -181,13 +182,13 @@ export function ExerciseRunner({
       {!runnable && (
         <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          {NOT_RUNNABLE_NOTICE}
+          {t("exercise.notRunnable")}
         </p>
       )}
       {exercise.language === "typescript" && (
         <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2 text-sm text-info">
           <Icon.Info className="mt-0.5 size-4 shrink-0" />
-          {TYPESCRIPT_NOTICE}
+          {t("exercise.typescriptNotice")}
         </p>
       )}
       {notice && (
@@ -217,17 +218,15 @@ export function ExerciseRunner({
         onRun={runnable ? () => void run() : undefined}
         readOnly={!canSubmit}
         language={exercise.language}
-        ariaLabel={`${exercise.title} solution`}
+        ariaLabel={t("exercise.solutionLabel", { title: exercise.title })}
         minHeight={variant === "inline" ? 240 : 400}
       />
       {submission && (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-muted">
-          <span>
-            Last submitted <LocalDateTime iso={submission.submittedAt} />
-          </span>
+          <span>{t.rich("exercise.lastSubmitted", { time: <LocalDateTime iso={submission.submittedAt} /> })}</span>
           <span aria-hidden="true">·</span>
           <Link href={`/exercises/submissions/${submission.id}`} className="font-medium text-accent hover:underline">
-            View submission
+            {t("exercise.viewSubmission")}
           </Link>
         </p>
       )}
@@ -237,7 +236,7 @@ export function ExerciseRunner({
           tests={exercise.tests}
           running={running}
           revealHidden={revealHidden}
-          emptyText={runnable ? "Please run the code to execute the test cases." : "Tests run after an instructor reviews your submission."}
+          emptyText={runnable ? t("exercise.runToSee") : t("exercise.testsAfterReview")}
         />
       </div>
       <ConfirmDialog
@@ -249,9 +248,9 @@ export function ExerciseRunner({
           setLastRunCode(null);
           setConfirmReset(false);
         }}
-        title="Reset your code?"
-        description="Your editor will go back to the starter code. Your last submission is kept."
-        confirmLabel="Reset code"
+        title={t("exercise.resetTitle")}
+        description={t("exercise.resetBody")}
+        confirmLabel={t("exercise.resetConfirm")}
         destructive
       />
     </div>
@@ -266,18 +265,18 @@ export function ExerciseRunner({
               <Icon.Code className="size-5" />
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">Programming exercise</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{t("exercise.eyebrow")}</p>
               <h3 className="truncate font-semibold text-ink">{exercise.title}</h3>
             </div>
           </div>
-          <ButtonLink href={`/exercises/${exercise.id}${lessonQuery(lessonId, courseId)}`} variant="ghost" size="sm" rightIcon={<Icon.ArrowUpRight className="size-4" />}>
-            Open full screen
+          <ButtonLink href={`/exercises/${exercise.id}${lessonQuery(lessonId, courseId)}`} variant="ghost" size="sm" rightIcon={<Icon.ArrowUpRight className="size-4 rtl:-scale-x-100" />}>
+            {t("exercise.openFull")}
           </ButtonLink>
         </div>
         <div className="space-y-5 p-5">
           <details open className="group rounded-xl border border-border bg-surface-2/40 px-4 py-3">
             <summary className="flex cursor-pointer select-none items-center justify-between text-sm font-semibold text-ink">
-              Problem Statement
+              {t("exercise.statement")}
               <Icon.ChevronDown className="size-4 text-ink-muted transition-transform group-open:rotate-180" />
             </summary>
             <div className="mt-3">
@@ -293,20 +292,20 @@ export function ExerciseRunner({
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
       <Card className="h-fit p-5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto sm:p-6">
-        <h2 className="mb-3 text-lg font-semibold text-ink">Problem Statement</h2>
+        <h2 className="mb-3 text-lg font-semibold text-ink">{t("exercise.statement")}</h2>
         <Markdown content={exercise.problemStatement} />
         <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-4 text-xs text-ink-muted">
           <span className="inline-flex items-center gap-1">
-            <Icon.ListChecks className="size-3.5" /> {exercise.tests.length} test{exercise.tests.length === 1 ? "" : "s"}
+            <Icon.ListChecks className="size-3.5" /> {t("exercise.testCount", { count: exercise.tests.length })}
           </span>
-          {exercise.tests.some((t) => t.hidden) && (
+          {exercise.tests.some((test) => test.hidden) && (
             <span className="inline-flex items-center gap-1">
-              <Icon.EyeOff className="size-3.5" /> {exercise.tests.filter((t) => t.hidden).length} hidden
+              <Icon.EyeOff className="size-3.5" /> {t("exercise.hiddenCount", { count: exercise.tests.filter((test) => test.hidden).length })}
             </span>
           )}
           {runnable && (
             <span className="inline-flex items-center gap-1">
-              <Icon.Timer className="size-3.5" /> 3s per test
+              <Icon.Timer className="size-3.5" /> {t("exercise.timeLimit", { seconds: 3 })}
             </span>
           )}
         </div>

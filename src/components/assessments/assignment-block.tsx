@@ -4,6 +4,7 @@ import { canManageAssessments, getAssignment, getOwnAssignmentSubmission, toAssi
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { AssignmentFeedback } from "@/components/teaching/assignment-feedback";
+import { getT } from "@/i18n/server";
 import { AssignmentPanel } from "./assignment-panel";
 import { lessonQuery } from "./shared";
 
@@ -12,12 +13,12 @@ import { lessonQuery } from "./shared";
  * type-specific submission form, status, evaluator comments and model answer.
  */
 export async function AssignmentBlock({ assignmentId, lessonId, courseId }: { assignmentId: string; lessonId?: string; courseId?: string }) {
-  const [assignment, user] = await Promise.all([getAssignment(assignmentId), getCurrentUser()]);
+  const [assignment, user, t] = await Promise.all([getAssignment(assignmentId), getCurrentUser(), getT("learning")]);
   if (!assignment) {
     return (
       <Card className="flex items-center gap-3 p-4 text-sm text-ink-muted">
         <Icon.AlertCircle className="size-5 shrink-0 text-ink-faint" />
-        This assignment is no longer available.
+        {t("assignment.gone")}
       </Card>
     );
   }

@@ -9,6 +9,7 @@ import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./settings-ui";
+import { useT } from "@/i18n/client";
 
 /**
  * Read-only status of the real payment gateways: whether the keys in `.env`
@@ -17,10 +18,11 @@ import { SettingsSection } from "./settings-ui";
  * "Test connection" button.
  */
 export function PaymentGatewaysPanel({ gateways, activeGateway, localAppUrl }: { gateways: GatewayStatusView[]; activeGateway: string; localAppUrl: boolean }) {
+  const t = useT("admin");
   return (
     <SettingsSection
-      title="Payment gateways"
-      description="Stripe and Razorpay are configured with environment variables in your .env file (restart the server after changing them). Manual payments always work."
+      title={t("gateways.title")}
+      description={t("gateways.description")}
     >
       {gateways.map((g) => (
         <GatewayCard key={g.gateway} gateway={g} active={activeGateway === g.gateway} localAppUrl={localAppUrl} />
@@ -30,6 +32,7 @@ export function PaymentGatewaysPanel({ gateways, activeGateway, localAppUrl }: {
 }
 
 function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStatusView; active: boolean; localAppUrl: boolean }) {
+  const t = useT("admin");
   const toast = useToast();
   const [testing, startTesting] = useTransition();
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -38,11 +41,11 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
     startTesting(async () => {
       const res = await testGatewayConnectionAction(g.gateway);
       if (res.ok) {
-        setResult({ ok: true, text: res.message ?? "Connected." });
-        toast.success(res.message ?? "Connected");
+        setResult({ ok: true, text: res.message ?? t("gateways.connected") });
+        toast.success(res.message ?? t("gateways.connected"));
       } else {
         setResult({ ok: false, text: res.error });
-        toast.error("Connection failed", res.error);
+        toast.error(t("gateways.connectionFailed"), res.error);
       }
     });
   };
@@ -59,22 +62,22 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
               <h4 className="text-sm font-semibold text-ink">{g.label}</h4>
               {g.configured ? (
                 <Badge tone="success" dot>
-                  Configured
+                  {t("gateways.configured")}
                 </Badge>
               ) : (
                 <Badge tone="warning" dot>
-                  Not configured
+                  {t("gateways.notConfigured")}
                 </Badge>
               )}
-              {g.mode && <Badge tone={g.mode === "live" ? "accent" : "outline"}>{g.mode === "live" ? "Live mode" : "Test mode"}</Badge>}
-              {active && <Badge tone="info">Active at checkout</Badge>}
+              {g.mode && <Badge tone={g.mode === "live" ? "accent" : "outline"}>{g.mode === "live" ? t("gateways.liveMode") : t("gateways.testMode")}</Badge>}
+              {active && <Badge tone="info">{t("gateways.active")}</Badge>}
             </div>
             <p className="mt-0.5 text-xs text-ink-muted">{g.note}</p>
           </div>
         </div>
         {g.configured && (
           <Button variant="outline" size="sm" onClick={test} loading={testing} leftIcon={<Icon.Zap className="size-4" />}>
-            Test connection
+            {t("gateways.test")}
           </Button>
         )}
       </div>
@@ -82,18 +85,18 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
         <div className="min-w-0">
           <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">{g.keyLabel}</dt>
-          <dd className="mt-0.5 font-mono text-xs text-ink">{g.maskedKey || <span className="font-sans text-ink-muted">Not set</span>}</dd>
+          <dd className="mt-0.5 font-mono text-xs text-ink" dir="ltr">{g.maskedKey || <span className="font-sans text-ink-muted">{t("gateways.notSet")}</span>}</dd>
         </div>
         <div className="min-w-0">
           <dt className="text-xs font-medium uppercase tracking-wide text-ink-faint">{g.webhookSecretVar}</dt>
           <dd className="mt-0.5 text-xs">
             {g.webhookConfigured ? (
               <span className="inline-flex items-center gap-1 text-success">
-                <Icon.CheckCircle className="size-3.5" /> Set
+                <Icon.CheckCircle className="size-3.5" /> {t("gateways.set")}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-warning">
-                <Icon.AlertTriangle className="size-3.5" /> Missing — webhooks are rejected until it is set
+                <Icon.AlertTriangle className="size-3.5" /> {t("gateways.missingSecret")}
               </span>
             )}
           </dd>
@@ -112,12 +115,11 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
       )}
 
       <div className="mt-4 rounded-xl border border-border bg-surface-2 p-3">
-        <p className="text-xs font-medium text-ink">Webhook endpoint</p>
+        <p className="text-xs font-medium text-ink">{t("gateways.webhook")}</p>
         <p className="mt-0.5 text-xs text-ink-muted">
-          Add this URL in the {g.label} dashboard and subscribe to the events below, then copy the signing secret into <span className="font-mono">{g.webhookSecretVar}</span>.
-          Orders are also confirmed when learners return from checkout, but webhooks make it reliable.
+          {t.rich("gateways.webhookHelp", { gateway: g.label, variable: <span className="font-mono">{g.webhookSecretVar}</span> })}
         </p>
-        <CopyField value={g.webhookUrl} label={`${g.label} webhook URL`} />
+        <CopyField value={g.webhookUrl} label={t("gateways.webhookUrl", { gateway: g.label })} />
         <div className="mt-2 flex flex-wrap gap-1.5">
           {g.webhookEvents.map((e) => (
             <code key={e} className="rounded-md bg-surface-1 px-1.5 py-0.5 font-mono text-[11px] text-ink-muted ring-1 ring-border">
@@ -130,20 +132,26 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
             <Icon.Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
             {g.gateway === "stripe" ? (
               <span>
-                APP_URL points to this computer, which {g.label} cannot reach. For local testing run{" "}
-                <span className="font-mono">stripe listen --forward-to {new URL(g.webhookUrl).host}/api/payments/stripe/webhook</span> and use the secret it prints.
+                {t.rich("gateways.localStripe", {
+                  gateway: g.label,
+                  command: (
+                    <span className="font-mono" dir="ltr">
+                      stripe listen --forward-to {new URL(g.webhookUrl).host}/api/payments/stripe/webhook
+                    </span>
+                  ),
+                })}
               </span>
             ) : (
-              <span>APP_URL points to this computer, which {g.label} cannot reach. Expose it with a tunnel (and set APP_URL to the tunnel address) to receive webhooks locally.</span>
+              <span>{t("gateways.localOther", { gateway: g.label })}</span>
             )}
           </p>
         )}
         <div className="mt-3 flex flex-wrap gap-2">
           <ButtonLink href={g.dashboardUrl} variant="ghost" size="sm" leftIcon={<Icon.ExternalLink className="size-4" />}>
-            Open {g.label} webhooks
+            {t("gateways.openDashboard", { gateway: g.label })}
           </ButtonLink>
           <ButtonLink href={g.docsUrl} variant="ghost" size="sm" leftIcon={<Icon.BookOpen className="size-4" />}>
-            Webhook docs
+            {t("gateways.docs")}
           </ButtonLink>
         </div>
       </div>
@@ -159,6 +167,7 @@ function GatewayCard({ gateway: g, active, localAppUrl }: { gateway: GatewayStat
 }
 
 function CopyField({ value, label }: { value: string; label: string }) {
+  const t = useT("admin");
   const toast = useToast();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -167,7 +176,7 @@ function CopyField({ value, label }: { value: string; label: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error("Couldn't copy", "Select the URL and copy it manually.");
+      toast.error(t("gateways.copyFailed"), t("gateways.copyManually"));
     }
   };
   return (
@@ -175,11 +184,12 @@ function CopyField({ value, label }: { value: string; label: string }) {
       <input
         readOnly
         value={value}
+        dir="ltr"
         aria-label={label}
         onFocus={(e) => e.currentTarget.select()}
         className="h-8 min-w-0 flex-1 rounded-lg border border-border-strong bg-surface-1 px-2.5 font-mono text-xs text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
       />
-      <IconButton label={copied ? "Copied" : "Copy URL"} variant="outline" size="icon-sm" onClick={() => void copy()} className="size-8">
+      <IconButton label={copied ? t("gateways.copied") : t("gateways.copyUrl")} variant="outline" size="icon-sm" onClick={() => void copy()} className="size-8">
         {copied ? <Icon.Check className="size-4 text-success" /> : <Icon.Copy className="size-4" />}
       </IconButton>
     </div>

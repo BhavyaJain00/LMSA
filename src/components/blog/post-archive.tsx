@@ -6,14 +6,14 @@ import { ArticleTeasers } from "@/components/marketing/article-teasers";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState } from "@/components/ui/skeleton";
-import { pluralize } from "@/lib/utils";
+import { getT } from "@/i18n/server";
 
 /**
  * Body of a blog archive (category or topic): heading, intro, the article
  * grid with pagination (page 1 is the bare canonical URL) and an optional
  * block of related links underneath. Server Component.
  */
-export function PostArchive({
+export async function PostArchive({
   title,
   intro,
   posts,
@@ -30,13 +30,13 @@ export function PostArchive({
   /** Related links rendered below the list (other categories, related topics). */
   children?: ReactNode;
 }) {
+  const t = await getT("public");
   return (
     <>
       <header className="mb-8 max-w-3xl">
         <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{title}</h1>
         <p className="mt-2 text-sm text-ink-muted">
-          {pluralize(posts.total, "article")}
-          {posts.pages > 1 && ` · page ${posts.page} of ${posts.pages}`}
+          {posts.pages > 1 ? t("blog.archive.countPaged", { count: posts.total, page: posts.page, pages: posts.pages }) : t("blog.archive.count", { count: posts.total })}
         </p>
         <div className="mt-4 text-base leading-7 text-ink-muted">{intro}</div>
       </header>
@@ -45,9 +45,9 @@ export function PostArchive({
       ) : (
         <EmptyState
           icon={<Icon.FileText />}
-          title="No articles here yet"
-          description="New articles will appear here as soon as they are published."
-          action={<ButtonLink href="/blog">All articles</ButtonLink>}
+          title={t("blog.archive.emptyTitle")}
+          description={t("blog.archive.emptyDescription")}
+          action={<ButtonLink href="/blog">{t("blog.allArticles")}</ButtonLink>}
         />
       )}
       <PageLinks className="mt-8" page={posts.page} pageCount={posts.pages} hrefFor={(page) => landingHref(basePath, { page })} label={label} />

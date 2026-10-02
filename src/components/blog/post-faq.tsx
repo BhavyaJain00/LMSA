@@ -1,18 +1,20 @@
 import type { FaqItem } from "@/lib/types";
 import { Markdown } from "@/lib/markdown";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 
 /**
  * Frequently asked questions of an article as native disclosure widgets
  * (keyboard accessible, no JavaScript). The same items feed the page's
  * FAQPage JSON-LD. Server Component.
  */
-export function PostFaq({ items }: { items: FaqItem[] }) {
+export async function PostFaq({ items }: { items: FaqItem[] }) {
   if (!items.length) return null;
+  const t = await getT("public");
   return (
     <section aria-labelledby="faq-heading">
       <h2 id="faq-heading" className="text-2xl font-semibold tracking-tight text-ink">
-        Frequently asked questions
+        {t("blog.faq.title")}
       </h2>
       <div className="mt-4 divide-y divide-border rounded-card border border-border bg-surface-1">
         {items.map((item, i) => (

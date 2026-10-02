@@ -14,19 +14,21 @@ import { PostArchive } from "@/components/blog/post-archive";
 import { ChipLinks } from "@/components/marketing/chip-links";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
+import { getLocale, getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/blog/category/[slug]">): Promise<Metadata> {
-  const [{ slug }, sp, settings] = await Promise.all([props.params, props.searchParams, getSettings()]);
+  const [{ slug }, sp, settings, t, locale] = await Promise.all([props.params, props.searchParams, getSettings(), getT("public"), getLocale()]);
   const page = parsePageParam(sp.page);
   const landing = settings.seo.blogEnabled ? await getBlogCategoryLanding(decodeSegment(slug) ?? "", page) : null;
-  if (!landing) return notFoundMetadata("Category not found");
+  if (!landing) return notFoundMetadata(t("categories.notFound"));
   const { category, posts } = landing;
   const titles = posts.items.slice(0, 3).map((p) => p.title);
   return pageMetadata(
     {
-      title: `${category.name} articles`,
-      description: [`${posts.total === 1 ? "An article" : `${posts.total} articles`} about ${category.name.toLowerCase()} from ${settings.brand.name}: ${titles.join("; ")}.`],
+      title: t("categories.articles", { category: category.name }),
+      description: [t("blog.category.metaDescription", { count: posts.total, topic: category.name.toLowerCase(), brand: settings.brand.name, titles: titles.join("; ") })],
       path: blogCategoryPath(category.slug),
+      locale,
       ...listingIndexing({ page }),
       keywords: [category.name, `${category.name} articles`, `${category.name} tutorials`],
     },
@@ -35,7 +37,7 @@ export async function generateMetadata(props: PageProps<"/blog/category/[slug]">
 }
 
 export default async function BlogCategoryPage(props: PageProps<"/blog/category/[slug]">) {
-  const [{ slug: rawSlug }, sp, settings] = await Promise.all([props.params, props.searchParams, getSettings()]);
+  const [{ slug: rawSlug }, sp, settings, t] = await Promise.all([props.params, props.searchParams, getSettings(), getT("public")]);
   const slug = decodeSegment(rawSlug);
   if (!settings.seo.blogEnabled || !slug) notFound();
   await publishDuePosts();
@@ -51,17 +53,17 @@ export default async function BlogCategoryPage(props: PageProps<"/blog/category/
         <JsonLd data={itemListJsonLd(`${category.name} articles`, posts.items.map((p) => ({ name: p.title, path: postPath(p.slug), image: p.coverImageUrl })), { origin: siteOrigin() })} />
       )}
       <PostArchive
-        title={`${category.name} articles`}
+        title={t("categories.articles", { category: category.name })}
         posts={posts}
         basePath={blogCategoryPath(category.slug)}
-        label={`${category.name} article pages`}
+        label={t("blog.archive.pagesLabel", { name: category.name })}
         intro={
           <>
-            {category.intro ? <Markdown content={category.intro} /> : <p>Guides, tutorials and practical advice on {lower} from the instructors at {settings.brand.name}.</p>}
+            {category.intro ? <Markdown content={category.intro} /> : <p>{t("blog.category.intro", { topic: lower, brand: settings.brand.name })}</p>}
             {settings.features.courses && (
               <p className="mt-3">
                 <Link href={categoryPath(category.slug)} className="font-medium text-accent hover:underline">
-                  Browse {lower} courses
+                  {t("blog.category.browseCourses", { topic: lower })}
                 </Link>
               </p>
             )}
@@ -71,9 +73,9 @@ export default async function BlogCategoryPage(props: PageProps<"/blog/category/
         {otherCategories.length > 0 && (
           <section aria-labelledby="blog-other-categories" className="mt-12">
             <h2 id="blog-other-categories" className="mb-3 text-xl font-semibold tracking-tight text-ink">
-              More topics on the blog
+              {t("blog.category.moreTopics")}
             </h2>
-            <ChipLinks label="Other blog categories" items={otherCategories.map((c) => ({ href: blogCategoryPath(c.slug), label: c.name, count: c.postCount }))} />
+            <ChipLinks label={t("blog.category.otherLabel")} items={otherCategories.map((c) => ({ href: blogCategoryPath(c.slug), label: c.name, count: c.postCount }))} />
           </section>
         )}
       </PostArchive>

@@ -2,6 +2,7 @@
 
 import { useId, useRef, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 const LINE_HEIGHT = 20;
 const PADDING_Y = 12;
@@ -38,12 +39,14 @@ export function CodeEditor({
   language,
   id,
   name,
-  ariaLabel = "Code editor",
+  ariaLabel: ariaLabelProp,
   minHeight = 280,
   maxHeight = 1000,
   className,
   showHint = true,
 }: CodeEditorProps) {
+  const t = useT("learning");
+  const ariaLabel = ariaLabelProp ?? t("global.codeEditor.label");
   const autoId = useId();
   const editorId = id ?? `code-${autoId}`;
   const hintId = `${editorId}-hint`;
@@ -176,8 +179,8 @@ export function CodeEditor({
       </div>
       {showHint && (
         <p id={hintId} className="text-[11px] text-ink-faint">
-          {readOnly ? "Read-only." : "Tab indents · Shift+Tab outdents · Esc then Tab leaves the editor"}
-          {onRun ? " · Ctrl/⌘+Enter runs the tests" : ""}
+          {readOnly ? t("global.codeEditor.readOnly") : t("global.codeEditor.hint")}
+          {onRun ? ` · ${t("global.codeEditor.runHint")}` : ""}
         </p>
       )}
     </div>

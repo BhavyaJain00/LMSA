@@ -60,6 +60,7 @@ export function isRunnableLanguage(language: ExerciseLanguage): boolean {
   return language === "javascript" || language === "typescript";
 }
 
+/** English copies of `exercise.notRunnable` / `exercise.typescriptNotice` (learning messages), for server-side text. */
 export const NOT_RUNNABLE_NOTICE = "Automatic checks are available for JavaScript only; your submission is saved for instructor review.";
 export const NOT_RUNNABLE_RESULT_NOTE = "Not run: automatic checks are available for JavaScript only.";
 export const TYPESCRIPT_NOTICE =
@@ -92,21 +93,21 @@ export const ASSIGNMENT_UPLOAD: Record<
     accept: ".pdf,application/pdf",
     kind: "document",
     extensions: [".pdf"],
-    error: "Only PDF files are allowed.",
+    error: "Upload a PDF file.",
     label: "PDF",
   },
   document: {
     accept: ".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     kind: "document",
     extensions: [".doc", ".docx"],
-    error: "Only document file of type .doc or .docx are allowed.",
+    error: "Upload a Word document (.doc or .docx).",
     label: "Document",
   },
   image: {
     accept: "image/png,image/jpeg,image/gif,image/webp,image/avif",
     kind: "image",
     extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"],
-    error: "Only image file is allowed.",
+    error: "Upload an image file (PNG, JPEG, GIF, WebP or AVIF).",
     label: "Image",
   },
 };

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 import { CodeEditor } from "./code-editor";
 import { runTestsInBrowser } from "./js-runner";
 import { TestResultsList } from "./test-results";
@@ -29,6 +30,7 @@ export function SubmissionReplay({
   revealHidden: boolean;
   allowRerun: boolean;
 }) {
+  const t = useT("learning");
   const [results, setResults] = useState<TestResultView[]>(storedResults);
   const [running, setRunning] = useState(false);
   const [rerun, setRerun] = useState(false);
@@ -52,22 +54,22 @@ export function SubmissionReplay({
     <div className="space-y-5">
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-ink">Submitted code</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("exercise.replay.code")}</h2>
           {allowRerun && runnable && (
             <Button variant="outline" size="sm" onClick={() => void run()} loading={running} leftIcon={<Icon.Play className="size-3.5" />}>
-              {running ? "Running" : "Re-run in browser"}
+              {running ? t("exercise.running") : t("exercise.replay.rerun")}
             </Button>
           )}
         </div>
-        <CodeEditor value={code} readOnly language={language} ariaLabel="Submitted code" minHeight={200} maxHeight={640} showHint={false} />
+        <CodeEditor value={code} readOnly language={language} ariaLabel={t("exercise.replay.code")} minHeight={200} maxHeight={640} showHint={false} />
       </div>
       {rerun && !running && (
         <p className="flex items-center gap-2 text-xs text-ink-muted">
           <Icon.Info className="size-3.5" />
-          Showing results from your browser re-run. The stored result is unchanged.
+          {t("exercise.replay.rerunNote")}
         </p>
       )}
-      <TestResultsList results={results} tests={tests} running={running} revealHidden={revealHidden} emptyText="No test results were stored for this submission." />
+      <TestResultsList results={results} tests={tests} running={running} revealHidden={revealHidden} emptyText={t("exercise.replay.noResults")} />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { getLessonHref } from "@/lib/data/courses";
 import { canManageAssessments, getExercise, getOwnExerciseSubmission, toExerciseSubmissionView, toRunnerExercise } from "@/lib/data/assessments";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 import { ExerciseRunner } from "./exercise-runner";
 
 /**
@@ -11,13 +12,13 @@ import { ExerciseRunner } from "./exercise-runner";
  * in-browser test run and server-validated submission, all inline.
  */
 export async function ExerciseBlock({ exerciseId, lessonId, courseId }: { exerciseId: string; lessonId?: string; courseId?: string }) {
-  const [exercise, user, settings] = await Promise.all([getExercise(exerciseId), getCurrentUser(), getSettings()]);
+  const [exercise, user, settings, t] = await Promise.all([getExercise(exerciseId), getCurrentUser(), getSettings(), getT("learning")]);
 
   if (!exercise) {
     return (
       <Card className="flex items-center gap-3 p-4 text-sm text-ink-muted">
         <Icon.AlertCircle className="size-5 shrink-0 text-ink-faint" />
-        This programming exercise is no longer available.
+        {t("exercise.gone")}
       </Card>
     );
   }
@@ -25,7 +26,7 @@ export async function ExerciseBlock({ exerciseId, lessonId, courseId }: { exerci
     return (
       <Card className="flex items-center gap-3 p-4 text-sm text-ink-muted">
         <Icon.Code className="size-5 shrink-0 text-ink-faint" />
-        Programming exercises are currently turned off.
+        {t("exercise.off")}
       </Card>
     );
   }

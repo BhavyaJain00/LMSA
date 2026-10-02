@@ -3,6 +3,7 @@ import type { PostAuthor } from "@/lib/data/blog";
 import { Markdown } from "@/lib/markdown";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
+import { getT } from "@/i18n/server";
 
 /**
  * "About the author" block under an article: avatar, name (linked to the
@@ -10,11 +11,12 @@ import { Icon } from "@/components/ui/icons";
  * with credentials is part of what search engines look for in helpful
  * content. Server Component.
  */
-export function AuthorBox({ author, profileHref }: { author: PostAuthor; profileHref: string | null }) {
+export async function AuthorBox({ author, profileHref }: { author: PostAuthor; profileHref: string | null }) {
+  const t = await getT("public");
   return (
     <section aria-labelledby="author-heading" className="rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
       <h2 id="author-heading" className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
-        About the author
+        {t("blog.author.title")}
       </h2>
       <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start">
         <Avatar name={author.name} src={author.avatarUrl} size="xl" className="shrink-0" />
@@ -32,7 +34,7 @@ export function AuthorBox({ author, profileHref }: { author: PostAuthor; profile
           {author.bio && <Markdown content={author.bio} className="mt-3 text-sm" />}
           {profileHref && (
             <Link href={profileHref} className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-              View profile
+              {t("course.instructors.viewProfile")}
               <Icon.ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
             </Link>
           )}

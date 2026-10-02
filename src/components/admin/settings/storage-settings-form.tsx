@@ -18,13 +18,14 @@ import { cn } from "@/lib/utils";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 /** Rendition heights offered in the form (mirrors SUPPORTED_RENDITIONS on the server). */
-const RENDITION_CHOICES: { height: number; hint: string }[] = [
-  { height: 1080, hint: "Full HD · about 5 Mbit/s" },
-  { height: 720, hint: "HD · about 2.8 Mbit/s" },
-  { height: 480, hint: "SD · about 1.4 Mbit/s" },
-  { height: 360, hint: "Data saver · about 0.8 Mbit/s" },
+const RENDITION_CHOICES: { height: number; hint: "fullHd" | "hd" | "sd" | "saver"; mbps: number }[] = [
+  { height: 1080, hint: "fullHd", mbps: 5 },
+  { height: 720, hint: "hd", mbps: 2.8 },
+  { height: 480, hint: "sd", mbps: 1.4 },
+  { height: 360, hint: "saver", mbps: 0.8 },
 ];
 
 /** Settings → Storage & video: CDN, adaptive streaming, renditions and automatic captions. */
@@ -40,6 +41,7 @@ export function StorageSettingsForm({
   ffmpegAvailable: boolean;
   transcribeConfigured: boolean;
 }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveStorageSettingsAction);
   const [transcode, setTranscode] = useState(initial.transcodeToHls);
   const [heights, setHeights] = useState<number[]>(initial.renditions);
@@ -48,39 +50,39 @@ export function StorageSettingsForm({
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
-      <SettingsSection title="Delivery" description="How stored files reach learners.">
+      <SettingsSection title={t("storageForm.delivery.title")} description={t("storageForm.delivery.description")}>
         <SettingsRow
-          label="CDN base URL"
+          label={t("storageForm.cdn.label")}
           htmlFor="cdnBaseUrl"
           error={errors.cdnBaseUrl}
           description={
             remote
-              ? "Public origin of your CDN in front of the bucket (for example a Cloudflare or CloudFront domain). Images and documents are served from it; protected lesson videos keep using signed links."
-              : "Only used with S3-compatible storage. With local storage, put your CDN in front of the whole site instead."
+              ? t("storageForm.cdn.remote")
+              : t("storageForm.cdn.local")
           }
         >
-          <Input id="cdnBaseUrl" name="cdnBaseUrl" type="url" inputMode="url" placeholder="https://cdn.example.com" defaultValue={initial.cdnBaseUrl ?? ""} invalid={!!errors.cdnBaseUrl} />
+          <Input id="cdnBaseUrl" name="cdnBaseUrl" type="url" inputMode="url" dir="ltr" placeholder="https://cdn.example.com" defaultValue={initial.cdnBaseUrl ?? ""} invalid={!!errors.cdnBaseUrl} />
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Adaptive streaming" description="Convert uploaded lesson videos to HLS so the player can switch quality with the learner's connection.">
+      <SettingsSection title={t("storageForm.hls.title")} description={t("storageForm.hls.description")}>
         <SettingsSwitchRow>
           <Switch
             name="transcodeToHls"
             checked={transcode}
             onChange={(e) => setTranscode(e.target.checked)}
-            label="Convert uploaded videos to HLS"
+            label={t("storageForm.hls.label")}
             description={
               ffmpegAvailable
-                ? "Each upload is converted in the background, one video at a time. Until a conversion finishes, and whenever it fails, learners get the original file."
-                : "ffmpeg is not installed on this server, so videos keep playing as uploaded. Conversion starts automatically once ffmpeg is available."
+                ? t("storageForm.hls.ready")
+                : t("storageForm.hls.noFfmpeg")
             }
           />
         </SettingsSwitchRow>
         <fieldset className="px-4 py-4 sm:px-5" aria-describedby="renditions-hint">
-          <legend className="text-sm font-medium text-ink">Qualities to produce</legend>
+          <legend className="text-sm font-medium text-ink">{t("storageForm.renditions.title")}</legend>
           <p id="renditions-hint" className="mt-0.5 text-xs text-ink-muted">
-            Only qualities at or below the uploaded video&apos;s own resolution are made. More qualities take longer to convert and use more storage.
+            {t("storageForm.renditions.hint")}
           </p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {RENDITION_CHOICES.map((r) => (
@@ -93,7 +95,7 @@ export function StorageSettingsForm({
                   onChange={(e) => toggleHeight(r.height, e.target.checked)}
                   disabled={!transcode}
                   label={`${r.height}p`}
-                  description={r.hint}
+                  description={t(`storageForm.renditions.${r.hint}`, { mbps: r.mbps })}
                 />
               </div>
             ))}
@@ -108,16 +110,16 @@ export function StorageSettingsForm({
         </fieldset>
       </SettingsSection>
 
-      <SettingsSection title="Captions">
+      <SettingsSection title={t("storageForm.captions.title")}>
         <SettingsSwitchRow>
           <Switch
             name="autoTranscribe"
             defaultChecked={initial.autoTranscribe}
-            label="Generate captions automatically"
+            label={t("storageForm.captions.label")}
             description={
               transcribeConfigured
-                ? "When a video is ready, its audio is sent to your transcription service and the transcript becomes captions, a searchable transcript and context for the AI tutor."
-                : "Needs TRANSCRIBE_API_URL and TRANSCRIBE_API_KEY in the server's .env (any OpenAI-compatible speech-to-text endpoint) and ffmpeg. Until then, instructors can still upload or type transcripts."
+                ? t("storageForm.captions.ready")
+                : t("storageForm.captions.notConfigured")
             }
           />
         </SettingsSwitchRow>
@@ -153,6 +155,7 @@ export function StorageActionButton<T>({
   disabled?: boolean;
   className?: string;
 }) {
+  const t = useT("admin");
   const router = useRouter();
   const toast = useToast();
   const [pending, startTransition] = useTransition();
@@ -162,7 +165,7 @@ export function StorageActionButton<T>({
     startTransition(async () => {
       const result = await action();
       setAsking(false);
-      if (result.ok) toast.success(result.message ?? "Done");
+      if (result.ok) toast.success(result.message ?? t("storageForm.done"));
       else toast.error(result.error);
       router.refresh();
     });
@@ -188,17 +191,18 @@ export function StorageActionButton<T>({
   );
 }
 
-const STEP_LABELS: Record<string, string> = {
-  write: "Write a test file",
-  read: "Read it back",
-  "signed-url": "Download through a signed URL",
-  delete: "Delete it",
+const STEP_KEYS: Record<string, "write" | "read" | "signedUrl" | "delete"> = {
+  write: "write",
+  read: "read",
+  "signed-url": "signedUrl",
+  delete: "delete",
 };
 
 type TestResult = Awaited<ReturnType<typeof testStorageConnectionAction>>;
 
 /** "Test connection": writes, reads, (signs) and deletes a probe file and lists each step. */
 export function StorageConnectionTest() {
+  const t = useT("admin");
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<TestResult | null>(null);
 
@@ -211,7 +215,7 @@ export function StorageConnectionTest() {
         leftIcon={<Icon.Zap className="size-4" />}
         onClick={() => startTransition(async () => setResult(await testStorageConnectionAction()))}
       >
-        Test connection
+        {t("gateways.test")}
       </Button>
       <div aria-live="polite">
         {result && (
@@ -223,8 +227,8 @@ export function StorageConnectionTest() {
                   {result.data.steps.map((s) => (
                     <li key={s.step} className="flex items-center gap-2 text-xs text-ink-muted">
                       <Icon.CheckCircle className="size-3.5 shrink-0 text-success" />
-                      <span className="flex-1">{STEP_LABELS[s.step] ?? s.step}</span>
-                      <span className="tabular-nums">{s.ms} ms</span>
+                      <span className="flex-1">{STEP_KEYS[s.step] ? t(`storageForm.steps.${STEP_KEYS[s.step]}`) : s.step}</span>
+                      <span className="tabular-nums">{t("storageForm.ms", { ms: s.ms })}</span>
                     </li>
                   ))}
                 </ul>
@@ -248,27 +252,29 @@ export function StorageConnectionTest() {
 
 /** Retry / cancel buttons of one queue row. */
 export function TranscodeJobActions({ jobId, status }: { jobId: string; status: "queued" | "running" | "done" | "failed" }) {
+  const t = useT("admin");
   if (status === "queued" || status === "running") {
     return (
       <StorageActionButton
         action={() => cancelTranscodeJobAction(jobId)}
-        label="Cancel"
+        label={t("shared.cancel")}
         variant="ghost"
         icon={<Icon.X className="size-4" />}
         confirm={{
-          title: "Cancel this conversion?",
-          description: "Learners keep getting the original file (or the previous converted version). You can start the conversion again later.",
-          confirmLabel: "Cancel conversion",
+          title: t("storageForm.queue.cancelTitle"),
+          description: t("storageForm.queue.cancelDescription"),
+          confirmLabel: t("storageForm.queue.cancelConfirm"),
           destructive: true,
         }}
       />
     );
   }
-  return <StorageActionButton action={() => retryTranscodeJobAction(jobId)} label={status === "failed" ? "Retry" : "Convert again"} variant="ghost" icon={<Icon.Refresh className="size-4" />} />;
+  return <StorageActionButton action={() => retryTranscodeJobAction(jobId)} label={status === "failed" ? t("storageForm.queue.retry") : t("storageForm.queue.again")} variant="ghost" icon={<Icon.Refresh className="size-4" />} />;
 }
 
 /** Refreshes the page every few seconds while conversions are queued or running, so progress stays current. */
 export function QueueAutoRefresh({ active, intervalMs = 5000 }: { active: boolean; intervalMs?: number }) {
+  const t = useT("admin");
   const router = useRouter();
   useEffect(() => {
     if (!active) return;
@@ -281,7 +287,7 @@ export function QueueAutoRefresh({ active, intervalMs = 5000 }: { active: boolea
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
       <Icon.Loader className="size-3.5 animate-spin" aria-hidden="true" />
-      Updating live
+      {t("storageForm.queue.live")}
     </span>
   );
 }

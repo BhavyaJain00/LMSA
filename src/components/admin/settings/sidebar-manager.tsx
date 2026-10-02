@@ -12,6 +12,7 @@ import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export interface BuiltInItem {
   label: string;
@@ -23,10 +24,10 @@ export interface BuiltInItem {
 
 const ICON_NAMES = (Object.keys(Icon) as IconName[]).filter((n) => n !== "Loader" && n !== "Dot");
 
-function linkType(href: string): string {
-  if (href.startsWith("/")) return "Link within this site";
-  if (href.startsWith("mailto:")) return "Email link";
-  return "External link";
+function linkType(href: string): "internal" | "email" | "external" {
+  if (href.startsWith("/")) return "internal";
+  if (href.startsWith("mailto:")) return "email";
+  return "external";
 }
 
 function IconGlyph({ name, className }: { name: string | undefined; className?: string }) {
@@ -36,6 +37,7 @@ function IconGlyph({ name, className }: { name: string | undefined; className?: 
 }
 
 export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; builtIns: BuiltInItem[] }) {
+  const t = useT("admin");
   const toast = useToast();
   const [editing, setEditing] = useState<SidebarItem | "new" | null>(null);
   const [toDelete, setToDelete] = useState<SidebarItem | null>(null);
@@ -47,7 +49,7 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
     setBusyId(item.id);
     startMove(async () => {
       const res = await moveSidebarItemAction(item.id, direction);
-      if (!res.ok) toast.error("Error saving sidebar", res.error);
+      if (!res.ok) toast.error(t("sidebarManager.saveFailed"), res.error);
       setBusyId(null);
     });
   };
@@ -58,7 +60,7 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
     startDelete(async () => {
       const res = await deleteSidebarItemAction(target.id);
       if (res.ok) {
-        toast.success(res.message ?? "Sidebar link removed");
+        toast.success(res.message ?? t("sidebarManager.removed"));
         setToDelete(null);
       } else toast.error(res.error);
     });
@@ -69,27 +71,27 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
       <div className="overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
           <div>
-            <h3 className="text-base font-semibold text-ink">Custom links</h3>
-            <p className="text-sm text-ink-muted">Shown under “Links” in the sidebar, in this order.</p>
+            <h3 className="text-base font-semibold text-ink">{t("sidebarManager.custom")}</h3>
+            <p className="text-sm text-ink-muted">{t("sidebarManager.customHint")}</p>
           </div>
           <Button size="sm" leftIcon={<Icon.Plus className="size-4" />} onClick={() => setEditing("new")}>
-            New
+            {t("sidebarManager.new")}
           </Button>
         </div>
         {items.length === 0 ? (
           <div className="px-5 py-10 text-center">
-            <p className="text-sm font-medium text-ink">No custom links yet</p>
-            <p className="mt-1 text-sm text-ink-muted">Add links to your blog, community forum, help center or any page on this site.</p>
+            <p className="text-sm font-medium text-ink">{t("sidebarManager.emptyTitle")}</p>
+            <p className="mt-1 text-sm text-ink-muted">{t("sidebarManager.emptyDescription")}</p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
             {items.map((item, i) => (
               <li key={item.id} className={cn("flex items-center gap-3 px-4 py-3 sm:px-5", busyId === item.id && "opacity-60")}>
                 <div className="flex flex-col">
-                  <IconButton label={`Move ${item.label} up`} size="icon-sm" disabled={i === 0 || !!busyId} onClick={() => move(item, "up")}>
+                  <IconButton label={t("sidebarManager.moveUp", { label: item.label })} size="icon-sm" disabled={i === 0 || !!busyId} onClick={() => move(item, "up")}>
                     <Icon.ChevronUp className="size-4" />
                   </IconButton>
-                  <IconButton label={`Move ${item.label} down`} size="icon-sm" disabled={i === items.length - 1 || !!busyId} onClick={() => move(item, "down")}>
+                  <IconButton label={t("sidebarManager.moveDown", { label: item.label })} size="icon-sm" disabled={i === items.length - 1 || !!busyId} onClick={() => move(item, "down")}>
                     <Icon.ChevronDown className="size-4" />
                   </IconButton>
                 </div>
@@ -99,15 +101,15 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{item.label}</p>
                   <p className="truncate text-xs text-ink-muted">
-                    <span className="hidden sm:inline">{linkType(item.href)} · </span>
-                    <span className="font-mono">{item.href}</span>
+                    <span className="hidden sm:inline">{t(`sidebarManager.linkType.${linkType(item.href)}`)} · </span>
+                    <span className="font-mono" dir="ltr">{item.href}</span>
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1">
-                  <IconButton label={`Edit ${item.label}`} size="icon-sm" onClick={() => setEditing(item)}>
+                  <IconButton label={t("shared.editNamed", { name: item.label })} size="icon-sm" onClick={() => setEditing(item)}>
                     <Icon.Edit className="size-4" />
                   </IconButton>
-                  <IconButton label={`Delete ${item.label}`} size="icon-sm" className="hover:text-danger" onClick={() => setToDelete(item)}>
+                  <IconButton label={t("shared.deleteNamed", { name: item.label })} size="icon-sm" className="hover:text-danger" onClick={() => setToDelete(item)}>
                     <Icon.Trash className="size-4" />
                   </IconButton>
                 </div>
@@ -119,17 +121,20 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
 
       <div className="overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
         <div className="border-b border-border px-4 py-3.5 sm:px-5">
-          <h3 className="text-base font-semibold text-ink">Built-in items</h3>
+          <h3 className="text-base font-semibold text-ink">{t("sidebarManager.builtIn")}</h3>
           <p className="text-sm text-ink-muted">
-            These follow your{" "}
-            <Link href="/admin/settings/features" className="font-medium text-accent hover:underline">
-              Features
-            </Link>{" "}
-            and{" "}
-            <Link href="/admin/settings/general" className="font-medium text-accent hover:underline">
-              contact
-            </Link>{" "}
-            settings and each member&apos;s role.
+            {t.rich("sidebarManager.builtInHint", {
+              features: (chunks) => (
+                <Link href="/admin/settings/features" className="font-medium text-accent hover:underline">
+                  {chunks}
+                </Link>
+              ),
+              contact: (chunks) => (
+                <Link href="/admin/settings/general" className="font-medium text-accent hover:underline">
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
         </div>
         <ul className="divide-y divide-border">
@@ -144,11 +149,11 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
               </div>
               {b.visible ? (
                 <Badge tone="success" dot>
-                  Visible
+                  {t("sidebarManager.visible")}
                 </Badge>
               ) : (
                 <Badge tone="neutral" dot>
-                  Hidden
+                  {t("sidebarManager.hidden")}
                 </Badge>
               )}
             </li>
@@ -164,15 +169,16 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
         onConfirm={confirmDelete}
         loading={deleting}
         destructive
-        title={`Remove “${toDelete?.label ?? "link"}” from the sidebar?`}
-        description="Members will no longer see this link. You can add it again at any time."
-        confirmLabel="Remove"
+        title={toDelete ? t("sidebarManager.removeTitle", { label: toDelete.label }) : ""}
+        description={t("sidebarManager.removeDescription")}
+        confirmLabel={t("sidebarManager.remove")}
       />
     </div>
   );
 }
 
 function SidebarLinkDialog({ item, onClose }: { item: SidebarItem | null; onClose: () => void }) {
+  const t = useT("admin");
   const [icon, setIcon] = useState<string>(item?.icon ?? "ExternalLink");
   const [label, setLabel] = useState(item?.label ?? "");
   const [iconSearch, setIconSearch] = useState("");
@@ -189,14 +195,14 @@ function SidebarLinkDialog({ item, onClose }: { item: SidebarItem | null; onClos
       open
       onClose={() => (pending ? undefined : onClose())}
       size="lg"
-      title={item ? "Edit sidebar link" : "Add link to sidebar"}
+      title={item ? t("sidebarManager.editTitle") : t("sidebarManager.addTitle")}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("shared.cancel")}
           </Button>
           <Button type="submit" form={formId} loading={pending} disabled={!!item && !dirty}>
-            {item ? "Save" : "Add"}
+            {item ? t("shared.save") : t("sidebarManager.add")}
           </Button>
         </>
       }
@@ -205,36 +211,37 @@ function SidebarLinkDialog({ item, onClose }: { item: SidebarItem | null; onClos
         {item && <input type="hidden" name="id" value={item.id} />}
         <input type="hidden" name="icon" value={icon} />
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Label" htmlFor={`${formId}-label`} error={errors.label} required>
-            <Input id={`${formId}-label`} name="label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={40} placeholder="Community forum" invalid={!!errors.label} autoFocus />
+          <Field label={t("sidebarManager.label")} htmlFor={`${formId}-label`} error={errors.label} required>
+            <Input id={`${formId}-label`} name="label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={40} placeholder={t("sidebarManager.labelPlaceholder")} invalid={!!errors.label} autoFocus />
           </Field>
-          <Field label="Link" htmlFor={`${formId}-href`} error={errors.href} hint={errors.href ? undefined : "A route like /programs or a full https:// URL."} required>
-            <Input id={`${formId}-href`} name="href" defaultValue={item?.href} placeholder="https://forum.example.com" invalid={!!errors.href} spellCheck={false} />
+          <Field label={t("sidebarManager.link")} htmlFor={`${formId}-href`} error={errors.href} hint={errors.href ? undefined : t("sidebarManager.linkHint")} required>
+            <Input id={`${formId}-href`} name="href" defaultValue={item?.href} placeholder="https://forum.example.com" invalid={!!errors.href} spellCheck={false} dir="ltr" />
           </Field>
         </div>
 
         <div>
           <div className="mb-1.5 flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-ink">
-              Icon<span className="ml-0.5 text-danger">*</span>
+              {t("sidebarManager.icon")}
+              <span className="ms-0.5 text-danger">*</span>
             </span>
             <span className="flex items-center gap-2 text-xs text-ink-muted">
-              Preview
+              {t("sidebarManager.preview")}
               <span className="inline-flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1 text-sm text-ink">
                 <IconGlyph name={icon} className="size-4" />
-                {label || "Link"}
+                {label || t("sidebarManager.link")}
               </span>
             </span>
           </div>
           <Input
             type="search"
-            aria-label="Search icons"
-            placeholder="Search icons"
+            aria-label={t("sidebarManager.searchIcons")}
+            placeholder={t("sidebarManager.searchIcons")}
             value={iconSearch}
             onChange={(e) => setIconSearch(e.target.value)}
             leftAddon={<Icon.Search className="size-4" />}
           />
-          <div role="radiogroup" aria-label="Icon" className="mt-2 grid max-h-56 grid-cols-6 gap-1 overflow-y-auto rounded-lg border border-border p-1.5 sm:grid-cols-9">
+          <div role="radiogroup" aria-label={t("sidebarManager.icon")} className="mt-2 grid max-h-56 grid-cols-6 gap-1 overflow-y-auto rounded-lg border border-border p-1.5 sm:grid-cols-9">
             {icons.map((name) => {
               const selected = icon === name;
               return (
@@ -258,7 +265,7 @@ function SidebarLinkDialog({ item, onClose }: { item: SidebarItem | null; onClos
                 </button>
               );
             })}
-            {icons.length === 0 && <p className="col-span-full px-2 py-4 text-center text-sm text-ink-muted">No icons match “{iconSearch}”.</p>}
+            {icons.length === 0 && <p className="col-span-full px-2 py-4 text-center text-sm text-ink-muted">{t("sidebarManager.noIcons", { query: iconSearch })}</p>}
           </div>
           {errors.icon && <p className="mt-1 text-xs text-danger">{errors.icon}</p>}
         </div>

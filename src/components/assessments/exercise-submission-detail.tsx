@@ -5,40 +5,48 @@ import { Card, PageHeader } from "@/components/ui/card";
 import { ButtonLink } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
+import { LearningI18n } from "@/components/learn/learning-i18n";
+import { getT } from "@/i18n/server";
 import { Breadcrumbs, type Crumb } from "./breadcrumbs";
 import { ExerciseStatusBadge } from "./status-badges";
 import { LocalDateTime } from "./client-time";
 import { SubmissionReplay } from "./submission-replay";
 import { LANGUAGE_LABELS } from "./shared";
 
-/** Shared body of the learner and staff exercise-submission pages. */
-export function ExerciseSubmissionDetailView({ detail, staff, owner, crumbs }: { detail: ExerciseSubmissionDetail; staff: boolean; owner: boolean; crumbs: Crumb[] }) {
+/** Shared body of the learner and staff exercise-submission pages. Server component; provides the `learning` messages of its client parts. */
+export async function ExerciseSubmissionDetailView({ detail, staff, owner, crumbs }: { detail: ExerciseSubmissionDetail; staff: boolean; owner: boolean; crumbs: Crumb[] }) {
+  const t = await getT("learning");
   const { submission, exercise } = detail;
   const view = toExerciseSubmissionView(submission, exercise, { revealHidden: staff });
   const runner = exercise ? toRunnerExercise(exercise, { revealHidden: staff }) : null;
   const title = exercise?.title ?? submission.exerciseTitle;
 
   return (
+    <LearningI18n slices={["exercise."]}>
     <div className="animate-fade-in">
       <PageHeader
         breadcrumbs={<Breadcrumbs items={crumbs} />}
-        title={owner ? `Your submission: ${title}` : `${detail.user.name}'s submission`}
-        description={exercise ? `${LANGUAGE_LABELS[exercise.language]} · ${exercise.testCases.length} test cases` : "This exercise has been deleted."}
+        title={owner ? t("exercise.detail.ownTitle", { title }) : t("exercise.detail.title", { name: detail.user.name })}
+        description={
+          exercise
+            ? t("exercise.detail.description", { language: LANGUAGE_LABELS[exercise.language], count: exercise.testCases.length })
+            : t("exercise.detail.deleted")
+        }
         actions={
           <>
             {detail.lessonHref && (
               <ButtonLink href={detail.lessonHref} variant="outline" leftIcon={<Icon.BookOpen className="size-4" />}>
-                Open lesson
+                {t("exercise.detail.openLesson")}
               </ButtonLink>
             )}
             {owner && exercise && (
               <ButtonLink href={`/exercises/${exercise.id}`} leftIcon={<Icon.Code className="size-4" />}>
-                Open in editor
+                {t("exercise.detail.openEditor")}
               </ButtonLink>
             )}
             {staff && !owner && exercise && (
               <ButtonLink href={`/admin/exercises/${exercise.id}`} variant="ghost" leftIcon={<Icon.Edit className="size-4" />}>
-                Edit exercise
+                {t("exercise.detail.edit")}
               </ButtonLink>
             )}
           </>
@@ -62,27 +70,27 @@ export function ExerciseSubmissionDetailView({ detail, staff, owner, crumbs }: {
           </div>
           <dl className="space-y-3 p-4 text-sm">
             <div className="flex items-center justify-between gap-3">
-              <dt className="text-ink-muted">Status</dt>
+              <dt className="text-ink-muted">{t("exercise.detail.status")}</dt>
               <dd>
                 <ExerciseStatusBadge status={view.status} />
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <dt className="text-ink-muted">Tests passed</dt>
+              <dt className="text-ink-muted">{t("exercise.detail.testsPassed")}</dt>
               <dd className="font-medium text-ink">
                 {view.passedCount} / {view.totalCount}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <dt className="text-ink-muted">Submitted</dt>
-              <dd className="text-right text-ink">
+              <dt className="text-ink-muted">{t("exercise.detail.submitted")}</dt>
+              <dd className="text-end text-ink">
                 <LocalDateTime iso={submission.submittedAt} />
               </dd>
             </div>
             {detail.course && (
               <div className="flex items-start justify-between gap-3">
-                <dt className="text-ink-muted">Course</dt>
-                <dd className="text-right">
+                <dt className="text-ink-muted">{t("exercise.detail.course")}</dt>
+                <dd className="text-end">
                   <Link href={`/courses/${detail.course.slug}`} className="text-accent hover:underline">
                     {detail.course.title}
                   </Link>
@@ -91,15 +99,15 @@ export function ExerciseSubmissionDetailView({ detail, staff, owner, crumbs }: {
             )}
             {detail.lessonTitle && (
               <div className="flex items-start justify-between gap-3">
-                <dt className="text-ink-muted">Lesson</dt>
-                <dd className="text-right text-ink">{detail.lessonTitle}</dd>
+                <dt className="text-ink-muted">{t("exercise.detail.lesson")}</dt>
+                <dd className="text-end text-ink">{detail.lessonTitle}</dd>
               </div>
             )}
           </dl>
           {staff && exercise && (
             <div className="p-4">
               <ButtonLink href={`/admin/exercises/submissions?exercise=${exercise.id}`} variant="ghost" size="sm" className="w-full" leftIcon={<Icon.ClipboardList className="size-4" />}>
-                All submissions for this exercise
+                {t("exercise.detail.allSubmissions")}
               </ButtonLink>
             </div>
           )}
@@ -117,5 +125,6 @@ export function ExerciseSubmissionDetailView({ detail, staff, owner, crumbs }: {
         </Card>
       </div>
     </div>
+    </LearningI18n>
   );
 }

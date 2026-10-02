@@ -12,6 +12,7 @@ import { SnippetPreview } from "@/components/seo/snippet-preview";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export interface SeoValues {
   brandName: string;
@@ -33,6 +34,7 @@ export interface SeoValues {
 }
 
 export function SeoForm({ initial }: { initial: SeoValues }) {
+  const t = useT("admin");
   const { onSubmit, pending, errors, dirty, markDirty, state } = useFormAction(saveSeoSettingsAction);
   const [template, setTemplate] = useState(initial.siteTitleTemplate);
   const [description, setDescription] = useState(initial.metaDescription);
@@ -41,7 +43,7 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
   const [noindex, setNoindex] = useState(initial.noindexSite);
 
   const homeTitle = initial.tagline ? `${initial.brandName} — ${initial.tagline}` : initial.brandName;
-  const sampleTitle = template.includes("%s") ? applyTitleTemplate(template, "Introduction to JavaScript") : "Include %s in the template";
+  const sampleTitle = template.includes("%s") ? applyTitleTemplate(template, t("seoForm.samplePage")) : t("seoForm.includePlaceholder");
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-6">
@@ -49,19 +51,24 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
         <div role="alert" className="flex items-start gap-3 rounded-card border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-ink">
           <Icon.EyeOff className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
           <p>
-            <span className="font-medium">Search engines are asked not to index this site.</span>{" "}
-            <span className="text-ink-muted">Every page carries a noindex tag. Turn this off before launch or your pages will disappear from search results.</span>
+            <span className="font-medium">{t("seoForm.noindexWarning")}</span>{" "}
+            <span className="text-ink-muted">{t("seoForm.noindexWarningDetail")}</span>
           </p>
         </div>
       )}
 
-      <SettingsSection title="Search appearance" description="How your pages are titled and described in search results and link previews.">
+      <SettingsSection title={t("seoForm.appearance.title")} description={t("seoForm.appearance.description")}>
         <SettingsRow
-          label="Title template"
+          label={t("seoForm.template.label")}
           description={
-            <>
-              Applied to every page title. <code className="rounded bg-surface-2 px-1">%s</code> is replaced by the page name. Example: {sampleTitle}
-            </>
+            t.rich("seoForm.template.description", {
+              token: (
+                <code className="rounded bg-surface-2 px-1" dir="ltr">
+                  %s
+                </code>
+              ),
+              example: sampleTitle,
+            })
           }
           htmlFor="siteTitleTemplate"
           error={errors.siteTitleTemplate}
@@ -79,8 +86,8 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
           />
         </SettingsRow>
         <SettingsRow
-          label="Default meta description"
-          description="Used on the home page and on any page without its own description. Aim for 120–160 characters that tell searchers what they will learn."
+          label={t("seoForm.description.label")}
+          description={t("seoForm.description.description")}
           htmlFor="metaDescription"
           error={errors.metaDescription}
           stacked
@@ -93,16 +100,16 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
             onChange={(e) => setDescription(e.target.value)}
             maxLength={SEO_SETTINGS_LIMITS.description}
             invalid={!!errors.metaDescription}
-            placeholder="Hands-on online courses with video lessons, quizzes, live cohorts and certificates."
+            placeholder={t("seoForm.description.placeholder")}
           />
           <CharCounter length={description.trim().length} min={DESCRIPTION_MIN} max={DESCRIPTION_MAX} />
         </SettingsRow>
-        <SettingsRow label="Keywords" description="Comma separated. Few search engines still read them; they also feed the site's default keywords." htmlFor="metaKeywords" error={errors.metaKeywords} stacked>
-          <Textarea id="metaKeywords" name="metaKeywords" rows={2} defaultValue={initial.metaKeywords} invalid={!!errors.metaKeywords} placeholder="online courses, web development, certificates" />
+        <SettingsRow label={t("seoForm.keywords.label")} description={t("seoForm.keywords.description")} htmlFor="metaKeywords" error={errors.metaKeywords} stacked>
+          <Textarea id="metaKeywords" name="metaKeywords" rows={2} defaultValue={initial.metaKeywords} invalid={!!errors.metaKeywords} placeholder={t("seoForm.keywords.placeholder")} />
         </SettingsRow>
         <SettingsRow
-          label="Default share image"
-          description="Shown when a page without its own image is shared on social networks. Use 1200×630 px. Leave empty to use the generated brand card."
+          label={t("seoForm.image.label")}
+          description={t("seoForm.image.description")}
           error={errors.metaImageUrl}
           stacked
         >
@@ -116,19 +123,19 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
             }}
           />
         </SettingsRow>
-        <SettingsRow label="X (Twitter) handle" description="Credited on shared links (twitter:site)." htmlFor="twitterHandle" error={errors.twitterHandle}>
+        <SettingsRow label={t("seoForm.twitter.label")} description={t("seoForm.twitter.description")} htmlFor="twitterHandle" error={errors.twitterHandle}>
           <Input id="twitterHandle" name="twitterHandle" defaultValue={initial.twitterHandle} placeholder="@yourbrand" autoComplete="off" spellCheck={false} invalid={!!errors.twitterHandle} />
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Search result preview" description="An approximation of how the home page may appear on Google.">
+      <SettingsSection title={t("seoForm.preview.title")} description={t("seoForm.preview.description")}>
         <div className="px-4 py-4 sm:px-5">
           <SnippetPreview url={initial.siteUrl} title={homeTitle} description={description} />
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Organization" description="Describes who runs the site in structured data (Google's knowledge panel, logo in results, course provider).">
-        <SettingsRow label="Organization name" description="Usually your company or school name." htmlFor="organizationName" error={errors.organizationName} required>
+      <SettingsSection title={t("seoForm.organization.title")} description={t("seoForm.organization.description")}>
+        <SettingsRow label={t("seoForm.organization.name")} description={t("seoForm.organization.nameDescription")} htmlFor="organizationName" error={errors.organizationName} required>
           <Input
             id="organizationName"
             name="organizationName"
@@ -138,7 +145,7 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
             required
           />
         </SettingsRow>
-        <SettingsRow label="Logo" description="A square logo of at least 112×112 px. Empty = the logo from Branding." error={errors.organizationLogoUrl} stacked>
+        <SettingsRow label={t("seoForm.organization.logo")} description={t("seoForm.organization.logoDescription")} error={errors.organizationLogoUrl} stacked>
           <FileUpload
             name="organizationLogoUrl"
             kind="image"
@@ -150,8 +157,8 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
           />
         </SettingsRow>
         <SettingsRow
-          label="Official profiles"
-          description="One URL per line: LinkedIn, YouTube, X, Instagram, Wikipedia… Search engines use them to connect your brand's profiles."
+          label={t("seoForm.organization.profiles")}
+          description={t("seoForm.organization.profilesDescription")}
           htmlFor="sameAs"
           error={errors.sameAs}
           stacked
@@ -168,10 +175,10 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Search engine verification" description="Prove you own the site to see search performance, submit sitemaps and fix indexing problems.">
+      <SettingsSection title={t("seoForm.verification.title")} description={t("seoForm.verification.description")}>
         <SettingsRow
           label="Google Search Console"
-          description="Search Console → Add property → URL prefix → HTML tag. Paste the token or the whole meta tag."
+          description={t("seoForm.verification.google")}
           htmlFor="googleVerification"
           error={errors.googleVerification}
           stacked
@@ -188,7 +195,7 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
         </SettingsRow>
         <SettingsRow
           label="Bing Webmaster Tools"
-          description="Add a site → HTML Meta Tag option (msvalidate.01). Paste the token or the whole meta tag."
+          description={t("seoForm.verification.bing")}
           htmlFor="bingVerification"
           error={errors.bingVerification}
           stacked
@@ -205,25 +212,25 @@ export function SeoForm({ initial }: { initial: SeoValues }) {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="Blog">
+      <SettingsSection title={t("seoForm.blog.title")}>
         <SettingsSwitchRow error={errors.blogEnabled}>
           <Switch
             name="blogEnabled"
             defaultChecked={initial.blogEnabled}
-            label="Publish the blog"
-            description="Shows /blog with its categories, topics and RSS feed, adds articles to the sitemap, the footer and course pages. When off, articles stay editable under Admin → Blog but are not public."
+            label={t("seoForm.blog.label")}
+            description={t("seoForm.blog.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>
 
-      <SettingsSection title="Indexing">
+      <SettingsSection title={t("seoForm.indexing.title")}>
         <SettingsSwitchRow error={errors.noindexSite}>
           <Switch
             name="noindexSite"
             checked={noindex}
             onChange={(e) => setNoindex(e.target.checked)}
-            label="Hide the whole site from search engines"
-            description="Adds noindex to every page and blocks crawling in robots.txt. Use it for staging copies or before launch; account, admin and checkout pages are always hidden."
+            label={t("seoForm.indexing.label")}
+            description={t("seoForm.indexing.description")}
           />
         </SettingsSwitchRow>
       </SettingsSection>
