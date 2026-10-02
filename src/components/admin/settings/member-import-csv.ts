@@ -112,20 +112,38 @@ function normalizeHeader(h: string): string {
  * Turn CSV text into import rows. Needs an `email` and a `name` column; the
  * `roles` and `password` columns are optional. Column order does not matter.
  */
-export function readMemberImportCsv(text: string): { ok: true; rows: MemberImportRow[] } | { ok: false; error: string } {
+/** Why a file could not be read, so the interface can explain it in the viewer's language. */
+export type MemberImportCsvProblem =
+  | { code: "empty" }
+  | { code: "missingColumns"; missing: ("email" | "name")[] }
+  | { code: "headerOnly" }
+  | { code: "tooManyRows"; rows: number; max: number };
+
+export function readMemberImportCsv(text: string): { ok: true; rows: MemberImportRow[] } | ({ ok: false; error: string } & MemberImportCsvProblem) {
   const parsed = parseCsv(text);
-  if (!parsed.length) return { ok: false, error: "The file is empty. Add a header row and one row per member." };
+  if (!parsed.length) return { ok: false, code: "empty", error: "The file is empty. Add a header row and one row per member." };
   const header = parsed[0].cells.map(normalizeHeader);
   const index = (key: keyof typeof HEADER_ALIASES) => header.findIndex((h) => HEADER_ALIASES[key].some((a) => normalizeHeader(a) === h));
   const col = { email: index("email"), name: index("name"), roles: index("roles"), password: index("password") };
   const missing = (["email", "name"] as const).filter((k) => col[k] < 0);
   if (missing.length) {
-    return { ok: false, error: `Missing ${missing.join(" and ")} ${missing.length === 1 ? "column" : "columns"}. The header row must include email and name (roles and password are optional).` };
+    return {
+      ok: false,
+      code: "missingColumns",
+      missing: [...missing],
+      error: `Missing ${missing.join(" and ")} ${missing.length === 1 ? "column" : "columns"}. The header row must include email and name (roles and password are optional).`,
+    };
   }
   const body = parsed.slice(1);
-  if (!body.length) return { ok: false, error: "The file only has a header row. Add one row per member below it." };
+  if (!body.length) return { ok: false, code: "headerOnly", error: "The file only has a header row. Add one row per member below it." };
   if (body.length > MEMBER_IMPORT_MAX_ROWS) {
-    return { ok: false, error: `The file has ${body.length} rows. Import at most ${MEMBER_IMPORT_MAX_ROWS} members at a time by splitting it into smaller files.` };
+    return {
+      ok: false,
+      code: "tooManyRows",
+      rows: body.length,
+      max: MEMBER_IMPORT_MAX_ROWS,
+      error: `The file has ${body.length} rows. Import at most ${MEMBER_IMPORT_MAX_ROWS} members at a time by splitting it into smaller files.`,
+    };
   }
   const at = (cells: string[], i: number) => (i >= 0 ? (cells[i] ?? "").trim() : "");
   return {

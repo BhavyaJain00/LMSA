@@ -5,6 +5,7 @@ import { Markdown } from "@/lib/markdown";
 import { Icon } from "@/components/ui/icons";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 type Mode = "write" | "preview";
 
@@ -39,16 +40,17 @@ function QuoteIcon() {
 
 type ToolId = "bold" | "italic" | "heading" | "bullets" | "numbers" | "quote" | "link" | "code" | "codeblock";
 
-const TOOLS: { id: ToolId; label: string; icon: ReactNode }[] = [
-  { id: "bold", label: "Bold", icon: <Glyph className="font-bold">B</Glyph> },
-  { id: "italic", label: "Italic", icon: <Glyph className="font-serif italic">I</Glyph> },
-  { id: "heading", label: "Heading", icon: <Glyph className="font-semibold">H</Glyph> },
-  { id: "bullets", label: "Bulleted list", icon: <ListIcon /> },
-  { id: "numbers", label: "Numbered list", icon: <ListIcon ordered /> },
-  { id: "quote", label: "Quote", icon: <QuoteIcon /> },
-  { id: "link", label: "Link", icon: <Icon.Link className="size-4" /> },
-  { id: "code", label: "Inline code", icon: <Icon.Code className="size-4" /> },
-  { id: "codeblock", label: "Code block", icon: <Icon.Terminal className="size-4" /> },
+/** Toolbar buttons; labels are `global.markdown.<id>` messages. */
+const TOOLS: { id: ToolId; icon: ReactNode }[] = [
+  { id: "bold", icon: <Glyph className="font-bold">B</Glyph> },
+  { id: "italic", icon: <Glyph className="font-serif italic">I</Glyph> },
+  { id: "heading", icon: <Glyph className="font-semibold">H</Glyph> },
+  { id: "bullets", icon: <ListIcon /> },
+  { id: "numbers", icon: <ListIcon ordered /> },
+  { id: "quote", icon: <QuoteIcon /> },
+  { id: "link", icon: <Icon.Link className="size-4" /> },
+  { id: "code", icon: <Icon.Code className="size-4" /> },
+  { id: "codeblock", icon: <Icon.Terminal className="size-4" /> },
 ];
 
 export interface MarkdownEditorProps {
@@ -88,6 +90,7 @@ export function MarkdownEditor({
   className,
   describedBy,
 }: MarkdownEditorProps) {
+  const t = useT("learning");
   const autoId = useId();
   const fieldId = id ?? `md-${autoId}`;
   const [inner, setInner] = useState(defaultValue);
@@ -110,7 +113,7 @@ export function MarkdownEditor({
     });
   };
 
-  const wrap = (before: string, after = before, fallback = "text") => {
+  const wrap = (before: string, after: string, fallback: string) => {
     const el = ref.current;
     if (!el || disabled) return;
     const { selectionStart: s, selectionEnd: e } = el;
@@ -140,7 +143,7 @@ export function MarkdownEditor({
     const el = ref.current;
     if (!el || disabled) return;
     const { selectionStart: s, selectionEnd: e } = el;
-    const label = current.slice(s, e) || "link text";
+    const label = current.slice(s, e) || t("global.markdown.sampleLink");
     const snippet = `[${label}](https://)`;
     set(current.slice(0, s) + snippet + current.slice(e));
     const urlStart = s + label.length + 3;
@@ -151,7 +154,7 @@ export function MarkdownEditor({
     const el = ref.current;
     if (!el || disabled) return;
     const { selectionStart: s, selectionEnd: e } = el;
-    const selected = current.slice(s, e) || "code";
+    const selected = current.slice(s, e) || t("global.markdown.sampleCode");
     const needsBreak = s > 0 && current[s - 1] !== "\n";
     const snippet = `${needsBreak ? "\n" : ""}\`\`\`\n${selected}\n\`\`\`\n`;
     set(current.slice(0, s) + snippet + current.slice(e));
@@ -162,9 +165,9 @@ export function MarkdownEditor({
   const runTool = (tool: ToolId) => {
     switch (tool) {
       case "bold":
-        return wrap("**", "**", "bold text");
+        return wrap("**", "**", t("global.markdown.sampleBold"));
       case "italic":
-        return wrap("_", "_", "italic text");
+        return wrap("_", "_", t("global.markdown.sampleItalic"));
       case "heading":
         return prefixLines(() => "## ");
       case "bullets":
@@ -176,7 +179,7 @@ export function MarkdownEditor({
       case "link":
         return insertLink();
       case "code":
-        return wrap("`", "`", "code");
+        return wrap("`", "`", t("global.markdown.sampleCode"));
       case "codeblock":
         return insertCodeBlock();
     }
@@ -192,18 +195,18 @@ export function MarkdownEditor({
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2 px-2 py-1.5">
-        <div role="toolbar" aria-label="Formatting" className="flex flex-wrap items-center gap-0.5">
-          {TOOLS.map((t) => (
+        <div role="toolbar" aria-label={t("global.markdown.toolbar")} className="flex flex-wrap items-center gap-0.5">
+          {TOOLS.map((tool) => (
             <button
-              key={t.id}
+              key={tool.id}
               type="button"
-              onClick={() => runTool(t.id)}
+              onClick={() => runTool(tool.id)}
               disabled={disabled || mode === "preview"}
-              title={t.label}
-              aria-label={t.label}
+              title={t(`global.markdown.${tool.id}`)}
+              aria-label={t(`global.markdown.${tool.id}`)}
               className="inline-flex size-7 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40"
             >
-              {t.icon}
+              {tool.icon}
             </button>
           ))}
         </div>
@@ -212,8 +215,8 @@ export function MarkdownEditor({
           value={mode}
           onChange={setMode}
           options={[
-            { value: "write", label: "Write" },
-            { value: "preview", label: "Preview" },
+            { value: "write", label: t("global.markdown.write") },
+            { value: "preview", label: t("global.markdown.preview") },
           ]}
         />
       </div>
@@ -237,10 +240,10 @@ export function MarkdownEditor({
       />
       {mode === "preview" && (
         <div className="min-h-32 px-4 py-3" aria-live="polite">
-          {current.trim() ? <Markdown content={current} /> : <p className="text-sm italic text-ink-faint">Nothing to preview yet.</p>}
+          {current.trim() ? <Markdown content={current} /> : <p className="text-sm italic text-ink-faint">{t("global.markdown.empty")}</p>}
         </div>
       )}
-      <p className="border-t border-border bg-surface-2/60 px-3 py-1 text-[11px] text-ink-faint">Markdown supported: **bold**, _italic_, lists, links, `code`, tables.</p>
+      <p className="border-t border-border bg-surface-2/60 px-3 py-1 text-[11px] text-ink-faint">{t("global.markdown.hint")}</p>
     </div>
   );
 }

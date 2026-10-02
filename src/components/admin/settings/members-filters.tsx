@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Input, Select } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 export interface MemberFilterValues {
   search: string;
@@ -13,6 +14,8 @@ export interface MemberFilterValues {
 
 /** URL-driven search + role + enabled filters for the members list. */
 export function MembersFilters({ values }: { values: MemberFilterValues }) {
+  const t = useT("admin");
+  const ts = useT("shell");
   const router = useRouter();
   const pathname = usePathname();
   const [pending, startTransition] = useTransition();
@@ -39,8 +42,8 @@ export function MembersFilters({ values }: { values: MemberFilterValues }) {
     <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_11rem_10rem]" aria-busy={pending}>
       <Input
         type="search"
-        aria-label="Search members"
-        placeholder="Search by name, email or username"
+        aria-label={t("members.filters.searchLabel")}
+        placeholder={t("members.filters.searchPlaceholder")}
         value={search}
         onChange={(e) => {
           const value = e.target.value;
@@ -51,26 +54,26 @@ export function MembersFilters({ values }: { values: MemberFilterValues }) {
         leftAddon={pending ? <Spinner className="size-4" /> : <Icon.Search className="size-4" />}
       />
       <Select
-        aria-label="Filter by role"
+        aria-label={t("members.filters.role")}
         value={values.role}
         onChange={(e) => apply({ role: e.target.value })}
         options={[
-          { value: "all", label: "All roles" },
-          { value: "student", label: "Student" },
-          { value: "course_creator", label: "Course Creator" },
-          { value: "batch_evaluator", label: "Evaluator" },
-          { value: "moderator", label: "Moderator" },
-          { value: "admin", label: "Admin" },
+          { value: "all", label: t("members.filters.allRoles") },
+          { value: "student", label: ts("roles.student") },
+          { value: "course_creator", label: ts("roles.course_creator") },
+          { value: "batch_evaluator", label: ts("roles.batch_evaluator") },
+          { value: "moderator", label: ts("roles.moderator") },
+          { value: "admin", label: ts("roles.admin") },
         ]}
       />
       <Select
-        aria-label="Filter by status"
+        aria-label={t("members.filters.status")}
         value={values.status}
         onChange={(e) => apply({ status: e.target.value })}
         options={[
-          { value: "all", label: "Any status" },
-          { value: "enabled", label: "Enabled" },
-          { value: "disabled", label: "Disabled" },
+          { value: "all", label: t("members.filters.anyStatus") },
+          { value: "enabled", label: t("members.filters.enabled") },
+          { value: "disabled", label: t("members.filters.disabled") },
         ]}
       />
     </div>

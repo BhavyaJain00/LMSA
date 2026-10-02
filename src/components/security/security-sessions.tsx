@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 export interface SecuritySessionRow {
   id: string;
@@ -23,6 +24,7 @@ export interface SecuritySessionRow {
 export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] }) {
   const router = useRouter();
   const toast = useToast();
+  const t = useT("account");
   const [pending, startTransition] = useTransition();
   const [target, setTarget] = useState<SecuritySessionRow | null>(null);
   const [confirmOthers, setConfirmOthers] = useState(false);
@@ -32,7 +34,7 @@ export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] 
     startTransition(async () => {
       const result = await revokeSessionAction(row.id);
       setTarget(null);
-      if (result.ok) toast.success(result.message ?? "Session signed out.");
+      if (result.ok) toast.success(result.message ?? t("security.devices.signedOut"));
       else toast.error(result.error);
       router.refresh();
     });
@@ -41,7 +43,7 @@ export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] 
     startTransition(async () => {
       const result = await logoutOtherSessionsAction();
       setConfirmOthers(false);
-      if (result.ok) toast.success(result.message ?? "Other sessions signed out.");
+      if (result.ok) toast.success(result.message ?? t("security.devices.othersSignedOut"));
       else toast.error(result.error);
       router.refresh();
     });
@@ -59,17 +61,17 @@ export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] 
                 <span className="truncate">{s.device}</span>
                 {s.current && (
                   <Badge tone="success" size="xs" dot>
-                    This device
+                    {t("security.devices.thisDevice")}
                   </Badge>
                 )}
               </p>
               <p className="text-xs text-ink-muted">
-                <span title={s.signedInTitle}>Signed in {s.signedInLabel}</span> · expires {s.expiresLabel}
+                <span title={s.signedInTitle}>{t("security.devices.signedIn", { when: s.signedInLabel })}</span> · {t("security.devices.expires", { date: s.expiresLabel })}
               </p>
             </div>
             {!s.current && (
-              <Button variant="ghost" size="xs" onClick={() => setTarget(s)} disabled={pending} aria-label={`Sign out ${s.device}`}>
-                Sign out
+              <Button variant="ghost" size="xs" onClick={() => setTarget(s)} disabled={pending} aria-label={t("security.devices.signOutLabel", { device: s.device })}>
+                {t("security.devices.signOut")}
               </Button>
             )}
           </li>
@@ -77,7 +79,7 @@ export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] 
       </ul>
       <div className="mt-4">
         <Button variant="outline" size="sm" disabled={others === 0 || pending} onClick={() => setConfirmOthers(true)} leftIcon={<Icon.LogOut className="size-4" />}>
-          Sign out other devices
+          {t("security.devices.signOutOthers")}
         </Button>
       </div>
 
@@ -88,18 +90,18 @@ export function SecuritySessions({ sessions }: { sessions: SecuritySessionRow[] 
           if (target) revoke(target);
         }}
         loading={pending}
-        title="Sign out this device?"
-        description={target ? `${target.device} (signed in ${target.signedInLabel}) will need to log in again.` : undefined}
-        confirmLabel="Sign out"
+        title={t("security.devices.confirmTitle")}
+        description={target ? t("security.devices.confirmBody", { device: target.device, when: target.signedInLabel }) : undefined}
+        confirmLabel={t("security.devices.signOut")}
       />
       <ConfirmDialog
         open={confirmOthers}
         onClose={() => setConfirmOthers(false)}
         onConfirm={revokeOthers}
         loading={pending}
-        title="Sign out other devices?"
-        description={`This signs you out on ${others} other ${others === 1 ? "device" : "devices"}. You stay signed in here.`}
-        confirmLabel="Sign out others"
+        title={t("security.devices.othersTitle")}
+        description={t("security.devices.othersBody", { count: others })}
+        confirmLabel={t("security.devices.othersConfirm")}
       />
     </div>
   );

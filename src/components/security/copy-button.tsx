@@ -3,14 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /** Copies `value` to the clipboard and briefly confirms. */
 export function CopyButton({
   value,
-  label = "Copy",
-  copiedLabel = "Copied",
+  label,
+  copiedLabel,
   ...props
 }: { value: string; label?: string; copiedLabel?: string } & Omit<ButtonProps, "onClick" | "children">) {
+  const t = useT("account");
+  const tc = useT("common");
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -45,7 +48,7 @@ export function CopyButton({
       onClick={() => void copy()}
       {...props}
     >
-      <span aria-live="polite">{copied ? copiedLabel : failed ? "Copy failed — select and copy manually" : label}</span>
+      <span aria-live="polite">{copied ? (copiedLabel ?? tc("actions.copied")) : failed ? t("security.copy.failed") : (label ?? tc("actions.copy"))}</span>
     </Button>
   );
 }

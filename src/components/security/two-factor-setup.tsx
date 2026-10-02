@@ -12,12 +12,14 @@ import { safeRedirectPath } from "@/lib/auth/redirects";
 import { CopyButton } from "./copy-button";
 import { OtpCodeInput } from "./otp-code-input";
 import { RecoveryCodesDialog } from "./recovery-codes-dialog";
+import { useT } from "@/i18n/client";
 
 type ConfirmResult = ActionResult<{ recoveryCodes: string[] }>;
 
 /** Generates a new secret and reveals the setup steps (the page re-renders with the QR code). */
-export function StartTwoFactorButton({ label = "Set up two-step verification", variant = "primary" }: { label?: string; variant?: "primary" | "outline" }) {
+export function StartTwoFactorButton({ label, variant = "primary" }: { label?: string; variant?: "primary" | "outline" }) {
   const toast = useToast();
+  const t = useT("account");
   const [pending, startTransition] = useTransition();
   const start = () =>
     startTransition(async () => {
@@ -26,7 +28,7 @@ export function StartTwoFactorButton({ label = "Set up two-step verification", v
     });
   return (
     <Button variant={variant} onClick={start} loading={pending} leftIcon={<Icon.ShieldCheck className="size-4" />}>
-      {label}
+      {label ?? t("security.setup.start")}
     </Button>
   );
 }
@@ -53,6 +55,7 @@ export function TwoFactorSetup({
 }) {
   const router = useRouter();
   const toast = useToast();
+  const t = useT("account");
   const [code, setCode] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
   const [cancelling, startCancel] = useTransition();
@@ -72,7 +75,7 @@ export function TwoFactorSetup({
 
   const finish = () => {
     setCodes(null);
-    toast.success("Two-step verification is on.");
+    toast.success(t("security.setup.done"));
     const target = safeRedirectPath(continueTo);
     if (target) router.push(target);
     else router.refresh();
@@ -87,33 +90,32 @@ export function TwoFactorSetup({
           ) : (
             <div role="note" className="mx-auto flex w-44 max-w-full items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-ink sm:mx-0">
               <Icon.AlertTriangle className="size-4 shrink-0 text-warning" />
-              <span>We couldn&apos;t draw a QR code for this account. Enter the setup key instead.</span>
+              <span>{t("security.setup.noQr")}</span>
             </div>
           )}
           <div className="min-w-0 space-y-3">
             <p className="text-sm font-medium text-ink">
-              <span className="mr-2 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">1</span>
-              {qr ? "Scan the QR code" : "Add the key to your app"}
+              <span className="me-2 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">1</span>
+              {qr ? t("security.setup.scanTitle") : t("security.setup.keyTitle")}
             </p>
             <p className="text-sm text-ink-muted">
-              Open an authenticator app such as Google Authenticator, Microsoft Authenticator, 1Password or Authy, add an account and{" "}
-              {qr ? "scan this code." : "choose to enter a setup key."}
+              {qr ? t("security.setup.scanBody") : t("security.setup.keyBody")}
             </p>
             <details open={!qr} className="group rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm">
-              <summary className="cursor-pointer select-none font-medium text-ink marker:text-ink-faint">Can&apos;t scan it? Enter the key instead</summary>
+              <summary className="cursor-pointer select-none font-medium text-ink marker:text-ink-faint">{t("security.setup.cantScan")}</summary>
               <div className="mt-3 space-y-3">
-                <p className="break-all rounded-md bg-surface-1 px-3 py-2 font-mono text-sm tracking-wider text-ink select-all" aria-label="Setup key">
+                <p className="break-all rounded-md bg-surface-1 px-3 py-2 font-mono text-sm tracking-wider text-ink select-all" aria-label={t("security.setup.keyLabel")} dir="ltr">
                   {secret}
                 </p>
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-ink-muted">
-                  <dt>Account</dt>
+                  <dt>{t("security.setup.account")}</dt>
                   <dd className="truncate text-ink">
                     {brand}: {email}
                   </dd>
-                  <dt>Type</dt>
-                  <dd className="text-ink">Time-based (TOTP), 6 digits, every 30 seconds</dd>
+                  <dt>{t("security.setup.type")}</dt>
+                  <dd className="text-ink">{t("security.setup.typeValue")}</dd>
                 </dl>
-                <CopyButton value={secret.replace(/\s+/g, "")} label="Copy key" />
+                <CopyButton value={secret.replace(/\s+/g, "")} label={t("security.setup.copyKey")} />
               </div>
             </details>
           </div>
@@ -121,20 +123,20 @@ export function TwoFactorSetup({
 
         <li className="space-y-3">
           <p className="text-sm font-medium text-ink">
-            <span className="mr-2 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">2</span>
-            Enter the 6-digit code from the app
+            <span className="me-2 inline-flex size-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-accent-fg">2</span>
+            {t("security.setup.enterCode")}
           </p>
           <form action={formAction} className="space-y-3" noValidate>
             <FormError message={state && !state.ok ? state.error : null} />
             <div className="max-w-xs">
-              <OtpCodeInput id="setup-code" value={code} onChange={setCode} invalid={!!errors.code} autoSubmit disabled={pending} label="Code from your authenticator app" />
+              <OtpCodeInput id="setup-code" value={code} onChange={setCode} invalid={!!errors.code} autoSubmit disabled={pending} label={t("security.setup.codeLabel")} />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" loading={pending} disabled={code.length !== 6} leftIcon={<Icon.ShieldCheck className="size-4" />}>
-                Turn on two-step verification
+                {t("security.setup.turnOn")}
               </Button>
               <Button type="button" variant="ghost" onClick={cancel} loading={cancelling} disabled={pending}>
-                Cancel setup
+                {t("security.setup.cancel")}
               </Button>
             </div>
           </form>

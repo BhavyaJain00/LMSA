@@ -15,11 +15,11 @@ import { FileUpload } from "@/components/ui/file-upload";
 import { Tooltip } from "@/components/ui/dropdown";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 import { MarkdownEditor } from "./markdown-editor";
 import { AssignmentStatusBadge, NotSavedBadge } from "./status-badges";
 import { LocalDateTime, useNow } from "./client-time";
 import {
-  ASSIGNMENT_TYPE_LABELS,
   ASSIGNMENT_UPLOAD,
   assignmentScheduleState,
   fileExtension,
@@ -78,6 +78,7 @@ function Alert({ tone, title, children }: { tone: "warning" | "info" | "success"
 }
 
 function AttachmentRow({ url }: { url: string }) {
+  const t = useT("learning");
   return (
     <div className="space-y-2">
       <a
@@ -94,7 +95,7 @@ function AttachmentRow({ url }: { url: string }) {
       </a>
       {isImageUrl(url) && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt="Submitted image" className="max-h-72 w-auto rounded-xl border border-border object-contain" />
+        <img src={url} alt={t("assignment.submittedImage")} className="max-h-72 w-auto rounded-xl border border-border object-contain" />
       )}
     </div>
   );
@@ -113,6 +114,8 @@ export function AssignmentPanel({
   manageHref,
   pageHref,
 }: AssignmentPanelProps) {
+  const t = useT("learning");
+  const tc = useT("common");
   const { toast } = useToast();
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -120,8 +123,8 @@ export function AssignmentPanel({
     const res = await submitAssignmentAction(prev, formData);
     if (res.ok) {
       toast({
-        title: res.message ?? "Changes saved successfully",
-        description: res.data.lessonCompleted && lessonId ? "This lesson is now marked as complete." : undefined,
+        title: t("assignment.saved"),
+        description: res.data.lessonCompleted && lessonId ? t("assignment.lessonCompleted") : undefined,
         tone: "success",
       });
       // Pull fresh server state: lesson status, course progress, and the model answer (revealed after submitting).
@@ -179,11 +182,11 @@ export function AssignmentPanel({
     if (!upload) return;
     const ext = fileExtension(meta?.name ?? url) || fileExtension(url);
     if (assignment.type === "image" && ext === ".svg") {
-      setUploadError("SVG contains potentially unsafe content.");
+      setUploadError(t("assignment.upload.svgBlocked"));
       return;
     }
     if (!upload.extensions.includes(ext)) {
-      setUploadError(upload.error);
+      setUploadError(t(`assignment.upload.error.${upload.kind === "image" ? "image" : assignment.type === "pdf" ? "pdf" : "document"}`));
       return;
     }
     setAttachment(url);
@@ -193,21 +196,17 @@ export function AssignmentPanel({
     <Alert
       tone="warning"
       title={
-        schedule.reason === "not_started" && assignment.scheduleStart ? (
-          <>
-            This assignment opens on <LocalDateTime iso={assignment.scheduleStart} />.
-          </>
-        ) : (
-          "The schedule for this assignment has ended."
-        )
+        schedule.reason === "not_started" && assignment.scheduleStart
+          ? t.rich("assignment.schedule.opensOn", { time: <LocalDateTime iso={assignment.scheduleStart} /> })
+          : t("assignment.schedule.ended")
       }
     >
-      {privileged ? "You can still save because you manage assignments." : null}
+      {privileged ? t("assignment.schedule.managerBypass") : null}
     </Alert>
   ) : assignment.enableScheduling && assignment.scheduleEnd ? (
     <p className="flex items-center gap-1.5 text-xs text-ink-muted">
       <Icon.Clock className="size-3.5" />
-      Submissions close on <LocalDateTime iso={assignment.scheduleEnd} />.
+      <span>{t.rich("assignment.schedule.closesOn", { time: <LocalDateTime iso={assignment.scheduleEnd} /> })}</span>
     </p>
   ) : null;
 
@@ -217,8 +216,8 @@ export function AssignmentPanel({
         return (
           <div className="space-y-2 rounded-xl border border-border p-4">
             <div>
-              <p className="text-sm font-medium text-ink">Upload Assignment</p>
-              <p className="text-xs text-ink-muted">You can only upload {upload.label} files</p>
+              <p className="text-sm font-medium text-ink">{t("assignment.upload.title")}</p>
+              <p className="text-xs text-ink-muted">{t("assignment.upload.only", { type: t(`global.assess.type.${assignment.type}`) })}</p>
             </div>
             <FileUpload
               name="attachmentUrl"
@@ -246,7 +245,7 @@ export function AssignmentPanel({
         );
       }
       return (
-        <Field label="Enter a URL" htmlFor={`asg-url-${assignment.id}`} error={fieldErrors?.answer}>
+        <Field label={t("assignment.urlLabel")} htmlFor={`asg-url-${assignment.id}`} error={fieldErrors?.answer}>
           <Input
             id={`asg-url-${assignment.id}`}
             name="answer"
@@ -273,7 +272,7 @@ export function AssignmentPanel({
     return (
       <div>
         <label htmlFor={`asg-text-${assignment.id}`} className="mb-1.5 block text-sm font-medium text-ink">
-          Write your answer here
+          {t("assignment.textLabel")}
         </label>
         <MarkdownEditor
           id={`asg-text-${assignment.id}`}
@@ -283,7 +282,7 @@ export function AssignmentPanel({
           rows={variant === "inline" ? 6 : 9}
           disabled={!canModify}
           invalid={!!fieldErrors?.answer}
-          placeholder="Explain your approach, paste code in ``` fences, add links…"
+          placeholder={t("assignment.textPlaceholder")}
         />
         {fieldErrors?.answer && <p className="mt-1.5 text-xs text-danger">{fieldErrors.answer}</p>}
       </div>
@@ -300,7 +299,7 @@ export function AssignmentPanel({
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <h3 className="font-semibold text-ink">Submission</h3>
+          <h3 className="font-semibold text-ink">{t("assignment.submission")}</h3>
           {loggedIn && canModify && dirty && (submission || answer || attachment) ? (
             <NotSavedBadge />
           ) : submission ? (
@@ -309,15 +308,15 @@ export function AssignmentPanel({
         </div>
         {loggedIn ? (
           canModify && (
-            <Tooltip label="Save (Ctrl/⌘ + S)">
+            <Tooltip label={t("assignment.saveShortcut")}>
               <Button type="submit" loading={pending} disabled={!dirty && !!submission} leftIcon={<Icon.Check className="size-4" />}>
-                {submission ? "Save" : "Submit"}
+                {submission ? tc("actions.save") : tc("actions.submit")}
               </Button>
             </Tooltip>
           )
         ) : (
-          <ButtonLink href={loginHref} leftIcon={<Icon.LogIn className="size-4" />}>
-            Log in to submit
+          <ButtonLink href={loginHref} leftIcon={<Icon.LogIn className="size-4 rtl:-scale-x-100" />}>
+            {t("assignment.loginToSubmit")}
           </ButtonLink>
         )}
       </div>
@@ -325,32 +324,32 @@ export function AssignmentPanel({
       {state && !state.ok && !state.fieldErrors && <FormError message={state.error} />}
 
       {submission && submission.status === "not_graded" && canModify && (
-        <Alert tone="info" title="You've successfully submitted the assignment.">
-          Once the moderator grades your submission, you&apos;ll find the details here. Feel free to make edits to your submission if needed.
+        <Alert tone="info" title={t("assignment.submittedTitle")}>
+          {t("assignment.submittedBody")}
         </Alert>
       )}
       {submission && submission.status === "not_applicable" && (
-        <Alert tone="success" title="Your submission has been received.">
-          This assignment isn&apos;t graded{canModify ? ", and you can keep improving your answer." : "."}
+        <Alert tone="success" title={t("assignment.receivedTitle")}>
+          {canModify ? t("assignment.ungradedEditable") : t("assignment.ungraded")}
         </Alert>
       )}
       {graded && (
-        <Alert tone={submission?.status === "pass" ? "success" : "warning"} title={submission?.status === "pass" ? "Your submission passed." : "Your submission did not pass."}>
-          Graded submissions can no longer be edited.
+        <Alert tone={submission?.status === "pass" ? "success" : "warning"} title={submission?.status === "pass" ? t("assignment.passedTitle") : t("assignment.failedTitle")}>
+          {t("assignment.gradedLocked")}
         </Alert>
       )}
 
       {loggedIn || !upload ? answerArea : null}
 
       {submission && !scheduleBlocked && !canModify && !submission.answer && !submission.attachmentUrl && (
-        <p className="text-sm italic text-ink-muted">No answer was saved.</p>
+        <p className="text-sm italic text-ink-muted">{t("assignment.noAnswer")}</p>
       )}
 
       {submission?.comments && (
         <div className="rounded-xl border border-border bg-surface-2 p-4">
           <p className="mb-2 flex flex-wrap items-center gap-x-2 text-sm font-semibold text-ink">
             <Icon.MessageSquare className="size-4 text-ink-muted" />
-            Comments by Evaluator
+            {t("assignment.evaluatorComments")}
             {submission.evaluatorName && <span className="font-normal text-ink-muted">· {submission.evaluatorName}</span>}
           </p>
           <Markdown content={submission.comments} className="text-sm" />
@@ -361,7 +360,7 @@ export function AssignmentPanel({
         <details className="group rounded-xl border border-success/30 bg-success/5 px-4 py-3">
           <summary className="flex cursor-pointer select-none items-center justify-between text-sm font-semibold text-ink">
             <span className="flex items-center gap-2">
-              <Icon.Sparkles className="size-4 text-success" /> Model answer
+              <Icon.Sparkles className="size-4 text-success" /> {t("assignment.modelAnswer")}
             </span>
             <Icon.ChevronDown className="size-4 text-ink-muted transition-transform group-open:rotate-180" />
           </summary>
@@ -373,10 +372,13 @@ export function AssignmentPanel({
 
       {manageHref && (
         <p className="border-t border-border pt-3 text-xs text-ink-muted">
-          You manage assignments.{" "}
-          <Link href={manageHref} className="font-medium text-accent hover:underline">
-            Review all submissions
-          </Link>
+          {t.rich("assignment.manage", {
+            link: (text) => (
+              <Link href={manageHref} className="font-medium text-accent hover:underline">
+                {text}
+              </Link>
+            ),
+          })}
         </p>
       )}
     </form>
@@ -391,20 +393,20 @@ export function AssignmentPanel({
               <Icon.ClipboardList className="size-5" />
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">Assignment · {ASSIGNMENT_TYPE_LABELS[assignment.type]}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{t("assignment.eyebrow", { type: t(`global.assess.type.${assignment.type}`) })}</p>
               <h3 className="truncate font-semibold text-ink">{assignment.title}</h3>
             </div>
           </div>
           {pageHref && (
-            <ButtonLink href={pageHref} variant="ghost" size="sm" rightIcon={<Icon.ArrowUpRight className="size-4" />}>
-              Open full page
+            <ButtonLink href={pageHref} variant="ghost" size="sm" rightIcon={<Icon.ArrowUpRight className="size-4 rtl:-scale-x-100" />}>
+              {t("assignment.openPage")}
             </ButtonLink>
           )}
         </div>
         <div className="space-y-5 p-5">
           <details open className="group rounded-xl border border-border bg-surface-2/40 px-4 py-3">
             <summary className="flex cursor-pointer select-none items-center justify-between text-sm font-semibold text-ink">
-              Question
+              {t("assignment.question")}
               <Icon.ChevronDown className="size-4 text-ink-muted transition-transform group-open:rotate-180" />
             </summary>
             <div className="mt-3">
@@ -420,15 +422,15 @@ export function AssignmentPanel({
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card className="h-fit p-5 sm:p-6 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
-        {viewerName && <h2 className="text-lg font-semibold text-ink">Submission by {viewerName}</h2>}
-        <p className={cn("text-sm font-semibold text-ink", viewerName && "mt-1")}>Assignment: {assignment.title}</p>
+        {viewerName && <h2 className="text-lg font-semibold text-ink">{t("assignment.submissionBy", { name: viewerName })}</h2>}
+        <p className={cn("text-sm font-semibold text-ink", viewerName && "mt-1")}>{t("assignment.titleLabel", { title: assignment.title })}</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          <Badge tone="outline">{ASSIGNMENT_TYPE_LABELS[assignment.type]}</Badge>
-          {!assignment.gradeAssignment && <Badge tone="neutral">Not graded</Badge>}
+          <Badge tone="outline">{t(`global.assess.type.${assignment.type}`)}</Badge>
+          {!assignment.gradeAssignment && <Badge tone="neutral">{t("assignment.notGraded")}</Badge>}
           {assignment.enableScheduling && assignment.scheduleStart && (
             <Badge tone="neutral">
               <Icon.Calendar className="size-3" />
-              Opens <LocalDateTime iso={assignment.scheduleStart} mode="date" />
+              {t.rich("assignment.opensBadge", { date: <LocalDateTime iso={assignment.scheduleStart} mode="date" /> })}
             </Badge>
           )}
         </div>

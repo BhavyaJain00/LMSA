@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 function CardPlaceholder({ rows }: { rows: number }) {
   return (
@@ -22,10 +23,11 @@ function CardPlaceholder({ rows }: { rows: number }) {
   );
 }
 
-export default function SecuritySettingsLoading() {
+export default async function SecuritySettingsLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-3xl">
-      <span className="sr-only">Loading security settings…</span>
+      <span className="sr-only">{t("security.loading")}</span>
       <div className="mb-6 space-y-2">
         <Skeleton className="h-4 w-40" />
         <Skeleton className="h-8 w-40" />

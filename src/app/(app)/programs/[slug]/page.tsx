@@ -3,7 +3,6 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { canManageProgram, getProgramBySlug, getProgramCourses, getProgramSummary } from "@/lib/data/programs";
-import { pluralize } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress";
@@ -19,16 +18,18 @@ import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { JsonLd } from "@/components/seo/json-ld";
 import { EnrollProgramButton } from "@/components/programs/program-actions";
 import { ProgramCourseGrid } from "@/components/programs/program-course-grid";
+import { getLocale, getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/programs/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [program, settings] = await Promise.all([getProgramBySlug(slug), getSettings()]);
-  if (!program || !isProgramPublic(program) || !settings.features.programs) return notFoundMetadata(program ? program.title : "Program");
+  const [program, settings, t, locale] = await Promise.all([getProgramBySlug(slug), getSettings(), getT("public"), getLocale()]);
+  if (!program || !isProgramPublic(program) || !settings.features.programs) return notFoundMetadata(program ? program.title : t("programs.detail.metaFallback"));
   return pageMetadata(
     {
       title: program.title,
-      description: [program.description, `A guided learning path of ${program.courseIds.length} ${program.courseIds.length === 1 ? "course" : "courses"} on ${settings.brand.name}. Enroll once and work through the courses step by step.`],
+      description: [program.description, t("programs.detail.metaDescription", { count: program.courseIds.length, brand: settings.brand.name })],
       path: programPath(program.slug),
+      locale,
       generatedImage: true,
     },
     settings,
@@ -36,7 +37,7 @@ export async function generateMetadata(props: PageProps<"/programs/[slug]">): Pr
 }
 
 export default async function ProgramPage(props: PageProps<"/programs/[slug]">) {
-  const [{ slug }, user, settings] = await Promise.all([props.params, getCurrentUser(), getSettings()]);
+  const [{ slug }, user, settings, t] = await Promise.all([props.params, getCurrentUser(), getSettings(), getT("public")]);
   if (!settings.features.programs) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/programs/${slug}`)}`);
 
@@ -60,65 +61,61 @@ export default async function ProgramPage(props: PageProps<"/programs/[slug]">) 
         <div className="min-w-0 max-w-3xl">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-3xl font-semibold tracking-tight text-ink">{program.title}</h1>
-            {summary.isMember && <Badge tone={progress >= 100 ? "success" : "warning"}>{progress}% completed</Badge>}
+            {summary.isMember && <Badge tone={progress >= 100 ? "success" : "warning"}>{t("card.progress", { percent: progress })}</Badge>}
             {program.enforceCourseOrder && (
-              <Tooltip label="Courses must be completed in order" side="bottom">
+              <Tooltip label={t("programs.inOrderHint")} side="bottom">
                 <span
                   tabIndex={0}
                   className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-ink-muted"
-                  aria-label="Courses must be completed in order. You can only start the next course after completing the previous one."
+                  aria-label={t("programs.inOrderDescription")}
                 >
-                  <Icon.Info className="size-3.5" /> In order
+                  <Icon.Info className="size-3.5" /> {t("programs.inOrder")}
                 </span>
               </Tooltip>
             )}
-            {!program.published && <Badge tone="warning">Unpublished</Badge>}
+            {!program.published && <Badge tone="warning">{t("card.unpublished")}</Badge>}
           </div>
           {program.description && <p className="mt-3 text-base text-ink-muted">{program.description}</p>}
           <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-ink-muted">
             <span className="inline-flex items-center gap-1.5">
-              <Icon.BookOpen className="size-4" /> {pluralize(summary.courseCount, "course")}
+              <Icon.BookOpen className="size-4" /> {t("catalog.courseCount", { count: summary.courseCount })}
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Icon.FileText className="size-4" /> {pluralize(totalLessons, "lesson")}
+              <Icon.FileText className="size-4" /> {t("catalog.lessonCount", { count: totalLessons })}
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Icon.Users className="size-4" /> {pluralize(summary.memberCount, "member")}
+              <Icon.Users className="size-4" /> {t("programs.memberCount", { count: summary.memberCount })}
             </span>
           </div>
         </div>
         {manager && (
           <ButtonLink href={`/admin/programs/${program.id}`} variant="outline" leftIcon={<Icon.Settings className="size-4" />}>
-            Manage program
+            {t("programs.detail.manage")}
           </ButtonLink>
         )}
       </header>
 
       {summary.isMember ? (
         <div className="mt-6 max-w-xl">
-          <ProgressBar value={progress} size="md" tone={progress >= 100 ? "success" : "accent"} label="Program progress" />
+          <ProgressBar value={progress} size="md" tone={progress >= 100 ? "success" : "accent"} label={t("programs.detail.progress")} />
           <p className="mt-1.5 text-sm text-ink-muted">
-            {completed} of {courses.length} courses completed
-            {progress >= 100 && " — congratulations on finishing the program!"}
+            {progress >= 100 ? t("programs.detail.finished", { done: completed, total: courses.length }) : t("programs.detail.completed", { done: completed, total: courses.length })}
           </p>
         </div>
       ) : (
         <div className="mt-6 rounded-card border border-info/30 bg-info/10 p-5">
           <p className="text-sm text-ink">
-            This program consists of {pluralize(courses.length, "course")}
-            {program.enforceCourseOrder
-              ? " designed as a structured learning path to guide your progress. Courses in this program must be taken in order, and each course will unlock as you complete the previous one."
-              : " designed as a learning path to guide your progress. You may take the courses in any order that suits you."}
+            {program.enforceCourseOrder ? t("programs.detail.introOrdered", { count: courses.length }) : t("programs.detail.introFree", { count: courses.length })}
           </p>
           {user ? (
             courses.length > 0 ? (
               <EnrollProgramButton programId={program.id} className="mt-3" />
             ) : (
-              <p className="mt-3 text-sm text-ink-muted">Enrollment opens once courses are added.</p>
+              <p className="mt-3 text-sm text-ink-muted">{t("programs.detail.noCoursesYet")}</p>
             )
           ) : (
             <ButtonLink href={`/login?next=${encodeURIComponent(`/programs/${program.slug}`)}`} className="mt-4" leftIcon={<Icon.LogIn className="size-4" />}>
-              Please log in to enroll in this program
+              {t("programs.detail.logIn")}
             </ButtonLink>
           )}
         </div>
@@ -126,10 +123,10 @@ export default async function ProgramPage(props: PageProps<"/programs/[slug]">) 
 
       <section className="mt-8" aria-labelledby="program-courses">
         <h2 id="program-courses" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-          {summary.isMember ? "Your courses" : "Courses in this Program"}
+          {summary.isMember ? t("programs.detail.yourCourses") : t("programs.detail.courses")}
         </h2>
         {courses.length === 0 ? (
-          <EmptyState icon={<Icon.BookOpen />} title="No courses added yet." description="Courses will appear here once the program is set up." />
+          <EmptyState icon={<Icon.BookOpen />} title={t("programs.detail.emptyTitle")} description={t("programs.detail.emptyDescription")} />
         ) : (
           <ProgramCourseGrid programId={program.id} courses={courses} isMember={summary.isMember} />
         )}

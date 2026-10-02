@@ -64,7 +64,7 @@ export function SettingsRow({
       <div className={cn("min-w-0", !stacked && "sm:max-w-md sm:flex-1")}>
         <label htmlFor={htmlFor} className="block text-sm font-medium text-ink">
           {label}
-          {required && <span className="ml-0.5 text-danger">*</span>}
+          {required && <span className="ms-0.5 text-danger">*</span>}
         </label>
         {description && <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{description}</p>}
       </div>
@@ -112,7 +112,7 @@ export function Breadcrumbs({ items, className }: { items: Crumb[]; className?: 
                   {item.label}
                 </span>
               )}
-              {!last && <Icon.ChevronRight className="size-3.5 shrink-0 text-ink-faint" />}
+              {!last && <Icon.ChevronRight className="size-3.5 shrink-0 text-ink-faint rtl:rotate-180" />}
             </li>
           );
         })}

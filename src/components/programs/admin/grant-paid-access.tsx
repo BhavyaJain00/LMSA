@@ -3,14 +3,8 @@
 import { Checkbox } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useFormatter, useT } from "@/i18n/client";
 import type { ProgramEnrollmentReport, ProgramPaidCourse } from "../types";
-
-/** "A", "A and B", "A, B and C" */
-function titleList(courses: ProgramPaidCourse[]): string {
-  const titles = courses.map((c) => c.title);
-  if (titles.length <= 1) return titles.join("");
-  return `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}`;
-}
 
 /**
  * Notice and "Grant access without payment" box for a manager's program
@@ -36,19 +30,19 @@ export function GrantPaidAccessField({
   /** One member is being enrolled (wording). */
   single?: boolean;
 }) {
+  const t = useT("public");
+  const f = useFormatter();
   if (!courses.length) return null;
   const grantable = courses.filter((c) => c.grantable);
   const locked = courses.filter((c) => !c.grantable);
-  const it = courses.length === 1 ? "it" : "them";
+  const titleList = (list: ProgramPaidCourse[]) => f.list(list.map((c) => c.title));
   return (
     <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/5 p-3">
       <p className="flex items-start gap-2 text-sm text-ink">
         <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
         <span>
-          {titleList(courses)} {courses.length === 1 ? "is a paid course" : "are paid courses"}.{" "}
-          {single
-            ? `If the member hasn't bought ${it}, they won't be enrolled and need to purchase ${it} first.`
-            : `Members who haven't bought ${it} won't be enrolled and need to purchase ${it} first.`}
+          {t("programsAdmin.grant.paid", { count: courses.length, titles: titleList(courses) })}{" "}
+          {single ? t("programsAdmin.grant.singleNotice", { count: courses.length }) : t("programsAdmin.grant.notice", { count: courses.length })}
         </span>
       </p>
       {grantable.length > 0 && (
@@ -57,15 +51,11 @@ export function GrantPaidAccessField({
           name={name}
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          label="Grant access without payment"
-          description={`Enroll ${single ? "the member" : "them"} in ${titleList(grantable)} without a purchase.`}
+          label={t("programsAdmin.grant.label")}
+          description={single ? t("programsAdmin.grant.singleDescription", { titles: titleList(grantable) }) : t("programsAdmin.grant.description", { titles: titleList(grantable) })}
         />
       )}
-      {locked.length > 0 && (
-        <p className="text-xs text-ink-muted">
-          Only instructors of {titleList(locked)} and moderators can grant access to {locked.length === 1 ? "it" : "them"} without payment.
-        </p>
-      )}
+      {locked.length > 0 && <p className="text-xs text-ink-muted">{t("programsAdmin.grant.locked", { count: locked.length, titles: titleList(locked) })}</p>}
     </div>
   );
 }

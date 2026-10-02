@@ -3,10 +3,12 @@
 import { useState } from "react";
 import { Input, type InputProps } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /** Password input with a show/hide toggle and a lock icon. */
 export function PasswordField({ showIcon = true, ...props }: Omit<InputProps, "type" | "leftAddon" | "rightAddon"> & { showIcon?: boolean }) {
   const [visible, setVisible] = useState(false);
+  const t = useT("account");
   return (
     <Input
       {...props}
@@ -19,7 +21,7 @@ export function PasswordField({ showIcon = true, ...props }: Omit<InputProps, "t
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          aria-label={visible ? "Hide password" : "Show password"}
+          aria-label={visible ? t("global.password.hide") : t("global.password.show")}
           aria-pressed={visible}
           className="pointer-events-auto rounded text-ink-faint hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >

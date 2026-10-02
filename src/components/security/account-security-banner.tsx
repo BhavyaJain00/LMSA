@@ -5,6 +5,7 @@ import { isEmailVerified, maskEmail, mustSetUpTwoFactor } from "@/lib/auth/accou
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { ResendVerificationButton } from "./resend-verification-button";
+import { getT } from "@/i18n/server";
 
 /**
  * App-wide account notice, rendered above page content:
@@ -16,7 +17,7 @@ import { ResendVerificationButton } from "./resend-verification-button";
 export async function AccountSecurityBanner({ className }: { className?: string }) {
   const user = await getCurrentUser();
   if (!user) return null;
-  const settings = await getSettings();
+  const [settings, t] = await Promise.all([getSettings(), getT("account")]);
 
   if (settings.security.requireEmailVerification && !isEmailVerified(user)) {
     return (
@@ -27,14 +28,20 @@ export async function AccountSecurityBanner({ className }: { className?: string 
         <div className="flex min-w-0 items-start gap-3">
           <Icon.Mail className="mt-0.5 size-5 shrink-0 text-warning" />
           <div className="min-w-0 text-sm">
-            <p className="font-medium text-ink">Confirm your email address</p>
+            <p className="font-medium text-ink">{t("security.banner.confirmTitle")}</p>
             <p className="text-ink-muted">
-              We sent a link to <span className="font-medium text-ink">{maskEmail(user.email)}</span>. You&apos;ll be able to enroll in courses and make purchases once it&apos;s
-              confirmed.
+              {t.rich("security.banner.confirmBody", {
+                email: maskEmail(user.email),
+                b: (text) => (
+                  <span className="font-medium text-ink" dir="ltr">
+                    {text}
+                  </span>
+                ),
+              })}
             </p>
           </div>
         </div>
-        <div className="shrink-0 pl-8 sm:pl-0">
+        <div className="shrink-0 ps-8 sm:ps-0">
           <ResendVerificationButton />
         </div>
       </div>
@@ -50,12 +57,13 @@ export async function AccountSecurityBanner({ className }: { className?: string 
         <div className="flex min-w-0 items-start gap-3">
           <Icon.ShieldCheck className="mt-0.5 size-5 shrink-0 text-accent" />
           <div className="min-w-0 text-sm">
-            <p className="font-medium text-ink">Two-step verification is required for your role</p>
-            <p className="text-ink-muted">Set it up to keep using admin and teaching tools.</p>
+            <p className="font-medium text-ink">{t("security.banner.twoFactorTitle")}</p>
+            <p className="text-ink-muted">{t("security.banner.twoFactorBody")}</p>
           </div>
         </div>
-        <Link href="/settings/security?required=2fa" className="shrink-0 pl-8 text-sm font-medium text-accent hover:underline sm:pl-0">
-          Set it up now →
+        <Link href="/settings/security?required=2fa" className="inline-flex shrink-0 items-center gap-1 ps-8 text-sm font-medium text-accent hover:underline sm:ps-0">
+          {t("security.banner.setUp")}
+          <Icon.ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
         </Link>
       </div>
     );

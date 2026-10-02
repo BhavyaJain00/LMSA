@@ -2,6 +2,7 @@
 
 import { useRef, type ChangeEvent } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 /**
  * One-time code field: numeric keyboard on phones, `one-time-code` autofill,
@@ -17,7 +18,7 @@ export function OtpCodeInput({
   autoSubmit = false,
   disabled,
   describedBy,
-  label = "Verification code",
+  label,
 }: {
   id: string;
   name?: string;
@@ -31,6 +32,7 @@ export function OtpCodeInput({
   describedBy?: string;
   label?: string;
 }) {
+  const t = useT("account");
   const ref = useRef<HTMLInputElement>(null);
   const submitted = useRef<string | null>(null);
 
@@ -57,7 +59,8 @@ export function OtpCodeInput({
       pattern="[0-9]{6}"
       maxLength={6}
       placeholder="000000"
-      aria-label={label}
+      aria-label={label ?? t("global.otp.label")}
+      dir="ltr"
       aria-invalid={invalid || undefined}
       aria-describedby={describedBy}
       autoFocus={autoFocus}

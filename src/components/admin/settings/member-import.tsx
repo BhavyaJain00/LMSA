@@ -17,11 +17,9 @@ import { Icon } from "@/components/ui/icons";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
-import { cn, formatNumber } from "@/lib/utils";
-import { ROLE_OPTIONS } from "./roles";
+import { cn } from "@/lib/utils";
+import { useFormatter, useT } from "@/i18n/client";
 import { MEMBER_IMPORT_MAX_BYTES, MEMBER_IMPORT_MAX_ROWS, readMemberImportCsv, toCsv, type MemberImportRow } from "./member-import-csv";
-
-const ROLE_LABEL: Record<Role, string> = Object.fromEntries(ROLE_OPTIONS.map((r) => [r.value, r.label])) as Record<Role, string>;
 
 type Stage =
   | { kind: "upload" }
@@ -29,11 +27,12 @@ type Stage =
   | { kind: "done"; fileName: string; result: MemberImportResult };
 
 function RoleBadges({ roles }: { roles: Role[] }) {
+  const ts = useT("shell");
   return (
     <div className="flex flex-wrap gap-1">
       {roles.map((r) => (
         <Badge key={r} tone={r === "admin" ? "danger" : r === "student" ? "neutral" : "accent"}>
-          {ROLE_LABEL[r]}
+          {ts(`roles.${r}`)}
         </Badge>
       ))}
     </div>
@@ -57,6 +56,9 @@ function downloadCsv(fileName: string, csv: string) {
  * a validated preview, import the valid rows and download the results.
  */
 export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdmin: boolean; minPasswordLength: number }) {
+  const t = useT("admin");
+  const f = useFormatter();
+  const formatNumber = (n: number) => f.number(n);
   const toast = useToast();
   const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -79,11 +81,11 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
     if (!file) return;
     setError(null);
     if (!/\.csv$/i.test(file.name) && file.type !== "text/csv") {
-      setError("Please choose a .csv file. In Excel or Google Sheets, use File → Download → CSV.");
+      setError(t("members.import.errors.notCsv"));
       return;
     }
     if (file.size > MEMBER_IMPORT_MAX_BYTES) {
-      setError("The file is larger than 1 MB. Split it into smaller files.");
+      setError(t("members.import.errors.tooLarge"));
       return;
     }
     startChecking(async () => {
@@ -91,12 +93,20 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
       try {
         text = await file.text();
       } catch {
-        setError("The file could not be read. Try saving it again as CSV (UTF-8).");
+        setError(t("members.import.errors.unreadable"));
         return;
       }
       const parsed = readMemberImportCsv(text);
       if (!parsed.ok) {
-        setError(parsed.error);
+        setError(
+          parsed.code === "empty"
+            ? t("members.import.errors.empty")
+            : parsed.code === "headerOnly"
+              ? t("members.import.errors.headerOnly")
+              : parsed.code === "tooManyRows"
+                ? t("members.import.errors.tooManyRows", { rows: parsed.rows, max: parsed.max })
+                : t("members.import.errors.missingColumns", { columns: f.list(parsed.missing), count: parsed.missing.length }),
+        );
         return;
       }
       const res = await checkMemberImportAction(parsed.rows);
@@ -116,11 +126,11 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
       const res = await importMembersAction(rows);
       setConfirming(false);
       if (!res.ok) {
-        toast.error("Import failed", res.error);
+        toast.error(t("members.import.failed"), res.error);
         return;
       }
-      if (res.data.created.length) toast.success(res.message ?? "Members imported");
-      else toast.error(res.message ?? "No members were imported", "Fix the rows with errors and upload the file again.");
+      if (res.data.created.length) toast.success(res.message ?? t("members.import.imported"));
+      else toast.error(res.message ?? t("members.import.noneImported"), t("members.import.fixRows"));
       setStage({ kind: "done", fileName, result: res.data });
     });
   };
@@ -136,16 +146,16 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
       <div className="space-y-5">
         <Card>
           <CardHeader
-            title="Preview"
+            title={t("members.import.preview")}
             description={
               <>
-                <span className="font-medium text-ink">{stage.fileName}</span> · {formatNumber(stage.checks.length)} {stage.checks.length === 1 ? "row" : "rows"}
+                <span className="font-medium text-ink">{stage.fileName}</span> · {t("members.import.rows", { count: stage.checks.length })}
               </>
             }
             actions={
               <Button variant="outline" size="sm" onClick={reset} disabled={importing} leftIcon={<Icon.Upload className="size-4" />}>
-                <span className="hidden sm:inline">Choose another file</span>
-                <span className="sm:hidden">Change</span>
+                <span className="hidden sm:inline">{t("members.import.chooseAnother")}</span>
+                <span className="sm:hidden">{t("members.import.change")}</span>
               </Button>
             }
           />
@@ -153,29 +163,28 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge tone="success" size="md">
                 <Icon.CheckCircle className="size-4" />
-                {formatNumber(ready.length)} ready
+                {t("members.import.ready", { count: ready.length })}
               </Badge>
               {invalid > 0 && (
                 <Badge tone="danger" size="md">
                   <Icon.AlertCircle className="size-4" />
-                  {formatNumber(invalid)} with errors
+                  {t("members.import.withErrors", { count: invalid })}
                 </Badge>
               )}
               {generated > 0 && (
                 <Badge tone="info" size="md">
                   <Icon.Lock className="size-4" />
-                  {formatNumber(generated)} generated {generated === 1 ? "password" : "passwords"}
+                  {t("members.import.generated", { count: generated })}
                 </Badge>
               )}
             </div>
             {invalid > 0 && (
               <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink">
-                Rows with errors are skipped. Fix them in your file and upload it again, or import the {formatNumber(ready.length)} valid{" "}
-                {ready.length === 1 ? "row" : "rows"} now.
+                {t("members.import.skipNotice", { count: ready.length })}
               </p>
             )}
             {invalid > 0 && (
-              <Checkbox id={`${inputId}-errors`} label="Show only rows with errors" checked={onlyErrors} onChange={(e) => setOnlyErrors(e.target.checked)} />
+              <Checkbox id={`${inputId}-errors`} label={t("members.import.onlyErrors")} checked={onlyErrors} onChange={(e) => setOnlyErrors(e.target.checked)} />
             )}
           </CardBody>
         </Card>
@@ -183,23 +192,23 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
         <Table>
           <THead>
             <tr>
-              <TH className="w-14">Line</TH>
-              <TH>Member</TH>
-              <TH className="hidden md:table-cell">Roles</TH>
-              <TH className="hidden sm:table-cell">Password</TH>
-              <TH>Status</TH>
+              <TH className="w-14">{t("members.import.columns.line")}</TH>
+              <TH>{t("members.import.columns.member")}</TH>
+              <TH className="hidden md:table-cell">{t("members.import.columns.roles")}</TH>
+              <TH className="hidden sm:table-cell">{t("members.import.columns.password")}</TH>
+              <TH>{t("members.import.columns.status")}</TH>
             </tr>
           </THead>
           <TBody>
             {visible.length === 0 ? (
-              <TableEmpty colSpan={5}>Every row is valid.</TableEmpty>
+              <TableEmpty colSpan={5}>{t("members.import.allValid")}</TableEmpty>
             ) : (
               visible.map((c) => (
                 <TR key={c.line} className={cn(c.errors.length > 0 && "bg-danger/5")}>
                   <TD className="tabular-nums text-ink-muted">{c.line}</TD>
                   <TD>
-                    <p className="max-w-56 truncate font-medium">{c.name || <span className="text-ink-faint">No name</span>}</p>
-                    <p className="max-w-56 truncate text-xs text-ink-muted">{c.email || "No email"}</p>
+                    <p className="max-w-56 truncate font-medium">{c.name || <span className="text-ink-faint">{t("members.import.noName")}</span>}</p>
+                    <p className="max-w-56 truncate text-xs text-ink-muted">{c.email || t("members.import.noEmail")}</p>
                     <div className="mt-1 md:hidden">
                       <RoleBadges roles={c.roles} />
                     </div>
@@ -207,7 +216,7 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
                   <TD className="hidden md:table-cell">
                     <RoleBadges roles={c.roles} />
                   </TD>
-                  <TD className="hidden whitespace-nowrap text-ink-muted sm:table-cell">{c.generatePassword ? "Generated" : "From file"}</TD>
+                  <TD className="hidden whitespace-nowrap text-ink-muted sm:table-cell">{c.generatePassword ? t("members.import.passwordGenerated") : t("members.import.passwordFromFile")}</TD>
                   <TD>
                     {c.errors.length ? (
                       <ul className="space-y-0.5 text-xs text-danger">
@@ -220,7 +229,7 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
                       </ul>
                     ) : (
                       <Badge tone="success" dot>
-                        Ready
+                        {t("members.import.statusReady")}
                       </Badge>
                     )}
                   </TD>
@@ -232,7 +241,7 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <ButtonLink href="/admin/members" variant="outline">
-            Cancel
+            {t("shared.cancel")}
           </ButtonLink>
           <Button
             onClick={() => (invalid ? setConfirming(true) : runImport())}
@@ -240,7 +249,7 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
             loading={importing && !confirming}
             leftIcon={<Icon.UserPlus className="size-4" />}
           >
-            Import {formatNumber(ready.length)} {ready.length === 1 ? "member" : "members"}
+            {t("members.import.importCount", { count: ready.length })}
           </Button>
         </div>
 
@@ -249,9 +258,9 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
           onClose={() => (importing ? undefined : setConfirming(false))}
           onConfirm={runImport}
           loading={importing}
-          title={`Import ${formatNumber(ready.length)} ${ready.length === 1 ? "member" : "members"}?`}
-          description={`${formatNumber(invalid)} ${invalid === 1 ? "row has" : "rows have"} errors and will be skipped. You can import them later from a corrected file.`}
-          confirmLabel="Import valid rows"
+          title={t("members.import.confirmTitle", { count: ready.length })}
+          description={t("members.import.confirmDescription", { count: invalid })}
+          confirmLabel={t("members.import.confirmLabel")}
         />
       </div>
     );
@@ -260,7 +269,7 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <Card>
-        <CardHeader title="Upload a CSV file" description={`One row per member, up to ${MEMBER_IMPORT_MAX_ROWS} rows per file.`} />
+        <CardHeader title={t("members.import.uploadTitle")} description={t("members.import.uploadDescription", { max: MEMBER_IMPORT_MAX_ROWS })} />
         <CardBody className="space-y-4">
           <label
             htmlFor={inputId}
@@ -283,8 +292,8 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
             <span className="rounded-full bg-accent/10 p-3 text-accent">
               {checking ? <Icon.Loader className="size-6 animate-spin" /> : <Icon.Upload className="size-6" />}
             </span>
-            <span className="text-sm font-medium text-ink">{checking ? "Checking your file…" : "Drop a CSV file here or click to browse"}</span>
-            <span className="text-xs text-ink-muted">CSV (UTF-8), up to 1 MB</span>
+            <span className="text-sm font-medium text-ink">{checking ? t("members.import.checking") : t("members.import.drop")}</span>
+            <span className="text-xs text-ink-muted">{t("members.import.limits")}</span>
             <input
               ref={fileRef}
               id={inputId}
@@ -299,46 +308,45 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
           <div className="flex flex-wrap items-center gap-2">
             <a href="/admin/members/import/template" download className={buttonClasses({ variant: "outline", size: "sm" })}>
               <Icon.Download className="size-4" />
-              Download template
+              {t("members.import.template")}
             </a>
-            <span className="text-xs text-ink-muted">Fill it in with a spreadsheet app and save as CSV.</span>
+            <span className="text-xs text-ink-muted">{t("members.import.templateHint")}</span>
           </div>
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="Columns" />
+        <CardHeader title={t("members.import.columnsTitle")} />
         <CardBody>
           <dl className="space-y-3 text-sm">
             <div>
               <dt className="flex items-center gap-2 font-mono text-xs font-semibold text-ink">
-                email <Badge tone="danger">Required</Badge>
+                email <Badge tone="danger">{t("members.import.required")}</Badge>
               </dt>
-              <dd className="mt-0.5 text-ink-muted">Must be unique, both in the file and among existing members.</dd>
+              <dd className="mt-0.5 text-ink-muted">{t("members.import.emailHelp")}</dd>
             </div>
             <div>
               <dt className="flex items-center gap-2 font-mono text-xs font-semibold text-ink">
-                name <Badge tone="danger">Required</Badge>
+                name <Badge tone="danger">{t("members.import.required")}</Badge>
               </dt>
-              <dd className="mt-0.5 text-ink-muted">The member&apos;s full name.</dd>
+              <dd className="mt-0.5 text-ink-muted">{t("members.import.nameHelp")}</dd>
             </div>
             <div>
               <dt className="font-mono text-xs font-semibold text-ink">roles</dt>
               <dd className="mt-0.5 text-ink-muted">
-                Separate several with semicolons: <span className="font-mono text-xs">student</span>, <span className="font-mono text-xs">course_creator</span>,{" "}
-                <span className="font-mono text-xs">batch_evaluator</span>, <span className="font-mono text-xs">moderator</span>
-                {canGrantAdmin ? (
-                  <>
-                    , <span className="font-mono text-xs">admin</span>
-                  </>
-                ) : null}
-                . Leave empty for Student.
-                {!canGrantAdmin && " Only administrators can import admins."}
+                {t.rich("members.import.rolesHelp", {
+                  values: (
+                    <span className="font-mono text-xs" dir="ltr">
+                      {(canGrantAdmin ? ["student", "course_creator", "batch_evaluator", "moderator", "admin"] : ["student", "course_creator", "batch_evaluator", "moderator"]).join(", ")}
+                    </span>
+                  ),
+                })}
+                {!canGrantAdmin && ` ${t("members.import.adminsOnly")}`}
               </dd>
             </div>
             <div>
               <dt className="font-mono text-xs font-semibold text-ink">password</dt>
-              <dd className="mt-0.5 text-ink-muted">At least {minPasswordLength} characters with letters and numbers. Leave empty to generate one; generated passwords are shown once after the import.</dd>
+              <dd className="mt-0.5 text-ink-muted">{t("members.import.passwordHelp", { count: minPasswordLength })}</dd>
             </div>
           </dl>
         </CardBody>
@@ -348,6 +356,9 @@ export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdm
 }
 
 function ImportSummary({ fileName, result, onAgain }: { fileName: string; result: MemberImportResult; onAgain: () => void }) {
+  const t = useT("admin");
+  const f = useFormatter();
+  const formatNumber = (n: number) => f.number(n);
   const generated = result.created.filter((c) => c.generatedPassword).length;
 
   const downloadResults = () => {
@@ -363,40 +374,40 @@ function ImportSummary({ fileName, result, onAgain }: { fileName: string; result
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Imported" value={formatNumber(result.created.length)} icon={<Icon.UserPlus className="size-5" />} />
-        <StatCard label="Skipped" value={formatNumber(result.skipped.length)} hint={result.skipped.length ? "Rows with errors" : "No errors"} icon={<Icon.AlertCircle className="size-5" />} />
-        <StatCard label="Generated passwords" value={formatNumber(generated)} icon={<Icon.Lock className="size-5" />} />
+        <StatCard label={t("members.import.summary.imported")} value={formatNumber(result.created.length)} icon={<Icon.UserPlus className="size-5" />} />
+        <StatCard label={t("members.import.summary.skipped")} value={formatNumber(result.skipped.length)} hint={result.skipped.length ? t("members.import.summary.rowsWithErrors") : t("members.import.summary.noErrors")} icon={<Icon.AlertCircle className="size-5" />} />
+        <StatCard label={t("members.import.summary.generated")} value={formatNumber(generated)} icon={<Icon.Lock className="size-5" />} />
       </div>
 
       {generated > 0 && (
         <p className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-ink">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-          Generated passwords are shown only on this page. Download the results now and share each password privately with its member.
+          {t("members.import.summary.passwordWarning")}
         </p>
       )}
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={downloadResults} variant={generated ? "primary" : "outline"} leftIcon={<Icon.Download className="size-4" />}>
-          Download results
+          {t("members.import.summary.download")}
         </Button>
         <Button variant="outline" onClick={onAgain} leftIcon={<Icon.Upload className="size-4" />}>
-          Import another file
+          {t("members.import.summary.again")}
         </Button>
         <ButtonLink href="/admin/members" variant="ghost">
-          Back to members
+          {t("errorPages.backToMembers")}
         </ButtonLink>
       </div>
 
       {result.created.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-ink">Imported members</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("members.import.summary.importedMembers")}</h2>
           <Table>
             <THead>
               <tr>
-                <TH className="w-14">Line</TH>
-                <TH>Member</TH>
-                <TH className="hidden md:table-cell">Roles</TH>
-                <TH>Password</TH>
+                <TH className="w-14">{t("members.import.columns.line")}</TH>
+                <TH>{t("members.import.columns.member")}</TH>
+                <TH className="hidden md:table-cell">{t("members.import.columns.roles")}</TH>
+                <TH>{t("members.import.columns.password")}</TH>
               </tr>
             </THead>
             <TBody>
@@ -416,7 +427,7 @@ function ImportSummary({ fileName, result, onAgain }: { fileName: string; result
                     {c.generatedPassword ? (
                       <code className="select-all rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink">{c.generatedPassword}</code>
                     ) : (
-                      <span className="text-xs text-ink-muted">From file</span>
+                      <span className="text-xs text-ink-muted">{t("members.import.passwordFromFile")}</span>
                     )}
                   </TD>
                 </TR>
@@ -428,20 +439,20 @@ function ImportSummary({ fileName, result, onAgain }: { fileName: string; result
 
       {result.skipped.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-ink">Skipped rows</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("members.import.summary.skippedRows")}</h2>
           <Table>
             <THead>
               <tr>
-                <TH className="w-14">Line</TH>
-                <TH>Email</TH>
-                <TH>Errors</TH>
+                <TH className="w-14">{t("members.import.columns.line")}</TH>
+                <TH>{t("members.form.email")}</TH>
+                <TH>{t("members.import.columns.errors")}</TH>
               </tr>
             </THead>
             <TBody>
               {result.skipped.map((s) => (
                 <TR key={`${s.line}-${s.email}`}>
                   <TD className="tabular-nums text-ink-muted">{s.line}</TD>
-                  <TD className="max-w-48 truncate">{s.email || <span className="text-ink-faint">No email</span>}</TD>
+                  <TD className="max-w-48 truncate">{s.email || <span className="text-ink-faint">{t("members.import.noEmail")}</span>}</TD>
                   <TD>
                     <ul className="space-y-0.5 text-xs text-danger">
                       {s.errors.map((e) => (

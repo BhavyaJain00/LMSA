@@ -23,13 +23,17 @@ import { ResendVerificationButton } from "@/components/security/resend-verificat
 import { SecuritySessions, type SecuritySessionRow } from "@/components/security/security-sessions";
 import { StartTwoFactorButton, TwoFactorSetup } from "@/components/security/two-factor-setup";
 import { TwoFactorManage } from "@/components/security/two-factor-manage";
-import { cn, formatDate, formatDateTime, relativeTime } from "@/lib/utils";
+import { deviceLabel } from "@/components/security/device-label";
+import { cn } from "@/lib/utils";
+import { getFormatter, getT } from "@/i18n/server";
 
-export const metadata = { title: "Security" };
+export async function generateMetadata() {
+  return { title: (await getT("account"))("security.metaTitle") };
+}
 
 async function sessionRows(user: User): Promise<SecuritySessionRow[]> {
   const now = Date.now();
-  const current = await getCurrentSessionTokenHash();
+  const [current, t, f] = await Promise.all([getCurrentSessionTokenHash(), getT("account"), getFormatter()]);
   const rows: Session[] = await filter("sessions", (s) => s.userId === user.id && new Date(s.expiresAt).getTime() > now);
   return rows
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -37,11 +41,11 @@ async function sessionRows(user: User): Promise<SecuritySessionRow[]> {
       const ua = describeUserAgent(s.userAgent);
       return {
         id: s.id,
-        device: ua.label,
+        device: deviceLabel(ua, t),
         kind: ua.kind,
-        signedInLabel: relativeTime(s.createdAt),
-        signedInTitle: formatDateTime(s.createdAt),
-        expiresLabel: formatDate(s.expiresAt),
+        signedInLabel: f.relative(s.createdAt),
+        signedInTitle: f.dateTime(s.createdAt),
+        expiresLabel: f.date(s.expiresAt),
         current: s.tokenHash === current,
       };
     })
@@ -65,7 +69,7 @@ function CheckItem({ ok, label, detail }: { ok: boolean; label: string; detail: 
 export default async function SecuritySettingsPage(props: PageProps<"/settings/security">) {
   const user = await requireUser("/settings/security");
   const sp = await props.searchParams;
-  const settings = await getSettings();
+  const [settings, t, f] = await Promise.all([getSettings(), getT("account"), getFormatter()]);
   const next = safeRedirectPath(sp.next, undefined);
   const requiredNow = mustSetUpTwoFactor(user, settings.security);
 
@@ -90,17 +94,17 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
   return (
     <div className="mx-auto max-w-3xl animate-fade-in">
       <PageHeader
-        title="Security"
-        description="Protect your account with a strong password, a confirmed email and two-step verification."
-        breadcrumbs={<Breadcrumbs items={[{ label: "Account settings", href: "/settings" }, { label: "Security" }]} />}
+        title={t("security.metaTitle")}
+        description={t("security.description")}
+        breadcrumbs={<Breadcrumbs items={[{ label: t("settings.metaTitle"), href: "/settings" }, { label: t("security.metaTitle") }]} />}
       />
 
       {requiredNow && (
         <div role="alert" className="mb-6 flex items-start gap-3 rounded-card border border-accent/30 bg-accent/10 px-4 py-3">
           <Icon.ShieldCheck className="mt-0.5 size-5 shrink-0 text-accent" />
           <div className="text-sm">
-            <p className="font-medium text-ink">Two-step verification is required for your role</p>
-            <p className="text-ink-muted">{brand} asks staff to protect their accounts with an authenticator app. Set it up below to continue to admin and teaching tools.</p>
+            <p className="font-medium text-ink">{t("security.requiredTitle")}</p>
+            <p className="text-ink-muted">{t("security.requiredBody", { brand })}</p>
           </div>
         </div>
       )}
@@ -108,33 +112,39 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
         <div role="status" className="mb-6 flex flex-col gap-3 rounded-card border border-success/30 bg-success/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="flex items-center gap-2 text-sm font-medium text-ink">
             <Icon.CheckCircle className="size-5 text-success" />
-            You&apos;re all set — two-step verification is on.
+            {t("security.allSet")}
           </p>
-          <ButtonLink href={next} size="sm" rightIcon={<Icon.ArrowRight className="size-4" />}>
-            Continue
+          <ButtonLink href={next} size="sm" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
+            {t("security.continue")}
           </ButtonLink>
         </div>
       )}
 
       <div className="space-y-6">
         <Card>
-          <CardHeader title="Security checkup" description="A quick look at how well your account is protected." />
+          <CardHeader title={t("security.checkup.title")} description={t("security.checkup.description")} />
           <CardBody>
             <ul className="grid gap-4 sm:grid-cols-3">
               <CheckItem
                 ok={verified}
-                label={verified ? "Email confirmed" : "Email not confirmed"}
-                detail={user.emailVerifiedAt ? `Confirmed ${formatDate(user.emailVerifiedAt)}` : verified ? "Added by your organisation" : "Check your inbox for the link"}
+                label={verified ? t("security.checkup.emailConfirmed") : t("security.checkup.emailNotConfirmed")}
+                detail={
+                  user.emailVerifiedAt
+                    ? t("security.checkup.confirmedOn", { date: f.date(user.emailVerifiedAt) })
+                    : verified
+                      ? t("security.checkup.addedByOrg")
+                      : t("security.checkup.checkInbox")
+                }
               />
               <CheckItem
                 ok={twoFactorOn}
-                label={twoFactorOn ? "Two-step verification on" : "Two-step verification off"}
-                detail={twoFactorOn ? `${recoveryLeft} recovery ${recoveryLeft === 1 ? "code" : "codes"} left` : "Adds a code from your phone at sign-in"}
+                label={twoFactorOn ? t("security.checkup.twoFactorOn") : t("security.checkup.twoFactorOff")}
+                detail={twoFactorOn ? t("security.checkup.codesLeft", { count: recoveryLeft }) : t("security.checkup.addsCode")}
               />
               <CheckItem
                 ok={sessions.length <= 3}
-                label={`${sessions.length} signed-in ${sessions.length === 1 ? "device" : "devices"}`}
-                detail={lastSignIn ? `Last sign-in ${relativeTime(lastSignIn.createdAt)}` : "No sign-ins recorded yet"}
+                label={t("security.checkup.devices", { count: sessions.length })}
+                detail={lastSignIn ? t("security.checkup.lastSignIn", { when: f.relative(lastSignIn.createdAt) }) : t("security.checkup.noSignIns")}
               />
             </ul>
           </CardBody>
@@ -142,31 +152,31 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
 
         <Card>
           <CardHeader
-            title="Email address"
-            description="Used to sign in, reset your password and receive account notices."
+            title={t("security.email.title")}
+            description={t("security.email.description")}
             actions={
               verified ? (
                 <Badge tone="success" dot>
-                  Confirmed
+                  {t("security.email.confirmed")}
                 </Badge>
               ) : (
                 <Badge tone="warning" dot>
-                  Not confirmed
+                  {t("security.email.notConfirmed")}
                 </Badge>
               )
             }
           />
           <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 text-sm">
-              <p className="break-all font-medium text-ink">{user.email}</p>
+              <p className="break-all font-medium text-ink" dir="ltr">{user.email}</p>
               <p className="mt-0.5 text-ink-muted">
                 {verified
                   ? user.emailVerifiedAt
-                    ? `Confirmed on ${formatDate(user.emailVerifiedAt)}.`
-                    : "This address was added by your organisation and doesn't need confirming."
+                    ? t("security.email.confirmedOn", { date: f.date(user.emailVerifiedAt) })
+                    : t("security.email.addedByOrg")
                   : settings.security.requireEmailVerification
-                    ? "Confirm it to enroll in courses and make purchases. The link we sent expires after 24 hours."
-                    : "Confirm it so you can always recover your account. The link we sent expires after 24 hours."}
+                    ? t("security.email.confirmRequired")
+                    : t("security.email.confirmOptional")}
               </p>
             </div>
             {!verified && (
@@ -179,20 +189,20 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
 
         <Card>
           <CardHeader
-            title="Two-step verification"
-            description="After your password, sign-in also asks for a 6-digit code from an authenticator app on your phone."
+            title={t("security.twoFactor.title")}
+            description={t("security.twoFactor.description")}
             actions={
               twoFactorOn ? (
                 <Badge tone="success" dot>
-                  On
+                  {t("security.twoFactor.on")}
                 </Badge>
               ) : pendingSetup ? (
                 <Badge tone="info" dot>
-                  Setting up
+                  {t("security.twoFactor.settingUp")}
                 </Badge>
               ) : (
                 <Badge tone="neutral" dot>
-                  Off
+                  {t("security.twoFactor.off")}
                 </Badge>
               )
             }
@@ -203,25 +213,25 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
                 <div className="flex items-start gap-3 rounded-lg bg-surface-2/70 px-3 py-3 text-sm">
                   <Icon.Smartphone className="mt-0.5 size-5 shrink-0 text-ink-muted" />
                   <div className="min-w-0">
-                    <p className="font-medium text-ink">Authenticator app</p>
+                    <p className="font-medium text-ink">{t("security.twoFactor.app")}</p>
                     <p className="text-ink-muted">
                       {recoveryLeft > 0 ? (
                         <>
-                          {recoveryLeft} of 10 recovery codes left.
-                          {recoveryLeft <= 3 && <span className="font-medium text-warning"> Generate new codes soon.</span>}
+                          {t("security.twoFactor.codesLeft", { count: recoveryLeft, total: 10 })}
+                          {recoveryLeft <= 3 && <span className="font-medium text-warning"> {t("security.twoFactor.generateSoon")}</span>}
                         </>
                       ) : (
-                        <span className="font-medium text-warning">No recovery codes left — generate a new set so you can&apos;t get locked out.</span>
+                        <span className="font-medium text-warning">{t("security.twoFactor.noCodesLeft")}</span>
                       )}
                     </p>
                   </div>
                 </div>
                 <TwoFactorManage brand={brand} email={user.email} canDisable={canDisable} recoveryCodesLeft={recoveryLeft} />
-                {!canDisable && <p className="text-xs text-ink-muted">Your role requires two-step verification, so it can&apos;t be turned off.</p>}
+                {!canDisable && <p className="text-xs text-ink-muted">{t("security.twoFactor.required")}</p>}
               </div>
             ) : pendingSetup && otpauth && pendingSecret ? (
               <TwoFactorSetup
-                qr={qrMatrix ? <QrCode code={qrMatrix} title={`QR code to add ${brand} to your authenticator app`} /> : null}
+                qr={qrMatrix ? <QrCode code={qrMatrix} title={t("security.twoFactor.qrTitle", { brand })} /> : null}
                 secret={formatSecretForDisplay(pendingSecret)}
                 brand={brand}
                 email={user.email}
@@ -230,44 +240,46 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
             ) : pendingSetup ? (
               <div className="space-y-3">
                 <p className="text-sm text-danger">
-                  The setup key for your unfinished setup can&apos;t be read any more (the server key changed). Start again to get a new QR code.
+                  {t("security.twoFactor.keyUnreadable")}
                 </p>
-                <StartTwoFactorButton label="Start again" />
+                <StartTwoFactorButton label={t("security.twoFactor.startAgain")} />
               </div>
             ) : settings.security.allowTwoFactor ? (
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-ink-muted">Even if someone learns your password, they won&apos;t get in without your phone. Setup takes about a minute.</p>
+                <p className="text-sm text-ink-muted">{t("security.twoFactor.pitch")}</p>
                 <div className="shrink-0">
                   <StartTwoFactorButton />
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-ink-muted">Two-step verification isn&apos;t available on {brand} right now. An administrator can turn it on.</p>
+              <p className="text-sm text-ink-muted">{t("security.twoFactor.unavailable", { brand })}</p>
             )}
           </CardBody>
         </Card>
 
         <Card>
-          <CardHeader title="Password" description={`Use at least ${minLength} characters with letters and numbers. A long passphrase is easiest to remember.`} />
+          <CardHeader title={t("security.password.title")} description={t("security.password.description", { count: minLength })} />
           <CardBody className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-ink-muted">
-              Changing your password signs you out on your other devices. Forgot it?{" "}
-              <Link href={`/forgot-password?email=${encodeURIComponent(user.email)}`} className="font-medium text-accent hover:underline">
-                Reset it by email
-              </Link>
-              .
+              {t.rich("security.password.body", {
+                link: (text) => (
+                  <Link href={`/forgot-password?email=${encodeURIComponent(user.email)}`} className="font-medium text-accent hover:underline">
+                    {text}
+                  </Link>
+                ),
+              })}
             </p>
             <ButtonLink href="/settings" variant="outline" size="sm" leftIcon={<Icon.Lock className="size-4" />}>
-              Change password
+              {t("security.password.change")}
             </ButtonLink>
           </CardBody>
         </Card>
 
         <Card>
-          <CardHeader title="Recent sign-in activity" description="The last 20 attempts to sign in to your account. If something looks unfamiliar, change your password." />
+          <CardHeader title={t("security.activity.title")} description={t("security.activity.description")} />
           <CardBody>
             {events.length === 0 ? (
-              <EmptyState compact icon={<Icon.Clock />} title="No sign-in activity yet" description="Sign-ins and failed attempts will appear here from now on." />
+              <EmptyState compact icon={<Icon.Clock />} title={t("security.activity.emptyTitle")} description={t("security.activity.emptyBody")} />
             ) : (
               <LoginActivityList events={events} />
             )}
@@ -275,10 +287,10 @@ export default async function SecuritySettingsPage(props: PageProps<"/settings/s
         </Card>
 
         <Card>
-          <CardHeader title="Signed-in devices" description="Browsers and devices where you're currently signed in." />
+          <CardHeader title={t("security.devices.title")} description={t("security.devices.description")} />
           <CardBody>
             {sessions.length === 0 ? (
-              <EmptyState compact icon={<Icon.Monitor />} title="No active sessions" description="Devices you sign in on will be listed here." />
+              <EmptyState compact icon={<Icon.Monitor />} title={t("security.devices.emptyTitle")} description={t("security.devices.emptyBody")} />
             ) : (
               <SecuritySessions sessions={sessions} />
             )}

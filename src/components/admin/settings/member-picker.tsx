@@ -4,6 +4,7 @@ import { useId, useMemo, useState, type KeyboardEvent } from "react";
 import { Avatar } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 export interface PickerMember {
   id: string;
@@ -23,7 +24,7 @@ export function MemberPicker({
   defaultValue,
   invalid,
   onChange,
-  placeholder = "Search by name or email",
+  placeholder,
   id,
 }: {
   name: string;
@@ -34,6 +35,7 @@ export function MemberPicker({
   placeholder?: string;
   id?: string;
 }) {
+  const t = useT("admin");
   const autoId = useId();
   const inputId = id ?? autoId;
   const listId = `${inputId}-list`;
@@ -86,15 +88,15 @@ export function MemberPicker({
         <div className={cn("flex h-9.5 items-center gap-2 rounded-lg border bg-surface-1 px-2", invalid ? "border-danger" : "border-border-strong")}>
           <Avatar name={selected.name} src={selected.avatarUrl} size="xs" />
           <span className="min-w-0 flex-1 truncate text-sm">
-            <span className="font-medium text-ink">{selected.name}</span> <span className="text-ink-muted">· {selected.email}</span>
+            <span className="font-medium text-ink">{selected.name}</span> <span className="text-ink-muted" dir="ltr">· {selected.email}</span>
           </span>
-          <button type="button" onClick={clear} className="rounded p-1 text-ink-faint hover:bg-surface-2 hover:text-ink" aria-label="Change member">
+          <button type="button" onClick={clear} className="rounded p-1 text-ink-faint hover:bg-surface-2 hover:text-ink" aria-label={t("memberPicker.change")}>
             <Icon.X className="size-4" />
           </button>
         </div>
       ) : (
         <div className="relative">
-          <Icon.Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
+          <Icon.Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
           <input
             id={inputId}
             type="text"
@@ -105,7 +107,7 @@ export function MemberPicker({
             aria-invalid={invalid || undefined}
             autoComplete="off"
             value={query}
-            placeholder={placeholder}
+            placeholder={placeholder ?? t("memberPicker.placeholder")}
             onChange={(e) => {
               setQuery(e.target.value);
               setOpen(true);
@@ -115,7 +117,7 @@ export function MemberPicker({
             onBlur={() => setTimeout(() => setOpen(false), 120)}
             onKeyDown={onKeyDown}
             className={cn(
-              "h-9.5 w-full rounded-lg border bg-surface-1 pl-9 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25",
+              "h-9.5 w-full rounded-lg border bg-surface-1 ps-9 pe-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25",
               invalid ? "border-danger" : "border-border-strong",
             )}
           />
@@ -124,7 +126,7 @@ export function MemberPicker({
       {open && !selected && (
         <ul id={listId} role="listbox" className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-border bg-surface-1 p-1 shadow-pop">
           {results.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-ink-muted">No members match “{query}”.</li>
+            <li className="px-3 py-2 text-sm text-ink-muted">{t("memberPicker.noMatch", { query })}</li>
           ) : (
             results.map((m, i) => (
               <li
