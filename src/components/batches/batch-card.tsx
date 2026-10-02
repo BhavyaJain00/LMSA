@@ -6,16 +6,18 @@ import { Icon } from "@/components/ui/icons";
 import { BatchCover, BatchStatusBadge, InstructorNames, MetaRow, SeatBadge, batchPriceLabel } from "./batch-meta";
 import { LocalTimeRange } from "./local-time";
 import { formatClockRange, formatDateRange, formatGmtOffset, zonedTimeToUtc } from "./tz";
+import { getLocale, getT } from "@/i18n/server";
 
 /**
  * Batch card for lists: cover (image or gradient), status, title, short
  * description, date range, session time with timezone (+ the viewer's local
  * time), medium, seats left / Full, price and instructors.
  */
-export function BatchCard({ batch, className }: { batch: BatchSummary; className?: string }) {
+export async function BatchCard({ batch, className }: { batch: BatchSummary; className?: string }) {
   const startsAt = zonedTimeToUtc(batch.startDate, batch.startTime, batch.timezone);
   const offset = Number.isNaN(startsAt) ? "" : formatGmtOffset(batch.timezone, startsAt);
-  const price = batchPriceLabel(batch);
+  const [t, locale, paidPrice] = await Promise.all([getT("public"), getLocale(), batchPriceLabel(batch)]);
+  const price = paidPrice ?? t("catalog.free");
 
   return (
     <Link
@@ -31,13 +33,13 @@ export function BatchCard({ batch, className }: { batch: BatchSummary; className
             <BatchStatusBadge status={batch.status} className="bg-surface-1/90 backdrop-blur" />
             {!batch.published && (
               <Badge tone="warning" className="bg-surface-1/90 backdrop-blur">
-                Unpublished
+                {t("card.unpublished")}
               </Badge>
             )}
           </div>
           {batch.enrolled && (
             <Badge tone="dark" className="shrink-0">
-              <Icon.Check className="size-3" /> Enrolled
+              <Icon.Check className="size-3" /> {t("enroll.enrolled")}
             </Badge>
           )}
         </div>
@@ -51,9 +53,9 @@ export function BatchCard({ batch, className }: { batch: BatchSummary; className
         {batch.description && <p className="mt-1.5 line-clamp-2 text-sm text-ink-muted">{batch.description}</p>}
 
         <div className="mt-4 space-y-1.5">
-          <MetaRow icon={<Icon.Calendar />}>{formatDateRange(batch.startDate, batch.endDate)}</MetaRow>
+          <MetaRow icon={<Icon.Calendar />}>{formatDateRange(batch.startDate, batch.endDate, locale)}</MetaRow>
           <MetaRow icon={<Icon.Clock />}>
-            <span>{formatClockRange(batch.startTime, batch.endTime)}</span>
+            <span>{formatClockRange(batch.startTime, batch.endTime, locale)}</span>
             <span className="text-ink-faint">
               {" "}
               · {batch.timezone.replace(/_/g, " ")}
@@ -69,16 +71,16 @@ export function BatchCard({ batch, className }: { batch: BatchSummary; className
             />
           </MetaRow>
           <MetaRow icon={batch.medium === "online" ? <Icon.Monitor /> : <Icon.MapPin />}>
-            {batch.medium === "online" ? "Online" : "In person"}
+            {batch.medium === "online" ? t("batches.medium.online") : t("batches.medium.inPerson")}
             {batch.category && <span className="text-ink-faint"> · {batch.category.name}</span>}
-            {batch.certification && <span className="text-ink-faint"> · Certificate</span>}
+            {batch.certification && <span className="text-ink-faint"> · {t("batches.certificate")}</span>}
           </MetaRow>
         </div>
 
         <div className="mt-auto pt-4">
           <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
             <InstructorNames users={batch.instructors} />
-            <span className={cn("shrink-0 text-sm font-semibold", price === "Free" ? "text-success" : "text-ink")}>{price}</span>
+            <span className={cn("shrink-0 text-sm font-semibold", paidPrice === null ? "text-success" : "text-ink")}>{price}</span>
           </div>
         </div>
       </div>

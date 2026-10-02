@@ -5,6 +5,7 @@ import { useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import { Input, Select } from "@/components/ui/input";
 import { Icon, Spinner } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 /**
  * URL-driven list filters: text search (debounced), optional category select
@@ -13,14 +14,20 @@ import { Icon, Spinner } from "@/components/ui/icons";
 export function ListFilters({
   categories,
   certification = false,
-  placeholder = "Search",
+  certificationHint,
+  placeholder,
   className,
 }: {
   categories?: { value: string; label: string }[];
   certification?: boolean;
+  /** Tooltip of the certification toggle (defaults to a generic hint). */
+  certificationHint?: string;
   placeholder?: string;
   className?: string;
 }) {
+  // `global.` keys: the filters are also used on admin list pages.
+  const t = useT("public");
+  const searchLabel = placeholder ?? t("global.listFilters.search");
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -52,14 +59,14 @@ export function ListFilters({
     <div className={cn("flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center", className)} role="search">
       <div className="sm:w-60">
         <label htmlFor="list-search" className="sr-only">
-          {placeholder}
+          {searchLabel}
         </label>
         <Input
           id="list-search"
           type="search"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          placeholder={placeholder}
+          placeholder={searchLabel}
           leftAddon={<Icon.Search className="size-4" />}
           rightAddon={pending ? <Spinner className="size-4" /> : undefined}
         />
@@ -67,10 +74,10 @@ export function ListFilters({
       {categories && categories.length > 0 && (
         <div className="sm:w-48">
           <label htmlFor="list-category" className="sr-only">
-            Category
+            {t("global.listFilters.category")}
           </label>
           <Select id="list-category" value={category} onChange={(e) => apply({ category: e.target.value || null })}>
-            <option value="">All categories</option>
+            <option value="">{t("global.listFilters.allCategories")}</option>
             {categories.map((c) => (
               <option key={c.value} value={c.value}>
                 {c.label}
@@ -83,7 +90,7 @@ export function ListFilters({
         <button
           type="button"
           aria-pressed={certOnly}
-          title="Only show batches that offer a certificate"
+          title={certificationHint ?? t("global.listFilters.certificationHint")}
           onClick={() => apply({ certification: certOnly ? null : "1" })}
           className={cn(
             "inline-flex h-9.5 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors",
@@ -91,7 +98,7 @@ export function ListFilters({
           )}
         >
           <Icon.Award className="size-4" />
-          Certification
+          {t("global.listFilters.certification")}
         </button>
       )}
       {activeCount > 0 && (
@@ -103,7 +110,7 @@ export function ListFilters({
           }}
           className="inline-flex h-9.5 items-center gap-1 self-start rounded-lg px-2 text-sm text-ink-muted hover:text-ink sm:self-auto"
         >
-          <Icon.X className="size-4" /> Clear
+          <Icon.X className="size-4" /> {t("global.listFilters.clear")}
         </button>
       )}
     </div>

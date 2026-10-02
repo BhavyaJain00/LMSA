@@ -24,9 +24,10 @@ import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
 import { batchPath } from "@/lib/seo/content-index";
 import { siteOrigin } from "@/lib/seo/site";
 import { JsonLd } from "@/components/seo/json-ld";
+import { getLocale, getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/batches">): Promise<Metadata> {
-  const [settings, sp] = await Promise.all([getSettings(), props.searchParams]);
+  const [settings, sp, t, locale] = await Promise.all([getSettings(), props.searchParams, getT("public"), getLocale()]);
   const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
   const tab = str(sp.tab);
   // Tabs, search and filters canonicalise to the plain list of upcoming batches.
@@ -36,11 +37,10 @@ export async function generateMetadata(props: PageProps<"/batches">): Promise<Me
   });
   return pageMetadata(
     {
-      title: "Live batches",
-      description: [
-        `Learn with a cohort on ${settings.brand.name}: scheduled live classes, a shared timetable, assessments and instructor support from start to finish.`,
-      ],
+      title: t("batches.meta.title"),
+      description: [t("batches.meta.description", { brand: settings.brand.name })],
       path: "/batches",
+      locale,
       noindex: noindex || !settings.features.batches,
       follow,
     },
@@ -48,31 +48,17 @@ export async function generateMetadata(props: PageProps<"/batches">): Promise<Me
   );
 }
 
-const emptyCopy: Record<BatchListTab, { title: string; description: string }> = {
-  upcoming: {
-    title: "No Batches Found",
-    description: "There are no batches currently. Keep an eye out, fresh learning experiences are on the way!",
-  },
-  live: {
-    title: "No batches running right now",
-    description: "Batches that have started and are still in session will show up here.",
-  },
-  archived: {
-    title: "No archived batches",
-    description: "Batches that have finished will be listed here for reference.",
-  },
-  enrolled: {
-    title: "You haven't joined a batch yet",
-    description: "Pick an upcoming batch to learn with a cohort, attend live classes and get feedback from instructors.",
-  },
-  unpublished: {
-    title: "No unpublished batches",
-    description: "Batches you create start unpublished. Publish them from the batch settings when they are ready.",
-  },
-};
+/** Empty-state message keys per tab. */
+const EMPTY_KEYS = {
+  upcoming: { title: "batches.empty.upcomingTitle", description: "batches.empty.upcomingDescription" },
+  live: { title: "batches.empty.liveTitle", description: "batches.empty.liveDescription" },
+  archived: { title: "batches.empty.archivedTitle", description: "batches.empty.archivedDescription" },
+  enrolled: { title: "batches.empty.enrolledTitle", description: "batches.empty.enrolledDescription" },
+  unpublished: { title: "batches.empty.unpublishedTitle", description: "batches.empty.unpublishedDescription" },
+} as const satisfies Record<BatchListTab, { title: string; description: string }>;
 
 export default async function BatchesPage(props: PageProps<"/batches">) {
-  const [user, settings, sp] = await Promise.all([getCurrentUser(), getSettings(), props.searchParams]);
+  const [user, settings, sp, t] = await Promise.all([getCurrentUser(), getSettings(), props.searchParams, getT("public")]);
   if (!settings.features.batches) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect("/login?next=%2Fbatches");
   // No scheduler: due batch-start and live-class reminders are sent when members load the page.
@@ -92,7 +78,7 @@ export default async function BatchesPage(props: PageProps<"/batches">) {
   ]);
   const tabs = batchTabsFor(user);
   const filtered = !!(search || category || certification);
-  const empty = emptyCopy[tab];
+  const empty = EMPTY_KEYS[tab];
 
   const canonicalView = tab === "upcoming" && !filtered;
   const publicBatches = batches.filter((b) => b.published);
@@ -103,16 +89,16 @@ export default async function BatchesPage(props: PageProps<"/batches">) {
         <JsonLd data={itemListJsonLd("Upcoming batches", publicBatches.map((b) => ({ name: b.title, path: batchPath(b.slug), image: b.imageUrl })), { origin: siteOrigin() })} />
       )}
       <PageHeader
-        title="All Batches"
-        description="Learn with a cohort: scheduled live classes, a shared timetable, assessments and instructor support."
+        title={t("batches.title")}
+        description={t("batches.description")}
         actions={
           user && canCreateBatch(user) ? (
             <>
               <ButtonLink href="/admin/batches" variant="outline" leftIcon={<Icon.Settings className="size-4" />}>
-                Manage
+                {t("batches.manage")}
               </ButtonLink>
               <ButtonLink href="/admin/batches/new" leftIcon={<Icon.Plus className="size-4" />}>
-                New Batch
+                {t("batches.new")}
               </ButtonLink>
             </>
           ) : null
@@ -120,38 +106,38 @@ export default async function BatchesPage(props: PageProps<"/batches">) {
       />
 
       <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <Tabs items={tabs.map((t) => ({ value: t.value, label: t.label, count: counts[t.value] }))} className="lg:flex-1" />
-        <ListFilters categories={categories.map((c) => ({ value: c.slug, label: c.name }))} certification placeholder="Search batches" />
+        <Tabs items={tabs.map((tab) => ({ value: tab.value, label: t(`batches.tabs.${tab.value}`), count: counts[tab.value] }))} className="lg:flex-1" />
+        <ListFilters categories={categories.map((c) => ({ value: c.slug, label: c.name }))} certification certificationHint={t("batches.filters.certificationHint")} placeholder={t("batches.searchPlaceholder")} />
       </div>
 
       <p className="sr-only" role="status">
-        {batches.length === 0 ? "No Batches Found" : batches.length === 1 ? "1 result loaded" : `${batches.length} results loaded`}
+        {t("batches.resultsLoaded", { count: batches.length })}
       </p>
 
       {batches.length === 0 ? (
         filtered ? (
           <EmptyState
             icon={<Icon.Search />}
-            title="No batches match your filters"
-            description="Try a different search term or clear the filters."
+            title={t("batches.empty.filteredTitle")}
+            description={t("batches.empty.filteredDescription")}
             action={
               <ButtonLink href={tab === "upcoming" ? "/batches" : `/batches?tab=${tab}`} variant="outline">
-                Clear filters
+                {t("batches.clearFilters")}
               </ButtonLink>
             }
           />
         ) : (
           <EmptyState
             icon={<Icon.Users />}
-            title={empty.title}
-            description={empty.description}
+            title={t(empty.title)}
+            description={t(empty.description)}
             action={
               tab === "unpublished" || (tab === "upcoming" && user && canCreateBatch(user)) ? (
                 <ButtonLink href="/admin/batches/new" leftIcon={<Icon.Plus className="size-4" />}>
-                  New Batch
+                  {t("batches.new")}
                 </ButtonLink>
               ) : tab === "enrolled" ? (
-                <ButtonLink href="/batches">Browse upcoming batches</ButtonLink>
+                <ButtonLink href="/batches">{t("batches.browseUpcoming")}</ButtonLink>
               ) : null
             }
           />

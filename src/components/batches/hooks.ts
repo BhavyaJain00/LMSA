@@ -3,6 +3,7 @@
 import { startTransition, useActionState, useSyncExternalStore, useTransition, type FormEvent } from "react";
 import type { ActionResult } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 /* ------------------------------------------------------------------ */
 /* Clock                                                               */
@@ -112,6 +113,7 @@ export function useActionForm<T = undefined>(action: FormAction<T>, options: Act
 /** Run button-style Server Actions (remove, move, publish…) with toasts. */
 export function useServerAction() {
   const toast = useToast();
+  const common = useT("common");
   const [pending, start] = useTransition();
   const run = <T,>(fn: () => Promise<ActionResult<T>>, opts: { onSuccess?: (data: T, message?: string) => void; toast?: boolean } = {}) => {
     start(async () => {
@@ -126,7 +128,7 @@ export function useServerAction() {
       } catch (err) {
         // Redirects are control flow handled by Next.js – rethrow them.
         if (err && typeof err === "object" && "digest" in err && String((err as { digest?: unknown }).digest).startsWith("NEXT_REDIRECT")) throw err;
-        toast.error("Something went wrong. Please try again.");
+        toast.error(common("errors.generic"));
       }
     });
   };

@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function LegalPageLoading() {
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-5xl">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <Skeleton className="h-4 w-48" />
       <Skeleton className="mt-4 h-9 w-72 max-w-full" />
       <Skeleton className="mt-3 h-4 w-60" />

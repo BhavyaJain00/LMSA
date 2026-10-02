@@ -1,7 +1,9 @@
 "use client";
 
 import { RouteError } from "@/components/dashboard/route-error";
+import { useT } from "@/i18n/client";
 
 export default function DevelopersError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <RouteError error={error} reset={reset} title="The API reference couldn't be loaded" homeHref="/courses" homeLabel="Browse courses" />;
+  const t = useT("admin");
+  return <RouteError error={error} reset={reset} title={t("errorPages.developers")} homeHref="/courses" homeLabel={t("errorPages.browseCourses")} />;
 }

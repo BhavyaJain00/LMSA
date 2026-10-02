@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function PricingLoading() {
   return (
     <div aria-busy="true" aria-live="polite" className="pb-12">
-      <span className="sr-only">Loading membership plans…</span>
+      <LoadingLabel />
       <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 pt-4 sm:pt-8">
         <Skeleton className="h-6 w-40 rounded-full" />
         <Skeleton className="h-9 w-full max-w-md" />

@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function ProgramLoading() {
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <Skeleton className="h-4 w-44" />
       <div className="mt-4 space-y-3">
         <div className="flex flex-wrap items-center gap-3">

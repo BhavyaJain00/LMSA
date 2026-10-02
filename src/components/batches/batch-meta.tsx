@@ -1,11 +1,12 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { BatchSummary, PublicUser } from "@/lib/types";
-import { cn, formatPrice, gradientFor } from "@/lib/utils";
+import { cn, gradientFor } from "@/lib/utils";
 import { cardGradients } from "@/lib/config";
 import { Badge } from "@/components/ui/badge";
 import { AvatarGroup } from "@/components/ui/avatar";
 import { Icon } from "@/components/ui/icons";
+import { getFormatter, getT } from "@/i18n/server";
 import type { BatchStatus } from "./types";
 
 /** Deterministic gradient for batches without a cover image. */
@@ -52,77 +53,77 @@ export function BatchCover({
   );
 }
 
-const statusMeta: Record<BatchStatus, { label: string; tone: "info" | "success" | "neutral" }> = {
-  upcoming: { label: "Upcoming", tone: "info" },
-  active: { label: "Live now", tone: "success" },
-  completed: { label: "Completed", tone: "neutral" },
-};
+const statusMeta = {
+  upcoming: { label: "batches.status.upcoming", tone: "info" },
+  active: { label: "batches.status.active", tone: "success" },
+  completed: { label: "batches.status.completed", tone: "neutral" },
+} as const satisfies Record<BatchStatus, { label: string; tone: "info" | "success" | "neutral" }>;
 
-export function BatchStatusBadge({ status, className }: { status: BatchStatus; className?: string }) {
+export async function BatchStatusBadge({ status, className }: { status: BatchStatus; className?: string }) {
+  const t = await getT("public");
   const meta = statusMeta[status];
   return (
     <Badge tone={meta.tone} dot className={className}>
-      {meta.label}
+      {t(meta.label)}
     </Badge>
   );
 }
 
-/** '{n} Seats Left' / '1 Seat Left' / 'Full' — nothing when seats are unlimited. */
-export function SeatBadge({ seatsLeft, className }: { seatsLeft: number | null; className?: string }) {
+/** '{n} seats left' / '1 seat left' / 'Full' — nothing when seats are unlimited. */
+export async function SeatBadge({ seatsLeft, className }: { seatsLeft: number | null; className?: string }) {
   if (seatsLeft === null) return null;
+  const t = await getT("public");
   if (seatsLeft <= 0)
     return (
       <Badge tone="danger" className={className}>
-        Full
+        {t("batches.seats.full")}
       </Badge>
     );
   return (
     <Badge tone={seatsLeft <= 3 ? "warning" : "success"} className={className}>
-      {seatsLeft === 1 ? "1 Seat Left" : `${seatsLeft} Seats Left`}
+      {t("batches.seats.left", { count: seatsLeft })}
     </Badge>
   );
 }
 
-export function batchPriceLabel(batch: Pick<BatchSummary, "paidBatch" | "amount" | "currency">): string {
-  return batch.paidBatch && batch.amount > 0 ? formatPrice(batch.amount, batch.currency) : "Free";
+/** The batch price in the active language, or null when the batch is free. */
+export async function batchPriceLabel(batch: Pick<BatchSummary, "paidBatch" | "amount" | "currency">): Promise<string | null> {
+  if (!(batch.paidBatch && batch.amount > 0)) return null;
+  const f = await getFormatter();
+  return f.price(batch.amount, batch.currency);
 }
 
 /** 'Full Name' | 'First and First' | 'First and {n} others' */
-export function instructorNamesText(users: PublicUser[]): string {
+export async function instructorNamesText(users: PublicUser[]): Promise<string> {
   if (!users.length) return "";
   if (users.length === 1) return users[0]!.name;
+  const t = await getT("public");
   const first = (u: PublicUser) => u.name.split(" ")[0] ?? u.name;
-  if (users.length === 2) return `${first(users[0]!)} and ${first(users[1]!)}`;
-  return `${first(users[0]!)} and ${users.length - 1} others`;
+  if (users.length === 2) return t("shared.byline.two", { first: first(users[0]!), second: first(users[1]!) });
+  return t("shared.byline.more", { first: first(users[0]!), count: users.length - 1 });
 }
 
-export function InstructorNames({ users, linked = false, className, size = "xs" }: { users: PublicUser[]; linked?: boolean; className?: string; size?: "xs" | "sm" }) {
+export async function InstructorNames({ users, linked = false, className, size = "xs" }: { users: PublicUser[]; linked?: boolean; className?: string; size?: "xs" | "sm" }) {
   if (!users.length) return null;
+  const [t, names] = await Promise.all([getT("public"), instructorNamesText(users)]);
+  const profileLink = (u: PublicUser) => (
+    <Link href={`/user/${u.username}`} className="font-medium text-ink hover:text-accent hover:underline">
+      {u.name}
+    </Link>
+  );
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <AvatarGroup users={users} max={3} size={size} />
       {linked ? (
         <span className="min-w-0 truncate text-sm text-ink-muted">
-          {users.length <= 2
-            ? users.map((u, i) => (
-                <span key={u.id}>
-                  {i > 0 && " and "}
-                  <Link href={`/user/${u.username}`} className="font-medium text-ink hover:text-accent hover:underline">
-                    {u.name}
-                  </Link>
-                </span>
-              ))
-            : (
-                <>
-                  <Link href={`/user/${users[0]!.username}`} className="font-medium text-ink hover:text-accent hover:underline">
-                    {users[0]!.name}
-                  </Link>{" "}
-                  and {users.length - 1} others
-                </>
-              )}
+          {users.length === 1
+            ? profileLink(users[0]!)
+            : users.length === 2
+              ? t.rich("shared.byline.two", { first: profileLink(users[0]!), second: profileLink(users[1]!) })
+              : t.rich("shared.byline.more", { first: profileLink(users[0]!), count: users.length - 1 })}
         </span>
       ) : (
-        <span className="min-w-0 truncate text-sm text-ink-muted">{instructorNamesText(users)}</span>
+        <span className="min-w-0 truncate text-sm text-ink-muted">{names}</span>
       )}
     </div>
   );

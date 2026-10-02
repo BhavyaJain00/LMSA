@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Icon, Spinner } from "@/components/ui/icons";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
 function useUrlParams() {
   const router = useRouter();
@@ -28,7 +29,9 @@ function useUrlParams() {
 }
 
 /** Search box synced to `?{param}=` with a 300ms debounce. */
-export function SearchParamInput({ param = "search", placeholder = "Search", label }: { param?: string; placeholder?: string; label?: string }) {
+export function SearchParamInput({ param = "search", placeholder: placeholderProp, label }: { param?: string; placeholder?: string; label?: string }) {
+  const tc = useT("common");
+  const placeholder = placeholderProp ?? tc("actions.search");
   const { params, setParams, pending } = useUrlParams();
   const urlValue = params.get(param) ?? "";
   const [value, setValue] = useState(urlValue);
@@ -95,46 +98,48 @@ export function FilterParamSelect({
 
 /** "Clear filters" link shown when any of `params` is set. */
 export function ClearFiltersButton({ params: keys }: { params: string[] }) {
+  const t = useT("learning");
   const { params, setParams } = useUrlParams();
   const active = keys.some((k) => params.get(k));
   if (!active) return null;
   return (
     <Button variant="ghost" size="sm" onClick={() => setParams(Object.fromEntries(keys.map((k) => [k, null])))} leftIcon={<Icon.X className="size-4" />}>
-      Clear filters
+      {t("global.lists.clearFilters")}
     </Button>
   );
 }
 
 /** "x of y" counter with a Load More link that raises `?limit=`. */
 export function LoadMore({ shown, total, pageSize = 24 }: { shown: number; total: number; pageSize?: number }) {
+  const t = useT("learning");
+  const tc = useT("common");
   const pathname = usePathname();
   const params = useSearchParams();
   if (shown >= total) {
-    return total > 0 ? <p className="mt-4 text-center text-xs text-ink-faint">Showing all {total}</p> : null;
+    return total > 0 ? <p className="mt-4 text-center text-xs text-ink-faint">{t("global.lists.showingAll", { count: total })}</p> : null;
   }
   const next = new URLSearchParams(params.toString());
   next.set("limit", String(shown + pageSize));
   return (
     <div className="mt-4 flex flex-col items-center gap-2">
       <Link href={`${pathname}?${next.toString()}`} scroll={false} className="inline-flex h-9 items-center rounded-lg border border-border-strong bg-surface-1 px-4 text-sm font-medium text-ink hover:bg-surface-2">
-        Load More
+        {tc("actions.loadMore")}
       </Link>
-      <p className="text-xs text-ink-faint">
-        {shown} of {total}
-      </p>
+      <p className="text-xs text-ink-faint">{t("global.lists.shownOf", { shown, total })}</p>
     </div>
   );
 }
 
 /** Banner shown above a table while rows are selected. */
 export function SelectionBar({ count, onClear, children }: { count: number; onClear: () => void; children: ReactNode }) {
+  const t = useT("learning");
   if (count === 0) return null;
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/6 px-4 py-2 animate-fade-in" role="region" aria-label="Selection actions">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/6 px-4 py-2 animate-fade-in" role="region" aria-label={t("global.lists.selectionActions")}>
       <p className="text-sm font-medium text-ink">
-        {count} selected
-        <button type="button" onClick={onClear} className="ml-3 text-xs font-normal text-ink-muted hover:text-ink hover:underline">
-          Clear selection
+        {t("global.lists.selected", { count })}
+        <button type="button" onClick={onClear} className="ms-3 text-xs font-normal text-ink-muted hover:text-ink hover:underline">
+          {t("global.lists.clearSelection")}
         </button>
       </p>
       <div className="flex items-center gap-2">{children}</div>

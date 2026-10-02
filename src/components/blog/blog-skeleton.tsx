@@ -1,10 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 /** Loading placeholder of the blog index and archive pages. */
 export function BlogListSkeleton({ featured = false }: { featured?: boolean }) {
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading articles…</span>
+      <LoadingLabel />
       <Skeleton className="mb-4 h-4 w-40" />
       <Skeleton className="h-9 w-64 max-w-full" />
       <Skeleton className="mt-3 h-4 w-full max-w-xl" />
@@ -31,7 +32,7 @@ export function BlogListSkeleton({ featured = false }: { featured?: boolean }) {
 export function PostSkeleton() {
   return (
     <div className="mx-auto max-w-3xl animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading article…</span>
+      <LoadingLabel />
       <Skeleton className="mb-5 h-4 w-56" />
       <Skeleton className="h-3 w-24" />
       <Skeleton className="mt-3 h-10 w-full" />

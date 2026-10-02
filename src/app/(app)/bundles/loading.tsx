@@ -1,10 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { BundleCardSkeleton } from "@/components/commerce/bundle-card";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function BundlesLoading() {
   return (
     <div aria-busy="true" aria-live="polite" className="pb-12">
-      <span className="sr-only">Loading bundles…</span>
+      <LoadingLabel />
       <div className="mb-6 space-y-3">
         <Skeleton className="h-6 w-40 rounded-full" />
         <Skeleton className="h-8 w-56" />

@@ -4,13 +4,15 @@ import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
 import { useViewerTimeZone } from "./hooks";
 import { dayKeyInZone, formatGmtOffset, tzOffsetMinutes, zonedTimeToUtc } from "./tz";
+import { useLocale, useT } from "@/i18n/client";
+import { intlLocale } from "@/i18n/config";
 
-function formatInZone(epochMs: number, tz: string): string {
-  return new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(new Date(epochMs));
+function formatInZone(epochMs: number, tz: string, locale: string): string {
+  return new Intl.DateTimeFormat(intlLocale(locale), { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(new Date(epochMs));
 }
 
-function formatDayInZone(epochMs: number, tz: string): string {
-  return new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(new Date(epochMs));
+function formatDayInZone(epochMs: number, tz: string, locale: string): string {
+  return new Intl.DateTimeFormat(intlLocale(locale), { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(new Date(epochMs));
 }
 
 /**
@@ -24,7 +26,7 @@ export function LocalTimeRange({
   endTime,
   timezone,
   className,
-  label = "Your time",
+  label,
   showDay = false,
   compact = false,
 }: {
@@ -38,6 +40,9 @@ export function LocalTimeRange({
   showDay?: boolean;
   compact?: boolean;
 }) {
+  // `global.` keys: also shown in the admin live class list.
+  const t = useT("public");
+  const locale = useLocale();
   const viewerTz = useViewerTimeZone();
   if (!viewerTz) return null;
   const start = zonedTimeToUtc(date, startTime, timezone);
@@ -49,18 +54,22 @@ export function LocalTimeRange({
 
   const localDay = dayKeyInZone(start, viewerTz);
   const dayDiffers = localDay !== date;
-  const range = Number.isNaN(end) ? formatInZone(start, viewerTz) : `${formatInZone(start, viewerTz)} – ${formatInZone(end, viewerTz)}`;
-  const day = showDay || dayDiffers ? `${formatDayInZone(start, viewerTz)}, ` : "";
+  const range = Number.isNaN(end) ? formatInZone(start, viewerTz, locale) : `${formatInZone(start, viewerTz, locale)} – ${formatInZone(end, viewerTz, locale)}`;
+  const zone = viewerTz.replace(/_/g, " ");
 
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-xs text-ink-muted", className)} title={`Converted to ${viewerTz}`}>
+    <span className={cn("inline-flex items-center gap-1.5 text-xs text-ink-muted", className)} title={t("global.localTime.convertedTo", { zone })}>
       {!compact && <Icon.MapPin className="size-3.5 shrink-0 text-ink-faint" />}
       <span>
-        {label}: {day}
-        <span className="font-medium text-ink">{range}</span>{" "}
-        <span className="text-ink-faint">
-          ({viewerTz.replace(/_/g, " ")}, {formatGmtOffset(viewerTz, start)})
-        </span>
+        {t.rich(showDay || dayDiffers ? "global.localTime.rangeWithDay" : "global.localTime.range", {
+          label: label ?? t("global.localTime.yourTime"),
+          day: formatDayInZone(start, viewerTz, locale),
+          range,
+          zone,
+          offset: formatGmtOffset(viewerTz, start),
+          b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
+          muted: (chunks) => <span className="text-ink-faint">{chunks}</span>,
+        })}
       </span>
     </span>
   );
@@ -68,11 +77,13 @@ export function LocalTimeRange({
 
 /** A single instant (epoch ms) in the viewer's local time, e.g. for class start. */
 export function LocalInstant({ at, className }: { at: number; className?: string }) {
+  const t = useT("public");
+  const locale = useLocale();
   const viewerTz = useViewerTimeZone();
   if (!viewerTz || Number.isNaN(at)) return null;
   return (
     <span className={cn("text-xs text-ink-muted", className)}>
-      {formatDayInZone(at, viewerTz)}, {formatInZone(at, viewerTz)} your time
+      {t("global.localTime.instant", { day: formatDayInZone(at, viewerTz, locale), time: formatInZone(at, viewerTz, locale) })}
     </span>
   );
 }

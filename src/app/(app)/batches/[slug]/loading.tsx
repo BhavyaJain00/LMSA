@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function BatchLoading() {
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <Skeleton className="h-4 w-40" />
       <div className="mt-4 grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-4">

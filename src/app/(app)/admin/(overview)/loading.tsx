@@ -1,13 +1,15 @@
 import { ListSkeleton, Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 /**
  * Admin overview placeholder. It lives in the `(overview)` route group so it only
  * covers `/admin` itself; every admin section keeps its own loading state.
  */
-export default function AdminOverviewLoading() {
+export default async function AdminOverviewLoading() {
+  const t = await getT("admin");
   return (
     <div aria-busy="true" aria-live="polite" className="space-y-10">
-      <span className="sr-only">Loading the admin overview…</span>
+      <span className="sr-only">{t("pages.overview.loading")}</span>
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <Skeleton className="h-8 w-60 max-w-full" />

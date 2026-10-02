@@ -1,7 +1,9 @@
 "use client";
 
 import { RouteError } from "@/components/admin/settings/route-error";
+import { useT } from "@/i18n/client";
 
 export default function UpsellsError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <RouteError error={error} reset={reset} title="Upsells failed to load" backHref="/admin/settings" backLabel="Back to settings" />;
+  const t = useT("admin");
+  return <RouteError error={error} reset={reset} title={t("errorPages.upsells")} backHref="/admin/settings" backLabel={t("errorPages.backToSettings")} />;
 }

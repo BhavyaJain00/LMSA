@@ -10,6 +10,22 @@
  * (no hydration mismatches caused by ICU differences).
  */
 import { zonedTimeToUtc as wallClockToUtc } from "@/lib/calendar/time";
+import { intlLocale } from "@/i18n/config";
+
+/**
+ * The display helpers below take an optional interface language. Without one
+ * (or with English) they keep the stable hand-written English output; any
+ * other language is formatted with `Intl` in UTC, so a date key never shifts
+ * a day whatever the server's or browser's own timezone.
+ */
+function localized(locale: string | undefined): string | null {
+  return locale && locale !== "en" ? intlLocale(locale) : null;
+}
+
+function utcOfKey(dateKey: string): number | null {
+  const m = DATE_KEY_RE.exec(dateKey);
+  return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
 
 export const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 export const MONTHS_LONG = [
@@ -63,21 +79,23 @@ export function addMinutesToClock(hhmm: string, minutes: number): string {
 }
 
 /** "14:30" → "2:30 PM" */
-export function formatClock12(hhmm: string | undefined): string {
+export function formatClock12(hhmm: string | undefined, locale?: string): string {
   if (!hhmm) return "";
   const mins = clockToMinutes(hhmm);
   if (Number.isNaN(mins)) return hhmm;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
+  const tag = localized(locale);
+  if (tag) return new Intl.DateTimeFormat(tag, { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(Date.UTC(2000, 0, 1, h, m));
   const suffix = h >= 12 ? "PM" : "AM";
   const hour = h % 12 === 0 ? 12 : h % 12;
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
-export function formatClockRange(start: string | undefined, end: string | undefined): string {
+export function formatClockRange(start: string | undefined, end: string | undefined, locale?: string): string {
   if (!start) return "";
-  if (!end) return formatClock12(start);
-  return `${formatClock12(start)} – ${formatClock12(end)}`;
+  if (!end) return formatClock12(start, locale);
+  return `${formatClock12(start, locale)} – ${formatClock12(end, locale)}`;
 }
 
 function parseKey(dateKey: string): { y: number; m: number; d: number } | null {
@@ -94,18 +112,35 @@ export function weekdayOf(dateKey: string): number {
 }
 
 /** "2026-10-12" → "12 Oct 2026" (short) or "12 October 2026" (long). */
-export function formatDayKey(dateKey: string | undefined, style: "short" | "long" | "weekday" = "short"): string {
+export function formatDayKey(dateKey: string | undefined, style: "short" | "long" | "weekday" = "short", locale?: string): string {
   if (!dateKey) return "";
   const p = parseKey(dateKey);
   if (!p) return dateKey;
+  const tag = localized(locale);
+  if (tag) {
+    const options: Intl.DateTimeFormatOptions =
+      style === "long"
+        ? { day: "numeric", month: "long", year: "numeric" }
+        : style === "weekday"
+          ? { weekday: "short", day: "numeric", month: "short", year: "numeric" }
+          : { day: "numeric", month: "short", year: "numeric" };
+    return new Intl.DateTimeFormat(tag, { ...options, timeZone: "UTC" }).format(Date.UTC(p.y, p.m - 1, p.d));
+  }
   if (style === "long") return `${p.d} ${MONTHS_LONG[p.m - 1]} ${p.y}`;
   if (style === "weekday") return `${WEEKDAYS_SHORT[weekdayOf(dateKey)]}, ${p.d} ${MONTHS_SHORT[p.m - 1]} ${p.y}`;
   return `${p.d} ${MONTHS_SHORT[p.m - 1]} ${p.y}`;
 }
 
 /** "12 Oct 2026 – 9 Nov 2026", or a single date when both are the same day. */
-export function formatDateRange(start: string, end: string | undefined): string {
-  if (!end || start === end) return formatDayKey(start);
+export function formatDateRange(start: string, end: string | undefined, locale?: string): string {
+  if (!end || start === end) return formatDayKey(start, "short", locale);
+  const tag = localized(locale);
+  const from = utcOfKey(start);
+  const to = utcOfKey(end);
+  if (tag && from !== null && to !== null && from <= to) {
+    return new Intl.DateTimeFormat(tag, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).formatRange(from, to);
+  }
+  if (tag) return `${formatDayKey(start, "short", locale)} – ${formatDayKey(end, "short", locale)}`;
   const a = parseKey(start);
   const b = parseKey(end);
   if (a && b && a.y === b.y) {
@@ -234,13 +269,21 @@ export function clockInZone(epochMs: number, tz: string): string {
 }
 
 /** "in 2d 4h", "in 35m 10s", "now" – for countdowns. */
-export function formatCountdown(ms: number): string {
+export function formatCountdown(ms: number, locale?: string): string {
   if (ms <= 0) return "now";
   const total = Math.floor(ms / 1000);
   const d = Math.floor(total / 86400);
   const h = Math.floor((total % 86400) / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
+  const tag = localized(locale);
+  if (tag) {
+    // Narrow units in the interface language ("2 j 4 h 5 min"); callers word the "in …" around it.
+    const unit = (value: number, u: "day" | "hour" | "minute" | "second") => new Intl.NumberFormat(tag, { style: "unit", unit: u, unitDisplay: "narrow" }).format(value);
+    if (d > 0) return `${unit(d, "day")} ${unit(h, "hour")} ${unit(m, "minute")}`;
+    if (h > 0) return `${unit(h, "hour")} ${unit(m, "minute")} ${unit(s, "second")}`;
+    return `${unit(m, "minute")} ${unit(s, "second")}`;
+  }
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m ${String(s).padStart(2, "0")}s`;
   return `${m}m ${String(s).padStart(2, "0")}s`;

@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function JobLoading() {
   return (
     <div className="mx-auto max-w-3xl" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading job…</span>
+      <LoadingLabel />
       <Skeleton className="h-4 w-48" />
       <div className="mt-3 flex justify-end gap-2">
         <Skeleton className="h-9 w-28 rounded-lg" />

@@ -1,9 +1,10 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function BundleLoading() {
   return (
     <div aria-busy="true" aria-live="polite" className="pb-12">
-      <span className="sr-only">Loading bundle…</span>
+      <LoadingLabel />
       <Skeleton className="mb-3 h-4 w-48" />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start xl:grid-cols-[minmax(0,1fr)_23rem]">
         <div className="min-w-0 space-y-6">

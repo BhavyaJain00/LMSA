@@ -3,8 +3,10 @@
 import { useEffect } from "react";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
+import { useT } from "@/i18n/client";
 
 export default function AdminCoursesError({ error, retry }: { error: Error & { digest?: string }; retry: () => void }) {
+  const t = useT("admin");
   useEffect(() => {
     console.error(error);
   }, [error]);
@@ -14,15 +16,15 @@ export default function AdminCoursesError({ error, retry }: { error: Error & { d
       <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-danger/10 text-danger">
         <Icon.AlertTriangle className="size-6" />
       </span>
-      <h1 className="text-lg font-semibold text-ink">We couldn&apos;t load this course page</h1>
-      <p className="mt-1 max-w-md text-sm text-ink-muted">{error.message || "Something went wrong while loading the course data. Please try again."}</p>
-      {error.digest && <p className="mt-2 font-mono text-xs text-ink-faint">Reference: {error.digest}</p>}
+      <h1 className="text-lg font-semibold text-ink">{t("errorPages.courses.title")}</h1>
+      <p className="mt-1 max-w-md text-sm text-ink-muted">{error.message || t("errorPages.courses.description")}</p>
+      {error.digest && <p className="mt-2 font-mono text-xs text-ink-faint">{t("errorPages.reference", { digest: error.digest })}</p>}
       <div className="mt-6 flex gap-2">
         <Button onClick={() => retry()} leftIcon={<Icon.Refresh className="size-4" />}>
-          Try again
+          {t("errorPages.tryAgain")}
         </Button>
         <ButtonLink href="/admin/courses" variant="outline">
-          All courses
+          {t("errorPages.allCourses")}
         </ButtonLink>
       </div>
     </div>

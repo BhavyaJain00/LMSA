@@ -1,10 +1,11 @@
 import { CourseGridSkeleton } from "@/components/catalog/course-grid";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLabel } from "@/components/catalog/loading-label";
 
 export default function InstructorLoading() {
   return (
     <div className="animate-fade-in" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading…</span>
+      <LoadingLabel />
       <Skeleton className="mb-4 h-4 w-48" />
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
         <Skeleton className="size-28 shrink-0 rounded-full" />

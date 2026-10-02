@@ -1,7 +1,9 @@
 "use client";
 
 import { RouteError } from "@/components/admin/settings/route-error";
+import { useT } from "@/i18n/client";
 
 export default function AdminJobsError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <RouteError error={error} reset={reset} title="Job openings failed to load" backHref="/admin/jobs" backLabel="Back to job openings" />;
+  const t = useT("admin");
+  return <RouteError error={error} reset={reset} title={t("errorPages.jobs")} backHref="/admin/jobs" backLabel={t("errorPages.backToJobs")} />;
 }
