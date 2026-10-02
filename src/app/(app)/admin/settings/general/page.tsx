@@ -2,15 +2,21 @@ import { requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { GeneralSettingsForm } from "@/components/admin/settings/general-form";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "General settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.general.metaTitle") };
+}
 
 export default async function GeneralSettingsPage() {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/general");
   const settings = await getSettings();
   return (
     <>
-      <SettingsPanelHeader title="General" description="Brand name, tagline, footer, contact details and text direction." />
+      <SettingsPanelHeader title={t("pages.settings.general.title")} description={t("pages.settings.general.description")} />
       <GeneralSettingsForm
         initial={{
           name: settings.brand.name,

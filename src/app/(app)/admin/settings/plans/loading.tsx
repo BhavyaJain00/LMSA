@@ -1,10 +1,12 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 /** Skeleton of the plans panel (the settings nav stays in place). */
-export default function PlansSettingsLoading() {
+export default async function PlansSettingsLoading() {
+  const t = await getT("admin");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading membership plans…</span>
+      <span className="sr-only">{t("pages.settings.plans.loading")}</span>
       <Skeleton className="h-6 w-48" />
       <Skeleton className="mt-2 h-4 w-96 max-w-full" />
       <Skeleton className="mt-5 h-24 w-full rounded-card" />

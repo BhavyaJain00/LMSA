@@ -6,13 +6,21 @@ import { StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { SecuritySettingsForm } from "@/components/admin/settings/security-settings-form";
-import { formatNumber, percent } from "@/lib/utils";
+import { percent } from "@/lib/utils";
+import { getFormatter } from "@/i18n/server";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Security settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.security.metaTitle") };
+}
 
 export default async function SecuritySettingsAdminPage() {
+  const t = await getT("admin");
   const admin = await requireRole(["admin"], "/admin/settings/security");
-  const db = await getDb();
+  const [db, f] = await Promise.all([getDb(), getFormatter()]);
+  const formatNumber = (n: number) => f.number(n);
   const users = db.users.filter((u) => u.enabled);
   const staff = users.filter(hasStaffRole);
   const withTwoFactor = users.filter(isTwoFactorActive).length;
@@ -23,32 +31,32 @@ export default async function SecuritySettingsAdminPage() {
   return (
     <>
       <SettingsPanelHeader
-        title="Security"
-        description="Email confirmation, two-step verification, lockout after failed sign-ins and password rules."
+        title={t("pages.settings.security.title")}
+        description={t("pages.settings.security.description")}
         actions={
           <ButtonLink href="/admin/security" variant="outline" size="sm" leftIcon={<Icon.Shield className="size-4" />}>
-            Login activity
+            {t("pages.settings.security.loginActivity")}
           </ButtonLink>
         }
       />
       <div className="mb-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <StatCard
-          label="Two-step verification"
-          value={`${percent(withTwoFactor, users.length)}%`}
-          hint={`${formatNumber(withTwoFactor)} of ${formatNumber(users.length)} members`}
+          label={t("pages.settings.security.stats.twoFactor")}
+          value={f.percent(percent(withTwoFactor, users.length))}
+          hint={t("pages.settings.security.stats.twoFactorHint", { count: withTwoFactor, total: users.length })}
           icon={<Icon.ShieldCheck className="size-5" />}
         />
         <StatCard
-          label="Staff protected"
+          label={t("pages.settings.security.stats.staff")}
           value={`${formatNumber(staffWithTwoFactor)}/${formatNumber(staff.length)}`}
-          hint="Staff with two-step verification"
+          hint={t("pages.settings.security.stats.staffHint")}
           icon={<Icon.Users className="size-5" />}
         />
-        <StatCard label="Unconfirmed emails" value={formatNumber(unverified)} hint="Self-registered, not yet confirmed" icon={<Icon.Mail className="size-5" />} />
+        <StatCard label={t("pages.settings.security.stats.unverified")} value={formatNumber(unverified)} hint={t("pages.settings.security.stats.unverifiedHint")} icon={<Icon.Mail className="size-5" />} />
         <StatCard
-          label="Locked right now"
+          label={t("pages.settings.security.stats.locked")}
           value={formatNumber(locked)}
-          hint={locked ? "Unlock from Login activity" : "No accounts locked"}
+          hint={locked ? t("pages.settings.security.stats.lockedHint") : t("pages.settings.security.stats.noneLocked")}
           icon={<Icon.Lock className="size-5" />}
         />
       </div>

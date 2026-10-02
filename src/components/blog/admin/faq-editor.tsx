@@ -6,6 +6,7 @@ import { POST_LIMITS } from "@/lib/seo/blog";
 import { Button, IconButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Input, Textarea } from "@/components/ui/input";
+import { useT } from "@/i18n/client";
 
 /**
  * Question/answer list of an article: add, edit, reorder and remove. The
@@ -13,6 +14,8 @@ import { Input, Textarea } from "@/components/ui/input";
  * the article and marked up as FAQPage structured data.
  */
 export function FaqEditor({ items, onChange, error }: { items: FaqItem[]; onChange: (items: FaqItem[]) => void; error?: string }) {
+  // `global.` keys: the editor is also used in the course sales page builder (admin).
+  const t = useT("public");
   const id = useId();
   const update = (index: number, patch: Partial<FaqItem>) => onChange(items.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   const move = (index: number, delta: -1 | 1) => {
@@ -25,7 +28,7 @@ export function FaqEditor({ items, onChange, error }: { items: FaqItem[]; onChan
 
   return (
     <div className="space-y-3">
-      {items.length === 0 && <p className="text-sm text-ink-muted">Answer the questions readers search for. Each one can appear as a rich result in Google.</p>}
+      {items.length === 0 && <p className="text-sm text-ink-muted">{t("global.faqEditor.empty")}</p>}
       <ol className="space-y-3">
         {items.map((item, i) => (
           <li key={i} className="rounded-xl border border-border bg-surface-2/40 p-3">
@@ -35,22 +38,22 @@ export function FaqEditor({ items, onChange, error }: { items: FaqItem[]; onChan
               </span>
               <div className="min-w-0 flex-1 space-y-2">
                 <label htmlFor={`${id}-q-${i}`} className="sr-only">
-                  Question {i + 1}
+                  {t("global.faqEditor.questionLabel", { n: i + 1 })}
                 </label>
-                <Input id={`${id}-q-${i}`} value={item.question} maxLength={POST_LIMITS.faqQuestion} placeholder="Question" onChange={(e) => update(i, { question: e.target.value })} />
+                <Input id={`${id}-q-${i}`} value={item.question} maxLength={POST_LIMITS.faqQuestion} placeholder={t("global.faqEditor.questionPlaceholder")} onChange={(e) => update(i, { question: e.target.value })} />
                 <label htmlFor={`${id}-a-${i}`} className="sr-only">
-                  Answer {i + 1}
+                  {t("global.faqEditor.answerLabel", { n: i + 1 })}
                 </label>
-                <Textarea id={`${id}-a-${i}`} value={item.answer} rows={3} maxLength={POST_LIMITS.faqAnswer} placeholder="Answer (Markdown allowed)" onChange={(e) => update(i, { answer: e.target.value })} />
+                <Textarea id={`${id}-a-${i}`} value={item.answer} rows={3} maxLength={POST_LIMITS.faqAnswer} placeholder={t("global.faqEditor.answerPlaceholder")} onChange={(e) => update(i, { answer: e.target.value })} />
               </div>
               <div className="flex shrink-0 flex-col gap-1">
-                <IconButton label={`Move question ${i + 1} up`} size="icon-sm" disabled={i === 0} onClick={() => move(i, -1)}>
+                <IconButton label={t("global.faqEditor.moveUp", { n: i + 1 })} size="icon-sm" disabled={i === 0} onClick={() => move(i, -1)}>
                   <Icon.ChevronUp className="size-4" />
                 </IconButton>
-                <IconButton label={`Move question ${i + 1} down`} size="icon-sm" disabled={i === items.length - 1} onClick={() => move(i, 1)}>
+                <IconButton label={t("global.faqEditor.moveDown", { n: i + 1 })} size="icon-sm" disabled={i === items.length - 1} onClick={() => move(i, 1)}>
                   <Icon.ChevronDown className="size-4" />
                 </IconButton>
-                <IconButton label={`Remove question ${i + 1}`} size="icon-sm" className="hover:text-danger" onClick={() => onChange(items.filter((_, j) => j !== i))}>
+                <IconButton label={t("global.faqEditor.remove", { n: i + 1 })} size="icon-sm" className="hover:text-danger" onClick={() => onChange(items.filter((_, j) => j !== i))}>
                   <Icon.Trash className="size-4" />
                 </IconButton>
               </div>
@@ -71,7 +74,7 @@ export function FaqEditor({ items, onChange, error }: { items: FaqItem[]; onChan
         onClick={() => onChange([...items, { question: "", answer: "" }])}
         leftIcon={<Icon.Plus className="size-3.5" />}
       >
-        Add a question
+        {t("global.faqEditor.add")}
       </Button>
     </div>
   );

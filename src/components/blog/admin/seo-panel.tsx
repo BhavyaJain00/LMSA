@@ -9,12 +9,13 @@ import { SnippetPreview } from "@/components/seo/snippet-preview";
 import { Icon } from "@/components/ui/icons";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 
-const STATUS_STYLE: Record<SeoCheckStatus, { icon: "CheckCircleFilled" | "AlertTriangle" | "XCircle"; className: string; label: string }> = {
-  pass: { icon: "CheckCircleFilled", className: "text-success", label: "Good" },
-  warn: { icon: "AlertTriangle", className: "text-warning", label: "Could be better" },
-  fail: { icon: "XCircle", className: "text-danger", label: "Needs work" },
-};
+const STATUS_STYLE = {
+  pass: { icon: "CheckCircleFilled", className: "text-success", label: "blogAdmin.seo.good" },
+  warn: { icon: "AlertTriangle", className: "text-warning", label: "blogAdmin.seo.couldBeBetter" },
+  fail: { icon: "XCircle", className: "text-danger", label: "blogAdmin.seo.needsWork" },
+} as const satisfies Record<SeoCheckStatus, { icon: "CheckCircleFilled" | "AlertTriangle" | "XCircle"; className: string; label: string }>;
 
 function scoreTone(score: number): string {
   if (score >= 80) return "bg-success/15 text-success";
@@ -59,6 +60,7 @@ export function SeoPanel({
   checks: SeoCheck[];
   errors: Record<string, string>;
 }) {
+  const t = useT("public");
   const id = useId();
   const score = seoScore(checks);
   const passed = checks.filter((c) => c.status === "pass").length;
@@ -66,38 +68,38 @@ export function SeoPanel({
   return (
     <div className="space-y-5">
       <div>
-        <p className="mb-2 text-xs font-medium text-ink-muted">Search result preview</p>
+        <p className="mb-2 text-xs font-medium text-ink-muted">{t("blogAdmin.seo.preview")}</p>
         <SnippetPreview url={url} title={documentTitle} description={previewDescription} />
       </div>
 
-      <Field label="SEO title" htmlFor={`${id}-title`} error={errors.seoTitle} hint={seoTitle ? undefined : `Empty: the article title is used (“${fallbackTitle || "Untitled"}”).`}>
+      <Field label={t("blogAdmin.seo.title")} htmlFor={`${id}-title`} error={errors.seoTitle} hint={seoTitle ? undefined : t("blogAdmin.seo.titleEmpty", { title: fallbackTitle || t("blogAdmin.untitled") })}>
         <Input
           id={`${id}-title`}
           name="seoTitle"
           value={seoTitle}
           maxLength={POST_LIMITS.seoTitle}
-          placeholder={fallbackTitle || "Title shown in search results"}
+          placeholder={fallbackTitle || t("blogAdmin.seo.titlePlaceholder")}
           invalid={!!errors.seoTitle}
           onChange={(e) => onSeoTitle(e.target.value)}
         />
         <CharCounter length={documentTitle.length} min={TITLE_MIN} max={TITLE_MAX} />
       </Field>
 
-      <Field label="Meta description" htmlFor={`${id}-desc`} error={errors.seoDescription} hint={seoDescription ? undefined : "Empty: a description is generated from the excerpt and the article."}>
+      <Field label={t("blogAdmin.seo.description")} htmlFor={`${id}-desc`} error={errors.seoDescription} hint={seoDescription ? undefined : t("blogAdmin.seo.descriptionEmpty")}>
         <Textarea
           id={`${id}-desc`}
           name="seoDescription"
           value={seoDescription}
           rows={3}
           maxLength={POST_LIMITS.seoDescription}
-          placeholder="One or two sentences that make searchers want to click."
+          placeholder={t("blogAdmin.seo.descriptionPlaceholder")}
           invalid={!!errors.seoDescription}
           onChange={(e) => onSeoDescription(e.target.value)}
         />
         <CharCounter length={seoDescription.length} min={DESCRIPTION_MIN} max={DESCRIPTION_MAX} />
       </Field>
 
-      <Field label="Focus keyword" htmlFor={`${id}-kw`} error={errors.focusKeyword} hint="The search phrase this article should rank for, e.g. “javascript roadmap”.">
+      <Field label={t("blogAdmin.seo.keyword")} htmlFor={`${id}-kw`} error={errors.focusKeyword} hint={t("blogAdmin.seo.keywordHint")}>
         <Input
           id={`${id}-kw`}
           name="focusKeyword"
@@ -111,12 +113,10 @@ export function SeoPanel({
 
       <div className="rounded-xl border border-border">
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <h3 className="text-sm font-semibold text-ink">On-page checks</h3>
+          <h3 className="text-sm font-semibold text-ink">{t("blogAdmin.seo.checks")}</h3>
           <p className="flex items-center gap-2 text-xs text-ink-muted">
-            <span>
-              {passed}/{checks.length} passed
-            </span>
-            <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", scoreTone(score))} aria-label={`SEO score ${score} out of 100`}>
+            <span>{t("blogAdmin.seo.passed", { passed, total: checks.length })}</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", scoreTone(score))} aria-label={t("blogAdmin.seo.score", { score })}>
               {score}
             </span>
           </p>
@@ -130,7 +130,7 @@ export function SeoPanel({
                 <StatusIcon className={cn("mt-0.5 size-4 shrink-0", style.className)} aria-hidden="true" />
                 <p className="min-w-0 text-sm">
                   <span className="font-medium text-ink">{check.label}</span>
-                  <span className="sr-only"> ({style.label})</span>
+                  <span className="sr-only"> ({t(style.label)})</span>
                   <span className="text-ink-muted"> — {check.detail}</span>
                 </p>
               </li>

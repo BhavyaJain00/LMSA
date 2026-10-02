@@ -3,10 +3,16 @@ import { getDb } from "@/lib/db/store";
 import { siteOrigin } from "@/lib/seo/site";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { CategoriesManager } from "@/components/admin/settings/categories-manager";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "Categories" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.categories.metaTitle") };
+}
 
 export default async function CategoriesSettingsPage() {
+  const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/categories");
   const db = await getDb();
   const courseCounts = new Map<string, number>();
@@ -28,7 +34,7 @@ export default async function CategoriesSettingsPage() {
 
   return (
     <>
-      <SettingsPanelHeader title="Categories" description="Group courses and batches so learners can filter the catalog. Each category has its own landing page with an introduction you can edit." />
+      <SettingsPanelHeader title={t("pages.settings.categories.title")} description={t("pages.settings.categories.description")} />
       <CategoriesManager categories={categories} siteUrl={siteOrigin()} brandName={db.settings.brand.name} />
     </>
   );

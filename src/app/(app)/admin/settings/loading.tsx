@@ -1,10 +1,12 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 /** Content-area skeleton while a settings panel loads (the settings nav stays in place). */
-export default function SettingsLoading() {
+export default async function SettingsLoading() {
+  const t = await getT("admin");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading settings…</span>
+      <span className="sr-only">{t("pages.settings.loading")}</span>
       <Skeleton className="h-6 w-40" />
       <Skeleton className="mt-2 h-4 w-72 max-w-full" />
       <div className="mt-6 space-y-5">

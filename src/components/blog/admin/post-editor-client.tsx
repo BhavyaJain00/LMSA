@@ -8,7 +8,7 @@ import type { PostEditorOptions } from "@/lib/data/blog";
 import { deletePostAction, savePostAction } from "@/lib/actions/blog";
 import { POST_LIMITS, autoExcerpt, normalizeTags, postReadingTime } from "@/lib/seo/blog";
 import { analyzeSeo } from "@/lib/seo/focus-keyword";
-import { applyTitleTemplate, metaDescription, readingTimeLabel, suggestSlug, wordCount } from "@/lib/seo/text";
+import { applyTitleTemplate, metaDescription, suggestSlug, wordCount } from "@/lib/seo/text";
 import { MarkdownEditor } from "@/components/admin/courses/markdown-editor";
 import { SaveBar } from "@/components/admin/settings/save-bar";
 import { SettingsSection } from "@/components/admin/settings/settings-ui";
@@ -22,6 +22,9 @@ import { Checkbox, Field, FormError, Input, RadioCard, Select, Switch, Textarea 
 import { useToast } from "@/components/ui/toast";
 import { FaqEditor } from "./faq-editor";
 import { SeoPanel } from "./seo-panel";
+import { useT } from "@/i18n/client";
+
+/* Rendered through `./post-editor.tsx`, which provides the `blogAdmin.` messages on the admin pages. */
 
 export interface PostEditorValues {
   id?: string;
@@ -60,11 +63,11 @@ function fromLocalInput(value: string): string {
   return Number.isNaN(d.getTime()) ? "" : d.toISOString();
 }
 
-const STATUS_OPTIONS: { value: BlogPostStatus; label: string; description: string }[] = [
-  { value: "draft", label: "Draft", description: "Only editors can see it." },
-  { value: "published", label: "Published", description: "Live on the blog now." },
-  { value: "scheduled", label: "Scheduled", description: "Goes live at the date you pick." },
-];
+const STATUS_OPTIONS = [
+  { value: "draft", label: "blogAdmin.status.draft", description: "blogAdmin.editor.statusDraftHint" },
+  { value: "published", label: "blogAdmin.status.published", description: "blogAdmin.editor.statusPublishedHint" },
+  { value: "scheduled", label: "blogAdmin.status.scheduled", description: "blogAdmin.editor.statusScheduledHint" },
+] as const satisfies readonly { value: BlogPostStatus; label: string; description: string }[];
 
 /**
  * Article editor: title, slug (with suggestion and redirect note), excerpt,
@@ -86,6 +89,8 @@ export function PostEditor({
   titleTemplate: string;
   blogEnabled: boolean;
 }) {
+  const t = useT("public");
+  const common = useT("common");
   const id = useId();
   const router = useRouter();
   const toast = useToast();
@@ -140,11 +145,11 @@ export function PostEditor({
 
   const insertImage = (url: string) => {
     if (!url) return;
-    const alt = title.trim() ? `Illustration for ${title.trim()}` : "Image";
+    const alt = title.trim() ? t("blogAdmin.editor.imageAlt", { title: title.trim() }) : t("blogAdmin.editor.imageAltFallback");
     setContent((prev) => `${prev.replace(/\s*$/, "")}\n\n![${alt}](${url})\n`);
     setInlineImage("");
     markDirty();
-    toast.success("Image added at the end of the article. Move it where it belongs and adjust the alt text.");
+    toast.success(t("blogAdmin.editor.imageAdded"));
   };
 
   const remove = () =>
@@ -152,7 +157,7 @@ export function PostEditor({
       if (!post?.id) return;
       const result = await deletePostAction(post.id);
       if (result.ok) {
-        toast.success(result.message ?? "Deleted");
+        toast.success(result.message ?? t("blogAdmin.deleted"));
         router.push("/admin/blog");
       } else {
         toast.error(result.error);
@@ -166,7 +171,16 @@ export function PostEditor({
   const tagPreview = normalizeTags(tags);
   const scheduleInPast = status === "scheduled" && !!when && Date.parse(fromLocalInput(when)) <= now;
   const saveLabel =
-    status === "draft" ? "Save draft" : status === "scheduled" ? (scheduleInPast ? "Publish" : "Schedule") : post?.status === "published" ? "Update" : "Publish";
+    status === "draft"
+      ? t("blogAdmin.editor.saveDraft")
+      : status === "scheduled"
+        ? scheduleInPast
+          ? t("blogAdmin.editor.publish")
+          : t("blogAdmin.editor.schedule")
+        : post?.status === "published"
+          ? t("blogAdmin.editor.update")
+          : t("blogAdmin.editor.publish");
+  const minutes = Math.max(1, Math.round(postReadingTime(content) / 60));
 
   return (
     <form onSubmit={onSubmit} onChange={markDirty} noValidate>
@@ -185,27 +199,28 @@ export function PostEditor({
 
       <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-6">
-          <SettingsSection title="Article">
+          <SettingsSection title={t("blogAdmin.editor.article")}>
             <div className="space-y-5 p-4 sm:p-5">
-              <Field label="Title" htmlFor={`${id}-title`} required error={errors.title}>
+              <Field label={t("blogAdmin.editor.title")} htmlFor={`${id}-title`} required error={errors.title}>
                 <Input
                   id={`${id}-title`}
                   name="title"
                   value={title}
                   maxLength={POST_LIMITS.title}
-                  placeholder="A clear, specific headline"
+                  placeholder={t("blogAdmin.editor.titlePlaceholder")}
                   invalid={!!errors.title}
                   className="text-base font-medium"
                   onChange={(e) => set(setTitle)(e.target.value)}
                   autoFocus={isNew}
                 />
               </Field>
-              <Field label="Slug" htmlFor={`${id}-slug`} error={errors.slug}>
+              <Field label={t("blogAdmin.editor.slug")} htmlFor={`${id}-slug`} error={errors.slug}>
                 <Input
                   id={`${id}-slug`}
                   name="slug"
                   value={slug}
                   placeholder={title ? suggestSlug(title) : "article-address"}
+                  dir="ltr"
                   className="font-mono"
                   autoComplete="off"
                   spellCheck={false}
@@ -214,14 +229,19 @@ export function PostEditor({
                 />
                 <SlugSuggestion title={title} slug={slug} onApply={set(setSlug)} basePath="/blog/" originalSlug={post?.status === "published" ? post.slug : undefined} />
               </Field>
-              <Field label="Excerpt" htmlFor={`${id}-excerpt`} error={errors.excerpt} hint={excerpt ? `${excerpt.length}/${POST_LIMITS.excerpt}` : "Shown on article cards and under the title. Empty: taken from the first paragraph."}>
+              <Field
+                label={t("blogAdmin.editor.excerpt")}
+                htmlFor={`${id}-excerpt`}
+                error={errors.excerpt}
+                hint={excerpt ? t("blogAdmin.editor.charCount", { length: excerpt.length, max: POST_LIMITS.excerpt }) : t("blogAdmin.editor.excerptHint")}
+              >
                 <Textarea
                   id={`${id}-excerpt`}
                   name="excerpt"
                   value={excerpt}
                   rows={2}
                   maxLength={POST_LIMITS.excerpt}
-                  placeholder={content ? autoExcerpt(content, 160) : "One or two sentences that sum up the article."}
+                  placeholder={content ? autoExcerpt(content, 160) : t("blogAdmin.editor.excerptPlaceholder")}
                   invalid={!!errors.excerpt}
                   onChange={(e) => set(setExcerpt)(e.target.value)}
                 />
@@ -229,10 +249,10 @@ export function PostEditor({
               <div>
                 <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
                   <label htmlFor={`${id}-content`} className="text-sm font-medium text-ink">
-                    Content <span className="text-danger">*</span>
+                    {t("blogAdmin.editor.content")} <span className="text-danger">*</span>
                   </label>
                   <p className="text-xs text-ink-muted" aria-live="polite">
-                    {words} {words === 1 ? "word" : "words"} · {readingTimeLabel(postReadingTime(content))}
+                    {t("blogAdmin.editor.wordCount", { count: words })} · {t("blog.readingTime", { minutes })}
                   </p>
                 </div>
                 <MarkdownEditor
@@ -243,7 +263,7 @@ export function PostEditor({
                   rows={22}
                   invalid={!!errors.content}
                   describedBy={errors.content ? `${id}-content-error` : `${id}-content-hint`}
-                  placeholder={"Start with a short introduction that mentions what the reader will learn.\n\n## First section\n\nUse ## and ### headings: they build the table of contents."}
+                  placeholder={t("blogAdmin.editor.contentPlaceholder")}
                 />
                 {errors.content ? (
                   <p id={`${id}-content-error`} className="mt-1.5 text-xs text-danger">
@@ -251,29 +271,29 @@ export function PostEditor({
                   </p>
                 ) : (
                   <p id={`${id}-content-hint`} className="mt-1.5 text-xs text-ink-muted">
-                    Markdown. H2 and H3 headings become the table of contents (shown from three headings).
+                    {t("blogAdmin.editor.contentHint")}
                   </p>
                 )}
                 <details className="mt-3 rounded-xl border border-border px-3 py-2">
                   <summary className="cursor-pointer text-sm font-medium text-ink">
                     <Icon.Image className="me-1.5 inline size-4 text-ink-muted" aria-hidden="true" />
-                    Upload an image into the article
+                    {t("blogAdmin.editor.uploadImage")}
                   </summary>
                   <div className="mt-3">
-                    <FileUpload kind="image" value={inlineImage} onChange={(url) => insertImage(url)} hint="PNG, JPG, WebP or GIF. The image is added at the end of the article as Markdown." />
+                    <FileUpload kind="image" value={inlineImage} onChange={(url) => insertImage(url)} hint={t("blogAdmin.editor.uploadImageHint")} />
                   </div>
                 </details>
               </div>
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Frequently asked questions" description="Shown under the article and marked up for rich results.">
+          <SettingsSection title={t("blog.faq.title")} description={t("blogAdmin.editor.faqDescription")}>
             <div className="p-4 sm:p-5">
               <FaqEditor items={faq} onChange={set(setFaq)} error={errors.faq} />
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Search engine optimisation" description="How the article appears in Google and how well it targets its keyword.">
+          <SettingsSection title={t("blogAdmin.editor.seo")} description={t("blogAdmin.editor.seoDescription")}>
             <div className="p-4 sm:p-5">
               <SeoPanel
                 url={`${origin}/blog/${effectiveSlug || "…"}`}
@@ -294,11 +314,11 @@ export function PostEditor({
         </div>
 
         <div className="min-w-0 space-y-6">
-          <SettingsSection title="Publishing">
+          <SettingsSection title={t("blogAdmin.editor.publishing")}>
             <div className="space-y-3 p-4">
-              {!blogEnabled && <p className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-ink">The blog is switched off: published articles become public once it is turned on.</p>}
+              {!blogEnabled && <p className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-ink">{t("blogAdmin.editor.blogOff")}</p>}
               <fieldset className="space-y-2">
-                <legend className="sr-only">Status</legend>
+                <legend className="sr-only">{t("blogAdmin.table.status")}</legend>
                 {STATUS_OPTIONS.map((option) => (
                   <RadioCard
                     key={option.value}
@@ -309,17 +329,17 @@ export function PostEditor({
                       setNow(Date.now());
                       set(setStatus)(option.value);
                     }}
-                    title={option.label}
-                    description={option.description}
+                    title={t(option.label)}
+                    description={t(option.description)}
                   />
                 ))}
               </fieldset>
               {(status === "scheduled" || when) && (
                 <Field
-                  label={status === "scheduled" ? "Goes live on" : status === "published" ? "Publication date" : "Planned date"}
+                  label={status === "scheduled" ? t("blogAdmin.editor.goesLive") : status === "published" ? t("blogAdmin.editor.publicationDate") : t("blogAdmin.editor.plannedDate")}
                   htmlFor={`${id}-when`}
                   error={errors.publishedAt}
-                  hint={scheduleInPast ? "This time has passed: the article is published when you save." : "Your local time."}
+                  hint={scheduleInPast ? t("blogAdmin.editor.datePassed") : t("blogAdmin.editor.localTime")}
                 >
                   <Input
                     id={`${id}-when`}
@@ -333,11 +353,11 @@ export function PostEditor({
               )}
               {status !== "scheduled" && !when && (
                 <button type="button" className="text-xs font-medium text-accent hover:underline" onClick={() => set(setWhen)(toLocalInput(new Date().toISOString()))}>
-                  Set a date
+                  {t("blogAdmin.editor.setDate")}
                 </button>
               )}
               {options.authors.length > 0 && (
-                <Field label="Author" htmlFor={`${id}-author`} error={errors.authorId}>
+                <Field label={t("blogAdmin.editor.author")} htmlFor={`${id}-author`} error={errors.authorId}>
                   <Select id={`${id}-author`} name="authorId" defaultValue={post?.authorId} invalid={!!errors.authorId}>
                     {options.authors.map((a) => (
                       <option key={a.id} value={a.id}>
@@ -350,22 +370,22 @@ export function PostEditor({
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Cover image">
+          <SettingsSection title={t("blogAdmin.editor.cover")}>
             <div className="p-4">
-              <FileUpload kind="image" name="coverImageUrl" value={cover} onChange={(url) => set(setCover)(url)} hint="1200×630 or wider works best for cards and sharing." />
+              <FileUpload kind="image" name="coverImageUrl" value={cover} onChange={(url) => set(setCover)(url)} hint={t("blogAdmin.editor.coverHint")} />
               {errors.coverImageUrl && <p className="mt-1.5 text-xs text-danger">{errors.coverImageUrl}</p>}
               {cover && (
                 <Button type="button" size="xs" variant="ghost" className="mt-2" onClick={() => set(setCover)("")}>
-                  Remove cover
+                  {t("blogAdmin.editor.removeCover")}
                 </Button>
               )}
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Categories and topics">
+          <SettingsSection title={t("blogAdmin.editor.categoriesAndTopics")}>
             <div className="space-y-4 p-4">
               <fieldset>
-                <legend className="mb-1.5 text-sm font-medium text-ink">Categories</legend>
+                <legend className="mb-1.5 text-sm font-medium text-ink">{t("blogAdmin.editor.categories")}</legend>
                 {options.categories.length ? (
                   <div className="max-h-52 space-y-1.5 overflow-y-auto pe-1">
                     {options.categories.map((c) => (
@@ -381,18 +401,24 @@ export function PostEditor({
                   </div>
                 ) : (
                   <p className="text-xs text-ink-muted">
-                    No categories yet. <Link href="/admin/settings/categories" className="text-accent hover:underline">Create categories</Link> to group articles with courses.
+                    {t.rich("blogAdmin.editor.noCategories", {
+                      link: (chunks) => (
+                        <Link href="/admin/settings/categories" className="text-accent hover:underline">
+                          {chunks}
+                        </Link>
+                      ),
+                    })}
                   </p>
                 )}
                 {errors.categoryIds && <p className="mt-1.5 text-xs text-danger">{errors.categoryIds}</p>}
               </fieldset>
-              <Field label="Topics" htmlFor={`${id}-tags`} hint={`Comma separated, up to ${POST_LIMITS.tags}.`}>
-                <Input id={`${id}-tags`} name="tags" value={tags} placeholder="javascript, beginners, career" onChange={(e) => set(setTags)(e.target.value)} />
+              <Field label={t("blogAdmin.editor.topics")} htmlFor={`${id}-tags`} hint={t("blogAdmin.editor.topicsHint", { max: POST_LIMITS.tags })}>
+                <Input id={`${id}-tags`} name="tags" value={tags} placeholder={t("blogAdmin.editor.topicsPlaceholder")} onChange={(e) => set(setTags)(e.target.value)} />
                 {tagPreview.length > 0 && (
-                  <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Topics">
-                    {tagPreview.map((t) => (
-                      <li key={t} className="rounded-full bg-surface-3 px-2 py-0.5 text-xs text-ink">
-                        {t}
+                  <ul className="mt-2 flex flex-wrap gap-1.5" aria-label={t("blogAdmin.editor.topics")}>
+                    {tagPreview.map((tag) => (
+                      <li key={tag} className="rounded-full bg-surface-3 px-2 py-0.5 text-xs text-ink">
+                        {tag}
                       </li>
                     ))}
                   </ul>
@@ -401,10 +427,10 @@ export function PostEditor({
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Related courses" description="Promoted under the article and linked from those courses' pages.">
+          <SettingsSection title={t("blogAdmin.editor.relatedCourses")} description={t("blogAdmin.editor.relatedCoursesHint")}>
             <div className="space-y-2 p-4">
               {options.courses.length > 6 && (
-                <Input type="search" value={courseFilter} onChange={(e) => setCourseFilter(e.target.value)} placeholder="Find a course" aria-label="Find a course" leftAddon={<Icon.Search className="size-4" />} />
+                <Input type="search" value={courseFilter} onChange={(e) => setCourseFilter(e.target.value)} placeholder={t("blogAdmin.editor.findCourse")} aria-label={t("blogAdmin.editor.findCourse")} leftAddon={<Icon.Search className="size-4" />} />
               )}
               {options.courses.length ? (
                 <div className="max-h-60 space-y-1.5 overflow-y-auto pe-1">
@@ -412,36 +438,36 @@ export function PostEditor({
                     <Checkbox
                       key={c.id}
                       id={`${id}-course-${c.id}`}
-                      label={c.published ? c.title : `${c.title} (not published)`}
+                      label={c.published ? c.title : t("blogAdmin.editor.courseUnpublished", { title: c.title })}
                       checked={courseIds.includes(c.id)}
                       disabled={!courseIds.includes(c.id) && courseIds.length >= POST_LIMITS.relatedCourses}
                       onChange={(e) => set(setCourseIds)(toggleIn(courseIds, c.id, e.target.checked))}
                     />
                   ))}
-                  {filteredCourses.length === 0 && <p className="text-xs text-ink-muted">No course matches “{courseFilter}”.</p>}
+                  {filteredCourses.length === 0 && <p className="text-xs text-ink-muted">{t("blogAdmin.editor.noCourseMatch", { search: courseFilter })}</p>}
                 </div>
               ) : (
-                <p className="text-xs text-ink-muted">No courses yet.</p>
+                <p className="text-xs text-ink-muted">{t("blogAdmin.editor.noCourses")}</p>
               )}
               {errors.relatedCourseIds && <p className="text-xs text-danger">{errors.relatedCourseIds}</p>}
             </div>
           </SettingsSection>
 
-          <SettingsSection title="Indexing">
+          <SettingsSection title={t("blogAdmin.editor.indexing")}>
             <div className="space-y-4 p-4">
               <Switch
                 name="noindex"
                 defaultChecked={post?.noindex}
-                label="Hide from search engines"
-                description="Adds noindex and leaves the article out of the sitemap. Visitors with the link can still read it."
+                label={t("blogAdmin.editor.noindex")}
+                description={t("blogAdmin.editor.noindexHint")}
               />
               <Field
-                label="Canonical URL"
+                label={t("blogAdmin.editor.canonical")}
                 htmlFor={`${id}-canonical`}
                 error={errors.canonicalUrl}
-                hint="Only for articles first published elsewhere: search engines credit that address instead."
+                hint={t("blogAdmin.editor.canonicalHint")}
               >
-                <Input id={`${id}-canonical`} name="canonicalUrl" type="url" defaultValue={post?.canonicalUrl} placeholder="https://" invalid={!!errors.canonicalUrl} />
+                <Input id={`${id}-canonical`} name="canonicalUrl" type="url" defaultValue={post?.canonicalUrl} placeholder="https://" dir="ltr" invalid={!!errors.canonicalUrl} />
               </Field>
             </div>
           </SettingsSection>
@@ -459,10 +485,10 @@ export function PostEditor({
           post?.id ? (
             <>
               <ButtonLink href={`/blog/${post.slug}`} variant="ghost" size="sm" leftIcon={<Icon.Eye className="size-4" />}>
-                {post.status === "published" ? "View" : "Preview"}
+                {post.status === "published" ? t("blogAdmin.view") : t("blogAdmin.preview")}
               </ButtonLink>
               <Button variant="ghost" size="sm" className="text-danger" onClick={() => setConfirmDelete(true)} leftIcon={<Icon.Trash className="size-4" />}>
-                Delete
+                {common("actions.delete")}
               </Button>
             </>
           ) : undefined
@@ -475,9 +501,9 @@ export function PostEditor({
         onConfirm={remove}
         loading={deleting}
         destructive
-        title={`Delete “${post?.title ?? "this article"}”?`}
-        description="Deleted articles cannot be restored. The address stops working and search engines are told the page is gone."
-        confirmLabel="Delete"
+        title={post?.title ? t("blogAdmin.deleteOne", { title: post.title }) : t("blogAdmin.deleteThis")}
+        description={t("blogAdmin.editor.deleteDescription")}
+        confirmLabel={common("actions.delete")}
       />
     </form>
   );

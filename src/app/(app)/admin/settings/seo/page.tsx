@@ -2,8 +2,13 @@ import { requireRole } from "@/lib/auth/session";
 import { getSettings } from "@/lib/db/store";
 import { siteOrigin } from "@/lib/seo/site";
 import { SeoForm } from "@/components/admin/settings/seo-form";
+import type { Metadata } from "next";
+import { getT } from "@/i18n/server";
 
-export const metadata = { title: "SEO settings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT("admin");
+  return { title: t("pages.settings.seo.metaTitle") };
+}
 
 export default async function SeoSettingsPage() {
   await requireRole(["admin"], "/admin/settings/seo");

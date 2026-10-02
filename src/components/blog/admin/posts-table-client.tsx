@@ -15,6 +15,9 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { POST_STATUS } from "./post-status";
+import { useT } from "@/i18n/client";
+
+/* Rendered through `./posts-table.tsx`, which provides the `blogAdmin.` messages on the admin page. */
 
 export interface PostRowView {
   id: string;
@@ -31,12 +34,12 @@ export interface PostRowView {
   noindex: boolean;
 }
 
-const BULK: { op: BulkPostOperation; label: string; icon: keyof typeof Icon }[] = [
-  { op: "publish", label: "Publish", icon: "Globe" },
-  { op: "draft", label: "Move to drafts", icon: "EyeOff" },
-  { op: "noindex", label: "Hide from search engines", icon: "Shield" },
-  { op: "index", label: "Show to search engines", icon: "Search" },
-];
+const BULK = [
+  { op: "publish", label: "blogAdmin.bulk.publish", icon: "Globe" },
+  { op: "draft", label: "blogAdmin.bulk.draft", icon: "EyeOff" },
+  { op: "noindex", label: "blogAdmin.bulk.noindex", icon: "Shield" },
+  { op: "index", label: "blogAdmin.bulk.index", icon: "Search" },
+] as const satisfies readonly { op: BulkPostOperation; label: string; icon: keyof typeof Icon }[];
 
 type Confirm = { kind: "delete"; ids: string[]; title?: string } | null;
 
@@ -46,6 +49,8 @@ type Confirm = { kind: "delete"; ids: string[]; title?: string } | null;
  * confirmation). Rows are filtered and paginated on the server.
  */
 export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { rows: PostRowView[]; total: number; filtered: boolean; clearHref: string; showAuthor: boolean }) {
+  const t = useT("public");
+  const common = useT("common");
   const toast = useToast();
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -71,7 +76,7 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
       const result = await bulkPostAction(ids, op);
       setBusy(null);
       if (result.ok) {
-        toast.success(result.message ?? "Done");
+        toast.success(result.message ?? common("actions.done"));
         setSelected(new Set());
         setConfirm(null);
         router.refresh();
@@ -88,7 +93,7 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
       const result = await deletePostAction(id!);
       setBusy(null);
       if (result.ok) {
-        toast.success(result.message ?? "Deleted");
+        toast.success(result.message ?? t("blogAdmin.deleted"));
         setConfirm(null);
         router.refresh();
       } else toast.error(result.error);
@@ -101,7 +106,7 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
       const result = await duplicatePostAction(id);
       setBusy(null);
       if (result.ok) {
-        toast.success(result.message ?? "Copied");
+        toast.success(result.message ?? t("blogAdmin.copied"));
         router.push(`/admin/blog/${result.data.id}`);
       } else toast.error(result.error);
     });
@@ -112,22 +117,22 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
       <EmptyState
         compact
         icon={<Icon.Search />}
-        title="No articles match"
-        description="Try another search or clear the filters."
+        title={t("blogAdmin.table.noMatchTitle")}
+        description={t("blogAdmin.table.noMatchDescription")}
         action={
           <ButtonLink href={clearHref} variant="outline" size="sm">
-            Show all articles
+            {t("blog.index.showAll")}
           </ButtonLink>
         }
       />
     ) : (
       <EmptyState
         icon={<Icon.FileText />}
-        title="No articles yet"
-        description="Articles bring learners in from search engines and point them to your courses. Write the first one."
+        title={t("blog.index.emptyTitle")}
+        description={t("blogAdmin.table.emptyDescription")}
         action={
           <ButtonLink href="/admin/blog/new" leftIcon={<Icon.Plus className="size-4" />}>
-            New article
+            {t("blogAdmin.table.new")}
           </ButtonLink>
         }
       />
@@ -137,19 +142,19 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
   return (
     <div className="space-y-3">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-2" aria-live="polite">
-        <p className="text-xs text-ink-muted">{chosen.length > 0 ? `${chosen.length} selected` : `${rows.length} shown · ${total} in total`}</p>
+        <p className="text-xs text-ink-muted">{chosen.length > 0 ? t("blogAdmin.table.selected", { count: chosen.length }) : t("blogAdmin.table.shown", { shown: rows.length, total })}</p>
         {chosen.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {BULK.map(({ op, label, icon }) => {
               const BulkIcon = Icon[icon];
               return (
                 <Button key={op} size="sm" variant="outline" disabled={pending} onClick={() => runBulk(op, chosen)} leftIcon={busy === op ? <Spinner className="size-3.5" /> : <BulkIcon className="size-3.5" />}>
-                  {label}
+                  {t(label)}
                 </Button>
               );
             })}
             <Button size="sm" variant="danger" disabled={pending} onClick={() => setConfirm({ kind: "delete", ids: chosen })} leftIcon={<Icon.Trash className="size-3.5" />}>
-              Delete
+              {common("actions.delete")}
             </Button>
           </div>
         )}
@@ -162,29 +167,29 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
               <input
                 type="checkbox"
                 className="size-4 cursor-pointer rounded border-border-strong accent-accent"
-                aria-label="Select every article on this page"
+                aria-label={t("blogAdmin.table.selectAll")}
                 checked={allChosen}
                 onChange={(e) => setSelected(e.target.checked ? new Set(visibleIds) : new Set())}
               />
             </TH>
-            <TH>Article</TH>
-            <TH className="hidden sm:table-cell">Status</TH>
-            {showAuthor && <TH className="hidden lg:table-cell">Author</TH>}
-            <TH className="hidden text-right md:table-cell">Views</TH>
-            <TH className="hidden xl:table-cell">Updated</TH>
-            <TH className="w-12 text-right">
-              <span className="sr-only">Actions</span>
+            <TH>{t("blogAdmin.table.article")}</TH>
+            <TH className="hidden sm:table-cell">{t("blogAdmin.table.status")}</TH>
+            {showAuthor && <TH className="hidden lg:table-cell">{t("blogAdmin.editor.author")}</TH>}
+            <TH className="hidden text-end md:table-cell">{t("blogAdmin.table.views")}</TH>
+            <TH className="hidden xl:table-cell">{t("blogAdmin.table.updated")}</TH>
+            <TH className="w-12 text-end">
+              <span className="sr-only">{t("blogAdmin.table.actions")}</span>
             </TH>
           </tr>
         </THead>
         <TBody>
           {rows.map((row) => {
-            const status = POST_STATUS[row.status];
+            const status = { tone: POST_STATUS[row.status].tone, label: t(`blogAdmin.status.${row.status}`) };
             const items: DropdownItem[] = [
-              { label: "Edit", icon: <Icon.Edit />, href: `/admin/blog/${row.id}` },
-              { label: row.status === "published" ? "View article" : "Preview", icon: <Icon.Eye />, href: `/blog/${row.slug}` },
-              { label: "Duplicate", icon: <Icon.Copy />, onClick: () => duplicate(row.id) },
-              { label: "Delete", icon: <Icon.Trash />, destructive: true, separator: true, onClick: () => setConfirm({ kind: "delete", ids: [row.id], title: row.title }) },
+              { label: common("actions.edit"), icon: <Icon.Edit />, href: `/admin/blog/${row.id}` },
+              { label: row.status === "published" ? t("blogAdmin.viewArticle") : t("blogAdmin.preview"), icon: <Icon.Eye />, href: `/blog/${row.slug}` },
+              { label: t("blogAdmin.duplicate"), icon: <Icon.Copy />, onClick: () => duplicate(row.id) },
+              { label: common("actions.delete"), icon: <Icon.Trash />, destructive: true, separator: true, onClick: () => setConfirm({ kind: "delete", ids: [row.id], title: row.title }) },
             ];
             return (
               <TR key={row.id}>
@@ -192,22 +197,22 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
                   <input
                     type="checkbox"
                     className="size-4 cursor-pointer rounded border-border-strong accent-accent"
-                    aria-label={`Select “${row.title}”`}
+                    aria-label={t("blogAdmin.table.select", { title: row.title })}
                     checked={selected.has(row.id)}
                     onChange={(e) => toggle(row.id, e.target.checked)}
                   />
                 </TD>
                 <TD className="max-w-0">
                   <Link href={`/admin/blog/${row.id}`} className="block truncate font-medium text-ink hover:text-accent hover:underline">
-                    {row.title || "Untitled"}
+                    {row.title || t("blogAdmin.untitled")}
                   </Link>
                   <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-muted">
-                    <span className="truncate font-mono">/blog/{row.slug}</span>
+                    <span className="truncate font-mono" dir="ltr">/blog/{row.slug}</span>
                     {row.categories && <span className="hidden truncate md:inline">· {row.categories}</span>}
                     {row.focusKeyword && (
                       <span className="inline-flex items-center gap-1">
                         <Icon.Target className="size-3" aria-hidden="true" />
-                        <span className="sr-only">Focus keyword:</span>
+                        <span className="sr-only">{t("blogAdmin.table.focusKeyword")}</span>
                         {row.focusKeyword}
                       </span>
                     )}
@@ -218,7 +223,7 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
                     </Badge>
                     {row.noindex && (
                       <Badge tone="warning" size="xs">
-                        Noindex
+                        {t("blogAdmin.table.noindex")}
                       </Badge>
                     )}
                   </p>
@@ -230,21 +235,21 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
                     </Badge>
                     {row.noindex && (
                       <Badge tone="warning" size="xs">
-                        Noindex
+                        {t("blogAdmin.table.noindex")}
                       </Badge>
                     )}
                   </div>
                   {row.dateLabel && <p className="mt-1 whitespace-nowrap text-xs text-ink-muted">{row.dateLabel}</p>}
                 </TD>
                 {showAuthor && <TD className="hidden truncate text-sm text-ink-muted lg:table-cell">{row.author}</TD>}
-                <TD className="hidden text-right text-sm tabular-nums text-ink-muted md:table-cell">{row.views}</TD>
+                <TD className="hidden text-end text-sm tabular-nums text-ink-muted md:table-cell">{row.views}</TD>
                 <TD className="hidden whitespace-nowrap text-xs text-ink-muted xl:table-cell">{row.updatedLabel}</TD>
-                <TD className="text-right">
+                <TD className="text-end">
                   <Dropdown
                     trigger={
                       <span className="inline-flex size-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink">
                         {busy === `dup:${row.id}` ? <Spinner className="size-4" /> : <Icon.MoreHorizontal className="size-4" />}
-                        <span className="sr-only">Actions for {row.title}</span>
+                        <span className="sr-only">{t("blogAdmin.table.actionsFor", { title: row.title })}</span>
                       </span>
                     }
                     items={items}
@@ -262,9 +267,9 @@ export function PostsTable({ rows, total, filtered, clearHref, showAuthor }: { r
         onConfirm={remove}
         loading={busy === "delete"}
         destructive
-        title={confirm && confirm.ids.length > 1 ? `Delete ${confirm.ids.length} articles?` : `Delete “${confirm?.title ?? "this article"}”?`}
-        description="Deleted articles cannot be restored. Their addresses stop working and search engines are told they are gone."
-        confirmLabel="Delete"
+        title={confirm && confirm.ids.length > 1 ? t("blogAdmin.deleteMany", { count: confirm.ids.length }) : confirm?.title ? t("blogAdmin.deleteOne", { title: confirm.title }) : t("blogAdmin.deleteThis")}
+        description={t("blogAdmin.table.deleteDescription")}
+        confirmLabel={common("actions.delete")}
       />
     </div>
   );

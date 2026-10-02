@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function LegalEditorLoading() {
+export default async function LegalEditorLoading() {
+  const t = await getT("admin");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading the legal page editor…</span>
+      <span className="sr-only">{t("pages.settings.legal.loadingEditor")}</span>
       <Skeleton className="h-4 w-40" />
       <Skeleton className="mt-3 h-6 w-56" />
       <Skeleton className="mt-2 h-4 w-96 max-w-full" />
