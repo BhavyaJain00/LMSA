@@ -1,11 +1,14 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, type ReactNode } from "react";
 import type { ActionResult } from "@/lib/types";
 import { confirmUnsubscribeAction, resubscribeWithTokenAction, unsubscribeWithTokenAction } from "@/lib/actions/email-preferences";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { FormError } from "@/components/ui/input";
+import { useT } from "@/i18n/client";
+
+const strong = (text: ReactNode) => <span className="font-medium text-ink">{text}</span>;
 
 interface SignedLinkProps {
   userId: string;
@@ -34,6 +37,7 @@ function SignedFields({ userId, scope, token }: Pick<SignedLinkProps, "userId" |
  */
 export function UnsubscribeConfirm({ userId, scope, token, label, email, subscribed }: SignedLinkProps & { subscribed: boolean }) {
   const [state, action, pending] = useActionState<ActionResult | null, FormData>(subscribed ? confirmUnsubscribeAction : resubscribeWithTokenAction, null);
+  const t = useT("account");
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -42,24 +46,18 @@ export function UnsubscribeConfirm({ userId, scope, token, label, email, subscri
       </span>
       <div className="min-w-0 flex-1 space-y-3">
         <div>
-          <h2 className="text-base font-semibold text-ink">{subscribed ? `Unsubscribe from ${label}?` : `You're already unsubscribed from ${label}`}</h2>
+          <h2 className="text-base font-semibold text-ink">{subscribed ? t("settings.notifications.unsub.confirmTitle", { label }) : t("settings.notifications.unsub.alreadyTitle", { label })}</h2>
           <p className="mt-1 text-sm text-ink-muted">
-            {subscribed ? (
-              <>
-                <span className="font-medium text-ink">{email}</span> will stop receiving {label}. Password resets, security notices and receipts are always sent.
-              </>
-            ) : (
-              <>
-                <span className="font-medium text-ink">{email}</span> doesn&apos;t receive {label}. You can subscribe again if you changed your mind.
-              </>
-            )}
+            {subscribed
+              ? t.rich("settings.notifications.unsub.confirmBody", { email, label, b: strong })
+              : t.rich("settings.notifications.unsub.alreadyBody", { email, label, b: strong })}
           </p>
         </div>
         <FormError message={state && !state.ok ? state.error : null} />
         <form action={action}>
           <SignedFields userId={userId} scope={scope} token={token} />
           <Button type="submit" size="sm" variant={subscribed ? "primary" : "outline"} loading={pending} leftIcon={subscribed ? <Icon.XCircle className="size-4" /> : <Icon.Replay className="size-4" />}>
-            {subscribed ? "Unsubscribe" : "Subscribe again"}
+            {subscribed ? t("settings.notifications.unsub.unsubscribe") : t("settings.notifications.unsub.subscribeAgain")}
           </Button>
         </form>
       </div>
@@ -75,6 +73,7 @@ export function UnsubscribeConfirm({ userId, scope, token, label, email, subscri
  */
 export function UnsubscribeResult({ userId, scope, token, label, email, subscribed }: SignedLinkProps & { subscribed: boolean }) {
   const [state, action, pending] = useActionState<ActionResult | null, FormData>(subscribed ? unsubscribeWithTokenAction : resubscribeWithTokenAction, null);
+  const t = useT("account");
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -83,24 +82,18 @@ export function UnsubscribeResult({ userId, scope, token, label, email, subscrib
       </span>
       <div className="min-w-0 flex-1 space-y-3">
         <div aria-live="polite">
-          <h2 className="text-base font-semibold text-ink">{subscribed ? "You're subscribed" : "You've been unsubscribed"}</h2>
+          <h2 className="text-base font-semibold text-ink">{subscribed ? t("settings.notifications.unsub.subscribedTitle") : t("settings.notifications.unsub.unsubscribedTitle")}</h2>
           <p className="mt-1 text-sm text-ink-muted">
-            {subscribed ? (
-              <>
-                <span className="font-medium text-ink">{email}</span> receives {label}.
-              </>
-            ) : (
-              <>
-                <span className="font-medium text-ink">{email}</span> will no longer receive {label}. Password resets, security notices and receipts are still sent.
-              </>
-            )}
+            {subscribed
+              ? t.rich("settings.notifications.unsub.subscribedBody", { email, label, b: strong })
+              : t.rich("settings.notifications.unsub.unsubscribedBody", { email, label, b: strong })}
           </p>
         </div>
         <FormError message={state && !state.ok ? state.error : null} />
         <form action={action}>
           <SignedFields userId={userId} scope={scope} token={token} />
           <Button type="submit" variant="outline" size="sm" loading={pending} leftIcon={subscribed ? <Icon.XCircle className="size-4" /> : <Icon.Replay className="size-4" />}>
-            {subscribed ? "Unsubscribe again" : "Undo — keep me subscribed"}
+            {subscribed ? t("settings.notifications.unsub.unsubscribeAgain") : t("settings.notifications.unsub.undo")}
           </Button>
         </form>
       </div>

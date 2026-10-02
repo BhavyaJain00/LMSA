@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 /** Row selection state that ignores ids no longer present in the list. */
 export function useSelection(allIds: string[]) {
@@ -32,11 +33,12 @@ export function useSelection(allIds: string[]) {
 }
 
 /** Header checkbox with an indeterminate state. */
-export function SelectAllCheckbox({ checked, indeterminate, onChange, label = "Select all rows" }: { checked: boolean; indeterminate: boolean; onChange: () => void; label?: string }) {
+export function SelectAllCheckbox({ checked, indeterminate, onChange, label }: { checked: boolean; indeterminate: boolean; onChange: () => void; label?: string }) {
+  const t = useT("learning");
   return (
     <input
       type="checkbox"
-      aria-label={label}
+      aria-label={label ?? t("global.bulk.selectAll")}
       checked={checked}
       ref={(el) => {
         if (el) el.indeterminate = indeterminate;
@@ -62,54 +64,53 @@ export function RowCheckbox({ checked, onChange, label }: { checked: boolean; on
 
 /**
  * Selection bar with a confirmed bulk "Delete". Calls `action(ids)` and
- * reports the result as a toast.
+ * reports the result as a toast. `noun` is kept for existing callers; the
+ * count reads "{n} selected" in every language.
  */
 export function BulkDeleteBar({
   selected,
   onClear,
   action,
-  noun,
-  confirmTitle = "Confirm Your Action",
+  confirmTitle,
   confirmDescription,
 }: {
   selected: string[];
   onClear: () => void;
   action: (ids: string[]) => Promise<ActionResult<{ count: number }>>;
-  noun: string;
+  noun?: string;
   confirmTitle?: string;
   confirmDescription: string;
 }) {
+  const t = useT("learning");
+  const tc = useT("common");
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const { toast } = useToast();
   if (!selected.length) return null;
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 animate-fade-in" role="region" aria-label="Selection actions">
-      <p className="text-sm font-medium text-ink">
-        {selected.length} {noun}
-        {selected.length === 1 ? "" : "s"} selected
-      </p>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 animate-fade-in" role="region" aria-label={t("global.lists.selectionActions")}>
+      <p className="text-sm font-medium text-ink">{t("global.lists.selected", { count: selected.length })}</p>
       <div className="flex items-center gap-1.5">
         <Button variant="ghost" size="sm" onClick={onClear}>
-          Clear
+          {tc("actions.clear")}
         </Button>
         <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10" onClick={() => setOpen(true)} leftIcon={<Icon.Trash className="size-4" />}>
-          Delete
+          {tc("actions.delete")}
         </Button>
       </div>
       <ConfirmDialog
         open={open}
         onClose={() => setOpen(false)}
-        title={confirmTitle}
+        title={confirmTitle ?? t("global.bulk.confirmTitle")}
         description={confirmDescription}
-        confirmLabel="Delete"
+        confirmLabel={tc("actions.delete")}
         destructive
         loading={pending}
         onConfirm={() =>
           startTransition(async () => {
             const res = await action(selected);
             if (res.ok) {
-              toast({ title: res.message ?? "Deleted", tone: "success" });
+              toast({ title: res.message ?? t("global.bulk.deleted"), tone: "success" });
               onClear();
               setOpen(false);
             } else {

@@ -11,9 +11,9 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { formatDate } from "@/lib/utils";
 import { MemberPicker, type PickerMember } from "./member-picker";
 import { useFormAction } from "./use-form-action";
+import { useFormatter, useT } from "@/i18n/client";
 
 export interface AssignmentRowData {
   id: string;
@@ -40,6 +40,8 @@ export function BadgeAssignments({
   badges: AssignableBadge[];
   today: string;
 }) {
+  const t = useT("admin");
+  const f = useFormatter();
   const toast = useToast();
   const [search, setSearch] = useState("");
   const [toRevoke, setToRevoke] = useState<AssignmentRowData | null>(null);
@@ -59,7 +61,7 @@ export function BadgeAssignments({
     startRevoke(async () => {
       const res = await revokeBadgeAssignmentAction(target.id);
       if (res.ok) {
-        toast.success(res.message ?? "Badge assignment deleted successfully");
+        toast.success(res.message ?? t("badges.assign.revoked"));
         setToRevoke(null);
       } else toast.error(res.error);
     });
@@ -69,33 +71,33 @@ export function BadgeAssignments({
     <div className="space-y-5">
       <form key={formKey} onSubmit={onSubmit} noValidate className="rounded-card border border-border bg-surface-1 p-4 shadow-card sm:p-5">
         <div className="mb-4">
-          <h3 className="text-base font-semibold text-ink">Assign a Badge</h3>
-          <p className="text-sm text-ink-muted">Award a badge by hand. The member is notified right away.</p>
+          <h3 className="text-base font-semibold text-ink">{t("badges.assign.title")}</h3>
+          <p className="text-sm text-ink-muted">{t("badges.assign.description")}</p>
         </div>
         {badges.length === 0 ? (
-          <p className="text-sm text-ink-muted">Create a badge first, then come back to assign it.</p>
+          <p className="text-sm text-ink-muted">{t("badges.assign.noBadges")}</p>
         ) : (
           <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_10rem_auto] md:items-start">
-            <Field label="Member" htmlFor="assign-member" error={errors.userId} hint={errors.userId ? undefined : "The user receiving the badge."} required>
+            <Field label={t("badges.assign.member")} htmlFor="assign-member" error={errors.userId} hint={errors.userId ? undefined : t("badges.assign.memberHint")} required>
               <MemberPicker id="assign-member" name="userId" members={members} invalid={!!errors.userId} />
             </Field>
-            <Field label="Badge" htmlFor="assign-badge" error={errors.badgeId} hint={errors.badgeId ? undefined : "The badge being awarded."} required>
+            <Field label={t("badges.assign.badge")} htmlFor="assign-badge" error={errors.badgeId} hint={errors.badgeId ? undefined : t("badges.assign.badgeHint")} required>
               <Select
                 id="assign-badge"
                 name="badgeId"
                 defaultValue=""
-                placeholder="Select a badge"
+                placeholder={t("badges.assign.badgePlaceholder")}
                 required
                 invalid={!!errors.badgeId}
-                options={badges.map((b) => ({ value: b.id, label: b.enabled ? b.title : `${b.title} (disabled)` }))}
+                options={badges.map((b) => ({ value: b.id, label: b.enabled ? b.title : t("badges.assign.disabledOption", { title: b.title }) }))}
               />
             </Field>
-            <Field label="Issued On" htmlFor="assign-issued" error={errors.issuedOn} required>
+            <Field label={t("badges.assign.issuedOn")} htmlFor="assign-issued" error={errors.issuedOn} required>
               <Input id="assign-issued" name="issuedOn" type="date" defaultValue={today} max={today} invalid={!!errors.issuedOn} />
             </Field>
             <div className="md:pt-6">
               <Button type="submit" loading={pending} leftIcon={<Icon.Award className="size-4" />} className="w-full md:w-auto">
-                Assign
+                {t("badges.assign.submit")}
               </Button>
             </div>
           </div>
@@ -103,14 +105,14 @@ export function BadgeAssignments({
       </form>
 
       {assignments.length === 0 ? (
-        <EmptyState icon={<Icon.Award />} title="No Badge Assignments Found" description="Badges members earn automatically, and the ones you assign here, will be listed." />
+        <EmptyState icon={<Icon.Award />} title={t("badges.assign.emptyTitle")} description={t("badges.assign.emptyDescription")} />
       ) : (
         <>
           <div className="w-full sm:max-w-xs">
             <Input
               type="search"
-              aria-label="Search assignments"
-              placeholder="Search"
+              aria-label={t("badges.assign.searchLabel")}
+              placeholder={t("shared.search")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               leftAddon={<Icon.Search className="size-4" />}
@@ -119,17 +121,17 @@ export function BadgeAssignments({
           <Table>
             <THead>
               <tr>
-                <TH>Member</TH>
-                <TH>Badge</TH>
-                <TH className="hidden sm:table-cell">Issued On</TH>
-                <TH className="w-16 text-right">
-                  <span className="sr-only">Actions</span>
+                <TH>{t("badges.assign.member")}</TH>
+                <TH>{t("badges.assign.badge")}</TH>
+                <TH className="hidden sm:table-cell">{t("badges.assign.issuedOn")}</TH>
+                <TH className="w-16 text-end">
+                  <span className="sr-only">{t("shared.actions")}</span>
                 </TH>
               </tr>
             </THead>
             <TBody>
               {filtered.length === 0 ? (
-                <TableEmpty colSpan={4}>No badge assignments match “{search}”.</TableEmpty>
+                <TableEmpty colSpan={4}>{t("badges.assign.noMatch", { query: search })}</TableEmpty>
               ) : (
                 filtered.map((a) => (
                   <TR key={a.id}>
@@ -143,7 +145,7 @@ export function BadgeAssignments({
                           </span>
                         </Link>
                       ) : (
-                        <span className="text-ink-faint">Deleted member</span>
+                        <span className="text-ink-faint">{t("shared.deletedMember")}</span>
                       )}
                     </TD>
                     <TD>
@@ -154,13 +156,13 @@ export function BadgeAssignments({
                           <span className="truncate">{a.badge.title}</span>
                         </span>
                       ) : (
-                        <span className="text-ink-faint">Deleted badge</span>
+                        <span className="text-ink-faint">{t("badges.assign.deletedBadge")}</span>
                       )}
-                      <span className="mt-0.5 block text-xs text-ink-muted sm:hidden">{formatDate(a.issuedOn)}</span>
+                      <span className="mt-0.5 block text-xs text-ink-muted sm:hidden">{f.date(a.issuedOn)}</span>
                     </TD>
-                    <TD className="hidden text-ink-muted sm:table-cell">{formatDate(a.issuedOn)}</TD>
-                    <TD className="text-right">
-                      <IconButton label="Revoke badge" size="icon-sm" className="hover:text-danger" onClick={() => setToRevoke(a)}>
+                    <TD className="hidden text-ink-muted sm:table-cell">{f.date(a.issuedOn)}</TD>
+                    <TD className="text-end">
+                      <IconButton label={t("badges.assign.revoke")} size="icon-sm" className="hover:text-danger" onClick={() => setToRevoke(a)}>
                         <Icon.Trash className="size-4" />
                       </IconButton>
                     </TD>
@@ -178,9 +180,9 @@ export function BadgeAssignments({
         onConfirm={confirmRevoke}
         loading={revoking}
         destructive
-        title="Revoke this badge?"
-        description={toRevoke ? `${toRevoke.member?.name ?? "The member"} will no longer hold “${toRevoke.badge?.title ?? "this badge"}”.` : undefined}
-        confirmLabel="Revoke"
+        title={t("badges.assign.revokeTitle")}
+        description={toRevoke ? t("badges.assign.revokeDescription", { name: toRevoke.member?.name ?? t("badges.assign.theMember"), badge: toRevoke.badge?.title ?? t("badges.assign.thisBadge") }) : undefined}
+        confirmLabel={t("badges.assign.revokeConfirm")}
       />
     </div>
   );

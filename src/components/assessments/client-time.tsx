@@ -1,6 +1,8 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { intlLocale } from "@/i18n/config";
+import { useLocale } from "@/i18n/client";
 
 const noopSubscribe = () => () => {};
 
@@ -41,22 +43,22 @@ export function useNow(intervalMs: number, initialNow: number): number {
 
 type Mode = "datetime" | "date" | "time" | "weekday-datetime";
 
-function formatLocal(iso: string, mode: Mode): string {
+function formatLocal(iso: string, mode: Mode, tag: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   switch (mode) {
     case "date":
-      return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+      return d.toLocaleDateString(tag, { year: "numeric", month: "short", day: "numeric" });
     case "time":
-      return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+      return d.toLocaleTimeString(tag, { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
     case "weekday-datetime":
-      return d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+      return d.toLocaleString(tag, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
     default:
-      return d.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return d.toLocaleString(tag, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
 }
 
-function formatUtc(iso: string, mode: Mode): string {
+function formatUtc(iso: string, mode: Mode, tag: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const opts: Intl.DateTimeFormatOptions =
@@ -65,15 +67,16 @@ function formatUtc(iso: string, mode: Mode): string {
       : mode === "time"
         ? { hour: "numeric", minute: "2-digit", timeZone: "UTC" }
         : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" };
-  return `${d.toLocaleString("en-US", opts)}${mode === "date" ? "" : " UTC"}`;
+  return `${d.toLocaleString(tag, opts)}${mode === "date" ? "" : " UTC"}`;
 }
 
-/** Renders an ISO instant in the viewer's own time zone (UTC during SSR). */
+/** Renders an ISO instant in the viewer's own time zone (UTC during SSR), in the interface language. */
 export function LocalDateTime({ iso, mode = "datetime", className }: { iso: string; mode?: Mode; className?: string }) {
   const client = useIsClient();
+  const tag = intlLocale(useLocale());
   return (
     <time dateTime={iso} className={className} suppressHydrationWarning>
-      {client ? formatLocal(iso, mode) : formatUtc(iso, mode)}
+      {client ? formatLocal(iso, mode, tag) : formatUtc(iso, mode, tag)}
     </time>
   );
 }
@@ -81,12 +84,13 @@ export function LocalDateTime({ iso, mode = "datetime", className }: { iso: stri
 /** "3 days ago" computed on the client (the UTC date during SSR and hydration). */
 export function RelativeTime({ iso, className }: { iso: string; className?: string }) {
   const now = useNow(60000, 0);
+  const tag = intlLocale(useLocale());
   const client = now > 0;
-  let text = formatUtc(iso, "date");
+  let text = formatUtc(iso, "date", tag);
   if (client) {
     const diff = Math.round((new Date(iso).getTime() - now) / 1000);
     const abs = Math.abs(diff);
-    const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+    const rtf = new Intl.RelativeTimeFormat(tag, { numeric: "auto" });
     const units: [Intl.RelativeTimeFormatUnit, number][] = [
       ["year", 31536000],
       ["month", 2592000],
@@ -95,7 +99,7 @@ export function RelativeTime({ iso, className }: { iso: string; className?: stri
       ["hour", 3600],
       ["minute", 60],
     ];
-    text = abs < 45 ? "just now" : rtf.format(Math.round(diff / 60), "minute");
+    text = abs < 45 ? rtf.format(0, "second") : rtf.format(Math.round(diff / 60), "minute");
     for (const [unit, secs] of units) {
       if (abs >= secs) {
         text = rtf.format(Math.round(diff / secs), unit);
@@ -104,7 +108,7 @@ export function RelativeTime({ iso, className }: { iso: string; className?: stri
     }
   }
   return (
-    <time dateTime={iso} className={className} title={client ? formatLocal(iso, "datetime") : undefined} suppressHydrationWarning>
+    <time dateTime={iso} className={className} title={client ? formatLocal(iso, "datetime", tag) : undefined} suppressHydrationWarning>
       {text}
     </time>
   );

@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/icons";
 import { buttonClasses } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PAGE_SIZES } from "./shared";
+import { useT } from "@/i18n/client";
 
 export interface FilterDef {
   /** Query-string key. */
@@ -75,6 +76,7 @@ function useQueryUpdater() {
 }
 
 function SearchFilter({ def, initial, onCommit }: { def: FilterDef; initial: string; onCommit: (value: string) => void }) {
+  const tc = useT("common");
   const [value, setValue] = useState(initial);
   const timer = useRef<number | null>(null);
   useEffect(
@@ -92,7 +94,7 @@ function SearchFilter({ def, initial, onCommit }: { def: FilterDef; initial: str
         id={`filter-${def.param}`}
         type="search"
         value={value}
-        placeholder={def.placeholder ?? "Search"}
+        placeholder={def.placeholder ?? tc("actions.search")}
         disabled={def.disabled}
         leftAddon={<Icon.Search className="size-4" />}
         onChange={(e) => {
@@ -115,6 +117,7 @@ function SearchFilter({ def, initial, onCommit }: { def: FilterDef; initial: str
 
 /** Filter row whose values live in the URL (so filters are shareable and restored on reload). */
 export function FilterBar({ filters, children, className }: { filters: FilterDef[]; children?: ReactNode; className?: string }) {
+  const t = useT("learning");
   const { update, pending, search } = useQueryUpdater();
   // Bumped by "Clear filters" to remount search inputs with an empty value.
   const [resetKey, setResetKey] = useState(0);
@@ -149,7 +152,7 @@ export function FilterBar({ filters, children, className }: { filters: FilterDef
               disabled={def.disabled}
               onChange={(e) => update({ [def.param]: e.target.value || null })}
             >
-              <option value="">{def.placeholder ?? `All ${def.label.toLowerCase()}`}</option>
+              <option value="">{def.placeholder ?? t("global.lists.all", { label: def.label.toLowerCase() })}</option>
               {def.options?.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -169,7 +172,7 @@ export function FilterBar({ filters, children, className }: { filters: FilterDef
           className={buttonClasses({ variant: "ghost", size: "sm", className: "self-start sm:self-auto" })}
         >
           <Icon.X className="size-4" />
-          Clear filters
+          {t("global.lists.clearFilters")}
         </button>
       )}
       {pending && <Spinner className="size-4 text-ink-faint" />}
@@ -179,19 +182,19 @@ export function FilterBar({ filters, children, className }: { filters: FilterDef
 }
 
 /** "Showing x of y" + page-length selector + Load More (URL params ?size= and ?pages=). */
-export function ListFooter({ shown, total, size, pages, noun = "rows" }: { shown: number; total: number; size: number; pages: number; noun?: string }) {
+export function ListFooter({ shown, total, size, pages, noun }: { shown: number; total: number; size: number; pages: number; noun?: string }) {
+  const t = useT("learning");
+  const tc = useT("common");
   const { update, pending, search } = useQueryUpdater();
   if (total === 0) return null;
   const params = new URLSearchParams(search.toString());
   params.set("pages", String(pages + 1));
   return (
     <div className="mt-4 flex flex-col items-center justify-between gap-3 text-sm text-ink-muted sm:flex-row">
-      <p>
-        Showing {shown} of {total} {noun}
-      </p>
+      <p>{noun ? t("global.lists.showingNoun", { shown, total, noun }) : t("global.lists.showing", { shown, total })}</p>
       <div className="flex items-center gap-2">
         <label htmlFor="page-size" className="text-xs">
-          Per page
+          {t("global.lists.perPage")}
         </label>
         <div className="w-24">
           <Select id="page-size" value={String(size)} onChange={(e) => update({ size: e.target.value, pages: null })} className="h-8 text-xs">
@@ -204,7 +207,7 @@ export function ListFooter({ shown, total, size, pages, noun = "rows" }: { shown
         </div>
         {shown < total && (
           <Link href={`?${params.toString()}`} scroll={false} className={buttonClasses({ variant: "outline", size: "sm" })} aria-busy={pending || undefined}>
-            Load More
+            {tc("actions.loadMore")}
           </Link>
         )}
       </div>

@@ -7,10 +7,12 @@ import { EMAIL_PREFERENCE_OPTIONS } from "@/lib/email/preferences";
 import { Button } from "@/components/ui/button";
 import { FormError, Switch } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { useT } from "@/i18n/client";
 
 /** Per-category email toggles for the signed-in member. */
 export function EmailPreferencesForm({ initial }: { initial: EmailPreferences }) {
   const toast = useToast();
+  const t = useT("account");
   const [values, setValues] = useState<EmailPreferences>(initial);
   const [saved, setSaved] = useState<EmailPreferences>(initial);
   const [bulkPending, startBulk] = useTransition();
@@ -19,9 +21,9 @@ export function EmailPreferencesForm({ initial }: { initial: EmailPreferences })
     if (result.ok) {
       setSaved(result.data);
       setValues(result.data);
-      toast.success(result.message ?? "Email preferences saved");
+      toast.success(result.message ?? t("settings.notifications.saved"));
     } else {
-      toast.error("Couldn't save your preferences", result.error);
+      toast.error(t("settings.notifications.saveFailed"), result.error);
     }
     return result;
   }, null);
@@ -36,9 +38,9 @@ export function EmailPreferencesForm({ initial }: { initial: EmailPreferences })
       if (result.ok) {
         setSaved(result.data);
         setValues(result.data);
-        toast.success(result.message ?? "Saved");
+        toast.success(result.message ?? t("settings.notifications.bulkSaved"));
       } else {
-        toast.error("Couldn't update your preferences", result.error);
+        toast.error(t("settings.notifications.updateFailed"), result.error);
       }
     });
 
@@ -53,8 +55,8 @@ export function EmailPreferencesForm({ initial }: { initial: EmailPreferences })
               name={o.key}
               checked={values[o.key]}
               onChange={(e) => setValues((v) => ({ ...v, [o.key]: e.target.checked }))}
-              label={o.label}
-              description={o.description}
+              label={t(`settings.notifications.pref.${o.key}`)}
+              description={t(`settings.notifications.pref.${o.key}.description`)}
             />
           </div>
         ))}
@@ -62,14 +64,14 @@ export function EmailPreferencesForm({ initial }: { initial: EmailPreferences })
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" size="sm" onClick={() => setAll(false)} disabled={allOff || bulkPending || pending}>
-            Unsubscribe from all
+            {t("settings.notifications.unsubscribeAll")}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setAll(true)} disabled={allOn || bulkPending || pending}>
-            Subscribe to all
+            {t("settings.notifications.subscribeAll")}
           </Button>
         </div>
         <Button type="submit" loading={pending} disabled={!dirty || bulkPending}>
-          Save preferences
+          {t("settings.notifications.save")}
         </Button>
       </div>
     </form>

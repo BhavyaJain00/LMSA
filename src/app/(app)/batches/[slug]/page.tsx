@@ -6,7 +6,6 @@ import type { Batch, BatchSummary, User } from "@/lib/types";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb, getSettings } from "@/lib/db/store";
 import { Markdown } from "@/lib/markdown";
-import { pluralize } from "@/lib/utils";
 import {
   acceptsEnrollment,
   canManageBatch,
@@ -54,33 +53,40 @@ import { BatchFeedbackForm, FeedbackSummaryCard } from "@/components/batches/bat
 import { LocalTimeRange } from "@/components/batches/local-time";
 import { dayKeyInZone, formatClockRange, formatDateRange, formatDayKey, formatTzLabel, zonedTimeToUtc } from "@/components/batches/tz";
 import type { BatchCourseItem, BatchDetailTab } from "@/components/batches/types";
+import { getLocale, getT } from "@/i18n/server";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
+
+type PublicT = Translator<MessageKey<"public">>;
 
 export async function generateMetadata(props: PageProps<"/batches/[slug]">): Promise<Metadata> {
   const { slug } = await props.params;
-  const [batch, settings] = await Promise.all([getBatchBySlug(slug), getSettings()]);
+  const [batch, settings, t, locale] = await Promise.all([getBatchBySlug(slug), getSettings(), getT("public"), getLocale()]);
   // Unpublished batches are private (enrolled learners and staff only): never indexed.
-  if (!batch || !isBatchPublic(batch) || !settings.features.batches) return notFoundMetadata(batch ? batch.title : "Batch");
+  if (!batch || !isBatchPublic(batch) || !settings.features.batches) return notFoundMetadata(batch ? batch.title : t("batches.detail.metaFallback"));
   return pageMetadata(
     {
       title: batch.title,
       description: [batch.description, batch.details],
       path: batchPath(batch.slug),
+      locale,
       generatedImage: true,
     },
     settings,
   );
 }
 
-function BatchHero({ batch, isManager, enrolled, showFacts }: { batch: BatchSummary; isManager: boolean; enrolled: boolean; showFacts: boolean }) {
+async function BatchHero({ batch, isManager, enrolled, showFacts }: { batch: BatchSummary; isManager: boolean; enrolled: boolean; showFacts: boolean }) {
+  const [t, locale] = await Promise.all([getT("public"), getLocale()]);
   const startsAt = zonedTimeToUtc(batch.startDate, batch.startTime, batch.timezone);
   return (
     <header className="min-w-0">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <BatchStatusBadge status={batch.status} />
-        {isManager && (batch.published ? <Badge tone="success">Published</Badge> : <Badge tone="warning">Unpublished</Badge>)}
+        {isManager && (batch.published ? <Badge tone="success">{t("batches.detail.published")}</Badge> : <Badge tone="warning">{t("card.unpublished")}</Badge>)}
         {enrolled && (
           <Badge tone="dark">
-            <Icon.Check className="size-3" /> Enrolled
+            <Icon.Check className="size-3" /> {t("enroll.enrolled")}
           </Badge>
         )}
         {batch.category && <Badge tone="outline">{batch.category.name}</Badge>}
@@ -92,15 +98,15 @@ function BatchHero({ batch, isManager, enrolled, showFacts }: { batch: BatchSumm
       {showFacts && (
         <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-ink-muted">
           <span className="inline-flex items-center gap-1.5">
-            <Icon.Calendar className="size-4 text-ink-faint" /> {formatDateRange(batch.startDate, batch.endDate)}
+            <Icon.Calendar className="size-4 text-ink-faint" /> {formatDateRange(batch.startDate, batch.endDate, locale)}
           </span>
           <span className="inline-flex flex-wrap items-center gap-x-1.5">
-            <Icon.Clock className="size-4 text-ink-faint" /> {formatClockRange(batch.startTime, batch.endTime)}
+            <Icon.Clock className="size-4 text-ink-faint" /> {formatClockRange(batch.startTime, batch.endTime, locale)}
             <span className="text-ink-faint">· {Number.isNaN(startsAt) ? batch.timezone : formatTzLabel(batch.timezone, startsAt)}</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
             {batch.medium === "online" ? <Icon.Monitor className="size-4 text-ink-faint" /> : <Icon.MapPin className="size-4 text-ink-faint" />}
-            {batch.medium === "online" ? "Online" : "In person"}
+            {batch.medium === "online" ? t("batches.medium.online") : t("batches.medium.inPerson")}
           </span>
           <LocalTimeRange date={batch.startDate} startTime={batch.startTime} endTime={batch.endTime} timezone={batch.timezone} className="w-full text-sm" />
         </div>
@@ -121,7 +127,7 @@ function IncludedTile({ icon, title, description }: { icon: ReactNode; title: st
   );
 }
 
-function OverviewContent({
+async function OverviewContent({
   batch,
   courses,
   liveClassCount,
@@ -132,13 +138,17 @@ function OverviewContent({
   liveClassCount: number;
   assessmentCount: number;
 }) {
-  const milestones = batch.timetable.filter((t) => t.milestone).length;
+  const [t, locale] = await Promise.all([getT("public"), getLocale()]);
+  const milestones = batch.timetable.filter((item) => item.milestone).length;
+  const certificateDescription = batch.evaluationEndDate
+    ? t("batches.included.certificateUntil", { date: formatDayKey(batch.evaluationEndDate, "short", locale) })
+    : t("batches.included.certificate");
   return (
     <div className="min-w-0 space-y-10">
       {batch.details && (
         <section aria-labelledby="batch-details">
           <h2 id="batch-details" className="sr-only">
-            Batch details
+            {t("batches.detail.details")}
           </h2>
           <Markdown content={batch.details} />
         </section>
@@ -146,33 +156,33 @@ function OverviewContent({
 
       <section aria-labelledby="whats-included">
         <h2 id="whats-included" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-          What&apos;s included
+          {t("batches.included.title")}
         </h2>
         <ul className="grid gap-3 sm:grid-cols-2">
           <IncludedTile
             icon={<Icon.BookOpen />}
-            title={pluralize(courses.length, "course")}
-            description={courses.length ? courses.map((c) => c.title).join(", ") : "Courses will be added before the batch starts."}
+            title={t("catalog.courseCount", { count: courses.length })}
+            description={courses.length ? courses.map((c) => c.title).join(", ") : t("batches.included.coursesLater")}
           />
           <IncludedTile
             icon={<Icon.ClipboardList />}
-            title={pluralize(assessmentCount, "assessment")}
-            description={assessmentCount ? "Quizzes, assignments and exercises to check your progress." : "No graded assessments in this batch."}
+            title={t("batches.assessmentCount", { count: assessmentCount })}
+            description={assessmentCount ? t("batches.included.assessments") : t("batches.included.noAssessments")}
           />
           <IncludedTile
             icon={<Icon.Video />}
-            title={pluralize(liveClassCount, "live class", "live classes")}
-            description={liveClassCount ? "Join live sessions with the instructors; recordings are shared afterwards." : "Live classes will be scheduled by the instructors."}
+            title={t("batches.liveClassCount", { count: liveClassCount })}
+            description={liveClassCount ? t("batches.included.liveClasses") : t("batches.included.liveClassesLater")}
           />
           <IncludedTile
             icon={batch.certification ? <Icon.Award /> : <Icon.Calendar />}
-            title={batch.certification ? "Certificate" : "Structured schedule"}
+            title={batch.certification ? t("batches.certificate") : t("batches.included.schedule")}
             description={
               batch.certification
-                ? `Earn a certificate after the final evaluation${batch.evaluationEndDate ? ` (evaluations until ${formatDayKey(batch.evaluationEndDate)})` : ""}.`
+                ? certificateDescription
                 : milestones
-                  ? `${pluralize(milestones, "milestone")} on the batch timetable.`
-                  : "A shared timetable keeps the cohort on track."
+                  ? t("batches.included.milestones", { count: milestones })
+                  : t("batches.included.scheduleDescription")
             }
           />
         </ul>
@@ -181,7 +191,7 @@ function OverviewContent({
       {batch.instructors.length > 0 && (
         <section aria-labelledby="batch-instructors">
           <h2 id="batch-instructors" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-            {batch.instructors.length > 1 ? "Instructors" : "Instructor"}
+            {t("batches.detail.instructors", { count: batch.instructors.length })}
           </h2>
           <ul className="grid gap-3 sm:grid-cols-2">
             {batch.instructors.map((u) => (
@@ -202,7 +212,7 @@ function OverviewContent({
       {courses.length > 0 && (
         <section aria-labelledby="batch-courses">
           <h2 id="batch-courses" className="mb-4 text-xl font-semibold tracking-tight text-ink">
-            Courses
+            {t("batches.detail.tabs.courses")}
           </h2>
           <BatchCourseGrid courses={courses} />
         </section>
@@ -211,22 +221,26 @@ function OverviewContent({
   );
 }
 
-function buildTabs(batch: Batch, opts: { liveClasses: boolean; discussions: boolean; enrolled: boolean; isManager: boolean; counts: Record<string, number> }): (TabItem & { value: BatchDetailTab })[] {
+function buildTabs(
+  batch: Batch,
+  opts: { liveClasses: boolean; discussions: boolean; enrolled: boolean; isManager: boolean; counts: Record<string, number> },
+  t: PublicT,
+): (TabItem & { value: BatchDetailTab })[] {
   const tabs: (TabItem & { value: BatchDetailTab })[] = [
-    { value: "overview", label: "Overview", icon: <Icon.Info className="hidden size-4 sm:block" /> },
-    { value: "courses", label: "Courses", icon: <Icon.BookOpen className="hidden size-4 sm:block" />, count: batch.courseIds.length },
-    { value: "assessments", label: "Assessments", icon: <Icon.ClipboardList className="hidden size-4 sm:block" />, count: batch.assessments.length },
+    { value: "overview", label: t("batches.detail.tabs.overview"), icon: <Icon.Info className="hidden size-4 sm:block" /> },
+    { value: "courses", label: t("batches.detail.tabs.courses"), icon: <Icon.BookOpen className="hidden size-4 sm:block" />, count: batch.courseIds.length },
+    { value: "assessments", label: t("batches.detail.tabs.assessments"), icon: <Icon.ClipboardList className="hidden size-4 sm:block" />, count: batch.assessments.length },
   ];
-  if (opts.liveClasses) tabs.push({ value: "classes", label: "Classes", icon: <Icon.Video className="hidden size-4 sm:block" />, count: opts.counts.classes });
-  tabs.push({ value: "announcements", label: "Announcements", icon: <Icon.Mail className="hidden size-4 sm:block" />, count: opts.counts.announcements });
-  if (opts.discussions) tabs.push({ value: "discussions", label: "Discussions", icon: <Icon.MessageCircle className="hidden size-4 sm:block" /> });
-  tabs.push({ value: "timetable", label: "Timetable", icon: <Icon.Calendar className="hidden size-4 sm:block" /> });
-  if (opts.enrolled || opts.isManager) tabs.push({ value: "feedback", label: "Feedback", icon: <Icon.Star className="hidden size-4 sm:block" /> });
+  if (opts.liveClasses) tabs.push({ value: "classes", label: t("batches.detail.tabs.classes"), icon: <Icon.Video className="hidden size-4 sm:block" />, count: opts.counts.classes });
+  tabs.push({ value: "announcements", label: t("batches.detail.tabs.announcements"), icon: <Icon.Mail className="hidden size-4 sm:block" />, count: opts.counts.announcements });
+  if (opts.discussions) tabs.push({ value: "discussions", label: t("batches.detail.tabs.discussions"), icon: <Icon.MessageCircle className="hidden size-4 sm:block" /> });
+  tabs.push({ value: "timetable", label: t("batches.detail.tabs.timetable"), icon: <Icon.Calendar className="hidden size-4 sm:block" /> });
+  if (opts.enrolled || opts.isManager) tabs.push({ value: "feedback", label: t("batches.detail.tabs.feedback"), icon: <Icon.Star className="hidden size-4 sm:block" /> });
   return tabs;
 }
 
 export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
-  const [{ slug }, sp, user, settings] = await Promise.all([props.params, props.searchParams, getCurrentUser(), getSettings()]);
+  const [{ slug }, sp, user, settings, t] = await Promise.all([props.params, props.searchParams, getCurrentUser(), getSettings(), getT("public")]);
   if (!settings.features.batches) notFound();
   if (!user && !settings.learning.allowGuestAccess) redirect(`/login?next=${encodeURIComponent(`/batches/${slug}`)}`);
 
@@ -285,9 +299,9 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
     enrolled,
     isManager,
     counts: { classes: liveClassCount, announcements: announcementCount },
-  });
+  }, t);
   const requested = typeof sp.tab === "string" ? sp.tab : "overview";
-  const active: BatchDetailTab = tabs.some((t) => t.value === requested) ? (requested as BatchDetailTab) : "overview";
+  const active: BatchDetailTab = tabs.some((tab) => tab.value === requested) ? (requested as BatchDetailTab) : "overview";
 
   return (
     <div className="animate-fade-in pb-10">
@@ -298,7 +312,7 @@ export default async function BatchPage(props: PageProps<"/batches/[slug]">) {
         {isManager && (
           <div className="flex shrink-0 flex-wrap gap-2">
             <ButtonLink href={`/admin/batches/${batch.id}`} leftIcon={<Icon.Settings className="size-4" />}>
-              Manage batch
+              {t("batches.manageBatch")}
             </ButtonLink>
           </div>
         )}
@@ -342,6 +356,7 @@ async function TabContent({
   liveClassCount: number;
   certificationsEnabled: boolean;
 }) {
+  const [t, locale] = await Promise.all([getT("public"), getLocale()]);
   const manageHref = (tab: string) => `/admin/batches/${batch.id}?tab=${tab}`;
 
   switch (active) {
@@ -372,9 +387,9 @@ async function TabContent({
         return (
           <EmptyState
             icon={<Icon.BookOpen />}
-            title="No courses added to this batch"
-            description="Courses that are part of this batch's curriculum will show up here."
-            action={isManager ? <ButtonLink href={manageHref("courses")}>Add courses</ButtonLink> : null}
+            title={t("batches.courses.emptyTitle")}
+            description={t("batches.courses.emptyDescription")}
+            action={isManager ? <ButtonLink href={manageHref("courses")}>{t("batches.courses.add")}</ButtonLink> : null}
           />
         );
       }
@@ -382,10 +397,10 @@ async function TabContent({
       return (
         <div className="space-y-4">
           <div>
-            <h2 className="text-lg font-semibold text-ink">Curriculum</h2>
+            <h2 className="text-lg font-semibold text-ink">{t("batches.courses.curriculum")}</h2>
             <p className="text-sm text-ink-muted">
-              As a part of this batch&apos;s curriculum you will have to complete the following courses
-              {batch.assessments.length ? " and assessments" : ""}.{enrolled && ` ${done} of ${courses.length} completed.`}
+              {batch.assessments.length ? t("batches.courses.introWithAssessments") : t("batches.courses.intro")}
+              {enrolled && <> {t("batches.courses.completed", { done, total: courses.length })}</>}
             </p>
           </div>
           <BatchCourseGrid courses={courses} showProgress={enrolled} />
@@ -405,15 +420,15 @@ async function TabContent({
           {rows.length === 0 ? (
             <EmptyState
               icon={<Icon.ClipboardList />}
-              title="No assessments added to this batch"
-              description="Quizzes, assignments and programming exercises for this batch will be listed here."
-              action={isManager ? <ButtonLink href={manageHref("assessments")}>Add assessments</ButtonLink> : null}
+              title={t("batches.assessments.emptyTitle")}
+              description={t("batches.assessments.emptyDescription")}
+              action={isManager ? <ButtonLink href={manageHref("assessments")}>{t("batches.assessments.add")}</ButtonLink> : null}
             />
           ) : (
             <div className="space-y-4">
               <div>
-                <h2 className="text-lg font-semibold text-ink">Assessments</h2>
-                <p className="text-sm text-ink-muted">{enrolled ? `${passed} of ${rows.length} passed.` : "Assessments learners complete as part of this batch."}</p>
+                <h2 className="text-lg font-semibold text-ink">{t("batches.detail.tabs.assessments")}</h2>
+                <p className="text-sm text-ink-muted">{enrolled ? t("batches.assessments.passed", { passed, total: rows.length }) : t("batches.assessments.description")}</p>
               </div>
               <AssessmentList rows={rows} showStatus={enrolled} />
             </div>
@@ -429,7 +444,7 @@ async function TabContent({
           {isManager && (
             <div className="flex justify-end">
               <ButtonLink href={manageHref("classes")} variant="outline" size="sm" leftIcon={<Icon.Plus className="size-4" />}>
-                Schedule a class
+                {t("batches.classes.schedule")}
               </ButtonLink>
             </div>
           )}
@@ -438,7 +453,7 @@ async function TabContent({
             serverNow={now}
             isManager={isManager}
             canJoin
-            emptyAction={isManager ? <ButtonLink href={manageHref("classes")}>Schedule a class</ButtonLink> : null}
+            emptyAction={isManager ? <ButtonLink href={manageHref("classes")}>{t("batches.classes.schedule")}</ButtonLink> : null}
           />
         </div>
       );
@@ -448,17 +463,17 @@ async function TabContent({
       return (
         <div className="mx-auto max-w-3xl space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-ink">Announcements</h2>
+            <h2 className="text-lg font-semibold text-ink">{t("batches.detail.tabs.announcements")}</h2>
             {isManager && (
               <ButtonLink href={manageHref("announcements")} size="sm" leftIcon={<Icon.Send className="size-4" />}>
-                Make Announcement
+                {t("batches.announcements.new")}
               </ButtonLink>
             )}
           </div>
           {announcements.length ? (
             <AnnouncementList announcements={announcements} showCc={isManager} />
           ) : (
-            <EmptyState icon={<Icon.Megaphone />} title="No announcements have been made yet for this batch" description="Updates from your instructors will appear here." />
+            <EmptyState icon={<Icon.Megaphone />} title={t("batches.announcements.emptyTitle")} description={t("batches.announcements.emptyDescription")} />
           )}
         </div>
       );
@@ -478,7 +493,7 @@ async function TabContent({
           {isManager && (
             <div className="flex justify-end">
               <ButtonLink href={manageHref("timetable")} variant="outline" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                Edit timetable
+                {t("batches.timetable.edit")}
               </ButtonLink>
             </div>
           )}
@@ -503,14 +518,14 @@ async function TabContent({
         return (
           <EmptyState
             icon={<Icon.Star />}
-            title="Feedback opens when the batch ends"
-            description={`You'll be able to rate the content, instructors and value of this batch after ${formatDayKey(batch.endDate, "long")}.`}
+            title={t("batches.feedback.closedTitle")}
+            description={t("batches.feedback.closedDescription", { date: formatDayKey(batch.endDate, "long", locale) })}
           />
         );
       }
       return (
         <Card className="max-w-3xl">
-          <CardHeader title="Feedback" description="Your ratings help instructors improve future cohorts." />
+          <CardHeader title={t("global.batchFeedback.title")} description={t("batches.feedback.description")} />
           <CardBody>
             <BatchFeedbackForm batchId={batch.id} existing={own} />
           </CardBody>

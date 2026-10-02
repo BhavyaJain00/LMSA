@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
 function CardPlaceholder({ lines, button = false }: { lines: number; button?: boolean }) {
   return (
@@ -17,10 +18,11 @@ function CardPlaceholder({ lines, button = false }: { lines: number; button?: bo
   );
 }
 
-export default function PrivacySettingsLoading() {
+export default async function PrivacySettingsLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-3xl">
-      <span className="sr-only">Loading your privacy settings…</span>
+      <span className="sr-only">{t("settings.privacy.loading")}</span>
       <div className="mb-6 space-y-2">
         <Skeleton className="h-3.5 w-40" />
         <Skeleton className="h-8 w-48" />

@@ -1,22 +1,28 @@
 import Link from "next/link";
 import { getCurrentUser, requireUser } from "@/lib/auth/session";
 import { findById, getSettings } from "@/lib/db/store";
-import { preferenceLabel, resolveEmailPreferences } from "@/lib/email/preferences";
+import { resolveEmailPreferences } from "@/lib/email/preferences";
 import { readSignedSubscription, readUnsubscribeReceipt, type SignedSubscription } from "@/lib/email/subscriptions";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { EmailPreferencesForm } from "./preferences-form";
 import { UnsubscribeConfirm, UnsubscribeResult } from "./unsubscribe-result";
+import { getT } from "@/i18n/server";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
 
-export const metadata = { title: "Email notifications" };
+export async function generateMetadata() {
+  return { title: (await getT("account"))("settings.notifications.metaTitle") };
+}
 
 function one(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? "";
 }
 
-function scopeLabel(sub: SignedSubscription): string {
-  return `${preferenceLabel(sub.scope).toLowerCase()} emails`;
+/** "announcement emails", "all optional emails", … in the active language. */
+function scopeLabel(sub: SignedSubscription, t: Translator<MessageKey<"account">>): string {
+  return t(`settings.notifications.scope.${sub.scope}`);
 }
 
 /**
@@ -41,22 +47,22 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
   const signed = hasLink || !!receiptState;
 
   const viewer = signed ? await getCurrentUser() : await requireUser("/settings/notifications");
-  const settings = await getSettings();
+  const [settings, t] = await Promise.all([getSettings(), getT("account")]);
   const fresh = viewer ? await findById("users", viewer.id) : null;
 
   return (
     <div className="mx-auto max-w-3xl animate-fade-in">
       <PageHeader
-        title="Email notifications"
-        description="Choose which emails you receive. In-app notifications are not affected."
+        title={t("settings.notifications.metaTitle")}
+        description={t("settings.notifications.description")}
         breadcrumbs={
           viewer ? (
-            <nav aria-label="Breadcrumb" className="mb-2 text-sm text-ink-muted">
+            <nav aria-label={t("settings.breadcrumb")} className="mb-2 text-sm text-ink-muted">
               <Link href="/settings" className="hover:text-ink hover:underline">
-                Account settings
+                {t("settings.metaTitle")}
               </Link>
               <span aria-hidden="true"> / </span>
-              <span className="font-medium text-ink">Email notifications</span>
+              <span className="font-medium text-ink">{t("settings.notifications.metaTitle")}</span>
             </nav>
           ) : undefined
         }
@@ -66,7 +72,7 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
         {hasLink && linkState && (
           <Card>
             <CardBody>
-              <UnsubscribeConfirm userId={userId} scope={linkState.scope} token={token} label={scopeLabel(linkState)} email={linkState.email} subscribed={linkState.subscribed} />
+              <UnsubscribeConfirm userId={userId} scope={linkState.scope} token={token} label={scopeLabel(linkState, t)} email={linkState.email} subscribed={linkState.subscribed} />
             </CardBody>
           </Card>
         )}
@@ -77,7 +83,7 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
                 userId={receipt.userId}
                 scope={receiptState.scope}
                 token={receipt.token}
-                label={scopeLabel(receiptState)}
+                label={scopeLabel(receiptState, t)}
                 email={receiptState.email}
                 subscribed={receiptState.subscribed}
               />
@@ -91,13 +97,13 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
                 <Icon.AlertTriangle className="size-6" />
               </span>
               <div className="min-w-0 space-y-2">
-                <h2 className="text-base font-semibold text-ink">This unsubscribe link isn&apos;t valid</h2>
+                <h2 className="text-base font-semibold text-ink">{t("settings.notifications.invalidTitle")}</h2>
                 <p className="text-sm text-ink-muted">
-                  The link may be incomplete or was changed. {viewer ? "You can manage your email preferences below." : "Log in to manage your email preferences."}
+                  {viewer ? t("settings.notifications.invalidBodySignedIn") : t("settings.notifications.invalidBodyGuest")}
                 </p>
                 {!viewer && (
                   <ButtonLink href="/login?next=%2Fsettings%2Fnotifications" size="sm" leftIcon={<Icon.LogIn className="size-4" />}>
-                    Log in
+                    {t("settings.notifications.logIn")}
                   </ButtonLink>
                 )}
               </div>
@@ -108,13 +114,13 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
         {!settings.email.enabled && (
           <div className="flex gap-3 rounded-card border border-info/30 bg-info/10 p-4 text-sm text-info">
             <Icon.Info className="mt-0.5 size-5 shrink-0" />
-            <p>Email notifications are currently turned off for everyone by the administrators. Your choices below apply when they are turned back on.</p>
+            <p>{t("settings.notifications.disabledGlobally")}</p>
           </div>
         )}
 
         {fresh ? (
           <Card>
-            <CardHeader title="Email categories" description={`Emails are sent to ${fresh.email}.`} />
+            <CardHeader title={t("settings.notifications.categoriesTitle")} description={t("settings.notifications.sentTo", { email: fresh.email })} />
             <CardBody>
               <EmailPreferencesForm key={JSON.stringify(resolveEmailPreferences(fresh))} initial={resolveEmailPreferences(fresh)} />
             </CardBody>
@@ -122,23 +128,33 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
         ) : (
           (linkState || receiptState) && (
             <p className="text-center text-sm text-ink-muted">
-              <Link href="/login?next=%2Fsettings%2Fnotifications" className="font-medium text-accent hover:underline">
-                Log in
-              </Link>{" "}
-              to manage all of your email preferences.
+              {t.rich("settings.notifications.loginToManage", {
+                link: (text) => (
+                  <Link href="/login?next=%2Fsettings%2Fnotifications" className="font-medium text-accent hover:underline">
+                    {text}
+                  </Link>
+                ),
+              })}
             </p>
           )
         )}
 
         {fresh && (
           <Card>
-            <CardHeader title="Always sent" description="These emails are needed to keep your account working and can't be turned off." />
+            <CardHeader title={t("settings.notifications.alwaysTitle")} description={t("settings.notifications.alwaysDescription")} />
             <CardBody>
               <ul className="grid gap-2 text-sm text-ink-muted sm:grid-cols-2">
-                {["Password reset links", "Email address confirmation", "Security notices about your account", "Payment receipts"].map((item) => (
+                {(
+                  [
+                    "settings.notifications.always.passwordReset",
+                    "settings.notifications.always.emailConfirmation",
+                    "settings.notifications.always.security",
+                    "settings.notifications.always.receipts",
+                  ] as const
+                ).map((item) => (
                   <li key={item} className="flex items-center gap-2">
                     <Icon.ShieldCheck className="size-4 shrink-0 text-success" />
-                    {item}
+                    {t(item)}
                   </li>
                 ))}
               </ul>

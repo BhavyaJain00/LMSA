@@ -1,10 +1,14 @@
+"use client";
+
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/client";
 
 /** Loading state for admin/learner list pages: header, filter row and table rows. */
-export function ListPageSkeleton({ columns = 4, rows = 8, filters = 2, label = "Loading…" }: { columns?: number; rows?: number; filters?: number; label?: string }) {
+export function ListPageSkeleton({ columns = 4, rows = 8, filters = 2, label }: { columns?: number; rows?: number; filters?: number; label?: string }) {
+  const tc = useT("common");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{label ?? tc("status.loading")}</span>
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <Skeleton className="h-4 w-32" />
@@ -37,10 +41,11 @@ export function ListPageSkeleton({ columns = 4, rows = 8, filters = 2, label = "
 }
 
 /** Loading state for card grids (certified members). */
-export function GridPageSkeleton({ cards = 9, label = "Loading…" }: { cards?: number; label?: string }) {
+export function GridPageSkeleton({ cards = 9, label }: { cards?: number; label?: string }) {
+  const tc = useT("common");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{label ?? tc("status.loading")}</span>
       <Skeleton className="h-4 w-32" />
       <Skeleton className="mt-3 h-7 w-64" />
       <div className="mt-6 flex flex-col gap-2 sm:flex-row">

@@ -13,9 +13,21 @@ import { AddToCalendar, type AddToCalendarEvent } from "@/components/pwa/add-to-
 import { zonedRange } from "@/lib/calendar/ics";
 import { addDaysToKey, isClock, isValidTimeZone, tzOffsetMinutes, zonedTimeToUtc } from "@/lib/calendar/time";
 import { useViewerTimeZone } from "./hooks";
-import { scheduleRows, timetableTimesNote, type RowSchedule } from "./timetable-schedule";
-import { MONTHS_LONG, WEEKDAYS_SHORT, formatClockRange, formatDayKey, formatGmtOffset } from "./tz";
+import { scheduleRows, type RowSchedule } from "./timetable-schedule";
+import { formatClockRange, formatDayKey, formatGmtOffset } from "./tz";
 import type { TimetableEntry } from "./types";
+import { useLocale, useT } from "@/i18n/client";
+import { intlLocale } from "@/i18n/config";
+import type { Translator } from "@/i18n/translate";
+import type { MessageKey } from "@/i18n/catalog";
+
+// `global.` keys throughout: the timetable is also shown in the admin timetable builder.
+type PublicT = Translator<MessageKey<"public">>;
+
+/** Item type in the interface language. */
+function typeLabel(type: TimetableItemType, t: PublicT): string {
+  return t(`global.timetable.type.${type}`);
+}
 
 export const timetableTypeLabel: Record<TimetableItemType, string> = {
   course: "Course",
@@ -51,8 +63,9 @@ function Dot({ color, className }: { color: string | null; className?: string })
 }
 
 function MilestoneMark({ className }: { className?: string }) {
+  const t = useT("public");
   return (
-    <svg viewBox="0 0 12 12" className={cn("size-3 shrink-0 text-warning", className)} aria-label="Milestone" role="img">
+    <svg viewBox="0 0 12 12" className={cn("size-3 shrink-0 text-warning", className)} aria-label={t("global.timetable.milestone")} role="img">
       <path d="M6 0.8 11.2 6 6 11.2 0.8 6Z" fill="currentColor" />
     </svg>
   );
@@ -78,12 +91,14 @@ function zoneName(tz: string): string {
 
 /** A class's start in the viewer's own timezone, when its clock differs from the one shown (client only). */
 function ViewerTime({ at, shownZone }: { at: number; shownZone: string }) {
+  const t = useT("public");
+  const locale = useLocale();
   const viewerZone = useViewerTimeZone();
   if (!viewerZone || !isValidTimeZone(viewerZone) || tzOffsetMinutes(viewerZone, at) === tzOffsetMinutes(shownZone, at)) return null;
-  const local = new Intl.DateTimeFormat(undefined, { timeZone: viewerZone, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(new Date(at));
+  const local = new Intl.DateTimeFormat(intlLocale(locale), { timeZone: viewerZone, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(new Date(at));
   return (
-    <span className="mt-0.5 block text-xs text-ink-faint" title={`Converted to ${zoneName(viewerZone)}`}>
-      Your time: {local} ({zoneName(viewerZone)})
+    <span className="mt-0.5 block text-xs text-ink-faint" title={t("global.localTime.convertedTo", { zone: zoneName(viewerZone) })}>
+      {t("global.timetable.yourTime", { time: local, zone: zoneName(viewerZone) })}
     </span>
   );
 }
@@ -122,7 +137,7 @@ function shiftMonth(month: Month, delta: number): Month {
  * are in the class timezone, not the batch's); other rows are timed in the
  * batch timezone, or all-day.
  */
-function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEvent | null {
+function calendarEvent(entry: TimetableEntry, timezone: string, t: PublicT): AddToCalendarEvent | null {
   const fromClass = entry.source === "live_class" && entry.refId;
   const icsHref = fromClass
     ? `/api/calendar/event?type=live_class&id=${encodeURIComponent(entry.refId!)}`
@@ -132,7 +147,7 @@ function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEv
   const base = {
     uid: fromClass ? `live-class-${entry.refId}` : `timetable-${entry.itemId ?? entry.id}`,
     title: entry.milestone ? `★ ${entry.title}` : entry.title,
-    description: [timetableTypeLabel[entry.type], entry.legendLabel && entry.legendLabel !== timetableTypeLabel[entry.type] ? entry.legendLabel : ""]
+    description: [typeLabel(entry.type, t), entry.legendLabel && entry.legendLabel !== timetableTypeLabel[entry.type] ? entry.legendLabel : ""]
       .filter(Boolean)
       .join(" · "),
     url: entry.href ?? undefined,
@@ -155,7 +170,9 @@ function calendarEvent(entry: TimetableEntry, timezone: string): AddToCalendarEv
 }
 
 function EntryRow({ entry, schedule, timezone, showCalendar }: { entry: TimetableEntry; schedule: RowSchedule; timezone: string; showCalendar: boolean }) {
-  const calendar = showCalendar ? calendarEvent(entry, timezone) : null;
+  const t = useT("public");
+  const locale = useLocale();
+  const calendar = showCalendar ? calendarEvent(entry, timezone, t) : null;
   return (
     <li className="flex items-start gap-3 py-3">
       <span
@@ -172,19 +189,19 @@ function EntryRow({ entry, schedule, timezone, showCalendar }: { entry: Timetabl
           </EntryLink>
           {entry.milestone && (
             <Badge tone="warning" size="xs">
-              <MilestoneMark className="size-2.5" /> Milestone
+              <MilestoneMark className="size-2.5" /> {t("global.timetable.milestone")}
             </Badge>
           )}
           {entry.completed && (
             <Badge tone="success" size="xs">
-              <Icon.Check className="size-3" /> Done
+              <Icon.Check className="size-3" /> {t("global.timetable.done")}
             </Badge>
           )}
         </div>
         <p className="mt-0.5 text-xs text-ink-muted">
-          {timetableTypeLabel[entry.type]}
+          {typeLabel(entry.type, t)}
           {entry.legendLabel && entry.legendLabel !== timetableTypeLabel[entry.type] && <> · {entry.legendLabel}</>}
-          {schedule.startTime && <> · {formatClockRange(schedule.startTime, schedule.endTime)}</>}
+          {schedule.startTime && <> · {formatClockRange(schedule.startTime, schedule.endTime, locale)}</>}
           {schedule.zone && schedule.startsAt !== null && (
             <span className="text-ink-faint">
               {" "}
@@ -195,7 +212,7 @@ function EntryRow({ entry, schedule, timezone, showCalendar }: { entry: Timetabl
         {schedule.startsAt !== null && <ViewerTime at={schedule.startsAt} shownZone={schedule.zone ?? timezone} />}
       </div>
       {calendar && <AddToCalendar event={calendar} size="xs" className="mt-1 shrink-0" />}
-      {entry.href && <Icon.ChevronRight className="mt-2 size-4 shrink-0 text-ink-faint" />}
+      {entry.href && <Icon.ChevronRight className="mt-2 size-4 shrink-0 text-ink-faint rtl:rotate-180" />}
     </li>
   );
 }
@@ -222,6 +239,8 @@ export function TimetableView({
   /** Per-entry "Add to calendar" menus in the list and day views. */
   showAddToCalendar?: boolean;
 }) {
+  const t = useT("public");
+  const locale = useLocale();
   const [view, setView] = useState<"calendar" | "list">("calendar");
   // Where and when each row is shown (live classes at their real time, see rowSchedule).
   const rows = useMemo(() => scheduleRows(entries, timezone), [entries, timezone]);
@@ -243,8 +262,8 @@ export function TimetableView({
     return (
       <EmptyState
         icon={<Icon.Calendar />}
-        title="No timetable yet"
-        description="The instructors haven't published a schedule for this batch. Sessions, deadlines and milestones will appear here."
+        title={t("global.timetable.emptyTitle")}
+        description={t("global.timetable.emptyDescription")}
       />
     );
   }
@@ -256,14 +275,23 @@ export function TimetableView({
   const firstMonth = monthOf(rows.reduce((min, r) => (r.schedule.date < min ? r.schedule.date : min), startDate));
   const lastMonth = monthOf(rows.reduce((max, r) => (r.schedule.date > max ? r.schedule.date : max), endDate));
   // Rows are in the batch timezone except live classes scheduled in a zone whose clock differs.
-  const timesNote = timetableTimesNote(rows, timezone);
+  const timesNote = rows.some((r) => r.schedule.zone)
+    ? t("global.timetable.timesNoteMixed", { zone: zoneName(timezone) })
+    : t("global.timetable.timesNote", { zone: zoneName(timezone) });
+  const tag = intlLocale(locale);
+  const monthTitle = new Intl.DateTimeFormat(tag, { month: "long", year: "numeric", timeZone: "UTC" }).format(Date.UTC(month.y, month.m - 1, 1));
+  // 2023-01-01 was a Sunday: the calendar grid starts on Sunday.
+  const weekdays = Array.from({ length: 7 }, (_, i) => ({
+    short: new Intl.DateTimeFormat(tag, { weekday: "short", timeZone: "UTC" }).format(Date.UTC(2023, 0, 1 + i)),
+    narrow: new Intl.DateTimeFormat(tag, { weekday: "narrow", timeZone: "UTC" }).format(Date.UTC(2023, 0, 1 + i)),
+  }));
   const canPrev = month.y * 12 + month.m > firstMonth.y * 12 + firstMonth.m - 1;
   const canNext = month.y * 12 + month.m < lastMonth.y * 12 + lastMonth.m + 1;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink-muted" aria-label="Legend">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink-muted" aria-label={t("global.timetable.legend")}>
           {legends.map((l) => (
             <span key={l.id} className="inline-flex items-center gap-1.5">
               <Dot color={l.color} className="size-2.5" /> {l.label}
@@ -271,19 +299,19 @@ export function TimetableView({
           ))}
           {hasLiveMerged && (
             <span className="inline-flex items-center gap-1.5">
-              <Dot color={null} className="size-2.5" /> {legends.length ? "Other" : "Scheduled item"}
+              <Dot color={null} className="size-2.5" /> {legends.length ? t("global.timetable.other") : t("global.timetable.scheduledItem")}
             </span>
           )}
           <span className="inline-flex items-center gap-1.5">
-            <MilestoneMark /> Milestone
+            <MilestoneMark /> {t("global.timetable.milestone")}
           </span>
         </div>
         <SegmentedControl
           value={view}
           onChange={setView}
           options={[
-            { value: "calendar", label: "Calendar", icon: <Icon.Calendar className="size-3.5" /> },
-            { value: "list", label: "List", icon: <Icon.Menu className="size-3.5" /> },
+            { value: "calendar", label: t("global.timetable.calendar"), icon: <Icon.Calendar className="size-3.5" /> },
+            { value: "list", label: t("global.timetable.list"), icon: <Icon.Menu className="size-3.5" /> },
           ]}
         />
       </div>
@@ -291,26 +319,26 @@ export function TimetableView({
       {view === "calendar" ? (
         <div className="rounded-card border border-border bg-surface-1 shadow-card">
           <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5 sm:px-4">
-            <IconButton label="Previous month" size="icon-sm" onClick={() => setMonth((m) => shiftMonth(m, -1))} disabled={!canPrev}>
-              <Icon.ChevronLeft className="size-4" />
+            <IconButton label={t("global.timetable.previousMonth")} size="icon-sm" onClick={() => setMonth((m) => shiftMonth(m, -1))} disabled={!canPrev}>
+              <Icon.ChevronLeft className="size-4 rtl:rotate-180" />
             </IconButton>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-ink" aria-live="polite">
-                {MONTHS_LONG[month.m - 1]} {month.y}
+                {monthTitle}
               </h3>
               <Button size="xs" variant="ghost" onClick={() => setMonth(monthOf(todayKey))}>
-                Today
+                {t("global.timetable.today")}
               </Button>
             </div>
-            <IconButton label="Next month" size="icon-sm" onClick={() => setMonth((m) => shiftMonth(m, 1))} disabled={!canNext}>
-              <Icon.ChevronRight className="size-4" />
+            <IconButton label={t("global.timetable.nextMonth")} size="icon-sm" onClick={() => setMonth((m) => shiftMonth(m, 1))} disabled={!canNext}>
+              <Icon.ChevronRight className="size-4 rtl:rotate-180" />
             </IconButton>
           </div>
           <div className="grid grid-cols-7 border-b border-border text-center text-[11px] font-medium uppercase tracking-wide text-ink-muted">
-            {WEEKDAYS_SHORT.map((d) => (
-              <div key={d} className="py-2">
-                <span className="sm:hidden">{d.slice(0, 1)}</span>
-                <span className="hidden sm:inline">{d}</span>
+            {weekdays.map((d, i) => (
+              <div key={i} className="py-2">
+                <span className="sm:hidden">{d.narrow}</span>
+                <span className="hidden sm:inline">{d.short}</span>
               </div>
             ))}
           </div>
@@ -335,7 +363,7 @@ export function TimetableView({
                   <button
                     type="button"
                     onClick={() => setSelected(isSelected ? null : cell.key)}
-                    aria-label={`${formatDayKey(cell.key, "weekday")}${dayEntries.length ? `, ${dayEntries.length} item${dayEntries.length > 1 ? "s" : ""}` : ""}`}
+                    aria-label={dayEntries.length ? t("global.timetable.dayWithItems", { date: formatDayKey(cell.key, "weekday", locale), count: dayEntries.length }) : formatDayKey(cell.key, "weekday", locale)}
                     aria-pressed={isSelected}
                     className={cn(
                       "flex size-6 items-center justify-center rounded-full text-xs transition-colors hover:bg-surface-3",
@@ -366,7 +394,7 @@ export function TimetableView({
                                 {e.milestone && <MilestoneMark className="size-2.5" />}
                                 <span
                                   className="truncate"
-                                  title={`${e.title}${s.startTime ? ` · ${formatClockRange(s.startTime, s.endTime)}` : ""}${s.zone && offset ? ` (${zoneName(s.zone)}, ${offset})` : ""}`}
+                                  title={`${e.title}${s.startTime ? ` · ${formatClockRange(s.startTime, s.endTime, locale)}` : ""}${s.zone && offset ? ` (${zoneName(s.zone)}, ${offset})` : ""}`}
                                 >
                                   {s.startTime && (
                                     <span className="text-ink-muted">
@@ -383,7 +411,7 @@ export function TimetableView({
                         {dayEntries.length > 3 && (
                           <li>
                             <button type="button" onClick={() => setSelected(cell.key)} className="px-1.5 text-[11px] font-medium text-accent hover:underline">
-                              +{dayEntries.length - 3} more
+                              {t("global.timetable.more", { count: dayEntries.length - 3 })}
                             </button>
                           </li>
                         )}
@@ -397,8 +425,8 @@ export function TimetableView({
           {selected && (
             <div className="border-t border-border px-4 py-3">
               <div className="flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold text-ink">{formatDayKey(selected, "weekday")}</h4>
-                <IconButton label="Close day" size="icon-sm" onClick={() => setSelected(null)}>
+                <h4 className="text-sm font-semibold text-ink">{formatDayKey(selected, "weekday", locale)}</h4>
+                <IconButton label={t("global.timetable.closeDay")} size="icon-sm" onClick={() => setSelected(null)}>
                   <Icon.X className="size-4" />
                 </IconButton>
               </div>
@@ -409,7 +437,7 @@ export function TimetableView({
                   ))}
                 </ul>
               ) : (
-                <p className="py-3 text-sm text-ink-muted">Nothing scheduled on this day.</p>
+                <p className="py-3 text-sm text-ink-muted">{t("global.timetable.nothingThatDay")}</p>
               )}
             </div>
           )}
@@ -420,8 +448,8 @@ export function TimetableView({
           {grouped.map(([date, list]) => (
             <section key={date} aria-labelledby={`tt-${date}`}>
               <h3 id={`tt-${date}`} className={cn("mb-1 text-sm font-semibold", date === todayKey ? "text-accent" : "text-ink")}>
-                {formatDayKey(date, "weekday")}
-                {date === todayKey && <span className="ml-2 text-xs font-medium">Today</span>}
+                {formatDayKey(date, "weekday", locale)}
+                {date === todayKey && <span className="ms-2 text-xs font-medium">{t("global.timetable.today")}</span>}
               </h3>
               <ul className="divide-y divide-border rounded-card border border-border bg-surface-1 px-4 shadow-card">
                 {list.map(({ entry, schedule }) => (

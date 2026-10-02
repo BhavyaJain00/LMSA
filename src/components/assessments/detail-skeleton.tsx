@@ -1,10 +1,14 @@
+"use client";
+
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/i18n/client";
 
 /** Loading state for submission detail pages (sidebar card + main card). */
-export function DetailPageSkeleton({ label = "Loading…" }: { label?: string }) {
+export function DetailPageSkeleton({ label }: { label?: string }) {
+  const tc = useT("common");
   return (
     <div aria-busy="true" aria-live="polite">
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{label ?? tc("status.loading")}</span>
       <Skeleton className="h-4 w-60" />
       <Skeleton className="mt-3 h-7 w-72 max-w-full" />
       <Skeleton className="mt-2 h-4 w-48" />

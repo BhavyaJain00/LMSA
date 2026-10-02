@@ -12,16 +12,20 @@ import { FileUpload } from "@/components/ui/file-upload";
 import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { pluralize } from "@/lib/utils";
-import { BADGE_EVENTS, BADGE_EVENT_LABELS } from "./badge-events";
+import { BADGE_EVENTS } from "./badge-events";
+import { useBadgeEventText } from "./use-badge-event-text";
 import { useFormAction } from "./use-form-action";
+import { useT } from "@/i18n/client";
 
 export interface BadgeRowData extends BadgeRecord {
   holderCount: number;
 }
 
 export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
+  const t = useT("admin");
   const toast = useToast();
+  const eventLabel = (event: BadgeEvent) => eventText(event).label;
+  const eventText = useBadgeEventText();
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<BadgeRowData | "new" | null>(null);
   const [toDelete, setToDelete] = useState<BadgeRowData | null>(null);
@@ -40,7 +44,7 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
       const res = await setBadgeEnabledAction(badge.id, enabled);
       if (!res.ok) {
         setEnabledOverrides((m) => ({ ...m, [badge.id]: !enabled }));
-        toast.error("Error updating badge", res.error);
+        toast.error(t("badges.toast.updateFailed"), res.error);
       }
     });
   };
@@ -51,7 +55,7 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
     startDelete(async () => {
       const res = await deleteBadgeAction(target.id);
       if (res.ok) {
-        toast.success(res.message ?? "Badge deleted successfully");
+        toast.success(res.message ?? t("badges.toast.deleted"));
         setToDelete(null);
       } else toast.error(res.error);
     });
@@ -63,26 +67,26 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
         <div className="w-full sm:max-w-xs">
           <Input
             type="search"
-            aria-label="Search badges"
-            placeholder="Search"
+            aria-label={t("badges.searchLabel")}
+            placeholder={t("shared.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             leftAddon={<Icon.Search className="size-4" />}
           />
         </div>
         <Button leftIcon={<Icon.Plus className="size-4" />} onClick={() => setEditing("new")}>
-          New badge
+          {t("badges.new")}
         </Button>
       </div>
 
       {badges.length === 0 ? (
         <EmptyState
           icon={<Icon.Award />}
-          title="No Badges Found"
-          description="Add one to get started. Badges reward learners for enrolling, finishing courses, passing quizzes and more."
+          title={t("badges.empty.title")}
+          description={t("badges.empty.description")}
           action={
             <Button leftIcon={<Icon.Plus className="size-4" />} onClick={() => setEditing("new")}>
-              New badge
+              {t("badges.new")}
             </Button>
           }
         />
@@ -90,18 +94,18 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
         <Table>
           <THead>
             <tr>
-              <TH>Badge</TH>
-              <TH className="hidden md:table-cell">Awarded For</TH>
-              <TH className="hidden lg:table-cell">Holders</TH>
-              <TH>Enabled</TH>
-              <TH className="w-24 text-right">
-                <span className="sr-only">Actions</span>
+              <TH>{t("badges.columns.badge")}</TH>
+              <TH className="hidden md:table-cell">{t("badges.columns.awardedFor")}</TH>
+              <TH className="hidden lg:table-cell">{t("badges.columns.holders")}</TH>
+              <TH>{t("badges.columns.enabled")}</TH>
+              <TH className="w-24 text-end">
+                <span className="sr-only">{t("shared.actions")}</span>
               </TH>
             </tr>
           </THead>
           <TBody>
             {filtered.length === 0 ? (
-              <TableEmpty colSpan={5}>No badges match “{search}”.</TableEmpty>
+              <TableEmpty colSpan={5}>{t("badges.noMatch", { query: search })}</TableEmpty>
             ) : (
               filtered.map((b) => {
                 const enabled = enabledOverrides[b.id] ?? b.enabled;
@@ -114,25 +118,25 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
                         <div className="min-w-0">
                           <p className="truncate font-medium">{b.title}</p>
                           <p className="line-clamp-1 text-xs text-ink-muted">{b.description}</p>
-                          <p className="mt-0.5 text-xs text-ink-faint md:hidden">{BADGE_EVENT_LABELS[b.event]}</p>
+                          <p className="mt-0.5 text-xs text-ink-faint md:hidden">{eventLabel(b.event)}</p>
                         </div>
                       </div>
                     </TD>
                     <TD className="hidden md:table-cell">
-                      <Badge tone="neutral">{BADGE_EVENT_LABELS[b.event]}</Badge>
-                      {b.threshold !== undefined && b.event !== "manual" && <span className="ml-2 text-xs text-ink-muted">≥ {b.threshold}</span>}
-                      {!b.grantOnlyOnce && <span className="ml-2 text-xs text-ink-muted">repeatable</span>}
+                      <Badge tone="neutral">{eventLabel(b.event)}</Badge>
+                      {b.threshold !== undefined && b.event !== "manual" && <span className="ms-2 text-xs text-ink-muted">≥ {b.threshold}</span>}
+                      {!b.grantOnlyOnce && <span className="ms-2 text-xs text-ink-muted">{t("badges.repeatable")}</span>}
                     </TD>
-                    <TD className="hidden text-ink-muted lg:table-cell">{pluralize(b.holderCount, "member")}</TD>
+                    <TD className="hidden text-ink-muted lg:table-cell">{t("badges.holders", { count: b.holderCount })}</TD>
                     <TD>
-                      <Switch id={`badge-enabled-${b.id}`} aria-label={`Enable ${b.title}`} checked={enabled} onChange={(e) => toggle(b, e.target.checked)} />
+                      <Switch id={`badge-enabled-${b.id}`} aria-label={t("badges.enableNamed", { title: b.title })} checked={enabled} onChange={(e) => toggle(b, e.target.checked)} />
                     </TD>
-                    <TD className="text-right">
+                    <TD className="text-end">
                       <div className="flex justify-end gap-1">
-                        <IconButton label={`Edit ${b.title}`} size="icon-sm" onClick={() => setEditing(b)}>
+                        <IconButton label={t("shared.editNamed", { name: b.title })} size="icon-sm" onClick={() => setEditing(b)}>
                           <Icon.Edit className="size-4" />
                         </IconButton>
-                        <IconButton label={`Delete ${b.title}`} size="icon-sm" className="hover:text-danger" onClick={() => setToDelete(b)}>
+                        <IconButton label={t("shared.deleteNamed", { name: b.title })} size="icon-sm" className="hover:text-danger" onClick={() => setToDelete(b)}>
                           <Icon.Trash className="size-4" />
                         </IconButton>
                       </div>
@@ -153,19 +157,19 @@ export function BadgesManager({ badges }: { badges: BadgeRowData[] }) {
         onConfirm={confirmDelete}
         loading={deleting}
         destructive
-        title={`Delete ${toDelete?.title ?? "badge"}?`}
+        title={toDelete ? t("badges.delete.title", { title: toDelete.title }) : ""}
         description={
-          toDelete?.holderCount
-            ? `${pluralize(toDelete.holderCount, "member")} will lose this badge. This cannot be undone.`
-            : "The badge definition will be removed. This cannot be undone."
+          toDelete?.holderCount ? t("badges.delete.withHolders", { count: toDelete.holderCount }) : t("badges.delete.noHolders")
         }
-        confirmLabel="Delete"
+        confirmLabel={t("shared.delete")}
       />
     </div>
   );
 }
 
 function BadgeFormDialog({ badge, onClose }: { badge: BadgeRowData | null; onClose: () => void }) {
+  const t = useT("admin");
+  const eventText = useBadgeEventText();
   const [imageUrl, setImageUrl] = useState(badge?.imageUrl ?? "");
   const [event, setEvent] = useState<BadgeEvent>(badge?.event ?? "course_completed");
   const { onSubmit, pending, errors, dirty, markDirty } = useFormAction(saveBadgeAction, { onSuccess: onClose });
@@ -177,43 +181,43 @@ function BadgeFormDialog({ badge, onClose }: { badge: BadgeRowData | null; onClo
       open
       onClose={() => (pending ? undefined : onClose())}
       size="lg"
-      title={badge ? badge.title : "New Badge"}
-      description={badge ? "Update how this badge looks and when it is awarded." : "Define a badge and the rule that awards it."}
+      title={badge ? badge.title : t("badges.form.newTitle")}
+      description={badge ? t("badges.form.editDescription") : t("badges.form.newDescription")}
       footer={
         <>
           {dirty && (
-            <Badge tone="warning" dot className="mr-auto">
-              Not saved
+            <Badge tone="warning" dot className="me-auto">
+              {t("shared.notSaved")}
             </Badge>
           )}
           <Button variant="outline" onClick={onClose} disabled={pending}>
-            Cancel
+            {t("shared.cancel")}
           </Button>
           <Button type="submit" form={formId} loading={pending} disabled={!dirty}>
-            Save
+            {t("shared.save")}
           </Button>
         </>
       }
     >
       <form id={formId} onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-4">
         {badge && <input type="hidden" name="id" value={badge.id} />}
-        <Field label="Title" htmlFor={`${formId}-title`} error={errors.title} hint="The name this badge is awarded and displayed under." required>
-          <Input id={`${formId}-title`} name="title" defaultValue={badge?.title} placeholder="e.g. Course Champion" maxLength={80} invalid={!!errors.title} autoFocus />
+        <Field label={t("badges.form.title")} htmlFor={`${formId}-title`} error={errors.title} hint={t("badges.form.titleHint")} required>
+          <Input id={`${formId}-title`} name="title" defaultValue={badge?.title} placeholder={t("badges.form.titlePlaceholder")} maxLength={80} invalid={!!errors.title} autoFocus />
         </Field>
-        <Field label="Description" htmlFor={`${formId}-description`} error={errors.description} required>
+        <Field label={t("badges.form.description")} htmlFor={`${formId}-description`} error={errors.description} required>
           <Textarea
             id={`${formId}-description`}
             name="description"
             rows={3}
             defaultValue={badge?.description}
-            placeholder="What is this badge awarded for?"
+            placeholder={t("badges.form.descriptionPlaceholder")}
             maxLength={300}
             invalid={!!errors.description}
           />
         </Field>
         <div>
           <FileUpload
-            label="Badge Image"
+            label={t("badges.form.image")}
             name="imageUrl"
             kind="image"
             value={imageUrl}
@@ -221,25 +225,25 @@ function BadgeFormDialog({ badge, onClose }: { badge: BadgeRowData | null; onClo
               setImageUrl(url);
               markDirty();
             }}
-            hint="Shown wherever this badge is awarded. Square SVG or PNG works best."
+            hint={t("badges.form.imageHint")}
           />
           {errors.imageUrl && <p className="mt-1 text-xs text-danger">{errors.imageUrl}</p>}
         </div>
 
         <div className="rounded-xl border border-border p-4">
-          <p className="text-sm font-semibold text-ink">Assignment rules</p>
+          <p className="text-sm font-semibold text-ink">{t("badges.form.rules")}</p>
           <div className="mt-3 grid gap-4 sm:grid-cols-2">
-            <Field label="Event" htmlFor={`${formId}-event`} error={errors.event} hint={eventInfo?.description} required>
+            <Field label={t("badges.form.event")} htmlFor={`${formId}-event`} error={errors.event} hint={eventInfo ? eventText(eventInfo.value).description : undefined} required>
               <Select
                 id={`${formId}-event`}
                 name="event"
                 value={event}
                 onChange={(e) => setEvent(e.target.value as BadgeEvent)}
-                options={BADGE_EVENTS.map((e) => ({ value: e.value, label: e.label }))}
+                options={BADGE_EVENTS.map((e) => ({ value: e.value, label: eventText(e.value).label }))}
               />
             </Field>
             {eventInfo?.threshold ? (
-              <Field label={eventInfo.threshold} htmlFor={`${formId}-threshold`} error={errors.threshold} hint="Leave empty for the default (1, or 0% for quizzes).">
+              <Field label={eventText(eventInfo.value).threshold} htmlFor={`${formId}-threshold`} error={errors.threshold} hint={t("badges.form.thresholdHint")}>
                 <Input
                   id={`${formId}-threshold`}
                   name="threshold"
@@ -260,10 +264,10 @@ function BadgeFormDialog({ badge, onClose }: { badge: BadgeRowData | null; onClo
               id={`${formId}-once`}
               name="grantOnlyOnce"
               defaultChecked={badge?.grantOnlyOnce ?? true}
-              label="Grant Only Once"
-              description="Each user can only receive this badge one time."
+              label={t("badges.form.once")}
+              description={t("badges.form.onceDescription")}
             />
-            <Switch id={`${formId}-enabled`} name="enabled" defaultChecked={badge?.enabled ?? true} label="Enabled" description="Disabled badges are never awarded automatically." />
+            <Switch id={`${formId}-enabled`} name="enabled" defaultChecked={badge?.enabled ?? true} label={t("badges.form.enabled")} description={t("badges.form.enabledDescription")} />
           </div>
         </div>
       </form>

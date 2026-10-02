@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function EmailNotificationsLoading() {
+export default async function EmailNotificationsLoading() {
+  const t = await getT("account");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-3xl">
-      <span className="sr-only">Loading email preferences…</span>
+      <span className="sr-only">{t("settings.notifications.loading")}</span>
       <div className="mb-6 space-y-2">
         <Skeleton className="h-3.5 w-44" />
         <Skeleton className="h-8 w-56" />
