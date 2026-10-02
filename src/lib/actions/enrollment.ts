@@ -55,7 +55,7 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
   const returnTo = lessonReturnPath(formData, course);
   const user = await getCurrentUser();
   if (!user) {
-    await setFlash("You need to login first to enroll for this course", "warning");
+    await setFlash("Log in to enroll in this course", "warning");
     redirect(`/login?next=${encodeURIComponent(returnTo ?? `/courses/${course.slug}`)}`);
   }
 

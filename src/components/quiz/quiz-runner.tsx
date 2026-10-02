@@ -42,7 +42,7 @@ export interface QuizRunnerProps {
   /** Shown on the results screen (e.g. "Back to lesson" on the standalone quiz page). */
   backHref?: string | null;
   backLabel?: string;
-  /** Adds the in-video hints ("Complete the quiz to continue the video."). */
+  /** Adds the in-video hints ("Finish this quiz to keep watching the video."). */
   inVideo?: boolean;
   className?: string;
 }

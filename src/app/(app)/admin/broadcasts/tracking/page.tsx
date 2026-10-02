@@ -273,7 +273,7 @@ export default async function EmailTrackingPage(props: PageProps<"/admin/broadca
         </Table>
 
         {events.pageCount > 1 && (
-          <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <nav aria-label="Pagination" className="flex flex-wrap items-center gap-3 justify-between text-sm">
             <p className="text-ink-muted">
               Page {events.page} of {events.pageCount} · {formatNumber(events.total)} {events.total === 1 ? "event" : "events"}
             </p>

@@ -66,7 +66,7 @@ export async function AssignmentFeedback({ assignmentId, userId, privileged = fa
         ))}
 
       {peer && privileged && (
-        <Card className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+        <Card className="flex flex-wrap items-center gap-3 justify-between p-4 text-sm">
           <p className="flex items-center gap-2 text-ink">
             <Icon.Users className="size-4 text-accent" aria-hidden="true" />
             Peer review is on: {peer.reviewsPerSubmission} {peer.reviewsPerSubmission === 1 ? "review" : "reviews"} per submission
@@ -101,7 +101,7 @@ export async function AssignmentFeedback({ assignmentId, userId, privileged = fa
             <div className="space-y-5">
               <div className="rounded-xl border border-border bg-surface-2/40 p-3 text-sm">
                 {feedback.toGive.pending > 0 ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3 justify-between">
                     <p className="text-ink">
                       <span className="font-medium">
                         {feedback.toGive.pending} {feedback.toGive.pending === 1 ? "review" : "reviews"} to write

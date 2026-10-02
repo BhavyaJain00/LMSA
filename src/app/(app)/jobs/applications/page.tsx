@@ -57,7 +57,7 @@ export default async function MyApplicationsPage() {
         <ul className="space-y-3">
           {applications.map((a) => (
             <li key={a.id} className="rounded-card border border-border bg-surface-1 p-4 shadow-card sm:p-5">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+              <div className="flex flex-col sm:flex-row sm:items-start gap-4">
                 {a.job ? <CompanyLogo company={a.job.company} logoUrl={a.job.companyLogoUrl} size="sm" /> : <CompanyLogo company="?" size="sm" />}
                 <div className="min-w-0 flex-1">
                   {a.job ? (

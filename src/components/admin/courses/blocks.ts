@@ -335,7 +335,7 @@ export function sanitizeBlocks(raw: unknown, ctx: BlockValidationContext): Block
               fail("An in-video quiz no longer exists. Remove it or pick another quiz.");
               continue;
             }
-            if (duration && time > duration) fail("Time in video exceeds the total duration of the video.");
+            if (duration && time > duration) fail("That time is past the end of the video.");
             quizMarkers.push({ time: Math.round(time), quizId });
           }
         }

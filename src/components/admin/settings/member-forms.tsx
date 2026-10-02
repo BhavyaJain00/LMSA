@@ -286,7 +286,7 @@ export function MemberAccountPanel({
             <PasswordInput id={`reset-confirm-${member.id}`} name="confirm" value={confirmPassword} onChange={setConfirmPassword} invalid={!!reset.errors.confirm} />
           </Field>
         </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3 justify-between">
           {!isSelf ? (
             <>
               <Checkbox name="signOut" id={`signout-${member.id}`} defaultChecked label={t("members.form.signOutAll")} />

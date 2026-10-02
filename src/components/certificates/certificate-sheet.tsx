@@ -212,7 +212,7 @@ function MinimalSheet(props: CertificateSheetProps) {
     <SheetFrame learnerName={learnerName} templateId="minimal">
       <div className="relative @2xl:aspect-[297/210]">
         <div className="flex h-full flex-col px-6 py-8 @2xl:absolute @2xl:inset-0 @2xl:px-[7cqw] @2xl:py-[5.5cqw]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-strong pb-4 @2xl:pb-[1.6cqw]">
+          <div className="flex flex-wrap items-center gap-3 justify-between border-b border-border-strong pb-4 @2xl:pb-[1.6cqw]">
             <BrandMark brandName={brandName} logoUrl={logoUrl} className="flex items-center gap-2.5 @2xl:gap-[1cqw]" />
             <p className="text-[11px] uppercase tracking-[0.3em] text-ink-faint @2xl:text-[1.05cqw]">Certificate of {kind === "batch" ? "Achievement" : "Completion"}</p>
           </div>

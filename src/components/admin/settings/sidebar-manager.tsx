@@ -69,7 +69,7 @@ export function SidebarManager({ items, builtIns }: { items: SidebarItem[]; buil
   return (
     <div className="space-y-5">
       <div className="overflow-hidden rounded-card border border-border bg-surface-1 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
+        <div className="flex flex-wrap items-center gap-3 justify-between border-b border-border px-4 py-3.5 sm:px-5">
           <div>
             <h3 className="text-base font-semibold text-ink">{t("sidebarManager.custom")}</h3>
             <p className="text-sm text-ink-muted">{t("sidebarManager.customHint")}</p>

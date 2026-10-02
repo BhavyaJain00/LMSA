@@ -10,6 +10,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { ColourModeRow } from "@/components/profile/theme-preference";
+import { AccountI18n } from "@/components/dashboard/account-i18n";
 import { buildMobileTabs } from "@/components/layout/mobile-tabs";
 import { SearchRow } from "./you-rows";
 
@@ -142,7 +143,9 @@ export default async function YouPage() {
         <Row href="/billing/history" icon={<Icon.Receipt />} label="Orders & invoices" />
         <Row href="/persona" icon={<Icon.Target />} label="Learning goals" />
         <li>
-          <ColourModeRow className={rowClass} />
+          <AccountI18n slices={["theme."]}>
+            <ColourModeRow className={rowClass} />
+          </AccountI18n>
         </li>
         <li>
           <form action={logoutAction}>

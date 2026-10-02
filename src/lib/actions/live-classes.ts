@@ -88,7 +88,7 @@ export async function saveLiveClassAction(_prev: ActionResult | null, formData: 
   else if (title.length > 140) fieldErrors.title = "Keep the title under 140 characters.";
   if (description.length > 2000) fieldErrors.description = "Keep the description under 2,000 characters.";
   if (!isDateKey(date)) fieldErrors.date = "Pick the date of the class.";
-  if (!isClock(time)) fieldErrors.time = "Time must be in 24 hour format (HH:mm). Example 11:30 or 22:00";
+  if (!isClock(time)) fieldErrors.time = "Enter the time as 24-hour HH:mm, for instance 09:15 or 21:45";
   const durationMinutes = Number(durationRaw);
   if (!durationRaw || !Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 720) {
     fieldErrors.durationMinutes = "Duration must be between 5 and 720 minutes.";

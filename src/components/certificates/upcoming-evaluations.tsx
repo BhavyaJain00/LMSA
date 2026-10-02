@@ -40,7 +40,7 @@ export function UpcomingEvaluations({ evaluations, canSchedule, deadline, schedu
 
   return (
     <section aria-labelledby="upcoming-evaluations" className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <h2 id="upcoming-evaluations" className="text-lg font-semibold tracking-tight text-ink">
           {t("certificates.upcoming.title")}
         </h2>

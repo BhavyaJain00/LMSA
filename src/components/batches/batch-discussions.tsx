@@ -165,7 +165,7 @@ export function BatchDiscussions({
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <div>
           <h2 className="text-lg font-semibold text-ink">{t("batches.discussions.title")}</h2>
           <p className="text-sm text-ink-muted">{t("batches.discussions.description")}</p>

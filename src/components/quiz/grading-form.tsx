@@ -128,7 +128,7 @@ export function GradingForm({ submissionId, rows, passingPercentage }: { submiss
   return (
     <div>
       {gradableRows.length > 0 && (
-        <div className="sticky top-14 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface-1/95 px-4 py-3 backdrop-blur sm:px-5">
+        <div className="sticky top-14 z-10 flex flex-wrap items-center gap-3 justify-between border-b border-border bg-surface-1/95 px-4 py-3 backdrop-blur sm:px-5">
           <div className="min-w-0 text-sm">
             <p className="font-medium text-ink">
               {t("quizAdmin.grading.scoreAfter", { score: formatScore(preview.score), total: formatScore(preview.outOf) })}{" "}

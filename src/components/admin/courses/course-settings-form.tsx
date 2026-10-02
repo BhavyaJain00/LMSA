@@ -164,7 +164,7 @@ export function CourseSettingsForm({
           checked={enforceLessonCompletion}
           onChange={(e) => setEnforceLessonCompletion(e.target.checked)}
           label="Enforce Lesson Completion"
-          description="Students must complete each lesson before the next one opens."
+          description="Each lesson opens only after the one before it is finished."
         />
       </Section>
 
@@ -188,7 +188,7 @@ export function CourseSettingsForm({
               if (next) setPaidCertificate(false);
             }}
             label="Paid course"
-            description="Charge learners to enroll in this course."
+            description="Learners pay a fee to join this course."
           />
           {errors.paidCourse && <p className="text-xs text-danger">{errors.paidCourse}</p>}
           {paidCourse && (
@@ -222,7 +222,7 @@ export function CourseSettingsForm({
               if (e.target.checked) setPaidCertificate(false);
             }}
             label="Completion certificate"
-            description="Issue a free certificate when learners complete the course."
+            description="Learners receive a free certificate once they finish the course."
           />
           {errors.enableCertification && <p className="mt-1.5 text-xs text-danger">{errors.enableCertification}</p>}
         </div>
@@ -239,7 +239,7 @@ export function CourseSettingsForm({
                 if (next) setEnableCertification(false);
               }}
               label="Paid certificate"
-              description="Sell an evaluator-graded certificate alongside this free course."
+              description="Offer a paid certificate, graded by an evaluator, with this free course."
             />
             {errors.paidCertificate && <p className="text-xs text-danger">{errors.paidCertificate}</p>}
             {paidCertificate && (
@@ -298,7 +298,7 @@ export function CourseSettingsForm({
         )}
       </Section>
 
-      <Section title="Meta Tags" description="These tags help search engines describe and rank your course in results.">
+      <Section title="Meta Tags" description="Search engines use these tags to describe your course and decide where it appears.">
         <Field
           label="Meta description"
           htmlFor="settings-meta-description"
@@ -312,7 +312,7 @@ export function CourseSettingsForm({
             value={metaDescription}
             onChange={(e) => setMetaDescription(e.target.value)}
             maxLength={META_DESCRIPTION_MAX}
-            placeholder="A short summary of the course for search results."
+            placeholder="A brief description that search engines can show for this course."
             invalid={!!errors.metaDescription}
           />
         </Field>

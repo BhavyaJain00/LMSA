@@ -100,9 +100,9 @@ export default async function NotificationsPage(props: PageProps<"/notifications
 
   const emptyCopy =
     tab === "unread"
-      ? { title: "No unread notifications", description: "You're all caught up! Check back later for updates." }
+      ? { title: "No unread notifications", description: "Nothing new right now. New updates will show up here." }
       : tab === "read"
-        ? { title: "No read notifications", description: "Notifications you have read will appear here." }
+        ? { title: "No read notifications", description: "Once you read a notification, it moves here." }
         : { title: "No notifications yet", description: "Announcements, grades, replies, badges and live class reminders will show up here." };
 
   return (

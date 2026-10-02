@@ -253,7 +253,7 @@ export default async function SequencePage(props: PageProps<"/admin/sequences/[i
       </div>
 
       <section aria-labelledby="sequence-people" className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 justify-between">
           <h2 id="sequence-people" className="text-lg font-semibold tracking-tight text-ink">
             People
           </h2>

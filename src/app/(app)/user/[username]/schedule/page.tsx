@@ -7,6 +7,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { StatCard } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { EvaluatorSchedule } from "@/components/certificates/evaluator-schedule";
+import { PublicI18n } from "@/components/catalog/public-i18n";
 import { getT } from "@/i18n/server";
 
 export async function generateMetadata(props: PageProps<"/user/[username]/schedule">): Promise<Metadata> {
@@ -45,19 +46,22 @@ export default async function EvaluatorSchedulePage(props: PageProps<"/user/[use
         <StatCard label={t("evaluator.schedule.awaiting")} value={awaiting} icon={<Icon.Timer className="size-5" />} />
         <StatCard label={t("evaluator.schedule.passed")} value={passed} icon={<Icon.Award className="size-5" />} />
       </div>
-      <EvaluatorSchedule
-        events={events}
-        today={today}
-        unavailable={unavailable}
-        viewer={{ id: viewer.id, moderator: isModerator(viewer) }}
-        emptyAction={
-          owner ? (
-            <ButtonLink href={`/user/${profile.username}/slots`} size="sm" leftIcon={<Icon.Plus className="size-4" />}>
-              {t("evaluator.schedule.addAvailability")}
-            </ButtonLink>
-          ) : undefined
-        }
-      />
+      {/* The evaluation dialog shows rating stars, which read `public` messages. */}
+      <PublicI18n pick={["certificates.stars.", "reviews.form.rating"]}>
+        <EvaluatorSchedule
+          events={events}
+          today={today}
+          unavailable={unavailable}
+          viewer={{ id: viewer.id, moderator: isModerator(viewer) }}
+          emptyAction={
+            owner ? (
+              <ButtonLink href={`/user/${profile.username}/slots`} size="sm" leftIcon={<Icon.Plus className="size-4" />}>
+                {t("evaluator.schedule.addAvailability")}
+              </ButtonLink>
+            ) : undefined
+          }
+        />
+      </PublicI18n>
     </div>
   );
 }

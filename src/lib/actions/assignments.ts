@@ -51,7 +51,7 @@ async function revalidateAssignment(assignmentId: string, lessonId?: string | nu
 export async function saveAssignmentAction(_prev: ActionResult<{ id: string }> | null, formData: FormData): Promise<ActionResult<{ id: string }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canManageAssessments(user)) return { ok: false, error: "You are not permitted to manage assignments." };
+  if (!canManageAssessments(user)) return { ok: false, error: "Your role can't manage assignments." };
 
   const id = fd(formData, "id");
   const title = fd(formData, "title").replace(/\s+/g, " ");
@@ -79,9 +79,9 @@ export async function saveAssignmentAction(_prev: ActionResult<{ id: string }> |
   if (enableScheduling) {
     const start = parseIso(scheduleStartRaw);
     const end = parseIso(scheduleEndRaw);
-    if (!start) fieldErrors.scheduleStart = "Schedule Start is required when scheduling is enabled.";
+    if (!start) fieldErrors.scheduleStart = "Set a start time, or turn scheduling off.";
     if (scheduleEndRaw && !end) fieldErrors.scheduleEnd = "Enter a valid end date and time.";
-    if (start && end && new Date(end).getTime() <= new Date(start).getTime()) fieldErrors.scheduleEnd = "Schedule End must be after Schedule Start.";
+    if (start && end && new Date(end).getTime() <= new Date(start).getTime()) fieldErrors.scheduleEnd = "The end time has to come after the start time.";
     scheduleStart = start ?? undefined;
     scheduleEnd = end ?? undefined;
   }
@@ -146,7 +146,7 @@ export async function saveAssignmentAction(_prev: ActionResult<{ id: string }> |
 export async function deleteAssignmentsAction(ids: string[]): Promise<ActionResult<{ count: number }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canManageAssessments(user)) return { ok: false, error: "You are not permitted to manage assignments." };
+  if (!canManageAssessments(user)) return { ok: false, error: "Your role can't manage assignments." };
   const set = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string"));
   if (!set.size) return { ok: false, error: "Select at least one assignment." };
 
@@ -229,16 +229,16 @@ export async function submitAssignmentAction(
   const fieldErrors: Record<string, string> = {};
   if (type === "text") {
     const text = rawAnswer.trim();
-    if (!text) return { ok: false, error: "Please provide an answer or upload a file before submitting.", fieldErrors: { answer: "Write your answer here." } };
+    if (!text) return { ok: false, error: "Add an answer or attach a file, then submit.", fieldErrors: { answer: "Write your answer here." } };
     if (text.length > MAX_TEXT) fieldErrors.answer = "Your answer is too long.";
     answer = text;
   } else if (type === "url") {
     const url = rawAnswer.trim();
-    if (!url) return { ok: false, error: "Please provide an answer or upload a file before submitting.", fieldErrors: { answer: "Enter a URL." } };
+    if (!url) return { ok: false, error: "Add an answer or attach a file, then submit.", fieldErrors: { answer: "Enter a URL." } };
     if (!/^https?:\/\//i.test(url) || !isValidUrl(url)) fieldErrors.answer = "Please enter a valid URL.";
     answer = url;
   } else {
-    if (!attachmentUrl) return { ok: false, error: "Please provide an answer or upload a file before submitting.", fieldErrors: { attachmentUrl: "Upload a file." } };
+    if (!attachmentUrl) return { ok: false, error: "Add an answer or attach a file, then submit.", fieldErrors: { attachmentUrl: "Upload a file." } };
     const err = validateAttachment(type, attachmentUrl);
     if (err) fieldErrors.attachmentUrl = err;
     attachment = attachmentUrl;

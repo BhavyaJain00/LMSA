@@ -131,7 +131,7 @@ export function StudentProgressTable({ batchId, students, courseTitles }: { batc
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <h2 className="text-base font-semibold text-ink">Students</h2>
         <div className="flex w-full items-center gap-2 sm:w-auto">
           <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">

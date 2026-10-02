@@ -22,7 +22,7 @@ export function DataPanel({ seedDemoData }: { seedDemoData: boolean }) {
 
   return (
     <section className="rounded-card border border-danger/30 bg-surface-1 p-4 shadow-card sm:p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-start gap-4 sm:justify-between">
         <div className="flex min-w-0 gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-danger/10 text-danger">
             <Icon.Refresh className="size-5" />

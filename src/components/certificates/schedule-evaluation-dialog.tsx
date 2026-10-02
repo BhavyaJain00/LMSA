@@ -36,7 +36,7 @@ export function ScheduleEvaluationDialog({ open, onClose, context }: { open: boo
   const [slot, setSlot] = useState<{ date: string; startTime: string } | null>(null);
   const [state, formAction, pending] = useActionState<BookState, FormData>(async (prev, formData) => {
     if (!formData.get("date") || !formData.get("startTime")) {
-      toast({ title: "Please select a slot for your evaluation.", tone: "warning", duration: 10000 });
+      toast({ title: "Pick a time slot for your evaluation first.", tone: "warning", duration: 10000 });
       return prev;
     }
     const res = await bookEvaluationAction(prev, formData);

@@ -287,7 +287,7 @@ export default async function AffiliatePage(props: PageProps<"/affiliate">) {
               </TBody>
             </Table>
             {commissionsPage.pageCount > 1 && (
-              <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <nav aria-label="Pagination" className="flex flex-wrap items-center gap-3 justify-between text-sm">
                 <p className="text-ink-muted">
                   Page {commissionsPage.page} of {commissionsPage.pageCount}
                 </p>

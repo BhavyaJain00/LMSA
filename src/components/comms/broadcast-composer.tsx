@@ -88,7 +88,7 @@ export function BroadcastComposer({ courses, broadcast, initialSegment }: { cour
       )}
 
       <Card className="min-w-0 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 justify-between">
           <h2 className="text-base font-semibold text-ink">Message</h2>
           <SegmentedControl
             size="md"

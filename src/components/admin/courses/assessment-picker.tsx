@@ -25,11 +25,11 @@ export const ASSESSMENT_COPY: Record<AssessmentKind, { noun: string; title: stri
     empty: "No assignments found",
     createHref: "/admin/assignments/new",
     editHref: (id) => `/admin/assignments/${id}`,
-    filterLabel: "Only show assignments from the current course",
+    filterLabel: "Limit the list to this course's assignments",
   },
   exercise: {
     noun: "programming exercise",
-    title: "Add a programming exercise to your lesson",
+    title: "Attach a coding exercise to this lesson",
     search: "Select a programming exercise",
     empty: "No programming exercises found",
     createHref: "/admin/exercises/new",
@@ -108,7 +108,7 @@ export function AssessmentPickerDialog({
           leftAddon={<Icon.Search className="size-4" />}
           autoFocus
         />
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 justify-between">
           <Switch
             id={`${listId}-filter`}
             checked={onlyCourse}

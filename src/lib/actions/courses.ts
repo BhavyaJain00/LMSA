@@ -193,7 +193,7 @@ async function parseCourseForm(formData: FormData, user: User, existing: Course 
 export async function createCourseAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Your session has expired. Please log in again." };
-  if (!canCreateCourses(user)) return { ok: false, error: "You are not permitted to create a course." };
+  if (!canCreateCourses(user)) return { ok: false, error: "Your role can't create courses." };
 
   const { values, fieldErrors, slugProvided } = await parseCourseForm(formData, user, null);
   if (Object.keys(fieldErrors).length) return { ok: false, error: "Please fix the highlighted fields.", fieldErrors };
@@ -599,7 +599,7 @@ export async function searchEnrollCandidatesAction(courseId: string, query: stri
 
 export async function enrollStudentAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const loaded = await loadManageable(fd(formData, "courseId"));
-  if ("error" in loaded) return { ok: false, error: "You do not have permission to enroll students in this course." };
+  if ("error" in loaded) return { ok: false, error: "Your role can't add learners to this course." };
   const { user: manager, course } = loaded;
   const db = await getDb();
 
@@ -616,7 +616,7 @@ export async function enrollStudentAction(_prev: ActionResult | null, formData: 
   else if (db.enrollments.some((e) => e.userId === userId && e.courseId === course.id)) fieldErrors.userId = "Student is already enrolled in this course.";
   if (purchasedCertificate) {
     const payment = db.payments.find((p) => p.id === paymentId);
-    if (!paymentId || !payment) fieldErrors.paymentId = "Please select a payment for the purchased certificate.";
+    if (!paymentId || !payment) fieldErrors.paymentId = "Choose the payment that covers this certificate purchase.";
     else if (payment.userId !== userId || payment.itemId !== course.id) fieldErrors.paymentId = "This payment belongs to another student or item.";
   }
   if (Object.keys(fieldErrors).length || !student) {

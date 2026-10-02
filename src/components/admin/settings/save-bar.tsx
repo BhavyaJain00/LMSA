@@ -38,7 +38,7 @@ export function SaveBar({
   return (
     <div
       className={cn(
-        "sticky bottom-0 z-10 -mx-1 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface-1/95 px-4 py-3 shadow-card backdrop-blur",
+        "sticky bottom-0 z-10 -mx-1 mt-6 flex flex-wrap items-center gap-3 justify-between rounded-xl border border-border bg-surface-1/95 px-4 py-3 shadow-card backdrop-blur",
         className,
       )}
     >

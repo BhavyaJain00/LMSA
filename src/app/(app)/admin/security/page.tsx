@@ -215,7 +215,7 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
               </DetailItem>
               <DetailItem label="Failed attempts">{selectedFailures} in a row</DetailItem>
             </dl>
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3 justify-between">
               <AdminAccountActions userId={selectedUser.id} name={selectedUser.name} actions={accountActions(selectedUser, viewer.id, selectedFailures)} />
               <Link href={`/admin/members/${selectedUser.id}`} className="text-sm font-medium text-accent hover:underline">
                 Open member profile →

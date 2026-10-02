@@ -230,11 +230,11 @@ export async function saveQuizAction(input: SaveQuizInput): Promise<ActionResult
   if (enableScheduling) {
     const start = s.scheduleStart ? Date.parse(s.scheduleStart) : NaN;
     const end = s.scheduleEnd ? Date.parse(s.scheduleEnd) : NaN;
-    if (!Number.isFinite(start)) fieldErrors.scheduleStart = "Schedule Start is required when scheduling is enabled.";
+    if (!Number.isFinite(start)) fieldErrors.scheduleStart = "Set a start time, or turn scheduling off.";
     else scheduleStart = new Date(start).toISOString();
     if (s.scheduleEnd && !Number.isFinite(end)) fieldErrors.scheduleEnd = "Enter a valid date and time.";
     else if (Number.isFinite(end)) {
-      if (Number.isFinite(start) && end <= start) fieldErrors.scheduleEnd = "Schedule End must be after Schedule Start.";
+      if (Number.isFinite(start) && end <= start) fieldErrors.scheduleEnd = "The end time has to come after the start time.";
       else scheduleEnd = new Date(end).toISOString();
     }
   }

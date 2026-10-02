@@ -88,7 +88,7 @@ export default async function AdminBatchPage(props: PageProps<"/admin/batches/[i
   return (
     <div className="animate-fade-in pb-10">
       <Breadcrumbs items={[{ label: "Batches", href: "/admin/batches" }, { label: batch.title }]} />
-      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mb-5 flex flex-col sm:flex-row sm:items-start gap-4 sm:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <BatchStatusBadge status={summary.status} />

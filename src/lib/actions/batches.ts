@@ -244,7 +244,7 @@ function parseBatchForm(formData: FormData, db: Database, existing: Batch | null
 export async function createBatchAction(_prev: ActionResult<{ id: string }> | null, formData: FormData): Promise<ActionResult<{ id: string }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canCreateBatch(user)) return { ok: false, error: "You are not permitted to create a batch." };
+  if (!canCreateBatch(user)) return { ok: false, error: "Your role can't create batches." };
   const db = await getDb();
   const { values, fieldErrors } = parseBatchForm(formData, db, null, "create");
   if (Object.keys(fieldErrors).length) return { ok: false, error: firstError(fieldErrors), fieldErrors };

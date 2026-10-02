@@ -285,7 +285,7 @@ export function BatchSettingsForm({
   return (
     <form ref={formRef} onSubmit={onSubmit} noValidate className="space-y-4">
       <input type="hidden" name="batchId" value={batch.id} />
-      <div className="sticky top-14 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-card sm:border sm:bg-surface-1/95 sm:px-5">
+      <div className="sticky top-14 z-20 -mx-4 flex flex-wrap items-center gap-3 justify-between border-b border-border bg-surface/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-card sm:border sm:bg-surface-1/95 sm:px-5">
         <div className="flex items-center gap-2 text-sm">
           {dirty ? (
             <Badge tone="warning" dot>
@@ -350,7 +350,7 @@ export function BatchSettingsForm({
               checked={values.allowSelfEnrollment}
               onChange={(e) => set("allowSelfEnrollment", e.target.checked)}
               label="Allow Self Enrollment"
-              description="Allow users to enroll in this batch on their own."
+              description="Let learners join this batch without an invitation."
             />
             <Switch
               name="allowFuture"
@@ -382,7 +382,7 @@ export function BatchSettingsForm({
               checked={values.certification}
               onChange={(e) => set("certification", e.target.checked)}
               label="Certification"
-              description={certificatesEnabled ? "Issue certificates to batch participants." : "Certificates are disabled in the platform settings."}
+              description={certificatesEnabled ? "Award certificates to the learners in this batch." : "Certificates are disabled in the platform settings."}
             />
             {values.certification && (
               <div className="grid gap-4 rounded-lg border border-border bg-surface-2/50 p-4 sm:grid-cols-2">

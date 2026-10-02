@@ -19,7 +19,7 @@ export async function createAnnouncementAction(_prev: ActionResult | null, formD
   const db = await getDb();
   const batch = db.batches.find((b) => b.id === fd(formData, "batchId"));
   if (!batch) return { ok: false, error: "This batch no longer exists." };
-  if (!canManageBatch(user, batch)) return { ok: false, error: "You are not permitted to make an announcement for this batch." };
+  if (!canManageBatch(user, batch)) return { ok: false, error: "Your role can't post announcements in this batch." };
 
   const students = db.batchEnrollments.filter((e) => e.batchId === batch.id).map((e) => e.userId);
   const subject = fd(formData, "subject");

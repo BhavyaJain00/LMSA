@@ -6,7 +6,7 @@ import { MEMBER_IMPORT_TEMPLATE } from "@/components/admin/settings/member-impor
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  if (!isModerator(user)) return NextResponse.json({ ok: false, error: "You are not permitted to manage members." }, { status: 403 });
+  if (!isModerator(user)) return NextResponse.json({ ok: false, error: "Your role can't manage members." }, { status: 403 });
   return new NextResponse(`﻿${MEMBER_IMPORT_TEMPLATE}\r\n`, {
     status: 200,
     headers: {

@@ -275,7 +275,7 @@ export function EditProfileForm({ userId, initial, isSelf, backHref }: { userId:
       <input type="hidden" name="education" value={JSON.stringify(values.education)} />
       <input type="hidden" name="workExperience" value={JSON.stringify(values.workExperience)} />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold tracking-tight text-ink">{isSelf ? t("profile.header.editProfile") : t("profile.edit.titleOther", { name: initial.name })}</h2>
           {dirty && (

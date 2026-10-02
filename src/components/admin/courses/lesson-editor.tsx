@@ -320,7 +320,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
                     checked={includeInPreview}
                     onChange={(e) => setIncludeInPreview(e.target.checked)}
                     label="Include in preview"
-                    description="When on, anyone can preview this lesson without enrolling. Otherwise it is visible only to enrolled students."
+                    description="When on, visitors can open this lesson as a free preview. When off, only enrolled learners can see it."
                   />
                 </div>
               </div>

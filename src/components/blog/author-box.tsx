@@ -18,7 +18,7 @@ export async function AuthorBox({ author, profileHref }: { author: PostAuthor; p
       <h2 id="author-heading" className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
         {t("blog.author.title")}
       </h2>
-      <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start">
+      <div className="mt-3 flex flex-col sm:flex-row sm:items-start gap-4">
         <Avatar name={author.name} src={author.avatarUrl} size="xl" className="shrink-0" />
         <div className="min-w-0 flex-1">
           <p className="text-lg font-semibold text-ink">

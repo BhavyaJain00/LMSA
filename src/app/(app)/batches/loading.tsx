@@ -7,7 +7,7 @@ export default function BatchesLoading() {
       <LoadingLabel />
       <Skeleton className="h-7 w-48" />
       <Skeleton className="mt-2 h-4 w-96 max-w-full" />
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+      <div className="mt-6 flex flex-wrap items-center gap-3 justify-between border-b border-border pb-3">
         <div className="flex gap-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-6 w-20" />

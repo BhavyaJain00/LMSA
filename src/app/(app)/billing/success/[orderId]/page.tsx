@@ -429,7 +429,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       <div className="grid gap-6 pb-10 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-6">
           <section className="rounded-card border border-border bg-surface-1 p-6 shadow-card" aria-labelledby="order-status-heading">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex flex-col sm:flex-row sm:items-start gap-4">
               <span className={`flex size-14 shrink-0 items-center justify-center rounded-full ${toneClasses}`}>{toneIcon}</span>
               <div className="min-w-0">
                 <h2 id="order-status-heading" className="text-xl font-semibold tracking-tight text-ink">

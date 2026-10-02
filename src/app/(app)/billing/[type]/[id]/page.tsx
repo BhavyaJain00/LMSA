@@ -267,7 +267,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
           )}
           <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
             <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
-            Please ensure that the billing name you enter is correct, as it will be used on your invoice.
+            Double-check the billing name: it is printed on your invoice exactly as entered.
           </p>
         </aside>
         <div className="min-w-0">

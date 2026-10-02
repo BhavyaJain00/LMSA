@@ -23,7 +23,7 @@ export function Pager({
   if (pageCount <= 1) return null;
   const disabled = "inline-flex h-8 items-center rounded-lg border border-border px-3 text-ink-faint";
   return (
-    <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+    <nav aria-label="Pagination" className="flex flex-wrap items-center gap-3 justify-between text-sm">
       <p className="text-ink-muted">
         Page {page} of {pageCount} · {formatNumber(total)} {total === 1 ? noun : (plural ?? `${noun}s`)}
       </p>

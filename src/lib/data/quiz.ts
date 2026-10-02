@@ -664,7 +664,7 @@ export async function startQuizAttempt(user: User, quizId: string): Promise<Acti
   }
 
   const entries = resolveQuizQuestions(db, quiz);
-  if (!entries.length) return fail("This quiz has no questions available yet.");
+  if (!entries.length) return fail("There are no questions in this quiz yet.");
   const n = used + 1;
   const key = await attemptKey();
   const pool = quiz.shuffleQuestions ? seededShuffle(entries, hmac(key, `order|${quiz.id}|${user.id}|${n}`)) : entries;
@@ -702,7 +702,7 @@ export async function recordQuizSubmission(user: User, input: SubmitQuizInput): 
 
   const now = Date.now();
   const entries = resolveQuizQuestions(db, quiz);
-  if (!entries.length) return fail("This quiz has no questions available yet.");
+  if (!entries.length) return fail("There are no questions in this quiz yet.");
   const byId = new Map(entries.map((e) => [e.question.id, e]));
 
   let ids: string[];

@@ -17,7 +17,7 @@ export default async function NewCoursePage() {
       <EmptyState
         icon={<Icon.Lock />}
         title="New Course"
-        description="You are not permitted to create a course."
+        description="Your role can't create courses."
         action={
           <ButtonLink href="/courses" variant="outline">
             Browse courses

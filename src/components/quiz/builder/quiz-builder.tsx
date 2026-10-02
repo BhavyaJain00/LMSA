@@ -63,8 +63,8 @@ function settingsErrors(s: QuizSettingsInput, rows: QuizQuestionRow[], mixedType
   if (s.enableNegativeMarking && (!Number.isFinite(s.marksToCut) || s.marksToCut <= 0)) e.marksToCut = "Marks to deduct must be greater than 0.";
   if (s.enableProctoring && (!Number.isInteger(s.maxViolations) || s.maxViolations < 1 || s.maxViolations > 50)) e.maxViolations = "Max violations must be a whole number between 1 and 50.";
   if (s.enableScheduling) {
-    if (!s.scheduleStart) e.scheduleStart = "Schedule Start is required when scheduling is enabled.";
-    else if (s.scheduleEnd && Date.parse(s.scheduleEnd) <= Date.parse(s.scheduleStart)) e.scheduleEnd = "Schedule End must be after Schedule Start.";
+    if (!s.scheduleStart) e.scheduleStart = "Set a start time, or turn scheduling off.";
+    else if (s.scheduleEnd && Date.parse(s.scheduleEnd) <= Date.parse(s.scheduleStart)) e.scheduleEnd = "The end time has to come after the start time.";
   }
   return e;
 }
@@ -711,7 +711,7 @@ export function QuizBuilder({ data, viewerName }: { data: QuizEditorData; viewer
                 <EmptyState
                   icon={<Icon.CircleDot />}
                   title="No questions yet"
-                  description="Add your first question and edit it right here. Choices, correct answers and explanations all in one card."
+                  description="Create the first question and edit it in place: options, the right answers and explanations live together in a single card."
                   action={
                     <div className="flex flex-wrap justify-center gap-2">
                       <Button variant="subtle" onClick={newQuestion} leftIcon={<Icon.Plus className="size-4" />}>

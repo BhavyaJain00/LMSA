@@ -168,7 +168,7 @@ export function ReviewsPanel({
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 flex flex-wrap items-center gap-3 justify-between">
         <h2 className="text-2xl font-semibold tracking-tight text-ink">{t("reviews.title")}</h2>
         {canWrite && (
           <Button onClick={() => setDialog({ open: true, existing: null })} leftIcon={<Icon.Star className="size-4" />}>

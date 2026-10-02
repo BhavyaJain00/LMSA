@@ -226,7 +226,7 @@ export function EvaluateDialog({ event, open, onClose, canEdit, today }: { event
                 defaultChecked={event.certificate?.published ?? true}
                 disabled={!canEdit}
                 label="Published"
-                description="Make this certificate visible to the participant."
+                description="Let the learner see this certificate."
               />
               <CertificateTemplateField id={`template-${event.id}`} defaultValue={event.certificate?.templateId} disabled={!canEdit} error={certErrors?.templateId} />
               <div className="grid gap-4 sm:grid-cols-2">

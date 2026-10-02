@@ -92,7 +92,7 @@ export default async function EmailNotificationsPage(props: PageProps<"/settings
         )}
         {hasLink && !linkState && (
           <Card>
-            <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <CardBody className="flex flex-col sm:flex-row sm:items-start gap-4">
               <span className="rounded-full bg-danger/12 p-2.5 text-danger">
                 <Icon.AlertTriangle className="size-6" />
               </span>

@@ -117,7 +117,7 @@ export function BulkIssueForm({ roster, evaluators, today }: { roster: BulkRoste
           </Field>
           <CertificateTemplateField id="bulk-template" error={errors?.templateId} className="sm:col-span-2" />
           <div className="sm:col-span-2">
-            <Switch id="bulk-published" name="published" defaultChecked label="Published" description="Enabling this will publish the certificate on the certified participants page." />
+            <Switch id="bulk-published" name="published" defaultChecked label="Published" description="When on, the certificate is listed on the public certified members page." />
           </div>
         </CardBody>
       </Card>

@@ -191,8 +191,8 @@ export async function bookEvaluationAction(_prev: ActionResult<{ id: string }> |
   const evaluatorId = fd(formData, "evaluatorId");
   const date = fd(formData, "date");
   const startTime = fd(formData, "startTime");
-  if (!evaluatorId || !date || !startTime) return { ok: false, error: "Please select a slot for your evaluation." };
-  if (!isValidDateKey(date) || !isValidClock(startTime)) return { ok: false, error: "Please select a slot for your evaluation." };
+  if (!evaluatorId || !date || !startTime) return { ok: false, error: "Pick a time slot for your evaluation first." };
+  if (!isValidDateKey(date) || !isValidClock(startTime)) return { ok: false, error: "Pick a time slot for your evaluation first." };
 
   const db = await getDb();
   const course = db.courses.find((c) => c.id === courseId);

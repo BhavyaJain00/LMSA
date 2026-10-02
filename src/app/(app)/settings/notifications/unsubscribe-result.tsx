@@ -40,7 +40,7 @@ export function UnsubscribeConfirm({ userId, scope, token, label, email, subscri
   const t = useT("account");
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+    <div className="flex flex-col sm:flex-row sm:items-start gap-4">
       <span className="rounded-full bg-accent/12 p-2.5 text-accent">
         <Icon.Mail className="size-6" />
       </span>
@@ -76,7 +76,7 @@ export function UnsubscribeResult({ userId, scope, token, label, email, subscrib
   const t = useT("account");
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+    <div className="flex flex-col sm:flex-row sm:items-start gap-4">
       <span className={subscribed ? "rounded-full bg-success/12 p-2.5 text-success" : "rounded-full bg-accent/12 p-2.5 text-accent"}>
         {subscribed ? <Icon.CheckCircle className="size-6" /> : <Icon.Mail className="size-6" />}
       </span>

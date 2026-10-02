@@ -27,7 +27,7 @@ function Composer({ batchId, studentCount }: { batchId: string; studentCount: nu
 
   return (
     <Card>
-      <CardHeader title="Make an Announcement" description={disabled ? "Add students to the batch to make an announcement" : `Every enrolled student (${studentCount}) gets an in-app notification.`} />
+      <CardHeader title="Make an Announcement" description={disabled ? "Enroll students in this batch before posting an announcement" : `Every enrolled student (${studentCount}) gets an in-app notification.`} />
       <CardBody>
         <form key={formKey} onSubmit={onSubmit} className="space-y-4" noValidate>
           <input type="hidden" name="batchId" value={batchId} />
@@ -43,7 +43,7 @@ function Composer({ batchId, studentCount }: { batchId: string; studentCount: nu
           </Field>
           <div className="flex justify-end">
             {disabled ? (
-              <Tooltip label="Add students to the batch to make an announcement">
+              <Tooltip label="Enroll students in this batch before posting an announcement">
                 <Button disabled leftIcon={<Icon.Send className="size-4" />}>
                   Send announcement
                 </Button>
@@ -69,7 +69,7 @@ export function AnnouncementsPanel({ batchId, announcements, studentCount }: { b
       <section className="space-y-4">
         <h2 className="text-base font-semibold text-ink">Sent announcements ({announcements.length})</h2>
         {announcements.length === 0 ? (
-          <EmptyState icon={<Icon.Megaphone />} title="No announcements have been made yet for this batch" description="Announcements you send appear here and on the batch page." compact />
+          <EmptyState icon={<Icon.Megaphone />} title="Nothing has been announced in this batch yet" description="Announcements you send appear here and on the batch page." compact />
         ) : (
           <AnnouncementList
             announcements={announcements}

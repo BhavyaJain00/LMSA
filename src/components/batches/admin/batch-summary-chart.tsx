@@ -26,7 +26,7 @@ export function BatchSummaryChart({ data, studentCount }: { data: ChartDatum[]; 
   const max = Math.max(1, studentCount);
   return (
     <Card>
-      <CardHeader title="Batch Summary" description="Progress of students in courses and assessments" />
+      <CardHeader title="Batch Summary" description="How learners are doing across courses and assessments" />
       <CardBody>
         {data.length === 0 || studentCount === 0 ? (
           <p className="text-sm text-ink-muted">

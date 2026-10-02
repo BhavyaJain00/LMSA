@@ -210,7 +210,7 @@ export interface BulkIssueResult {
 export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueResult> | null, formData: FormData): Promise<ActionResult<BulkIssueResult>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canIssueCertificates(user)) return { ok: false, error: "You are not permitted to generate certificates for this batch." };
+  if (!canIssueCertificates(user)) return { ok: false, error: "Your role can't issue certificates for this batch." };
 
   const batchId = fd(formData, "batchId");
   const courseId = fd(formData, "courseId");
@@ -223,7 +223,7 @@ export async function bulkIssueCertificatesAction(_prev: ActionResult<BulkIssueR
   const db = await getDb();
   const batch = db.batches.find((b) => b.id === batchId);
   if (!batch) return { ok: false, error: "This batch no longer exists." };
-  if (!batch.certification) return { ok: false, error: "Certificates are not enabled for this batch." };
+  if (!batch.certification) return { ok: false, error: "This batch doesn't issue certificates." };
   let course: Course | undefined;
   if (courseId) {
     course = db.courses.find((c) => c.id === courseId);

@@ -41,9 +41,9 @@ export function readBilling(formData: FormData): BillingInput {
 export function validateBilling(input: BillingInput, applyTax: boolean): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!input.source || !(BILLING_SOURCES as readonly string[]).includes(input.source)) {
-    errors.source = "Please let us know where you heard about us from.";
+    errors.source = "Tell us how you found out about us.";
   }
-  if (!input.consent) errors.consent = "Please provide your consent to proceed with the payment.";
+  if (!input.consent) errors.consent = "Tick the consent box to continue to payment.";
   if (input.billingName.length < 2 || input.billingName.length > 140) errors.billingName = "Please enter a valid Billing Name";
   if (input.line1.length < 3 || input.line1.length > 200) errors.line1 = "Please enter a valid Address Line 1";
   if (input.line2.length > 200) errors.line2 = "Please enter a valid Address Line 2";

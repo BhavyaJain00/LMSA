@@ -135,8 +135,8 @@ export default async function BlogPostPage(props: PageProps<"/blog/[slug]">) {
           role={live ? undefined : "status"}
           className={
             live
-              ? "mb-5 flex flex-wrap items-center justify-between gap-3 rounded-card border border-border bg-surface-1 px-4 py-3 text-sm"
-              : "mb-5 flex flex-wrap items-center justify-between gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm"
+              ? "mb-5 flex flex-wrap items-center gap-3 justify-between rounded-card border border-border bg-surface-1 px-4 py-3 text-sm"
+              : "mb-5 flex flex-wrap items-center gap-3 justify-between rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm"
           }
         >
           <p className="flex items-start gap-2 text-ink">

@@ -23,7 +23,7 @@ async function guardProgram(programId: string): Promise<Guard> {
   const db = await getDb();
   const program = db.programs.find((p) => p.id === programId);
   if (!program) return { ok: false, error: "This program no longer exists." };
-  if (!canManageProgram(user, program)) return { ok: false, error: "You are not permitted to manage programs." };
+  if (!canManageProgram(user, program)) return { ok: false, error: "Your role can't manage programs." };
   return { ok: true, user, program, db };
 }
 
@@ -181,7 +181,7 @@ function parseProgramForm(formData: FormData, db: Database, existing: Program | 
 export async function createProgramAction(_prev: unknown, formData: FormData): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canCreateProgram(user)) return { ok: false, error: "You are not permitted to manage programs." };
+  if (!canCreateProgram(user)) return { ok: false, error: "Your role can't manage programs." };
   const db = await getDb();
   const { fieldErrors, values } = parseProgramForm(formData, db, null);
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
@@ -375,7 +375,7 @@ export async function enrollInProgramAction(_prev: ActionResult | null, formData
   if (!program) return { ok: false, error: "This program no longer exists." };
   const user = await getCurrentUser();
   if (!user) {
-    await setFlash("Please log in to enroll in this program.", "warning");
+    await setFlash("Log in to join this program.", "warning");
     redirect(`/login?next=${encodeURIComponent(`/programs/${program.slug}`)}`);
   }
   if (!db.settings.features.programs) return { ok: false, error: "Programs are currently disabled on this platform." };
@@ -419,7 +419,7 @@ export async function startProgramCourseAction(_prev: ActionResult | null, formD
   if (program.enforceCourseOrder && index > 0) {
     const prevId = program.courseIds[index - 1]!;
     const prev = db.enrollments.find((e) => e.userId === user.id && e.courseId === prevId);
-    if (!prev || (prev.progress < 100 && !prev.completedAt)) return { ok: false, error: "Please complete the previous course to unlock this one." };
+    if (!prev || (prev.progress < 100 && !prev.completedAt)) return { ok: false, error: "Finish the course before this one to open it." };
   }
   const access = programCourseAccess(db, user, course);
   if (!access.ok) {

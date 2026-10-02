@@ -73,7 +73,7 @@ export function PersonaForm({
     {
       key: "referrer",
       title: `How did you hear about ${brandName}?`,
-      subtitle: "This helps us personalise your learning experience.",
+      subtitle: "Your answers let us tailor what you learn next.",
       options: withExisting(
         [
           "Search engine (Google, etc.)",

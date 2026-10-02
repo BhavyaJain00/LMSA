@@ -95,7 +95,7 @@ export function ManualAdjustments({ members, recent, enabled }: { members: Picke
           <Input id="adjust-note" name="note" maxLength={200} placeholder="Why are you adjusting these points?" invalid={!!errors.note} />
         </Field>
         {formError && !Object.keys(errors).length && <p className="text-sm text-danger">{formError}</p>}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 justify-between">
           {!enabled ? <p className="text-xs text-warning">Turn on points and save before adjusting.</p> : <span />}
           <Button type="submit" loading={pending} disabled={!enabled} variant={direction === "deduct" ? "danger" : "primary"}>
             {direction === "deduct" ? "Deduct points" : "Add points"}

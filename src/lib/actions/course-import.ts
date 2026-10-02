@@ -66,7 +66,7 @@ const fail = (error: string, status = 400): ImportCourseResult => ({ ok: false, 
 export async function importCourseFile(file: FormDataEntryValue | null): Promise<ImportCourseResult> {
   const user = await getCurrentUser();
   if (!user) return fail("Your session has expired. Please log in again.", 401);
-  if (!canCreateCourses(user)) return fail("You are not permitted to create a course.", 403);
+  if (!canCreateCourses(user)) return fail("Your role can't create courses.", 403);
 
   if (!(file instanceof File) || file.size === 0) return fail("Please choose a course JSON file.");
   if (file.size > MAX_IMPORT_BYTES) return fail("This file is too large (max 5 MB).", 413);

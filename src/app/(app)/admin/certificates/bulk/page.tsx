@@ -97,7 +97,7 @@ export default async function BulkCertificatesPage(props: PageProps<"/admin/cert
         {header}
         <EmptyState
           icon={<Icon.Certificate />}
-          title="Certificates are not enabled for this batch."
+          title="This batch doesn't issue certificates."
           description="Turn on certification in the batch settings, then generate certificates here."
           action={<ButtonLink href={`/admin/batches/${roster.batch.id}`}>Open batch settings</ButtonLink>}
         />

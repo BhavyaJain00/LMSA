@@ -222,7 +222,7 @@ export function EmailTemplatesPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <div>
           <h2 className="text-base font-semibold text-ink">Email templates</h2>
           <p className="text-sm text-ink-muted">Reusable messages for this batch, such as the enrollment confirmation. Placeholders are filled per learner.</p>

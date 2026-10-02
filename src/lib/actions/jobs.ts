@@ -229,7 +229,7 @@ export async function applyToJobAction(_prev: ActionResult | null, formData: For
     });
   }
   revalidateJobs(job.slug, job.id);
-  return { ok: true, data: undefined, message: "Your application has been submitted successfully" };
+  return { ok: true, data: undefined, message: "We've received your application" };
 }
 
 /** Withdraw your own application. */

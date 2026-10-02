@@ -61,7 +61,7 @@ export function BatchHeaderActions({
         loading={remove.pending}
         destructive
         title="Confirm your action to delete"
-        description="Deleting this batch will also delete all its data including enrolled students, linked courses, assessments, feedback and discussions. Are you sure you want to continue?"
+        description="Removing this batch also erases everything attached to it: enrollments, linked courses, assessments, feedback and discussions. Do you want to go ahead?"
         confirmLabel="Delete"
       />
     </div>

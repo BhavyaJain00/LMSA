@@ -22,7 +22,7 @@ function firstError(fieldErrors: Record<string, string>): string {
 
 async function loadCourse(courseId: string): Promise<{ user: User; course: Course } | { error: string }> {
   const user = await getCurrentUser();
-  if (!user) return { error: "You are not permitted to manage chapters." };
+  if (!user) return { error: "Your role can't manage chapters." };
   const course = await findById("courses", courseId);
   if (!course) return { error: "This course no longer exists." };
   if (!canManageCourse(user, course)) return { error: "You do not have permission to modify this chapter." };

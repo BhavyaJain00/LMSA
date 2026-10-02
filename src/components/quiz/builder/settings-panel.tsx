@@ -123,7 +123,7 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
             description={
               hasOpenEnded
                 ? "Not available for open-ended quizzes: you grade the answers after submission."
-                : "Display correct answers after each question is attempted."
+                : "Reveal the right answer as soon as a question has been answered."
             }
             checked={s.showAnswers && !hasOpenEnded}
             disabled={hasOpenEnded}
@@ -132,14 +132,14 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
           <Switch
             id="qb-history"
             label="Show Submission History"
-            description="Allow users to view their past quiz attempts."
+            description="Let learners look back at their earlier attempts."
             checked={s.showSubmissionHistory}
             onChange={(e) => onChange({ showSubmissionHistory: e.target.checked })}
           />
           <Switch
             id="qb-shuffle"
             label="Shuffle Questions"
-            description="Randomize the order of questions for each attempt."
+            description="Show the questions in a different order on every attempt."
             checked={s.shuffleQuestions}
             onChange={(e) => onChange({ shuffleQuestions: e.target.checked })}
           />
@@ -175,7 +175,7 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
           />
           {s.enableProctoring && (
             <Nested>
-              <Field label="Max Violations" htmlFor="qb-violations" required error={errors.maxViolations} hint="Quiz auto-submits when this many violations are recorded.">
+              <Field label="Max Violations" htmlFor="qb-violations" required error={errors.maxViolations} hint="The quiz is handed in automatically once this many violations are logged.">
                 <NumberInput id="qb-violations" min={1} max={50} step={1} value={s.maxViolations} onChange={(n) => onChange({ maxViolations: n })} invalid={!!errors.maxViolations} />
               </Field>
             </Nested>
@@ -183,7 +183,7 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
           <Switch
             id="qb-schedule"
             label="Enable Scheduling"
-            description="Restrict when learners can start and submit this quiz."
+            description="Set a window in which learners may start and hand in this quiz."
             checked={s.enableScheduling}
             onChange={(e) => onChange({ enableScheduling: e.target.checked })}
           />
@@ -200,7 +200,7 @@ export function SettingsPanel({ settings: s, onChange, errors, questionCount, to
                     invalid={!!errors.scheduleStart}
                   />
                 </Field>
-                <Field label="Schedule End" htmlFor="qb-end" error={errors.scheduleEnd} hint="Optional. Leave empty to keep the quiz open after it starts.">
+                <Field label="Schedule End" htmlFor="qb-end" error={errors.scheduleEnd} hint="Optional. Without an end time, the quiz stays open once it has started.">
                   <Input
                     id="qb-end"
                     type="datetime-local"

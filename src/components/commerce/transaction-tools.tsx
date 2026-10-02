@@ -154,7 +154,7 @@ function NewTransactionDialog({
       <form id={formId} onSubmit={onSubmit} onChange={markDirty} noValidate className="space-y-5">
         {formError && !Object.keys(errors).length && <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{formError}</p>}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Member" htmlFor="tx-member" error={errors.userId} hint={errors.userId ? undefined : "The user this payment is recorded against."} required className="sm:col-span-2">
+          <Field label="Member" htmlFor="tx-member" error={errors.userId} hint={errors.userId ? undefined : "The member this payment belongs to."} required className="sm:col-span-2">
             <MemberPicker
               id="tx-member"
               name="userId"
@@ -220,7 +220,7 @@ function NewTransactionDialog({
           <Field label="Tax Amount" htmlFor="tx-tax" error={errors.taxAmount}>
             <Input id="tx-tax" name="taxAmount" type="number" min={0} step="0.01" value={tax} onChange={(e) => setTax(e.target.value)} placeholder="0" invalid={!!errors.taxAmount} />
           </Field>
-          <Field label="Coupon" htmlFor="tx-coupon" error={errors.couponId} hint={errors.couponId ? undefined : "The coupon this payment was discounted by."}>
+          <Field label="Coupon" htmlFor="tx-coupon" error={errors.couponId} hint={errors.couponId ? undefined : "The coupon applied to this payment."}>
             <Select
               id="tx-coupon"
               name="couponId"
@@ -236,7 +236,7 @@ function NewTransactionDialog({
           </Field>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface-2 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3 justify-between rounded-xl bg-surface-2 px-4 py-3">
           <span className="text-sm text-ink-muted">Total</span>
           <span className="text-lg font-semibold tabular-nums text-ink">{money(total, currency)}</span>
         </div>

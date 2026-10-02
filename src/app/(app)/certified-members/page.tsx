@@ -11,7 +11,7 @@ import { Breadcrumbs } from "@/components/assessments/breadcrumbs";
 import { FilterBar, ListFooter } from "@/components/assessments/list-controls";
 import { param, parsePaging } from "@/components/assessments/shared";
 import { CertifiedMemberCard } from "@/components/certificates/member-card";
-import { getLocale, getT } from "@/i18n/server";
+import { getT } from "@/i18n/server";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getT("public");

@@ -331,7 +331,7 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
                 value={imageUrl}
                 onChange={setImageUrl}
                 invalid={!!errors.imageUrl}
-                hint="Upload a 750×422 image (.jpg, .jpeg, .gif, or .png). Shown on the catalog card and lesson hero."
+                hint="Use a 750×422 JPG, GIF or PNG. It appears on the catalog card and at the top of lessons."
               />
             </Field>
             <div>

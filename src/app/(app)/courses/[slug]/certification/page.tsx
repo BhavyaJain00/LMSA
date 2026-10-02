@@ -153,7 +153,7 @@ export default async function CourseCertificationPage(props: PageProps<"/courses
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Card>
           <CardBody className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3 justify-between">
               <div>
                 <p className="text-lg font-semibold text-ink">{t("enroll.getCertified")}</p>
                 <p className="text-sm text-ink-muted">{t("certification.purchase.description", { title: course.title })}</p>

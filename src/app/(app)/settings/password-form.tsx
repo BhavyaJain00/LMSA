@@ -77,7 +77,7 @@ export function PasswordForm({ minLength, context = [] }: { minLength: number; c
           />
         </Field>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <button type="button" onClick={() => setShow((s) => !s)} className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-muted hover:text-ink">
           {show ? <Icon.EyeOff className="size-4" /> : <Icon.Eye className="size-4" />}
           {show ? t("settings.password.hide") : t("settings.password.show")}

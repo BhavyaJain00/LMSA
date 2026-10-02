@@ -98,7 +98,7 @@ export function catalogMessages(locale: Locale, namespace: Namespace): Messages 
   if (!messages) {
     messages = { ...englishMessages(namespace) };
     for (const [key, value] of Object.entries(translatedMessages(locale, namespace))) {
-      if (typeof value === "string" && value.length > 0) messages[key] = value;
+      if (typeof value === "string" && value.trim().length > 0) messages[key] = value;
     }
     merged.set(cacheKey, messages);
   }

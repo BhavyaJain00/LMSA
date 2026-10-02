@@ -6,7 +6,7 @@ import { formatNumber } from "@/lib/utils";
 export function ListPagination({ page, pageCount, total, noun, href }: { page: number; pageCount: number; total: number; noun: string; href: (page: number) => string }) {
   if (pageCount <= 1) return null;
   return (
-    <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+    <nav aria-label="Pagination" className="flex flex-wrap items-center gap-3 justify-between text-sm">
       <p className="text-ink-muted">
         Page {page} of {pageCount} · {formatNumber(total)} {noun}
       </p>

@@ -31,7 +31,6 @@ export default async function EmailSettingsPage() {
   const delivery = getDeliveryState();
   const cron = cronUrl();
   const f = await getFormatter();
-  const formatNumber = (n: number) => f.number(n);
 
   return (
     <>

@@ -960,7 +960,7 @@ export function VideoBlockEditor({ block, onChange, quizzes }: EditorProps<"vide
                   >
                     <Icon.Trash className="size-4" />
                   </button>
-                  {tooLate && <p className="w-full text-xs text-danger">Time in video exceeds the total duration of the video.</p>}
+                  {tooLate && <p className="w-full text-xs text-danger">That time is past the end of the video.</p>}
                 </li>
               );
             })}

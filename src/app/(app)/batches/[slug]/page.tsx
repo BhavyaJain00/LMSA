@@ -462,7 +462,7 @@ async function TabContent({
       const announcements = await getBatchAnnouncements(batch.id);
       return (
         <div className="mx-auto max-w-3xl space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3 justify-between">
             <h2 className="text-lg font-semibold text-ink">{t("batches.detail.tabs.announcements")}</h2>
             {isManager && (
               <ButtonLink href={manageHref("announcements")} size="sm" leftIcon={<Icon.Send className="size-4" />}>

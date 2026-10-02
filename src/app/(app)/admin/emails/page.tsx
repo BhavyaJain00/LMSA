@@ -226,7 +226,7 @@ export default async function OutboxPage(props: PageProps<"/admin/emails">) {
           </Table>
 
           {list.pageCount > 1 && (
-            <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <nav aria-label="Pagination" className="flex flex-wrap items-center gap-3 justify-between text-sm">
               <p className="text-ink-muted">
                 Page {list.page} of {list.pageCount} · {formatNumber(list.total)} {list.total === 1 ? "email" : "emails"}
               </p>

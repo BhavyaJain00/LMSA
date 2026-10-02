@@ -297,7 +297,7 @@ export function AssignmentPanel({
 
       {scheduleAlert}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
         <div className="flex items-center gap-2">
           <h3 className="font-semibold text-ink">{t("assignment.submission")}</h3>
           {loggedIn && canModify && dirty && (submission || answer || attachment) ? (

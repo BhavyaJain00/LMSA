@@ -146,7 +146,7 @@ async function insertMember(actor: User, formData: FormData): Promise<ActionResu
 /** Add a member with a password and roles. */
 export async function createMemberAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const result = await insertMember(actor, formData);
   if (!result.ok) return result;
   await setFlash("Member added successfully", "success");
@@ -159,7 +159,7 @@ export async function createMemberAction(_prev: ActionResult | null, formData: F
  */
 export async function createMemberInlineAction(_prev: ActionResult<PublicUser> | null, formData: FormData): Promise<ActionResult<PublicUser>> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const result = await insertMember(actor, formData);
   if (!result.ok) return result;
   return { ok: true, data: toPublicUser(result.data), message: `${result.data.name} was added as a member.` };
@@ -168,7 +168,7 @@ export async function createMemberInlineAction(_prev: ActionResult<PublicUser> |
 /** Update profile fields (name, username, headline, location, bio; email for admins). */
 export async function updateMemberProfileAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const db = await getDb();
   const id = fd(formData, "id");
   const target = db.users.find((u) => u.id === id);
@@ -215,7 +215,7 @@ export async function updateMemberProfileAction(_prev: ActionResult | null, form
 /** Replace a member's roles (moderators; admin role changes require an admin). */
 export async function updateMemberRolesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const db = await getDb();
   const id = fd(formData, "id");
   const target = db.users.find((u) => u.id === id);
@@ -470,7 +470,7 @@ function generatePassword(minLength: number): string {
 /** Validate parsed CSV rows for the import preview (moderators). */
 export async function checkMemberImportAction(rows: MemberImportRow[]): Promise<ActionResult<MemberImportCheck[]>> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const clean = sanitizeImportRows(rows);
   if (!clean) return { ok: false, error: `Import between 1 and ${MEMBER_IMPORT_MAX_ROWS} members at a time.` };
   if (!clean.length) return { ok: false, error: "The file has no member rows." };
@@ -484,7 +484,7 @@ export async function checkMemberImportAction(rows: MemberImportRow[]): Promise<
  */
 export async function importMembersAction(rows: MemberImportRow[]): Promise<ActionResult<MemberImportResult>> {
   const actor = await getCurrentUser();
-  if (!actor || !isModerator(actor)) return { ok: false, error: "You are not permitted to manage members." };
+  if (!actor || !isModerator(actor)) return { ok: false, error: "Your role can't manage members." };
   const clean = sanitizeImportRows(rows);
   if (!clean) return { ok: false, error: `Import between 1 and ${MEMBER_IMPORT_MAX_ROWS} members at a time.` };
   if (!clean.length) return { ok: false, error: "The file has no member rows." };

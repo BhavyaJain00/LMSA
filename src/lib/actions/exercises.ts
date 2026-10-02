@@ -377,7 +377,7 @@ interface RawTestCase {
 export async function saveExerciseAction(_prev: ActionResult<{ id: string }> | null, formData: FormData): Promise<ActionResult<{ id: string }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canManageAssessments(user)) return { ok: false, error: "You are not permitted to manage programming exercises." };
+  if (!canManageAssessments(user)) return { ok: false, error: "Your role can't manage programming exercises." };
 
   const id = fd(formData, "id");
   const title = fd(formData, "title").replace(/\s+/g, " ");
@@ -472,7 +472,7 @@ export async function saveExerciseAction(_prev: ActionResult<{ id: string }> | n
 export async function deleteExercisesAction(ids: string[]): Promise<ActionResult<{ count: number }>> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "You must be logged in." };
-  if (!canManageAssessments(user)) return { ok: false, error: "You are not permitted to manage programming exercises." };
+  if (!canManageAssessments(user)) return { ok: false, error: "Your role can't manage programming exercises." };
   const set = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string"));
   if (!set.size) return { ok: false, error: "Select at least one exercise." };
   const count = await mutate((d) => {

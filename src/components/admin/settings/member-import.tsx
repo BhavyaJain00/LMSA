@@ -58,7 +58,6 @@ function downloadCsv(fileName: string, csv: string) {
 export function MemberImport({ canGrantAdmin, minPasswordLength }: { canGrantAdmin: boolean; minPasswordLength: number }) {
   const t = useT("admin");
   const f = useFormatter();
-  const formatNumber = (n: number) => f.number(n);
   const toast = useToast();
   const inputId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
