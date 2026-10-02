@@ -1,9 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { getT } from "@/i18n/server";
 
-export default function DevelopersLoading() {
+export default async function DevelopersLoading() {
+  const t = await getT("admin");
   return (
     <div aria-busy="true" aria-live="polite" className="mx-auto max-w-6xl pb-16">
-      <span className="sr-only">Loading the API reference…</span>
+      <span className="sr-only">{t("pages.developers.loading")}</span>
       <div className="mb-8 border-b border-border pb-6">
         <Skeleton className="h-4 w-24" />
         <Skeleton className="mt-2 h-9 w-56" />

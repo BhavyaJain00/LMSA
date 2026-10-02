@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/client";
 import { CodeBlock } from "./code-block";
 
 export interface CodeSample {
@@ -15,6 +16,7 @@ export interface CodeSample {
  * pattern: arrow keys, Home and End move between them.
  */
 export function CodeTabs({ samples, title, className }: { samples: readonly CodeSample[]; title?: string; className?: string }) {
+  const t = useT("admin");
   const [active, setActive] = useState(samples[0]?.id ?? "");
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
   const base = useId();
@@ -36,7 +38,7 @@ export function CodeTabs({ samples, title, className }: { samples: readonly Code
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
         {title && <p className="text-xs font-medium text-ink-muted">{title}</p>}
         {samples.length > 1 && (
-          <div role="tablist" aria-label={title ?? "Language"} className="inline-flex rounded-lg bg-surface-2 p-0.5">
+          <div role="tablist" aria-label={title ?? t("developers.code.language")} className="inline-flex rounded-lg bg-surface-2 p-0.5">
             {samples.map((sample, index) => {
               const selected = sample.id === current.id;
               return (

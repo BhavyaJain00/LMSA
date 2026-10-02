@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,6 +20,6 @@ export function RichText({ text, className }: { text: string; className?: string
   );
 }
 
-export function InlineCode({ children, className }: { children: string; className?: string }) {
-  return <code className={cn("rounded bg-surface-2 px-1 py-px font-mono text-[0.85em] text-ink break-words", className)}>{children}</code>;
+export function InlineCode({ children, className }: { children: ReactNode; className?: string }) {
+  return <code dir="ltr" className={cn("rounded bg-surface-2 px-1 py-px font-mono text-[0.85em] text-ink break-words", className)}>{children}</code>;
 }

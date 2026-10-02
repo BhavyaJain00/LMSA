@@ -9,12 +9,14 @@ import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/skeleton";
 import { tagAnchor } from "./anchors";
 import { EndpointCard } from "./endpoint-card";
+import { useT } from "@/i18n/client";
 
 /**
  * The endpoint reference with search and filters. Each endpoint is anchored
  * at its operationId (`/developers#listCourses`).
  */
 export function EndpointBrowser({ docs, tags }: { docs: readonly EndpointDoc[]; tags: readonly string[] }) {
+  const t = useT("admin");
   const [filter, setFilter] = useState<EndpointFilter>(NO_ENDPOINT_FILTER);
   const root = useRef<HTMLDivElement>(null);
   const matches = useMemo(() => filterEndpointDocs(docs, filter), [docs, filter]);
@@ -44,37 +46,37 @@ export function EndpointBrowser({ docs, tags }: { docs: readonly EndpointDoc[]; 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <label htmlFor="endpoint-search" className="sr-only">
-            Search endpoints
+            {t("developers.browser.search")}
           </label>
           <Input
             id="endpoint-search"
             type="search"
             value={filter.q}
             onChange={(event) => setFilter((current) => ({ ...current, q: event.target.value }))}
-            placeholder="Search endpoints, fields or scopes"
+            placeholder={t("developers.browser.searchPlaceholder")}
             leftAddon={<Icon.Search className="size-4" />}
             autoComplete="off"
           />
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex">
           <label htmlFor="endpoint-tag" className="sr-only">
-            Resource
+            {t("developers.browser.resource")}
           </label>
           <Select
             id="endpoint-tag"
             value={filter.tag}
             onChange={(event) => setFilter((current) => ({ ...current, tag: event.target.value }))}
-            options={[{ value: "", label: "All resources" }, ...tags.map((tag) => ({ value: tag, label: tag }))]}
+            options={[{ value: "", label: t("developers.browser.allResources") }, ...tags.map((tag) => ({ value: tag, label: tag }))]}
             className="sm:w-40"
           />
           <label htmlFor="endpoint-method" className="sr-only">
-            Method
+            {t("developers.browser.method")}
           </label>
           <Select
             id="endpoint-method"
             value={filter.method}
             onChange={(event) => setFilter((current) => ({ ...current, method: event.target.value }))}
-            options={[{ value: "", label: "All methods" }, ...methods.map((method) => ({ value: method, label: method }))]}
+            options={[{ value: "", label: t("developers.browser.allMethods") }, ...methods.map((method) => ({ value: method, label: method }))]}
             className="sm:w-36"
           />
         </div>
@@ -82,19 +84,19 @@ export function EndpointBrowser({ docs, tags }: { docs: readonly EndpointDoc[]; 
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted">
         <p aria-live="polite">
-          {filtered ? `${matches.length} of ${docs.length} endpoints` : `${docs.length} endpoints`}
+          {filtered ? t("developers.browser.countFiltered", { shown: matches.length, total: docs.length }) : t("developers.browser.count", { count: docs.length })}
         </p>
         <div className="flex gap-1">
           {filtered && (
             <Button variant="ghost" size="xs" onClick={() => setFilter(NO_ENDPOINT_FILTER)}>
-              Clear filters
+              {t("developers.browser.clear")}
             </Button>
           )}
           <Button variant="ghost" size="xs" onClick={() => setAll(true)} disabled={!matches.length}>
-            Expand all
+            {t("developers.browser.expandAll")}
           </Button>
           <Button variant="ghost" size="xs" onClick={() => setAll(false)} disabled={!matches.length}>
-            Collapse all
+            {t("developers.browser.collapseAll")}
           </Button>
         </div>
       </div>
@@ -103,11 +105,11 @@ export function EndpointBrowser({ docs, tags }: { docs: readonly EndpointDoc[]; 
         <EmptyState
           compact
           icon={<Icon.Search />}
-          title="No endpoint matches"
-          description="Try another word, or clear the filters to see every endpoint."
+          title={t("developers.browser.emptyTitle")}
+          description={t("developers.browser.emptyDescription")}
           action={
             <Button variant="outline" size="sm" onClick={() => setFilter(NO_ENDPOINT_FILTER)}>
-              Clear filters
+              {t("developers.browser.clear")}
             </Button>
           }
         />

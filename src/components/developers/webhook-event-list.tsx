@@ -5,6 +5,7 @@ import { eventAnchor } from "./anchors";
 import { CodeBlock } from "./code-block";
 import { ParamList } from "./param-list";
 import { InlineCode } from "./rich-text";
+import { getT } from "@/i18n/server";
 
 type FieldRow = Pick<DocParam, "name" | "type" | "required" | "nullable" | "description" | "values" | "constraints" | "example">;
 
@@ -42,7 +43,8 @@ function dataRows(event: WebhookEventDoc): FieldRow[] {
 }
 
 /** The event catalog: one disclosure per event with its fields and an example request body. */
-export function WebhookEventList({ events, examples }: { events: readonly WebhookEventDoc[]; examples: Readonly<Record<string, string>> }) {
+export async function WebhookEventList({ events, examples }: { events: readonly WebhookEventDoc[]; examples: Readonly<Record<string, string>> }) {
+  const t = await getT("admin");
   return (
     <div className="space-y-2">
       {events.map((event) => (
@@ -50,18 +52,18 @@ export function WebhookEventList({ events, examples }: { events: readonly Webhoo
           <summary className="flex cursor-pointer list-none items-start gap-3 rounded-card px-3 py-3 hover:bg-surface-2/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:items-center sm:px-4 [&::-webkit-details-marker]:hidden">
             <Icon.Zap className="mt-0.5 size-4 shrink-0 text-accent sm:mt-0" aria-hidden="true" />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-3">
-              <code className="font-mono text-[13px] font-medium text-ink">{event.name}</code>
+              <code dir="ltr" className="font-mono text-[13px] font-medium text-ink">{event.name}</code>
               <span className="text-sm text-ink-muted sm:truncate">{event.description}</span>
             </span>
             <Icon.ChevronDown className="mt-0.5 size-4 shrink-0 text-ink-faint transition-transform group-open:rotate-180 sm:mt-0" aria-hidden="true" />
           </summary>
           <div className="grid gap-5 border-t border-border px-3 pb-4 pt-4 sm:px-4 xl:grid-cols-2">
             <div className="min-w-0">
-              <ParamList title={`Fields of data (${event.label})`} params={dataRows(event)} />
+              <ParamList title={t("pages.developers.events.fields", { label: event.label })} params={dataRows(event)} />
             </div>
             <div className="min-w-0">
               <p className="mb-1.5 text-xs font-medium text-ink-muted">
-                Example body (what <InlineCode>Send test event</InlineCode> delivers)
+                {t.rich("pages.developers.events.example", { code: (chunks) => <InlineCode>{chunks}</InlineCode> })}
               </p>
               <CodeBlock code={examples[event.name] ?? "{}"} label="JSON" />
             </div>

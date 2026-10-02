@@ -21,7 +21,6 @@ import {
   MAX_DELIVERY_ATTEMPTS,
   RESPONSE_BODY_LIMIT,
   RETRY_DELAYS_MS,
-  describeDelay,
 } from "@/lib/webhooks/policy";
 import { SIGNATURE_HEADER, SIGNATURE_TOLERANCE_SECONDS, WEBHOOK_SECRET_PREFIX } from "@/lib/webhooks/signature";
 import { ButtonLink, buttonClasses } from "@/components/ui/button";
@@ -36,6 +35,16 @@ import { StatusCode } from "@/components/developers/method-badge";
 import { ObjectList } from "@/components/developers/object-list";
 import { InlineCode, RichText } from "@/components/developers/rich-text";
 import { WebhookEventList } from "@/components/developers/webhook-event-list";
+import { getFormatter, getLocale, getT } from "@/i18n/server";
+
+type AdminT = Awaited<ReturnType<typeof getT<"admin">>>;
+
+/** "1 minute", "3 hours" in the active language. */
+function delayText(t: AdminT, ms: number): string {
+  const HOUR = 3_600_000;
+  if (ms % HOUR === 0) return t("pages.developers.delay.hours", { count: ms / HOUR });
+  return t("pages.developers.delay.minutes", { count: Math.round(ms / 60_000) });
+}
 
 /**
  * Public developer documentation: REST API v1 and outgoing webhooks.
@@ -46,12 +55,13 @@ import { WebhookEventList } from "@/components/developers/webhook-event-list";
  */
 
 export async function generateMetadata(): Promise<Metadata> {
-  const settings = await getSettings();
+  const [settings, t, locale] = await Promise.all([getSettings(), getT("admin"), getLocale()]);
   return pageMetadata(
     {
-      title: `${settings.brand.name} API reference`,
-      description: "REST API and webhooks reference: authentication, scopes, rate limits, every endpoint with examples, and signed webhook events.",
+      title: t("pages.developers.metaTitle", { brand: settings.brand.name }),
+      description: t("pages.developers.metaDescription"),
       path: "/developers",
+      locale,
     },
     settings,
   );
@@ -107,7 +117,9 @@ const ERROR_EXAMPLE = JSON.stringify(
 );
 
 export default async function DevelopersPage() {
-  const [settings, viewer] = await Promise.all([getSettings(), getCurrentUser()]);
+  const [settings, viewer, t, f] = await Promise.all([getSettings(), getCurrentUser(), getT("admin"), getFormatter()]);
+  const code = (chunks: ReactNode) => <InlineCode>{chunks}</InlineCode>;
+  const strong = (chunks: ReactNode) => <strong className="text-ink">{chunks}</strong>;
   const baseUrl = siteConfig.appUrl;
   const apiBase = `${baseUrl}/api/v1`;
   const brand = settings.brand.name;
@@ -121,22 +133,22 @@ export default async function DevelopersPage() {
   const firstEvent = WEBHOOK_EVENTS[0]!;
 
   const nav: DocsNavItem[] = [
-    { href: "#overview", label: "Overview" },
-    { href: "#authentication", label: "Authentication" },
-    { href: "#scopes", label: "Scopes" },
-    { href: "#rate-limits", label: "Rate limits" },
-    { href: "#pagination", label: "Pagination & sync" },
-    { href: "#errors", label: "Errors" },
-    { href: "#endpoints", label: "Endpoints", children: tags.map((tag) => ({ href: `#${tagAnchor(tag)}`, label: tag })) },
-    { href: "#objects", label: "Objects" },
+    { href: "#overview", label: t("pages.developers.nav.overview") },
+    { href: "#authentication", label: t("pages.developers.nav.authentication") },
+    { href: "#scopes", label: t("pages.developers.nav.scopes") },
+    { href: "#rate-limits", label: t("pages.developers.nav.rateLimits") },
+    { href: "#pagination", label: t("pages.developers.nav.pagination") },
+    { href: "#errors", label: t("pages.developers.nav.errors") },
+    { href: "#endpoints", label: t("pages.developers.nav.endpoints"), children: tags.map((tag) => ({ href: `#${tagAnchor(tag)}`, label: tag })) },
+    { href: "#objects", label: t("pages.developers.nav.objects") },
     {
       href: "#webhooks",
-      label: "Webhooks",
+      label: t("pages.developers.nav.webhooks"),
       children: [
-        { href: "#webhook-requests", label: "Requests & headers" },
-        { href: "#signatures", label: "Verifying signatures" },
-        { href: "#retries", label: "Retries & failures" },
-        { href: "#events", label: "Event types" },
+        { href: "#webhook-requests", label: t("pages.developers.nav.requests") },
+        { href: "#signatures", label: t("pages.developers.nav.signatures") },
+        { href: "#retries", label: t("pages.developers.nav.retries") },
+        { href: "#events", label: t("pages.developers.nav.events") },
       ],
     },
   ];
@@ -147,22 +159,21 @@ export default async function DevelopersPage() {
       <header className="mb-8 flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <p className="mb-1 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-accent">
-            <Icon.Code className="size-4" /> Developers
+            <Icon.Code className="size-4" /> {t("pages.developers.eyebrow")}
           </p>
           <h1 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">{brand} API</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-muted">
-            Connect {brand} to your CRM, data warehouse or automation tools: sync members, enroll learners, read progress and payments over a JSON REST API, and get signed
-            webhooks the moment something happens.
+            {t("pages.developers.intro", { brand })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <a href="/api/v1/openapi.json" className={buttonClasses({ variant: "outline", size: "sm" })} download="openapi.json">
             <Icon.Download className="size-4" />
-            OpenAPI 3.1 spec
+            {t("pages.developers.openApiSpec")}
           </a>
           {admin && (
             <ButtonLink href="/admin/settings/api" size="sm" leftIcon={<Icon.Lock className="size-4" />}>
-              Keys & webhooks
+              {t("pages.developers.keysAndWebhooks")}
             </ButtonLink>
           )}
         </div>
@@ -172,8 +183,7 @@ export default async function DevelopersPage() {
         <div role="status" className="mb-8 flex items-start gap-3 rounded-card border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-ink">
           <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
           <p>
-            <strong>The API is switched off on this site.</strong> Requests are refused with <InlineCode>403 api_disabled</InlineCode> and no webhooks are sent until an administrator
-            turns it on{admin ? " in Admin → Settings → API & webhooks" : ""}.
+            {t.rich(admin ? "pages.developers.disabled.admin" : "pages.developers.disabled.guest", { b: (chunks) => <strong>{chunks}</strong>, code })}
           </p>
         </div>
       )}
@@ -186,73 +196,68 @@ export default async function DevelopersPage() {
         <div className="min-w-0 space-y-10">
           <Section
             id="overview"
-            title="Overview"
+            title={t("pages.developers.nav.overview")}
             lead={
               <p>
-                The API speaks JSON over HTTPS. Every request is authenticated with an API key, every response carries an <InlineCode>X-Request-Id</InlineCode> header to quote
-                when you report a problem, and the full contract is published as an OpenAPI 3.1 document you can feed to client generators.
+                {t.rich("pages.developers.overview.lead", { code })}
               </p>
             }
           >
             <Definitions
               rows={[
-                { key: "base", term: <span className="font-medium text-ink">Base URL</span>, detail: <InlineCode>{apiBase}</InlineCode> },
+                { key: "base", term: <span className="font-medium text-ink">{t("pages.developers.overview.baseUrl")}</span>, detail: <InlineCode>{apiBase}</InlineCode> },
                 {
                   key: "spec",
-                  term: <span className="font-medium text-ink">OpenAPI document</span>,
+                  term: <span className="font-medium text-ink">{t("pages.developers.overview.openApi")}</span>,
                   detail: (
                     <a href="/api/v1/openapi.json" className="text-accent hover:underline">
                       {apiBase}/openapi.json
                     </a>
                   ),
                 },
-                { key: "format", term: <span className="font-medium text-ink">Format</span>, detail: "JSON bodies (Content-Type: application/json), UTF-8." },
-                { key: "dates", term: <span className="font-medium text-ink">Dates</span>, detail: "ISO 8601 strings in UTC, e.g. 2026-01-15T09:30:00.000Z." },
-                { key: "money", term: <span className="font-medium text-ink">Amounts</span>, detail: "Integers in the smallest currency unit (4900 = 49.00 USD), with an ISO 4217 currency." },
-                { key: "nulls", term: <span className="font-medium text-ink">Missing values</span>, detail: "Fields are always present; a value that is not set is null." },
+                { key: "format", term: <span className="font-medium text-ink">{t("pages.developers.overview.format")}</span>, detail: t("pages.developers.overview.formatDetail") },
+                { key: "dates", term: <span className="font-medium text-ink">{t("pages.developers.overview.dates")}</span>, detail: t("pages.developers.overview.datesDetail") },
+                { key: "money", term: <span className="font-medium text-ink">{t("pages.developers.overview.amounts")}</span>, detail: t("pages.developers.overview.amountsDetail") },
+                { key: "nulls", term: <span className="font-medium text-ink">{t("pages.developers.overview.missing")}</span>, detail: t("pages.developers.overview.missingDetail") },
               ]}
             />
-            <SubHeading>Quick start</SubHeading>
-            <ol className="max-w-3xl list-decimal space-y-2 pl-5 text-sm leading-relaxed text-ink-muted">
+            <SubHeading>{t("pages.developers.quickStart.title")}</SubHeading>
+            <ol className="max-w-3xl list-decimal space-y-2 ps-5 text-sm leading-relaxed text-ink-muted">
               <li>
-                An administrator creates a key in <strong className="text-ink">Admin → Settings → API & webhooks</strong>, picks its scopes and copies it. The key is shown only once.
+                {t.rich("pages.developers.quickStart.step1", { b: strong })}
               </li>
               <li>
-                Store it server-side, for example in an environment variable named <InlineCode>LL_API_KEY</InlineCode>. Never put it in a web page or mobile app.
+                {t.rich("pages.developers.quickStart.step2", { code })}
               </li>
-              <li>Check the connection: the call below returns the key&apos;s name, scopes and rate limit.</li>
+              <li>{t("pages.developers.quickStart.step3")}</li>
             </ol>
             <CodeBlock code={curlExample(endpoints.getKeyInfo, baseUrl)} label="curl" />
           </Section>
 
           <Section
             id="authentication"
-            title="Authentication"
+            title={t("pages.developers.nav.authentication")}
             lead={
               <p>
-                Send the key in the <InlineCode>Authorization</InlineCode> header of every request. Keys look like <InlineCode>ll_live_&lt;id&gt;_&lt;secret&gt;</InlineCode>; only a
-                SHA-256 hash is stored, so a lost key cannot be shown again: create a new one and revoke the old one.
+                {t.rich("pages.developers.auth.lead", { code, format: <InlineCode>{"ll_live_<id>_<secret>"}</InlineCode> })}
               </p>
             }
           >
-            <CodeBlock code={`Authorization: Bearer ll_live_7tq2x9mb4c_…`} label="Header" />
+            <CodeBlock code={`Authorization: Bearer ll_live_7tq2x9mb4c_…`} label={t("pages.developers.auth.header")} />
             <Prose>
               <p>
-                A missing, malformed, unknown or revoked key is answered with <StatusCode status={401} />. A key stops working when it is revoked or when the administrator who created
-                it loses the admin role or is disabled. After {API_AUTH_FAILURE_LIMIT.limit} failed attempts from one address within a minute, further attempts get{" "}
-                <StatusCode status={429} />.
+                {t.rich("pages.developers.auth.failures", { unauthorized: <StatusCode status={401} />, tooMany: <StatusCode status={429} />, limit: API_AUTH_FAILURE_LIMIT.limit })}
               </p>
-              <p>Changes made with a key are recorded in the site&apos;s audit log under the key&apos;s creator and tagged with the key.</p>
+              <p>{t("pages.developers.auth.audit")}</p>
             </Prose>
           </Section>
 
           <Section
             id="scopes"
-            title="Scopes"
+            title={t("pages.developers.nav.scopes")}
             lead={
               <p>
-                Each key carries scopes that decide which endpoints it can reach. A <InlineCode>:write</InlineCode> scope includes the matching <InlineCode>:read</InlineCode> scope.
-                Calling an endpoint without its scope returns <StatusCode status={403} /> <InlineCode>insufficient_scope</InlineCode>.
+                {t.rich("pages.developers.scopes.lead", { code, forbidden: <StatusCode status={403} /> })}
               </p>
             }
           >
@@ -267,45 +272,42 @@ export default async function DevelopersPage() {
 
           <Section
             id="rate-limits"
-            title="Rate limits"
+            title={t("pages.developers.nav.rateLimits")}
             lead={
               <p>
-                Each key may make {perMinute} requests per minute. Every response reports where you stand; when the allowance is used up the API answers{" "}
-                <StatusCode status={429} /> with a <InlineCode>Retry-After</InlineCode> header in seconds.
+                {t.rich("pages.developers.rateLimits.lead", { code, perMinute, tooMany: <StatusCode status={429} /> })}
               </p>
             }
           >
             <Definitions
               rows={[
-                { key: "limit", term: <InlineCode className="text-xs">X-RateLimit-Limit</InlineCode>, detail: "Requests allowed per window." },
-                { key: "remaining", term: <InlineCode className="text-xs">X-RateLimit-Remaining</InlineCode>, detail: "Requests left in the current window." },
-                { key: "reset", term: <InlineCode className="text-xs">X-RateLimit-Reset</InlineCode>, detail: "Unix time (seconds) when the window starts over." },
-                { key: "retry", term: <InlineCode className="text-xs">Retry-After</InlineCode>, detail: "On 429 only: seconds to wait before the next request." },
+                { key: "limit", term: <InlineCode className="text-xs">X-RateLimit-Limit</InlineCode>, detail: t("pages.developers.rateLimits.limit") },
+                { key: "remaining", term: <InlineCode className="text-xs">X-RateLimit-Remaining</InlineCode>, detail: t("pages.developers.rateLimits.remaining") },
+                { key: "reset", term: <InlineCode className="text-xs">X-RateLimit-Reset</InlineCode>, detail: t("pages.developers.rateLimits.reset") },
+                { key: "retry", term: <InlineCode className="text-xs">Retry-After</InlineCode>, detail: t("pages.developers.rateLimits.retry") },
               ]}
             />
             <Prose>
-              <p>Spread bulk jobs out, or pause when X-RateLimit-Remaining reaches 0, rather than retrying in a tight loop.</p>
+              <p>{t("pages.developers.rateLimits.advice")}</p>
             </Prose>
           </Section>
 
           <Section
             id="pagination"
-            title="Pagination & sync"
+            title={t("pages.developers.nav.pagination")}
             lead={
               <p>
-                List endpoints return a page of results with <InlineCode>{"{ data: [...], meta: { page, perPage, total, totalPages, hasMore } }"}</InlineCode> and a{" "}
-                <InlineCode>Link</InlineCode> header with the <InlineCode>next</InlineCode>, <InlineCode>prev</InlineCode>, <InlineCode>first</InlineCode> and{" "}
-                <InlineCode>last</InlineCode> pages.
+                {t.rich("pages.developers.pagination.lead", { code, envelope: <InlineCode>{"{ data: [...], meta: { page, perPage, total, totalPages, hasMore } }"}</InlineCode> })}
               </p>
             }
           >
             <Definitions
               rows={[
-                { key: "page", term: <InlineCode className="text-xs">page</InlineCode>, detail: "Page number, starting at 1." },
+                { key: "page", term: <InlineCode className="text-xs">page</InlineCode>, detail: t("pages.developers.pagination.page") },
                 {
                   key: "perPage",
                   term: <InlineCode className="text-xs">perPage</InlineCode>,
-                  detail: `Items per page: default ${DEFAULT_PER_PAGE}, maximum ${MAX_PER_PAGE}. per_page works too.`,
+                  detail: t("pages.developers.pagination.perPage", { default: DEFAULT_PER_PAGE, max: MAX_PER_PAGE }),
                 },
                 {
                   key: "sort",
@@ -318,22 +320,21 @@ export default async function DevelopersPage() {
                           <InlineCode>{value}</InlineCode>
                         </span>
                       ))}
-                      . A leading minus sorts newest first (the default is -created_at).
+                      {t("pages.developers.pagination.sort")}
                     </>
                   ),
                 },
                 {
                   key: "updated_since",
                   term: <InlineCode className="text-xs">updated_since</InlineCode>,
-                  detail: "Only rows created or changed at or after this ISO 8601 time. A date alone means 00:00 UTC.",
+                  detail: t("pages.developers.pagination.updatedSince"),
                 },
               ]}
             />
-            <SubHeading>Keeping another system in sync</SubHeading>
+            <SubHeading>{t("pages.developers.pagination.syncTitle")}</SubHeading>
             <Prose>
               <p>
-                Remember when your last sync started, then fetch everything changed since with <InlineCode>sort=updated_at</InlineCode>, following pages until{" "}
-                <InlineCode>hasMore</InlineCode> is false. Webhooks tell you about changes as they happen; a periodic sync catches anything a receiver missed.
+                {t.rich("pages.developers.pagination.sync", { code })}
               </p>
             </Prose>
             <CodeBlock code={`curl "${apiBase}/enrollments?sort=updated_at&updated_since=2026-01-15T09:00:00Z&perPage=${MAX_PER_PAGE}" \\\n  -H "Authorization: Bearer $LL_API_KEY"`} label="curl" />
@@ -341,15 +342,14 @@ export default async function DevelopersPage() {
 
           <Section
             id="errors"
-            title="Errors"
+            title={t("pages.developers.nav.errors")}
             lead={
               <p>
-                Failed requests use one envelope: a stable machine-readable <InlineCode>code</InlineCode>, a <InlineCode>message</InlineCode> written for the developer and{" "}
-                <InlineCode>details</InlineCode> (null or an object). Validation errors list every invalid field, so a form can show them all at once.
+                {t.rich("pages.developers.errors.lead", { code })}
               </p>
             }
           >
-            <CodeBlock code={ERROR_EXAMPLE} label="400 response" />
+            <CodeBlock code={ERROR_EXAMPLE} label={t("pages.developers.errors.example")} />
             <ul className="divide-y divide-border rounded-lg border border-border text-sm">
               {Object.entries(ERROR_CODES).map(([code, info]) => (
                 <li key={code} className="flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-baseline sm:gap-3">
@@ -365,89 +365,93 @@ export default async function DevelopersPage() {
 
           <Section
             id="endpoints"
-            title="Endpoints"
+            title={t("pages.developers.nav.endpoints")}
             lead={
               <p>
-                Paths are relative to <InlineCode>{apiBase}</InlineCode>. Open an endpoint for its parameters, a request in curl or JavaScript, and an example response.
+                {t.rich("pages.developers.endpoints.lead", { base: <InlineCode>{apiBase}</InlineCode> })}
               </p>
             }
           >
             <EndpointBrowser docs={docs} tags={tags} />
           </Section>
 
-          <Section id="objects" title="Objects" lead={<p>Every field the API returns. Fields marked optional appear only when the key has the scope noted in their description.</p>}>
+          <Section id="objects" title={t("pages.developers.nav.objects")} lead={<p>{t("pages.developers.objects.lead")}</p>}>
             <ObjectList />
           </Section>
 
           <Section
             id="webhooks"
-            title="Webhooks"
+            title={t("pages.developers.nav.webhooks")}
             lead={
               <p>
-                Webhooks push events to your server as they happen: a new enrollment, a payment, a finished course. Add an endpoint in Admin → Settings → API & webhooks, or with{" "}
-                <a href="#createWebhook" className="text-accent hover:underline">
-                  POST /webhooks
-                </a>{" "}
-                and a key with the <InlineCode>webhooks:manage</InlineCode> scope, then pick the events it should receive.
+                {t.rich("pages.developers.webhooks.lead", {
+                  code,
+                  link: (chunks) => (
+                    <a href="#createWebhook" className="text-accent hover:underline">
+                      {chunks}
+                    </a>
+                  ),
+                })}
               </p>
             }
           >
-            <SubHeading id="webhook-requests">Requests & headers</SubHeading>
+            <SubHeading id="webhook-requests">{t("pages.developers.nav.requests")}</SubHeading>
             <Prose>
               <p>
-                Each event is sent as an HTTPS <InlineCode>POST</InlineCode> with a JSON body <InlineCode>{"{ id, type, createdAt, data }"}</InlineCode>. Records the event refers to
-                are included next to their ids (a <InlineCode>user</InlineCode> object next to <InlineCode>userId</InlineCode>, and so on), so most receivers need no follow-up call.
+                {t.rich("pages.developers.webhooks.requests", { code, body: <InlineCode>{"{ id, type, createdAt, data }"}</InlineCode> })}
               </p>
             </Prose>
-            <CodeBlock code={eventExamples[firstEvent.name] ?? "{}"} label={`${firstEvent.name} body`} />
+            <CodeBlock code={eventExamples[firstEvent.name] ?? "{}"} label={t("pages.developers.webhooks.bodyLabel", { event: firstEvent.name })} />
             <Definitions rows={WEBHOOK_HEADERS.map((header) => ({ key: header.name, term: <InlineCode className="text-xs">{header.name}</InlineCode>, detail: <RichText text={header.description} /> }))} />
 
-            <SubHeading id="signatures">Verifying signatures</SubHeading>
+            <SubHeading id="signatures">{t("pages.developers.nav.signatures")}</SubHeading>
             <Prose>
               <p>
-                Every request is signed with the endpoint&apos;s secret (<InlineCode>{`${WEBHOOK_SECRET_PREFIX}…`}</InlineCode>, shown when the endpoint is created or its secret
-                rolled). Check the signature before trusting the body:
+                {t.rich("pages.developers.signatures.lead", { secret: <InlineCode>{`${WEBHOOK_SECRET_PREFIX}…`}</InlineCode> })}
               </p>
-              <ol className="list-decimal space-y-1 pl-5">
+              <ol className="list-decimal space-y-1 ps-5">
                 <li>
-                  Read the raw request body as bytes, before any JSON parsing; re-serialized JSON will not match.
+                  {t("pages.developers.signatures.step1")}
                 </li>
                 <li>
-                  Split the <InlineCode>{SIGNATURE_HEADER}</InlineCode> header on commas: <InlineCode>t</InlineCode> is the send time (unix seconds), each{" "}
-                  <InlineCode>v1</InlineCode> a signature.
+                  {t.rich("pages.developers.signatures.step2", { code, header: <InlineCode>{SIGNATURE_HEADER}</InlineCode> })}
                 </li>
                 <li>
-                  Compute HMAC-SHA256 of <InlineCode>{"<t>.<raw body>"}</InlineCode> with the whole secret as the key, hex-encoded.
+                  {t.rich("pages.developers.signatures.step3", { input: <InlineCode>{"<t>.<raw body>"}</InlineCode> })}
                 </li>
-                <li>Compare it with each v1 value in constant time; accept if one matches.</li>
-                <li>Refuse timestamps more than {SIGNATURE_TOLERANCE_SECONDS / 60} minutes away from your clock, so a captured request cannot be replayed later.</li>
+                <li>{t("pages.developers.signatures.step4")}</li>
+                <li>{t("pages.developers.signatures.step5", { minutes: SIGNATURE_TOLERANCE_SECONDS / 60 })}</li>
               </ol>
             </Prose>
-            <CodeTabs samples={VERIFY_SAMPLES} title="Signature check" />
+            <CodeTabs samples={VERIFY_SAMPLES} title={t("pages.developers.signatures.sample")} />
 
-            <SubHeading id="retries">Retries & failures</SubHeading>
+            <SubHeading id="retries">{t("pages.developers.nav.retries")}</SubHeading>
             <Prose>
               <p>
-                Answer with any 2xx status within {DELIVERY_TIMEOUT_MS / 1000} seconds; do slow work after responding. Redirects are not followed, and only public addresses are
-                called: URLs that resolve to private, loopback or link-local networks are refused.
+                {t("pages.developers.retries.timeout", { seconds: DELIVERY_TIMEOUT_MS / 1000 })}
               </p>
               <p>
-                Anything else (another status, a timeout, a connection error) is retried, {MAX_DELIVERY_ATTEMPTS} attempts in all, waiting{" "}
-                {RETRY_DELAYS_MS.map((delay) => describeDelay(delay)).join(", ")} between them. Delivery is at least once and events can arrive out of order: deduplicate on{" "}
-                <InlineCode>id</InlineCode> and use <InlineCode>createdAt</InlineCode> to order them.
+                {t.rich("pages.developers.retries.schedule", {
+                  code,
+                  attempts: MAX_DELIVERY_ATTEMPTS,
+                  delays: f.list(RETRY_DELAYS_MS.map((delay) => delayText(t, delay))),
+                })}
               </p>
               <p>
-                An endpoint that answers <StatusCode status={410} /> Gone is switched off at once. One whose deliveries keep failing for {describeDelay(AUTO_DISABLE_AFTER_MS)} (at
-                least {AUTO_DISABLE_MIN_FAILURES} attempts in a row) is switched off too, and administrators are notified. They can turn it back on and resend what it missed from its
-                delivery log, which keeps the response code and the first {RESPONSE_BODY_LIMIT.toLocaleString("en-US")} characters of each answer for {DELIVERY_RETENTION_DAYS} days.
+                {t.rich("pages.developers.retries.disable", {
+                  gone: <StatusCode status={410} />,
+                  period: delayText(t, AUTO_DISABLE_AFTER_MS),
+                  failures: AUTO_DISABLE_MIN_FAILURES,
+                  chars: RESPONSE_BODY_LIMIT,
+                  days: DELIVERY_RETENTION_DAYS,
+                })}
               </p>
               <p>
-                <strong className="text-ink">Send test event</strong> delivers the documented example of an event once; its id starts with <InlineCode>{TEST_EVENT_ID_PREFIX}</InlineCode>{" "}
-                so your code can tell it apart.
+                {t.rich("pages.developers.retries.test", { b: strong, prefix: <InlineCode>{TEST_EVENT_ID_PREFIX}</InlineCode> })}
               </p>
             </Prose>
 
-            <SubHeading id="events">Event types</SubHeading>
+            <SubHeading id="events">{t("pages.developers.nav.events")}</SubHeading>
             <WebhookEventList events={WEBHOOK_EVENTS} examples={eventExamples} />
           </Section>
         </div>
