@@ -973,10 +973,10 @@ export function pruneBackups(dir, kind, keep, protect = []) {
 
 /** A backup path in `dir` that does not exist yet (automatic backups: the day's single name). */
 export function freeBackupPath(/** @type {string} */ dir, /** @type {BackupKind} */ kind, /** @type {BackupFormat} */ format, date = new Date()) {
-  if (kind === "auto") return path.join(dir, backupFileName(kind, format, date));
+  if (kind === "auto") return path.join(/* turbopackIgnore: true */ dir, backupFileName(kind, format, date));
   for (let suffix = 0; suffix < 1000; suffix++) {
-    const file = path.join(dir, backupFileName(kind, format, date, suffix));
-    if (!fs.existsSync(file)) return file;
+    const file = path.join(/* turbopackIgnore: true */ dir, backupFileName(kind, format, date, suffix));
+    if (!fs.existsSync(/* turbopackIgnore: true */ file)) return file;
   }
   throw new Error("Too many backups were created in the same second.");
 }

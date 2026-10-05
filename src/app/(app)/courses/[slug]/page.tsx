@@ -65,6 +65,7 @@ import { ENROLL_ANCHOR, SalesSections } from "@/components/marketing/sales/sales
 import { isPaidCourse } from "@/components/catalog/price-tag";
 import { hasSalesPage } from "@/lib/seo/sales-page";
 import { privacyPolicyHref } from "@/lib/seo/lead-capture";
+import { coursePreviewPlayback } from "@/lib/media/course-preview";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -251,6 +252,9 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
 
   const showCertification = certificationsEnabled && (course.enableCertification || course.paidCertificate || !!certificate);
   const salesPage = hasSalesPage(course.salesPage) ? course.salesPage : null;
+  // The preview's HLS stream (adaptive streaming) once converted; the uploaded file stays the fallback.
+  const preview = coursePreviewPlayback(course);
+  const previewVideo = preview ? { url: preview.src, poster: preview.poster, hlsUrl: preview.hlsUrl } : null;
   // "Get the syllabus by email" for visitors who are not learners of a public course yet.
   const offerSyllabus = isCoursePublic(course) && !enrollment && !manager && lessonCount > 0;
   const serverNow = requestTime();
@@ -364,7 +368,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
             <SalesSections
               page={salesPage}
               courseTitle={course.title}
-              video={course.videoUrl ? { url: course.videoUrl, poster: course.imageUrl } : null}
+              video={previewVideo}
               pricing={{ course, includes: salesIncludes, actionLabel: salesAction }}
               slots={{
                 curriculum: curriculumBody,

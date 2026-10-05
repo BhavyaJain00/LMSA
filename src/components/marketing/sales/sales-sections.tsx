@@ -26,7 +26,8 @@ export interface SalesPricing {
 export interface SalesSectionsProps {
   page: CourseSalesPage;
   courseTitle: string;
-  video: { url: string; poster?: string } | null;
+  /** Preview video: the uploaded file, plus its HLS stream once converted (adaptive streaming with the file as fallback). */
+  video: { url: string; poster?: string; hlsUrl?: string } | null;
   pricing: SalesPricing;
   /** Sections whose content the course page already renders (outline, instructors). */
   slots: { curriculum: ReactNode; instructor: ReactNode };
@@ -181,7 +182,7 @@ export async function SalesSections({ page, courseTitle, video, pricing, slots, 
         return video ? (
           <SectionShell key={section.id} section={section}>
             <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
-              <VideoPlayer src={video.url} poster={video.poster} title={t("course.hero.previewTitle", { title: courseTitle })} className="rounded-none" />
+              <VideoPlayer src={video.url} hlsUrl={video.hlsUrl} poster={video.poster} title={t("course.hero.previewTitle", { title: courseTitle })} className="rounded-none" />
             </div>
           </SectionShell>
         ) : null;

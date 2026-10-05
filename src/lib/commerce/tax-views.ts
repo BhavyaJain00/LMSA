@@ -32,8 +32,17 @@ export interface TaxRuleRow extends TaxRule {
   collected: { currency: string; amount: number }[];
 }
 
+function isSale(p: Payment): boolean {
+  return p.status === "paid" || (p.status === "refunded" && (p.refundedAmount ?? p.amount) < p.amount);
+}
+
 function isTaxedSale(p: Payment): boolean {
-  return (p.status === "paid" || (p.status === "refunded" && (p.refundedAmount ?? p.amount) < p.amount)) && p.taxAmount > 0;
+  return isSale(p) && p.taxAmount > 0;
+}
+
+/** Sales for the tax report: taxed ones, and EU reverse-charge ones (0% VAT, listed for the EC sales list). */
+function isReportedSale(p: Payment): boolean {
+  return isSale(p) && (p.taxAmount > 0 || !!p.reverseCharge);
 }
 
 /** Country a paid order was taxed for: the stored tax country, else its billing address. */
@@ -99,6 +108,10 @@ export interface TaxReportLine {
   total: number;
   currency: string;
   refunded: boolean;
+  /** The buyer's VAT / tax number from checkout. */
+  buyerTaxId: string;
+  /** EU reverse charge: no VAT charged, the buyer accounts for it. */
+  reverseCharge: boolean;
 }
 
 export interface TaxReportTotals {
@@ -109,14 +122,14 @@ export interface TaxReportTotals {
   orders: number;
 }
 
-/** Paid orders that charged tax, newest first, with totals per currency. */
+/** Paid orders that charged tax (or were reverse-charged), newest first, with totals per currency. */
 export function taxReport(db: Pick<Database, "payments" | "taxRules" | "settings">, filter: TaxReportFilter): { lines: TaxReportLine[]; totals: TaxReportTotals[] } {
   const from = filter.from ? Date.parse(`${filter.from}T00:00:00Z`) : null;
   const to = filter.to ? Date.parse(`${filter.to}T23:59:59.999Z`) : null;
   const lines: TaxReportLine[] = [];
   const totals = new Map<string, TaxReportTotals>();
   for (const p of db.payments) {
-    if (!isTaxedSale(p) || !p.paidAt) continue;
+    if (!isReportedSale(p) || !p.paidAt) continue;
     const at = Date.parse(p.paidAt);
     if ((from !== null && at < from) || (to !== null && at > to)) continue;
     const country = orderTaxCountry(p);
@@ -131,14 +144,16 @@ export function taxReport(db: Pick<Database, "payments" | "taxRules" | "settings
       paidAt: p.paidAt,
       buyer: p.billingName,
       country,
-      taxName: rule?.name ?? (db.settings.commerce.taxLabel || "Tax"),
-      rate: p.taxRate ?? null,
+      taxName: rule?.name ?? (p.reverseCharge ? "VAT" : db.settings.commerce.taxLabel || "Tax"),
+      rate: p.reverseCharge && p.taxAmount <= 0 ? 0 : (p.taxRate ?? null),
       inclusive,
       net,
       tax: p.taxAmount,
       total: p.amount,
       currency: p.currency,
       refunded: p.status === "refunded" || (p.refundedAmount ?? 0) > 0,
+      buyerTaxId: p.buyerVatId ?? "",
+      reverseCharge: !!p.reverseCharge && p.taxAmount <= 0,
     });
     const t = totals.get(p.currency) ?? { currency: p.currency, net: 0, tax: 0, total: 0, orders: 0 };
     t.net += net;
@@ -155,7 +170,7 @@ const decimal = (amount: number) => (amount / 100).toFixed(2);
 const csvRow = (cells: readonly (string | number)[]) => cells.map(csvCell).join(",");
 
 export function taxReportToCsv(lines: readonly TaxReportLine[]): string {
-  const header = ["Paid at", "Invoice", "Order", "Billing name", "Country", "Tax", "Rate %", "Included in price", "Net", "Tax amount", "Total", "Currency", "Refunded"];
+  const header = ["Paid at", "Invoice", "Order", "Billing name", "Country", "Tax", "Rate %", "Included in price", "Net", "Tax amount", "Total", "Currency", "Refunded", "Buyer VAT No.", "Reverse charge"];
   return [
     csvRow(header),
     ...lines.map((l) =>
@@ -173,6 +188,8 @@ export function taxReportToCsv(lines: readonly TaxReportLine[]): string {
         decimal(l.total),
         l.currency,
         l.refunded ? "yes" : "no",
+        l.buyerTaxId,
+        l.reverseCharge ? "yes" : "no",
       ]),
     ),
   ].join("\n");

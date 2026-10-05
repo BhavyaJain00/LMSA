@@ -10,6 +10,7 @@ import { VideoPlayer } from "@/components/player";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { getFormatter, getT } from "@/i18n/server";
+import { coursePreviewPlayback } from "@/lib/media/course-preview";
 import { SalesCountdown } from "./sales-countdown";
 
 /**
@@ -23,7 +24,8 @@ export async function SalesHero({ course, page, manager, serverNow }: { course: 
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const headline = page.heroHeadline?.trim() || course.title;
   const subheadline = page.heroSubheadline?.trim() || course.shortIntroduction;
-  const videoInHero = !!course.videoUrl && !page.sections.some((s) => s.type === "video");
+  const preview = coursePreviewPlayback(course);
+  const videoInHero = !!preview && !page.sections.some((s) => s.type === "video");
   if (videoInHero && course.imageUrl) preload(course.imageUrl, { as: "image", fetchPriority: "high" });
 
   return (
@@ -101,8 +103,8 @@ export async function SalesHero({ course, page, manager, serverNow }: { course: 
       {page.countdownEndsAt && <SalesCountdown endsAt={page.countdownEndsAt} serverNow={serverNow} />}
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
-        {videoInHero ? (
-          <VideoPlayer src={course.videoUrl!} poster={course.imageUrl} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
+        {videoInHero && preview ? (
+          <VideoPlayer src={preview.src} hlsUrl={preview.hlsUrl} poster={preview.poster} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
         ) : (
           <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
         )}

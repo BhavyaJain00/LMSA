@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { SettingsPanelHeader, SettingsSection } from "@/components/admin/settings/settings-ui";
 import { COUNTRIES } from "@/components/commerce/countries";
-import { CurrencyPricesManager, TaxRulesManager, TaxSettingsForm, type PricedItemRowData, type TaxRuleRowData } from "@/components/commerce/taxes-manager";
+import { CurrencyPricesManager, SellerDetailsForm, TaxRulesManager, TaxSettingsForm, type PricedItemRowData, type TaxRuleRowData } from "@/components/commerce/taxes-manager";
 import { getFormatter } from "@/i18n/server";
 import type { Metadata } from "next";
 import { getT } from "@/i18n/server";
@@ -39,7 +39,8 @@ export default async function TaxesSettingsPage(props: PageProps<"/admin/setting
   const f = await getFormatter();
   const money = (cents: number, currency: string) => (cents !== 0 ? f.price(cents, currency) : f.number(0, { style: "currency", currency }));
   const c = settings.commerce;
-  const byCountry = settings.growth.taxMode === "by_country";
+  const g = settings.growth;
+  const byCountry = g.taxMode === "by_country";
   const countries = countryChoices();
 
   const ruleRows: TaxRuleRowData[] = rules.map((r) => ({
@@ -49,6 +50,8 @@ export default async function TaxesSettingsPage(props: PageProps<"/admin/setting
     name: r.name,
     rate: r.rate,
     inclusive: r.inclusive,
+    registrationNumber: r.registrationNumber ?? "",
+    registrationLabel: r.registrationLabel ?? "",
     orders: r.orders,
     collectedLabel: r.collected.length ? r.collected.map((x) => money(x.amount, x.currency)).join(" + ") : "—",
   }));
@@ -90,6 +93,24 @@ export default async function TaxesSettingsPage(props: PageProps<"/admin/setting
               {t("pages.settings.taxes.singleRate")}
             </Link>
           </p>
+        </SettingsSection>
+
+        <SettingsSection title={t("pages.settings.taxes.seller.title")} description={t("pages.settings.taxes.seller.description")}>
+          <div className="p-4 sm:p-5">
+            <SellerDetailsForm
+              seller={{
+                legalName: g.sellerLegalName ?? "",
+                address: g.sellerAddress ?? "",
+                country: countryCode(g.sellerCountry) ?? "",
+                taxId: g.sellerTaxId ?? "",
+                taxIdLabel: g.sellerTaxIdLabel ?? "",
+              }}
+              fallbackName={settings.legal.companyName || settings.brand.name}
+              fallbackAddress={settings.legal.companyAddress ?? ""}
+              countries={countries}
+              byCountry={byCountry}
+            />
+          </div>
         </SettingsSection>
 
         <section aria-labelledby="tax-rules-heading">
@@ -218,7 +239,14 @@ export default async function TaxesSettingsPage(props: PageProps<"/admin/setting
                         </p>
                       </TD>
                       <TD className="hidden sm:table-cell">{l.country ? countryName(l.country) : "—"}</TD>
-                      <TD className="hidden md:table-cell">{taxLineLabel({ name: l.taxName, rate: l.rate, inclusive: l.inclusive })}</TD>
+                      <TD className="hidden md:table-cell">
+                        {l.reverseCharge ? `${l.taxName} (0%, reverse charge)` : taxLineLabel({ name: l.taxName, rate: l.rate, inclusive: l.inclusive })}
+                        {l.buyerTaxId && (
+                          <p className="font-mono text-xs text-ink-muted" dir="ltr">
+                            {l.buyerTaxId}
+                          </p>
+                        )}
+                      </TD>
                       <TD className="whitespace-nowrap text-end tabular-nums">{money(l.tax, l.currency)}</TD>
                       <TD className="hidden whitespace-nowrap text-end tabular-nums sm:table-cell">{money(l.total, l.currency)}</TD>
                     </TR>

@@ -2,17 +2,19 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { deleteTaxRulesAction, saveCurrencyPricesAction, saveTaxRuleAction, saveTaxSettingsAction } from "@/lib/actions/taxes";
+import { deleteTaxRulesAction, saveCurrencyPricesAction, saveSellerDetailsAction, saveTaxRuleAction, saveTaxSettingsAction } from "@/lib/actions/taxes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Icon, Spinner } from "@/components/ui/icons";
-import { Field, FormError, Input, RadioCard, Select, Switch } from "@/components/ui/input";
+import { Field, FormError, Input, RadioCard, Select, Switch, Textarea } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { formatPrice } from "@/lib/utils";
+import { addressLines, defaultTaxIdLabel } from "@/lib/commerce/invoice-seller";
+import { exampleVatId, isEuCountry, normalizeVatId } from "@/lib/commerce/vat-id";
 import { Pager } from "./pager";
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +72,179 @@ export function TaxSettingsForm({ taxMode, multiCurrency, flatRateLabel }: { tax
 }
 
 /* ------------------------------------------------------------------ */
+/* Seller details                                                      */
+/* ------------------------------------------------------------------ */
+
+export interface SellerDetailsData {
+  legalName: string;
+  address: string;
+  /** ISO code ("" = not set). */
+  country: string;
+  taxId: string;
+  taxIdLabel: string;
+}
+
+/**
+ * Who issues the invoices: legal name, registered address, country of
+ * establishment and VAT/GST number. Empty fields print the fallbacks
+ * (Settings → Legal, then the brand name). A live preview shows the
+ * invoice's "Billed by" block.
+ */
+export function SellerDetailsForm({
+  seller,
+  fallbackName,
+  fallbackAddress,
+  countries,
+  byCountry,
+}: {
+  seller: SellerDetailsData;
+  /** Printed when the legal name is empty (Settings → Legal company name, else the brand name). */
+  fallbackName: string;
+  /** Printed when the address is empty (Settings → Legal company address). */
+  fallbackAddress: string;
+  countries: { code: string; name: string }[];
+  /** Tax is charged by the buyer's country (needed for EU reverse charge). */
+  byCountry: boolean;
+}) {
+  const { onSubmit, pending, errors, formError } = useFormAction(saveSellerDetailsAction);
+  const [legalName, setLegalName] = useState(seller.legalName);
+  const [address, setAddress] = useState(seller.address);
+  const [country, setCountry] = useState(seller.country);
+  const [taxId, setTaxId] = useState(seller.taxId);
+  const [taxIdLabel, setTaxIdLabel] = useState(seller.taxIdLabel);
+  const dirty =
+    legalName !== seller.legalName || address !== seller.address || country !== seller.country || taxId !== seller.taxId || taxIdLabel !== seller.taxIdLabel;
+  const eu = isEuCountry(country);
+  const countryLabel = countries.find((c) => c.code === country)?.name ?? "";
+  const previewLines = addressLines(address || fallbackAddress);
+  const previewTaxId = normalizeVatId(taxId);
+  const autoLabel = previewTaxId ? defaultTaxIdLabel(previewTaxId, country || null) : "";
+  const previewLabel = taxIdLabel.trim() || autoLabel;
+  const showCountry = !!countryLabel && !previewLines.some((l) => l.toLowerCase().includes(countryLabel.toLowerCase()));
+  return (
+    <form onSubmit={onSubmit} noValidate className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="min-w-0 space-y-4">
+        {formError && !Object.keys(errors).length && <FormError message={formError} />}
+        <Field
+          label="Legal company name"
+          htmlFor="seller-legal-name"
+          error={errors.legalName}
+          hint={errors.legalName ? undefined : fallbackName ? `Empty: "${fallbackName}" is printed.` : "The registered name of the business that sells."}
+        >
+          <Input
+            id="seller-legal-name"
+            name="legalName"
+            value={legalName}
+            onChange={(e) => setLegalName(e.target.value)}
+            maxLength={140}
+            autoComplete="organization"
+            invalid={!!errors.legalName}
+          />
+        </Field>
+        <Field
+          label="Registered address"
+          htmlFor="seller-address"
+          error={errors.address}
+          hint={errors.address ? undefined : fallbackAddress ? "One line per row. Empty: the company address from Legal is printed." : "One line per row, at most 6 lines."}
+        >
+          <Textarea id="seller-address" name="address" rows={4} value={address} onChange={(e) => setAddress(e.target.value)} maxLength={800} invalid={!!errors.address} />
+        </Field>
+        <Field
+          label="Country of establishment"
+          htmlFor="seller-country"
+          error={errors.country}
+          hint={errors.country ? undefined : "Where the business is registered for tax. Decides whether EU reverse charge applies."}
+        >
+          <Select
+            id="seller-country"
+            name="country"
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            placeholder="Not set"
+            options={countries.map((c) => ({ value: c.code, label: c.name }))}
+            invalid={!!errors.country}
+          />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_11rem]">
+          <Field
+            label="VAT / GST registration number"
+            htmlFor="seller-tax-id"
+            error={errors.taxId}
+            hint={errors.taxId ? undefined : eu ? `With the country prefix, e.g. ${exampleVatId(country)}.` : "Printed on every invoice. Leave empty if you are not registered."}
+          >
+            <Input
+              id="seller-tax-id"
+              name="taxId"
+              value={taxId}
+              onChange={(e) => setTaxId(e.target.value)}
+              maxLength={30}
+              spellCheck={false}
+              autoComplete="off"
+              className="font-mono uppercase"
+              dir="ltr"
+              invalid={!!errors.taxId}
+            />
+          </Field>
+          <Field label="Label" htmlFor="seller-tax-id-label" error={errors.taxIdLabel} hint={errors.taxIdLabel ? undefined : "e.g. VAT No., GSTIN, ABN"}>
+            <Input
+              id="seller-tax-id-label"
+              name="taxIdLabel"
+              value={taxIdLabel}
+              onChange={(e) => setTaxIdLabel(e.target.value)}
+              maxLength={30}
+              placeholder={autoLabel || "Automatic"}
+              invalid={!!errors.taxIdLabel}
+            />
+          </Field>
+        </div>
+        <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-muted">
+          <Icon.Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>
+            {eu && byCountry
+              ? "Business buyers from other EU countries who enter a valid VAT number pay no VAT; their invoice says \"Reverse charge\"."
+              : eu
+                ? "EU reverse charge applies once tax is charged by the buyer's country."
+                : "EU reverse charge applies only when your country of establishment is in the EU."}{" "}
+            Registration numbers in other countries go on their tax rules below.
+          </span>
+        </p>
+        <div className="flex justify-end">
+          <Button type="submit" loading={pending} disabled={!dirty}>
+            Save seller details
+          </Button>
+        </div>
+      </div>
+
+      <aside aria-label="Invoice preview" className="self-start rounded-lg border border-dashed border-border-strong p-4 text-sm">
+        <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Billed by</p>
+        <p className="mt-2 font-semibold text-ink">{legalName.trim() || fallbackName || "Your business name"}</p>
+        {(previewLines.length > 0 || showCountry) && (
+          <address className="mt-1 not-italic leading-relaxed text-ink-muted">
+            {previewLines.map((line, i) => (
+              <span key={i} className="block">
+                {line}
+              </span>
+            ))}
+            {showCountry && <span className="block">{countryLabel}</span>}
+          </address>
+        )}
+        {previewTaxId ? (
+          <p className="mt-2 flex flex-wrap gap-x-2">
+            <span className="text-ink-muted">{previewLabel}</span>
+            <span className="font-mono text-ink" dir="ltr">
+              {previewTaxId}
+            </span>
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-warning">No tax number: invoices are printed without one.</p>
+        )}
+        <p className="mt-3 border-t border-border pt-2 text-xs text-ink-faint">Invoices already issued keep the details they were issued with.</p>
+      </aside>
+    </form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Tax rules                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -80,6 +255,9 @@ export interface TaxRuleRowData {
   name: string;
   rate: number;
   inclusive: boolean;
+  /** The seller's registration number in this country (printed on its buyers' invoices). */
+  registrationNumber: string;
+  registrationLabel: string;
   orders: number;
   collectedLabel: string;
 }
@@ -88,6 +266,7 @@ function TaxRuleForm({ rule, countries, onDone }: { rule: TaxRuleRowData | null;
   const { onSubmit, pending, errors, formError } = useFormAction(saveTaxRuleAction, { onSuccess: onDone });
   const [rate, setRate] = useState(rule ? String(rule.rate) : "");
   const [inclusive, setInclusive] = useState(rule?.inclusive ?? false);
+  const [ruleCountry, setRuleCountry] = useState(rule?.country ?? "");
   const pct = Number(rate.replace(",", "."));
   const example = Number.isFinite(pct) && pct > 0 && pct <= 100 ? pct : null;
   return (
@@ -98,7 +277,8 @@ function TaxRuleForm({ rule, countries, onDone }: { rule: TaxRuleRowData | null;
         <Select
           id="tax-country"
           name="country"
-          defaultValue={rule?.country ?? ""}
+          value={ruleCountry}
+          onChange={(e) => setRuleCountry(e.target.value)}
           placeholder="Choose a country"
           options={countries.map((c) => ({ value: c.code, label: c.name }))}
           invalid={!!errors.country}
@@ -121,6 +301,35 @@ function TaxRuleForm({ rule, countries, onDone }: { rule: TaxRuleRowData | null;
           label="Prices include this tax"
           description="Common for VAT: buyers pay the listed price and the tax is carved out of it. Off: the tax is added on top."
         />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <Field
+          label="Your registration number here"
+          htmlFor="tax-registration"
+          error={errors.registrationNumber}
+          hint={
+            errors.registrationNumber
+              ? undefined
+              : isEuCountry(ruleCountry)
+                ? `Optional. Your VAT number in this country, e.g. ${exampleVatId(ruleCountry)}. Printed on invoices of its buyers.`
+                : "Optional. Printed on invoices of buyers from this country, e.g. a local VAT or GST number."
+          }
+        >
+          <Input
+            id="tax-registration"
+            name="registrationNumber"
+            defaultValue={rule?.registrationNumber ?? ""}
+            maxLength={30}
+            spellCheck={false}
+            autoComplete="off"
+            className="font-mono uppercase"
+            dir="ltr"
+            invalid={!!errors.registrationNumber}
+          />
+        </Field>
+        <Field label="Label" htmlFor="tax-registration-label" error={errors.registrationLabel} hint={errors.registrationLabel ? undefined : "e.g. UK VAT No."}>
+          <Input id="tax-registration-label" name="registrationLabel" defaultValue={rule?.registrationLabel ?? ""} maxLength={30} invalid={!!errors.registrationLabel} />
+        </Field>
       </div>
       {example !== null && (
         <p className="rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-muted" aria-live="polite">
@@ -213,7 +422,7 @@ export function TaxRulesManager({ rules, countries, byCountry }: { rules: TaxRul
                 </TH>
                 <TH>Country</TH>
                 <TH>Tax</TH>
-                <TH className="hidden text-right sm:table-cell">Collected</TH>
+                <TH className="hidden text-end sm:table-cell">Collected</TH>
                 <TH>
                   <span className="sr-only">Actions</span>
                 </TH>
@@ -239,7 +448,7 @@ export function TaxRulesManager({ rules, countries, byCountry }: { rules: TaxRul
                     />
                   </TD>
                   <TD>
-                    <button type="button" onClick={() => setEditing(r)} className="text-left font-medium text-ink hover:text-accent hover:underline">
+                    <button type="button" onClick={() => setEditing(r)} className="text-start font-medium text-ink hover:text-accent hover:underline">
                       {r.countryName}
                     </button>
                     <p className="font-mono text-xs text-ink-muted">{r.country}</p>
@@ -251,14 +460,22 @@ export function TaxRulesManager({ rules, countries, byCountry }: { rules: TaxRul
                     <div className="mt-0.5">
                       <Badge tone={r.inclusive ? "info" : "neutral"}>{r.inclusive ? "Included in price" : "Added at checkout"}</Badge>
                     </div>
+                    {r.registrationNumber && (
+                      <p className="mt-1 text-xs text-ink-muted">
+                        {r.registrationLabel || `${r.name} No.`}{" "}
+                        <span className="font-mono" dir="ltr">
+                          {r.registrationNumber}
+                        </span>
+                      </p>
+                    )}
                   </TD>
-                  <TD className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
+                  <TD className="hidden whitespace-nowrap text-end tabular-nums sm:table-cell">
                     <span className="font-medium">{r.collectedLabel}</span>
                     <p className="text-xs text-ink-muted">
                       {r.orders} order{r.orders === 1 ? "" : "s"}
                     </p>
                   </TD>
-                  <TD className="text-right">
+                  <TD className="text-end">
                     <div className="flex justify-end gap-1">
                       <Button size="sm" variant="ghost" onClick={() => setEditing(r)} aria-label={`Edit the rule for ${r.countryName}`}>
                         <Icon.Edit className="size-4" />

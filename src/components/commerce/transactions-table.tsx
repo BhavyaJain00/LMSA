@@ -46,6 +46,10 @@ export interface TransactionView {
   address?: { line1: string; line2?: string; city: string; state?: string; country: string; pincode?: string };
   gstin?: string;
   pan?: string;
+  /** The buyer's VAT / tax number from checkout (printed on the invoice). */
+  buyerVatId?: string;
+  /** EU reverse charge: no VAT was charged. */
+  reverseCharge?: boolean;
   source?: string;
   gateway: string;
   gatewayLabel: string;
@@ -388,6 +392,14 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
                   {tx.gstin ?? "—"} / {tx.pan ?? "—"}
                 </DetailItem>
               )}
+              {(tx.buyerVatId || tx.reverseCharge) && (
+                <DetailItem label="VAT number">
+                  <span className="font-mono text-xs" dir="ltr">
+                    {tx.buyerVatId ?? "—"}
+                  </span>
+                  {tx.reverseCharge && <span className="ms-2 text-xs text-ink-muted">Reverse charge (0% VAT)</span>}
+                </DetailItem>
+              )}
               <DetailItem label="Invoice">
                 {tx.invoiceNumber ? (
                   <Link href={invoiceHref} className="font-mono text-accent hover:underline">
@@ -596,6 +608,14 @@ function EditPaymentDetailsForm({ tx, onDone }: { tx: TransactionView; onDone: (
             <Input id={`${id}-pan`} name="pan" defaultValue={tx.pan} maxLength={10} className="font-mono uppercase" invalid={!!errors.pan} />
           </Field>
         </div>
+        <Field
+          label="VAT number"
+          htmlFor={`${id}-vat`}
+          error={errors.vatId}
+          hint={errors.vatId ? undefined : tx.reverseCharge ? "Printed on the invoice. The order was reverse-charged, so a VAT number is required." : "Printed on the invoice. Changing it does not change the tax charged."}
+        >
+          <Input id={`${id}-vat`} name="vatId" defaultValue={tx.buyerVatId} maxLength={24} className="font-mono uppercase" dir="ltr" invalid={!!errors.vatId} />
+        </Field>
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="outline" size="sm" onClick={onDone} disabled={pending}>

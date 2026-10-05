@@ -58,7 +58,8 @@ import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { GSTIN_RE, PAN_RE } from "@/components/commerce/countries";
-import { billingFields, readBilling, validateBilling } from "@/lib/payments/billing-input";
+import { billingFields, readBilling, validateBilling, validateVatId } from "@/lib/payments/billing-input";
+import { normalizeVatId } from "@/lib/commerce/vat-id";
 import { setFlash } from "@/lib/flash";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, formatPrice, uid } from "@/lib/utils";
@@ -897,6 +898,8 @@ export async function updatePaymentDetailsAction(_prev: ActionResult | null, for
   const source = fd(formData, "source");
   const gstin = fd(formData, "gstin").toUpperCase();
   const pan = fd(formData, "pan").toUpperCase();
+  // Older forms do not post the VAT number: keep the stored one then.
+  const vatId = formData.has("vatId") ? normalizeVatId(fd(formData, "vatId")) : (payment.buyerVatId ?? "");
   const lockedReference = isGatewayPaymentReference(payment.gateway, payment.gatewayPaymentId);
 
   const errors: Record<string, string> = {};
@@ -909,6 +912,11 @@ export async function updatePaymentDetailsAction(_prev: ActionResult | null, for
   if (gstin && !GSTIN_RE.test(gstin)) errors.gstin = "Please enter a valid GST number.";
   if (pan && !PAN_RE.test(pan)) errors.pan = "Please enter a valid pan number.";
   else if (gstin && !pan) errors.pan = "Please enter a valid pan number.";
+  if (vatId !== (payment.buyerVatId ?? "")) {
+    // A reverse-charged order must name the VAT number it was reverse-charged for.
+    const vatError = !vatId && payment.reverseCharge ? "This order was reverse-charged: keep a VAT number on it." : validateVatId(vatId, payment.address?.country ?? "");
+    if (vatError) errors.vatId = vatError;
+  }
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
 
   await mutate((d) => {
@@ -919,6 +927,7 @@ export async function updatePaymentDetailsAction(_prev: ActionResult | null, for
     row.source = source || undefined;
     row.gstin = gstin || undefined;
     row.pan = pan || undefined;
+    row.buyerVatId = vatId || undefined;
   });
   await audit(actor, "payment.update", { type: "payment", id: payment.id }, { orderId: payment.orderId });
   revalidateCommerce(payment.orderId);

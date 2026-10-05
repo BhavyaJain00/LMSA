@@ -608,6 +608,14 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
                   {payment.gstin ?? "—"} / {payment.pan ?? "—"}
                 </DetailItem>
               )}
+              {payment.buyerVatId && (
+                <DetailItem label="VAT number">
+                  <span className="font-mono" dir="ltr">
+                    {payment.buyerVatId}
+                  </span>
+                  {payment.reverseCharge && <span className="ms-2 text-ink-muted">Reverse charge: no VAT charged</span>}
+                </DetailItem>
+              )}
             </dl>
           </section>
         </div>

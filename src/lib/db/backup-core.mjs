@@ -516,7 +516,7 @@ export function restoreOffline(config, sourceFile, options = {}) {
       const stamp = fileStamp();
       for (const suffix of ["", "-wal", "-shm"]) {
         const from = `${target}${suffix}`;
-        if (!fs.existsSync(from)) continue;
+        if (!fs.existsSync(/* turbopackIgnore: true */ from)) continue;
         const to = `${target}.damaged-${stamp}${suffix}`;
         try {
           fs.renameSync(from, to);

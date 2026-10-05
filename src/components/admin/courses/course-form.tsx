@@ -15,6 +15,7 @@ import type { CourseFormOptions, CourseFormValues, PickerOption } from "./types"
 import { MarkdownEditor } from "./markdown-editor";
 import { GradientPicker, ListEditor, MediaField, MultiSelect, TagsInput } from "./form-controls";
 import { UnsavedChangesGuard } from "./unsaved-changes-guard";
+import { PreviewVideoConversion } from "./preview-video-conversion";
 import { SlugSuggestion } from "@/components/seo/slug-suggestion";
 import { CREATE_MEMBER_OPTION, CreateMemberDialog, memberQualifies, type MemberPurpose } from "./create-member-dialog";
 
@@ -365,6 +366,7 @@ export function CourseForm({ mode, courseId, initial, options, tagSuggestions, r
                 hint="Self-hosted MP4/WebM or a direct video file URL. YouTube and Vimeo links are not supported."
               />
             </Field>
+            {mode === "edit" && courseId && <PreviewVideoConversion courseId={courseId} src={videoUrl} />}
           </div>
         </CardBody>
       </Card>

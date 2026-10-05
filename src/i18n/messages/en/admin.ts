@@ -1443,6 +1443,8 @@ const adminMessages = {
   "pages.settings.taxes.noTax": "Currently no tax",
   "pages.settings.taxes.computed": "Tax is calculated on the server for the billing address's country and rounded once per order to the smallest unit of its currency.",
   "pages.settings.taxes.singleRate": "The single rate and default currency are in Payments",
+  "pages.settings.taxes.seller.title": "Seller details on invoices",
+  "pages.settings.taxes.seller.description": "The legal entity, registered address and tax number printed on every invoice, as tax authorities require.",
   "pages.settings.taxes.rules.title": "Tax rules",
   "pages.settings.taxes.rules.applied": "Applied to every new order from these countries.",
   "pages.settings.taxes.rules.saved": "Kept for when tax is charged by the buyer's country; not applied at the moment.",

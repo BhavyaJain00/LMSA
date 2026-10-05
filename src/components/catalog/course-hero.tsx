@@ -8,6 +8,7 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { getFormatter, getT } from "@/i18n/server";
+import { coursePreviewPlayback } from "@/lib/media/course-preview";
 import { CourseCover } from "./course-cover";
 import { InstructorByline } from "./instructor-byline";
 import { compactCount } from "./format";
@@ -33,6 +34,8 @@ export async function CourseHero({ course, manager, className }: { course: Cours
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   const updated = course.updatedAt ? f.date(course.updatedAt, { month: "long", year: "numeric", day: undefined }) : "";
   if (course.videoUrl && course.imageUrl) preload(course.imageUrl, { as: "image", fetchPriority: "high" });
+  // Adaptive (HLS) stream of an uploaded preview once converted; the uploaded file stays the fallback.
+  const preview = coursePreviewPlayback(course);
   return (
     <section aria-labelledby="course-title" className={cn("space-y-5", className)}>
       <div className="flex flex-wrap items-center gap-2">
@@ -137,8 +140,8 @@ export async function CourseHero({ course, manager, className }: { course: Cours
       )}
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
-        {course.videoUrl ? (
-          <VideoPlayer src={course.videoUrl} poster={course.imageUrl} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
+        {preview ? (
+          <VideoPlayer src={preview.src} hlsUrl={preview.hlsUrl} poster={preview.poster} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
         ) : (
           <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
         )}
