@@ -1,16 +1,34 @@
 import "server-only";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Database, Lesson, TranscodeJob, VideoTranscodeState } from "@/lib/types";
+import type { Database, TranscodeJob, TranscodeTarget } from "@/lib/types";
 import { findById, getDb, getSettings, mutate } from "@/lib/db/store";
 import { notifyMany } from "@/lib/services/notifications";
 import { uid } from "@/lib/utils";
-import { getStorage, localStorage, s3Client, storageFor, uploadRoot, uploadUrlForKey } from "@/lib/storage";
+import { getStorage, localStorage, s3Client, storageFor, storageKeyFromUrl, uploadRoot, uploadUrlForKey } from "@/lib/storage";
 import { siteOrigins } from "../access";
 import { HLS_CONTENT_TYPES, buildMasterPlaylist, measureBandwidth, parseMasterRenditions, parseMediaSegments, type HlsVariant } from "../hls";
 import { FfmpegError, detectFfmpeg, probeMedia, runFfmpeg } from "./ffmpeg";
-import { hlsKeyPrefix, hlsVersionPrefix, pendingState, renditionLabel, transcodeSourceKey, type VideoBlock } from "./lesson-fields";
+import { hlsVersionFolderOfKey, hlsVersionPrefix, pendingState, renditionLabel, transcodeSourceKey } from "./lesson-fields";
 import { MASTER_PLAYLIST, POSTER_FILE, buildHlsPlan, buildPosterArgs, progressPercent, renditionLadder, tailText } from "./plan";
+import {
+  COURSE_PREVIEW_DIR,
+  COURSE_PREVIEW_ROOT,
+  coursePreviewTarget,
+  hlsPrefixFor,
+  jobIdentity,
+  jobTarget,
+  jobTargetId,
+  latestJobForTarget,
+  lessonBlockTarget,
+  needsConversion,
+  patchTargetMedia,
+  planEnqueue,
+  posterKeyFor,
+  readTargetMedia,
+  referencedHlsVersions,
+  settledState,
+} from "./targets";
 
 /**
  * Durable HLS transcoding queue.
@@ -18,12 +36,15 @@ import { MASTER_PLAYLIST, POSTER_FILE, buildHlsPlan, buildPosterArgs, progressPe
  * Jobs live in `db.transcodeJobs`, so a restart loses nothing: a job that was
  * running when the process stopped is queued again the next time the worker
  * starts. One job runs at a time, in this process, started lazily when a
- * video is queued, when the editor polls its status and by
- * `/api/cron/media`. Output is written to a hidden work folder, measured,
- * given a master playlist and then published under
- * `videos/<lessonId>/<blockId>/hls/<version>/`; the block's `hlsUrl` switches
- * to the new version only after everything is stored, and the previous
- * version is deleted afterwards.
+ * video is queued, when an editor polls its status and by `/api/cron/media`.
+ *
+ * A job converts a target (see `./targets`): a lesson video block, published
+ * under `videos/<lessonId>/<blockId>/hls/<version>/`, or a course's preview
+ * video, published under `videos/course/<courseId>/preview/hls/<version>/`.
+ * Output is written to a hidden work folder, measured, given a master
+ * playlist and then published; the target's HLS URL switches to the new
+ * version only after everything is stored, and the previous version is
+ * deleted afterwards (unless something else still plays it).
  */
 
 /** Kill ffmpeg when it reports nothing for this long. */
@@ -32,7 +53,7 @@ const STALL_MS = 15 * 60_000;
 const PROGRESS_WRITE_MS = 2_000;
 /** Presigned source URLs handed to ffmpeg for remote storage. */
 const SOURCE_URL_TTL_SECONDS = 12 * 60 * 60;
-/** Finished jobs older than this are pruned (the newest job of each block is kept). */
+/** Finished jobs older than this are pruned (the newest job of each target is kept). */
 const JOB_RETENTION_DAYS = 30;
 const MAX_ERROR_CHARS = 4000;
 /** A job interrupted by this many server restarts is failed instead of started again. */
@@ -47,30 +68,6 @@ const g = globalThis as unknown as { __llTranscodeWorker?: WorkerState };
 const worker: WorkerState = (g.__llTranscodeWorker ??= { running: false, current: null });
 
 class TranscodeCancelled extends Error {}
-
-/* ------------------------------------------------------------------ */
-/* Block helpers                                                        */
-/* ------------------------------------------------------------------ */
-
-function findVideoBlock(lesson: Lesson | undefined | null, blockId: string): VideoBlock | null {
-  const block = lesson?.blocks.find((b) => b.id === blockId);
-  return block?.type === "video" ? block : null;
-}
-
-/** Replace a video block inside a mutation. Returns false when the block is gone. */
-function patchBlock(db: Database, lessonId: string, blockId: string, patch: (block: VideoBlock) => VideoBlock | null): boolean {
-  const lesson = db.lessons.find((l) => l.id === lessonId);
-  if (!lesson) return false;
-  let changed = false;
-  lesson.blocks = lesson.blocks.map((b) => {
-    if (b.id !== blockId || b.type !== "video") return b;
-    const next = patch(b);
-    if (!next) return b;
-    changed = true;
-    return next;
-  });
-  return changed;
-}
 
 function isActive(job: TranscodeJob): boolean {
   return job.status === "queued" || job.status === "running";
@@ -89,65 +86,67 @@ export type EnqueueResult =
   | { ok: false; reason: "disabled" | "not-found" | "not-upload" | "unavailable" | "ready" | "failed"; message: string };
 
 /**
- * Queue a conversion of a block's uploaded video. Existing queued/running
- * jobs for the same file are reused. Without `force`, a block whose HLS
+ * Queue a conversion of a target's uploaded video. Existing queued/running
+ * jobs for the same file are reused. Without `force`, a target whose HLS
  * output already matches its file, or whose last conversion of this file
  * failed, is left alone (retries are explicit).
  */
-export async function enqueueTranscode(lessonId: string, blockId: string, opts: { force?: boolean } = {}): Promise<EnqueueResult> {
+export async function enqueueTargetTranscode(target: TranscodeTarget, opts: { force?: boolean } = {}): Promise<EnqueueResult> {
   const settings = await getSettings();
   if (!settings.storage.transcodeToHls) return { ok: false, reason: "disabled", message: "Adaptive streaming is turned off in Settings → Storage & video." };
   const ffmpeg = await detectFfmpeg();
   const origins = siteOrigins();
 
-  // A lesson saved by an editor that dropped the server-managed fields: re-link the finished output instead of converting again.
-  if (!opts.force && (await recoverHlsOutput(lessonId, blockId))) return { ok: false, reason: "ready", message: "This video is already converted." };
+  // A target saved by an editor that dropped the server-managed fields: re-link the finished output instead of converting again.
+  if (!opts.force && (await recoverTargetHlsOutput(target))) return { ok: false, reason: "ready", message: "This video is already converted." };
 
   const result = await mutate((db): EnqueueResult => {
-    const lesson = db.lessons.find((l) => l.id === lessonId);
-    const block = findVideoBlock(lesson, blockId);
-    if (!lesson || !block) return { ok: false, reason: "not-found", message: "This video block no longer exists. Save the lesson first." };
-    const key = transcodeSourceKey(block.src, origins);
-    if (!key) return { ok: false, reason: "not-upload", message: "Only videos uploaded to this site can be converted." };
-
+    const plan = planEnqueue({ target, media: readTargetMedia(db, target), jobs: db.transcodeJobs, ffmpegAvailable: ffmpeg.available, force: opts.force, siteOrigins: origins });
     const now = nowIso();
-    const stale = !!block.storageKey && block.storageKey !== key;
-    if (!ffmpeg.available) {
-      patchBlock(db, lessonId, blockId, (b) => ({
-        ...b,
-        ...(stale ? { hlsUrl: undefined, storageKey: undefined } : {}),
-        transcode: { status: "unavailable", error: ffmpeg.error ?? undefined, updatedAt: now },
-      }));
-      return { ok: false, reason: "unavailable", message: "ffmpeg is not installed on the server, so the original file is played." };
+    switch (plan.action) {
+      case "refuse":
+        return { ok: false, reason: plan.reason, message: plan.message };
+      case "unavailable":
+        patchTargetMedia(db, target, () => ({
+          ...(plan.stale ? { hlsUrl: undefined, storageKey: undefined } : {}),
+          transcode: { status: "unavailable", error: ffmpeg.error ?? undefined, updatedAt: now },
+        }));
+        return { ok: false, reason: "unavailable", message: plan.message };
+      case "reuse":
+        return { ok: true, job: plan.job, created: false };
+      case "skip":
+        return { ok: false, reason: plan.reason, message: plan.message };
+      case "create": {
+        // Jobs for an older file of this target are obsolete.
+        const obsolete = new Set(plan.obsoleteJobIds);
+        for (const j of db.transcodeJobs) if (obsolete.has(j.id)) Object.assign(j, { status: "failed", error: "Replaced by a newer video.", finishedAt: now });
+        const job: TranscodeJob = { id: uid("tcj"), ...jobIdentity(target), sourceKey: plan.sourceKey, status: "queued", progress: 0, attempts: 0, createdAt: now };
+        db.transcodeJobs.push(job);
+        patchTargetMedia(db, target, (m) =>
+          // A new file must never play the previous file's stream.
+          plan.stale ? { hlsUrl: undefined, storageKey: undefined, transcode: pendingState(undefined, now) } : { transcode: pendingState(m.transcode, now) },
+        );
+        return { ok: true, job, created: true };
+      }
     }
-
-    const jobs = db.transcodeJobs.filter((j) => j.lessonId === lessonId && j.blockId === blockId);
-    const active = jobs.find((j) => isActive(j) && j.sourceKey === key);
-    if (active) return { ok: true, job: active, created: false };
-    if (!opts.force) {
-      if (block.hlsUrl && block.storageKey === key && block.transcode?.status === "ready") return { ok: false, reason: "ready", message: "This video is already converted." };
-      const last = jobs.filter((j) => j.sourceKey === key).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-      if (last?.status === "failed") return { ok: false, reason: "failed", message: last.error?.split("\n")[0] ?? "The last conversion failed." };
-    }
-    // Jobs for an older file of this block are obsolete.
-    for (const j of jobs) if (j.status === "queued" && j.sourceKey !== key) Object.assign(j, { status: "failed", error: "Replaced by a newer video.", finishedAt: now });
-
-    const job: TranscodeJob = { id: uid("tcj"), lessonId, blockId, sourceKey: key, status: "queued", progress: 0, attempts: 0, createdAt: now };
-    db.transcodeJobs.push(job);
-    patchBlock(db, lessonId, blockId, (b) => ({
-      ...b,
-      // A new file must never play the previous file's stream.
-      ...(stale ? { hlsUrl: undefined, storageKey: undefined, transcode: pendingState(undefined, now) } : { transcode: pendingState(b.transcode, now) }),
-    }));
-    return { ok: true, job, created: true };
   });
   if (result.ok) kickTranscodeWorker();
   return result;
 }
 
-/** Newest published HLS version folder of a block (one with a master playlist), or null. */
-async function newestHlsVersion(lessonId: string, blockId: string): Promise<string | null> {
-  const prefix = hlsKeyPrefix(lessonId, blockId);
+/** Queue a conversion of a lesson video block (see `enqueueTargetTranscode`). */
+export function enqueueTranscode(lessonId: string, blockId: string, opts: { force?: boolean } = {}): Promise<EnqueueResult> {
+  return enqueueTargetTranscode(lessonBlockTarget(lessonId, blockId), opts);
+}
+
+/** Queue a conversion of a course's uploaded preview video (see `enqueueTargetTranscode`). */
+export function enqueueCoursePreviewTranscode(courseId: string, opts: { force?: boolean } = {}): Promise<EnqueueResult> {
+  return enqueueTargetTranscode(coursePreviewTarget(courseId), opts);
+}
+
+/** Newest published HLS version folder of a target (one with a master playlist), or null. */
+async function newestHlsVersion(target: TranscodeTarget): Promise<string | null> {
+  const prefix = hlsPrefixFor(target);
   const candidates: { prefix: string; time: number }[] = [];
   const dir = path.join(/* turbopackIgnore: true */ uploadRoot(), ...prefix.slice(0, -1).split("/"));
   for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -169,21 +168,21 @@ async function newestHlsVersion(lessonId: string, blockId: string): Promise<stri
 }
 
 /**
- * Re-link a block to HLS output that was already produced for its current
- * file (the latest job of the block finished for this very file) when the
- * block lost its `hlsUrl` — e.g. saved by an editor that does not carry the
- * server-managed fields over. Returns true when the block plays HLS again.
+ * Re-link a target to HLS output that was already produced for its current
+ * file (its latest job finished for this very file) when it lost its HLS URL
+ * — e.g. saved by an editor that does not carry the server-managed fields
+ * over. Returns true when the target plays HLS again.
  */
-export async function recoverHlsOutput(lessonId: string, blockId: string): Promise<boolean> {
+export async function recoverTargetHlsOutput(target: TranscodeTarget): Promise<boolean> {
   const db = await getDb();
   const origins = siteOrigins();
-  const block = findVideoBlock(db.lessons.find((l) => l.id === lessonId), blockId);
-  const key = block ? transcodeSourceKey(block.src, origins) : null;
-  if (!block || !key || (block.hlsUrl && block.storageKey === key)) return false;
-  const latest = latestJobFor(db, lessonId, blockId);
+  const media = readTargetMedia(db, target);
+  const key = media ? transcodeSourceKey(media.src, origins) : null;
+  if (!media || !key || (media.hlsUrl && media.storageKey === key)) return false;
+  const latest = latestJobForTarget(db.transcodeJobs, target);
   if (!latest || latest.status !== "done" || latest.sourceKey !== key) return false;
 
-  const prefix = await newestHlsVersion(lessonId, blockId).catch(() => null);
+  const prefix = await newestHlsVersion(target).catch(() => null);
   if (!prefix) return false;
   const masterKey = `${prefix}${MASTER_PLAYLIST}`;
   const text = await (await storageFor(masterKey)).readText(masterKey, 256 * 1024).catch(() => null);
@@ -191,10 +190,9 @@ export async function recoverHlsOutput(lessonId: string, blockId: string): Promi
   if (!renditions.length) return false;
 
   return mutate((d) =>
-    patchBlock(d, lessonId, blockId, (b) =>
-      transcodeSourceKey(b.src, origins) === key && !b.hlsUrl
+    patchTargetMedia(d, target, (m) =>
+      transcodeSourceKey(m.src, origins) === key && !m.hlsUrl
         ? {
-            ...b,
             hlsUrl: uploadUrlForKey(masterKey),
             storageKey: key,
             transcode: { status: "ready", progress: 100, renditions: renditions.map((r) => ({ height: r.height, bandwidth: r.bandwidth })), updatedAt: nowIso() },
@@ -202,6 +200,11 @@ export async function recoverHlsOutput(lessonId: string, blockId: string): Promi
         : null,
     ),
   );
+}
+
+/** Lesson block form of `recoverTargetHlsOutput`. */
+export function recoverHlsOutput(lessonId: string, blockId: string): Promise<boolean> {
+  return recoverTargetHlsOutput(lessonBlockTarget(lessonId, blockId));
 }
 
 /**
@@ -218,41 +221,57 @@ export async function syncLessonTranscodes(lessonId: string): Promise<number> {
   let created = 0;
   for (const block of lesson.blocks) {
     if (block.type !== "video") continue;
-    const key = transcodeSourceKey(block.src, origins);
-    if (!key) continue;
-    if (block.hlsUrl && block.storageKey === key && block.transcode?.status === "ready") continue;
+    if (!needsConversion(block, origins)) continue;
     const res = await enqueueTranscode(lessonId, block.id);
     if (res.ok && res.created) created++;
   }
   return created;
 }
 
-/** Queue every uploaded lesson video that has no current HLS version (cron and "Convert all"). */
+/**
+ * Queue the conversion of a course's preview video when it needs one (call
+ * after saving a course): a new upload, a replaced file or a video that
+ * waited for ffmpeg. Never throws; returns the number of new jobs (0 or 1).
+ */
+export async function syncCoursePreviewTranscode(courseId: string): Promise<number> {
+  try {
+    const settings = await getSettings();
+    if (!settings.storage.transcodeToHls) return 0;
+    const db = await getDb();
+    const target = coursePreviewTarget(courseId);
+    if (!needsConversion(readTargetMedia(db, target), siteOrigins())) return 0;
+    const res = await enqueueTargetTranscode(target);
+    return res.ok && res.created ? 1 : 0;
+  } catch (err) {
+    console.error("[transcode] could not queue a course preview video:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
+/** Queue every uploaded lesson video and course preview that has no current HLS version (cron and "Convert all"). */
 export async function syncAllTranscodes(): Promise<number> {
   const settings = await getSettings();
   if (!settings.storage.transcodeToHls) return 0;
   const db = await getDb();
   const origins = siteOrigins();
-  const lessonIds = db.lessons
-    .filter((l) =>
-      l.blocks.some((b) => {
-        if (b.type !== "video") return false;
-        const key = transcodeSourceKey(b.src, origins);
-        return !!key && !(b.hlsUrl && b.storageKey === key && b.transcode?.status === "ready");
-      }),
-    )
-    .map((l) => l.id);
+  const lessonIds = db.lessons.filter((l) => l.blocks.some((b) => b.type === "video" && needsConversion(b, origins))).map((l) => l.id);
+  const courseIds = db.courses.filter((c) => needsConversion(readTargetMedia(db, coursePreviewTarget(c.id)), origins)).map((c) => c.id);
   let created = 0;
   for (const id of lessonIds) created += await syncLessonTranscodes(id);
+  for (const id of courseIds) {
+    const res = await enqueueCoursePreviewTranscode(id);
+    if (res.ok && res.created) created++;
+  }
   return created;
 }
 
 /**
  * A video finished uploading (`/api/upload`, `/api/uploads/:id/complete`):
- * queue the saved blocks that already play this file, warm the ffmpeg
- * check for the editor's first status poll and resume any waiting jobs.
- * Blocks saved later are queued by the editor's status poll and the cron.
- * Never throws; returns the number of new jobs.
+ * queue the saved lesson blocks and course previews that already play this
+ * file, warm the ffmpeg check for the editor's first status poll and resume
+ * any waiting jobs. Targets saved later are queued by their save, the
+ * editors' status polls and the cron. Never throws; returns the number of
+ * new jobs.
  */
 export async function onSourceUploaded(key: string): Promise<number> {
   try {
@@ -269,6 +288,11 @@ export async function onSourceUploaded(key: string): Promise<number> {
         if (res.ok && res.created) created++;
       }
     }
+    for (const course of db.courses) {
+      if (transcodeSourceKey(course.videoUrl, origins) !== key) continue;
+      const res = await enqueueCoursePreviewTranscode(course.id);
+      if (res.ok && res.created) created++;
+    }
     kickTranscodeWorker();
     return created;
   } catch (err) {
@@ -277,32 +301,32 @@ export async function onSourceUploaded(key: string): Promise<number> {
   }
 }
 
-/** Retry a failed job (or re-run a finished one) as a new job for the block's current file. */
+/** Retry a failed job (or re-run a finished one) as a new job for the target's current file. */
 export async function retryTranscodeJob(jobId: string): Promise<EnqueueResult> {
   const job = await findById("transcodeJobs", jobId);
   if (!job) return { ok: false, reason: "not-found", message: "This job no longer exists." };
-  return enqueueTranscode(job.lessonId, job.blockId, { force: true });
+  return enqueueTargetTranscode(jobTarget(job), { force: true });
 }
 
-/** Queue a new job for every block whose latest job failed. */
+/** Queue a new job for every target whose latest job failed. */
 export async function retryFailedTranscodes(): Promise<number> {
   const db = await getDb();
   const latest = new Map<string, TranscodeJob>();
   for (const job of db.transcodeJobs) {
-    const key = `${job.lessonId}|${job.blockId}`;
+    const key = jobTargetId(job);
     const current = latest.get(key);
     if (!current || job.createdAt > current.createdAt) latest.set(key, job);
   }
   let queued = 0;
   for (const job of latest.values()) {
     if (job.status !== "failed") continue;
-    const res = await enqueueTranscode(job.lessonId, job.blockId, { force: true });
+    const res = await enqueueTargetTranscode(jobTarget(job), { force: true });
     if (res.ok && res.created) queued++;
   }
   return queued;
 }
 
-/** Cancel a queued or running job. The block keeps any earlier finished HLS version. */
+/** Cancel a queued or running job. The target keeps any earlier finished HLS version. */
 export async function cancelTranscodeJob(jobId: string): Promise<boolean> {
   if (worker.current?.jobId === jobId) {
     worker.current.abort.abort();
@@ -312,18 +336,11 @@ export async function cancelTranscodeJob(jobId: string): Promise<boolean> {
     const job = db.transcodeJobs.find((j) => j.id === jobId);
     if (!job || job.status !== "queued") return false;
     const now = nowIso();
+    const origins = siteOrigins();
     Object.assign(job, { status: "failed", error: "Cancelled by an administrator.", finishedAt: now });
-    patchBlock(db, job.lessonId, job.blockId, (b) => ({ ...b, transcode: settledState(b, "Cancelled by an administrator.", now) }));
+    patchTargetMedia(db, jobTarget(job), (m) => ({ transcode: settledState(m, "Cancelled by an administrator.", now, origins) }));
     return true;
   });
-}
-
-/** Block state after a job stopped without output: ready when an earlier version still plays, else failed. */
-function settledState(block: VideoBlock, error: string, now: string): VideoTranscodeState {
-  if (block.hlsUrl && block.storageKey && block.storageKey === transcodeSourceKey(block.src, siteOrigins())) {
-    return { status: "ready", progress: 100, renditions: block.transcode?.renditions, updatedAt: now };
-  }
-  return { status: "failed", progress: block.transcode?.progress, error, renditions: block.transcode?.renditions, updatedAt: now };
 }
 
 /* ------------------------------------------------------------------ */
@@ -365,15 +382,12 @@ export function jobView(job: TranscodeJob, all: readonly TranscodeJob[]): Transc
   };
 }
 
-/** Latest job of a block. */
+/** Latest job of a lesson video block. */
 export function latestJobFor(db: Pick<Database, "transcodeJobs">, lessonId: string, blockId: string): TranscodeJob | null {
-  let latest: TranscodeJob | null = null;
-  for (const job of db.transcodeJobs) {
-    if (job.lessonId !== lessonId || job.blockId !== blockId) continue;
-    if (!latest || job.createdAt > latest.createdAt) latest = job;
-  }
-  return latest;
+  return latestJobForTarget(db.transcodeJobs, lessonBlockTarget(lessonId, blockId));
 }
+
+export { latestJobForTarget };
 
 export interface QueueCounts {
   queued: number;
@@ -425,6 +439,7 @@ async function runLoop(): Promise<void> {
  */
 export function recoverOrphanedJobs(db: Database, activeJobId: string | null, now = nowIso()): TranscodeJob[] {
   const failed: TranscodeJob[] = [];
+  const origins = siteOrigins();
   for (const job of db.transcodeJobs) {
     if (job.status !== "running" || job.id === activeJobId) continue;
     if (job.attempts < MAX_JOB_ATTEMPTS) {
@@ -433,7 +448,7 @@ export function recoverOrphanedJobs(db: Database, activeJobId: string | null, no
     }
     const error = `The conversion was interrupted ${job.attempts} times (the server stopped while it ran), so it was not started again. Retry it once the server is stable, or upload a smaller or re-encoded file.`;
     Object.assign(job, { status: "failed", error, finishedAt: now });
-    patchBlock(db, job.lessonId, job.blockId, (b) => (transcodeSourceKey(b.src, siteOrigins()) === job.sourceKey ? { ...b, transcode: settledState(b, error, now) } : null));
+    patchTargetMedia(db, jobTarget(job), (m) => (transcodeSourceKey(m.src, origins) === job.sourceKey ? { transcode: settledState(m, error, now, origins) } : null));
     failed.push({ ...job });
   }
   return failed;
@@ -466,19 +481,19 @@ function contentTypeFor(file: string): string {
 
 async function processJob(job: TranscodeJob): Promise<void> {
   const abort = new AbortController();
+  const target = jobTarget(job);
   worker.current = { jobId: job.id, abort, heights: [], speed: null };
   const workDir = path.join(/* turbopackIgnore: true */ uploadRoot(), ".transcode", job.id);
   let published: string | null = null;
   try {
     const db = await getDb();
-    const lesson = db.lessons.find((l) => l.id === job.lessonId);
-    const block = findVideoBlock(lesson, job.blockId);
-    if (!block || transcodeSourceKey(block.src, siteOrigins()) !== job.sourceKey) throw new TranscodeCancelled("The video was removed or replaced before it was converted.");
+    const media = readTargetMedia(db, target);
+    if (!media || transcodeSourceKey(media.src, siteOrigins()) !== job.sourceKey) throw new TranscodeCancelled("The video was removed or replaced before it was converted.");
 
     const ffmpeg = await detectFfmpeg();
     if (!ffmpeg.available) throw new FfmpegError(`ffmpeg is not available: ${ffmpeg.error ?? "unknown error"}`);
 
-    await mutate((d) => patchBlock(d, job.lessonId, job.blockId, (b) => ({ ...b, transcode: { status: "processing", progress: 0, renditions: b.transcode?.renditions, updatedAt: nowIso() } })));
+    await mutate((d) => patchTargetMedia(d, target, (m) => ({ transcode: { status: "processing", progress: 0, renditions: m.transcode?.renditions, updatedAt: nowIso() } })));
 
     const settings = await getSettings();
     const source = await (await storageFor(job.sourceKey)).processingInput(job.sourceKey, SOURCE_URL_TTL_SECONDS);
@@ -508,9 +523,7 @@ async function processJob(job: TranscodeJob): Promise<void> {
         void mutate((d) => {
           const row = d.transcodeJobs.find((j) => j.id === job.id);
           if (row && row.status === "running") row.progress = percent;
-          patchBlock(d, job.lessonId, job.blockId, (b) =>
-            b.transcode?.status === "processing" ? { ...b, transcode: { ...b.transcode, progress: percent, updatedAt: nowIso() } } : null,
-          );
+          patchTargetMedia(d, target, (m) => (m.transcode?.status === "processing" ? { transcode: { ...m.transcode, progress: percent, updatedAt: nowIso() } } : null));
         });
       },
     });
@@ -539,7 +552,7 @@ async function processJob(job: TranscodeJob): Promise<void> {
 
     // Publish: segments and playlists first, the master playlist last.
     const version = uid().slice(0, 10);
-    const prefix = `${hlsKeyPrefix(job.lessonId, job.blockId)}${version}/`;
+    const prefix = `${hlsPrefixFor(target)}${version}/`;
     published = prefix;
     const storage = getStorage();
     const files = (await listFiles(workDir)).filter((f) => f !== POSTER_FILE && f !== MASTER_PLAYLIST);
@@ -550,41 +563,50 @@ async function processJob(job: TranscodeJob): Promise<void> {
     await storage.putFile(`${prefix}${MASTER_PLAYLIST}`, path.join(/* turbopackIgnore: true */ workDir, MASTER_PLAYLIST), { contentType: HLS_CONTENT_TYPES[".m3u8"]!, move: true });
     let posterUrl: string | null = null;
     if (posterMade) {
-      const posterKey = `posters/${job.lessonId}/${job.blockId}-${version}.jpg`;
+      const posterKey = posterKeyFor(target, version);
       await storage.putFile(posterKey, path.join(/* turbopackIgnore: true */ workDir, POSTER_FILE), { contentType: "image/jpeg", move: true, cacheControl: "public, max-age=31536000, immutable" });
       posterUrl = uploadUrlForKey(posterKey);
     }
 
-    // Switch the block to the new version (only if it still plays the same file).
+    // Switch the target to the new version (only if it still plays the same file).
     const origins = siteOrigins();
     const outcome = await mutate((d) => {
       let previous: string | null = null;
+      let previousPoster: string | null = null;
       const now = nowIso();
-      const ok = patchBlock(d, job.lessonId, job.blockId, (b) => {
-        if (transcodeSourceKey(b.src, origins) !== job.sourceKey) return null;
-        previous = hlsVersionPrefix(b.hlsUrl, origins);
-        return {
-          ...b,
+      const ok = patchTargetMedia(d, target, (m) => {
+        if (transcodeSourceKey(m.src, origins) !== job.sourceKey) return null;
+        previous = hlsVersionPrefix(m.hlsUrl, origins);
+        const common = {
           hlsUrl: uploadUrlForKey(`${prefix}${MASTER_PLAYLIST}`),
           storageKey: job.sourceKey,
-          transcode: { status: "ready", progress: 100, renditions: variants.map((v) => ({ height: v.height, bandwidth: v.bandwidth })), updatedAt: now },
-          duration: b.duration ?? (probe.duration > 0 ? Math.round(probe.duration) : undefined),
-          posterUrl: b.posterUrl || posterUrl || undefined,
+          transcode: { status: "ready" as const, progress: 100, renditions: variants.map((v) => ({ height: v.height, bandwidth: v.bandwidth })), updatedAt: now },
         };
+        if (target.kind === "course-preview") {
+          // The preview poster is generated only: a new conversion replaces it.
+          if (posterUrl && m.posterUrl && m.posterUrl !== posterUrl) previousPoster = m.posterUrl;
+          return { ...common, posterUrl: posterUrl ?? m.posterUrl };
+        }
+        // Lesson blocks keep a poster and duration the editor set.
+        return { ...common, duration: m.duration ?? (probe.duration > 0 ? Math.round(probe.duration) : undefined), posterUrl: m.posterUrl || posterUrl || undefined };
       });
       const row = d.transcodeJobs.find((j) => j.id === job.id);
       if (row) Object.assign(row, ok ? { status: "done", progress: 100, finishedAt: now, error: undefined } : { status: "failed", error: "The video was replaced while it was being converted.", finishedAt: now });
-      return { ok, previous: previous as string | null };
+      // An older version is deleted only when nothing else (e.g. a duplicated course or lesson) still plays it.
+      const stillUsed = previous ? referencedHlsVersions(d, origins).has(previous) : false;
+      return { ok, previous: stillUsed ? null : (previous as string | null), previousPoster: previousPoster as string | null };
     });
     if (!outcome.ok) {
       await storage.deletePrefix(prefix).catch(() => undefined);
+      if (posterUrl) await deleteGeneratedPoster(target, posterUrl);
       return;
     }
     published = null;
     if (outcome.previous && outcome.previous !== prefix) await deleteHlsVersion(outcome.previous);
+    if (outcome.previousPoster) await deleteGeneratedPoster(target, outcome.previousPoster);
 
     await notifyInstructors(job, "ready", `Converted to ${renditionLabel(variants.map((v) => v.height))}.`);
-    await onVideoReady(job.lessonId, job.blockId);
+    if (target.kind === "lesson-block") await onVideoReady(target.lessonId, target.blockId);
   } catch (err) {
     const cancelled = abort.signal.aborted || err instanceof TranscodeCancelled;
     const message = err instanceof Error ? err.message : String(err);
@@ -592,9 +614,10 @@ async function processJob(job: TranscodeJob): Promise<void> {
     if (!(err instanceof FfmpegError) && !cancelled) console.error("[transcode] job failed:", job.id, message);
     await mutate((d) => {
       const now = nowIso();
+      const origins = siteOrigins();
       const row = d.transcodeJobs.find((j) => j.id === job.id);
       if (row) Object.assign(row, { status: "failed", error: tailText(detail, MAX_ERROR_CHARS), finishedAt: now });
-      patchBlock(d, job.lessonId, job.blockId, (b) => (transcodeSourceKey(b.src, siteOrigins()) === job.sourceKey ? { ...b, transcode: settledState(b, message, now) } : null));
+      patchTargetMedia(d, target, (m) => (transcodeSourceKey(m.src, origins) === job.sourceKey ? { transcode: settledState(m, message, now, origins) } : null));
     });
     if (published) await getStorage().deletePrefix(published).catch(() => undefined);
     if (!cancelled) await notifyInstructors(job, "failed", message);
@@ -609,18 +632,43 @@ async function deleteHlsVersion(prefix: string): Promise<void> {
   await Promise.all([localStorage().deletePrefix(prefix).catch(() => 0), getStorage().kind === "s3" ? getStorage().deletePrefix(prefix).catch(() => 0) : Promise.resolve(0)]);
 }
 
+/** Delete a poster this pipeline generated for a course preview (never any other upload). */
+async function deleteGeneratedPoster(target: TranscodeTarget, url: string): Promise<void> {
+  if (target.kind !== "course-preview") return;
+  const key = storageKeyFromUrl(url, siteOrigins());
+  if (!key || !key.startsWith(`posters/${COURSE_PREVIEW_ROOT}/${target.courseId}/${COURSE_PREVIEW_DIR}-`)) return;
+  await (await storageFor(key)).delete(key).catch(() => undefined);
+}
+
 async function notifyInstructors(job: TranscodeJob, outcome: "ready" | "failed", detail: string): Promise<void> {
   try {
     const db = await getDb();
-    const lesson = db.lessons.find((l) => l.id === job.lessonId);
-    const course = lesson ? db.courses.find((c) => c.id === lesson.courseId) : null;
-    if (!lesson || !course) return;
+    const target = jobTarget(job);
+    let course = null;
+    let name: string;
+    let link: string;
+    if (target.kind === "course-preview") {
+      course = db.courses.find((c) => c.id === target.courseId) ?? null;
+      if (!course) return;
+      name = `${course.title} (preview video)`;
+      link = `/admin/courses/${course.id}`;
+    } else {
+      const lesson = db.lessons.find((l) => l.id === target.lessonId);
+      course = lesson ? (db.courses.find((c) => c.id === lesson.courseId) ?? null) : null;
+      if (!lesson || !course) return;
+      name = lesson.title;
+      link = `/admin/courses/${course.id}/lessons/${lesson.id}`;
+    }
+    const audience = target.kind === "course-preview" ? "Visitors" : "Learners";
     const recipients = Array.from(new Set([...course.instructorIds, course.createdById])).filter(Boolean);
     await notifyMany(recipients, {
       type: "system",
-      subject: outcome === "ready" ? `Video ready: ${lesson.title}` : `Video conversion failed: ${lesson.title}`,
-      message: outcome === "ready" ? `${detail} Learners now get adaptive streaming.` : `${detail.split("\n")[0]} Learners still get the original file. Open the lesson to retry.`,
-      link: `/admin/courses/${course.id}/lessons/${lesson.id}`,
+      subject: outcome === "ready" ? `Video ready: ${name}` : `Video conversion failed: ${name}`,
+      message:
+        outcome === "ready"
+          ? `${detail} ${audience} now get adaptive streaming.`
+          : `${detail.split("\n")[0]} ${audience} still get the original file. Open the ${target.kind === "course-preview" ? "course" : "lesson"} to retry.`,
+      link,
       // Success is informational only; failures also go out by email.
       email: outcome === "failed",
       dedupeKey: `transcode:${job.id}:${outcome}`,
@@ -631,9 +679,9 @@ async function notifyInstructors(job: TranscodeJob, outcome: "ready" | "failed",
 }
 
 /**
- * Hook point run after a video's HLS version is published: starts automatic
- * captions when the transcripts module is present (it is optional, so it is
- * loaded dynamically and its absence is not an error).
+ * Hook point run after a lesson video's HLS version is published: starts
+ * automatic captions when the transcripts module is present (it is optional,
+ * so it is loaded dynamically and its absence is not an error).
  */
 export async function onVideoReady(lessonId: string, blockId: string): Promise<void> {
   try {
@@ -648,59 +696,61 @@ export async function onVideoReady(lessonId: string, blockId: string): Promise<v
 /* Housekeeping                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Remove finished jobs older than the retention period (the newest job of each block stays). */
+/** Remove finished jobs older than the retention period (the newest job of each target stays). */
 export async function pruneTranscodeJobs(now = Date.now()): Promise<number> {
   const cutoff = new Date(now - JOB_RETENTION_DAYS * 86_400_000).toISOString();
   return mutate((db) => {
     const newest = new Map<string, string>();
     for (const j of db.transcodeJobs) {
-      const k = `${j.lessonId}|${j.blockId}`;
+      const k = jobTargetId(j);
       if ((newest.get(k) ?? "") < j.createdAt) newest.set(k, j.createdAt);
     }
     const before = db.transcodeJobs.length;
-    db.transcodeJobs = db.transcodeJobs.filter((j) => isActive(j) || j.createdAt >= cutoff || newest.get(`${j.lessonId}|${j.blockId}`) === j.createdAt);
+    db.transcodeJobs = db.transcodeJobs.filter((j) => isActive(j) || j.createdAt >= cutoff || newest.get(jobTargetId(j)) === j.createdAt);
     return before - db.transcodeJobs.length;
   });
 }
 
+/** Version folders `<hlsDir>/<version>/` on local disk, as storage prefixes under `prefix`. */
+async function localVersions(hlsDir: string, prefix: string): Promise<{ prefix: string; dir: string }[]> {
+  const versions = await fs.readdir(hlsDir, { withFileTypes: true }).catch(() => []);
+  return versions.filter((v) => v.isDirectory()).map((v) => ({ prefix: `${prefix}${v.name}/`, dir: path.join(/* turbopackIgnore: true */ hlsDir, v.name) }));
+}
+
 /**
- * Delete HLS versions no lesson block points at any more (deleted lessons or
- * blocks, replaced videos). Versions younger than a day are kept so a job
- * being published is never touched.
+ * Delete HLS versions no lesson block or course preview points at any more
+ * (deleted lessons, blocks or courses, replaced videos). Versions younger
+ * than a day are kept so a job being published is never touched.
  */
 export async function cleanupOrphanedHls(now = Date.now()): Promise<number> {
   const db = await getDb();
   const origins = siteOrigins();
-  const referenced = new Set<string>();
-  for (const lesson of db.lessons) {
-    for (const block of lesson.blocks) {
-      if (block.type !== "video") continue;
-      const prefix = hlsVersionPrefix(block.hlsUrl, origins);
-      if (prefix) referenced.add(prefix);
-    }
-  }
+  const referenced = referencedHlsVersions(db, origins);
   let removed = 0;
   const minAge = 86_400_000;
 
-  // Local disk: videos/<lesson>/<block>/hls/<version>/
+  // Local disk: videos/<lesson>/<block>/hls/<version>/ and videos/course/<course>/preview/hls/<version>/
   const videosDir = path.join(/* turbopackIgnore: true */ uploadRoot(), "videos");
-  const lessons = await fs.readdir(videosDir, { withFileTypes: true }).catch(() => []);
-  for (const l of lessons) {
+  const candidates: { prefix: string; dir: string }[] = [];
+  const level1 = await fs.readdir(videosDir, { withFileTypes: true }).catch(() => []);
+  for (const l of level1) {
     if (!l.isDirectory()) continue;
-    const blocks = await fs.readdir(path.join(/* turbopackIgnore: true */ videosDir, l.name), { withFileTypes: true }).catch(() => []);
-    for (const b of blocks) {
+    const level2 = await fs.readdir(path.join(/* turbopackIgnore: true */ videosDir, l.name), { withFileTypes: true }).catch(() => []);
+    for (const b of level2) {
       if (!b.isDirectory()) continue;
-      const hlsDir = path.join(/* turbopackIgnore: true */ videosDir, l.name, b.name, "hls");
-      const versions = await fs.readdir(hlsDir, { withFileTypes: true }).catch(() => []);
-      for (const v of versions) {
-        if (!v.isDirectory()) continue;
-        const prefix = `videos/${l.name}/${b.name}/hls/${v.name}/`;
-        if (referenced.has(prefix)) continue;
-        const stat = await fs.stat(path.join(/* turbopackIgnore: true */ hlsDir, v.name)).catch(() => null);
-        if (!stat || now - stat.mtimeMs < minAge) continue;
-        removed += await localStorage().deletePrefix(prefix).catch(() => 0);
+      candidates.push(...(await localVersions(path.join(/* turbopackIgnore: true */ videosDir, l.name, b.name, "hls"), `videos/${l.name}/${b.name}/hls/`)));
+      if (l.name === COURSE_PREVIEW_ROOT) {
+        candidates.push(
+          ...(await localVersions(path.join(/* turbopackIgnore: true */ videosDir, l.name, b.name, COURSE_PREVIEW_DIR, "hls"), `videos/${COURSE_PREVIEW_ROOT}/${b.name}/${COURSE_PREVIEW_DIR}/hls/`)),
+        );
       }
     }
+  }
+  for (const c of candidates) {
+    if (referenced.has(c.prefix)) continue;
+    const stat = await fs.stat(c.dir).catch(() => null);
+    if (!stat || now - stat.mtimeMs < minAge) continue;
+    removed += await localStorage().deletePrefix(c.prefix).catch(() => 0);
   }
 
   // Bucket: group keys by version folder.
@@ -710,8 +760,8 @@ export async function cleanupOrphanedHls(now = Date.now()): Promise<number> {
     const keys = await client.listKeys("videos/").catch(() => [] as string[]);
     const prefixes = new Set<string>();
     for (const key of keys) {
-      const m = /^(videos\/[^/]+\/[^/]+\/hls\/[^/]+\/)/.exec(key);
-      if (m) prefixes.add(m[1]!);
+      const folder = hlsVersionFolderOfKey(key);
+      if (folder) prefixes.add(folder);
     }
     for (const prefix of prefixes) {
       if (referenced.has(prefix)) continue;

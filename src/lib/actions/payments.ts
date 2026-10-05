@@ -165,7 +165,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   // Paying in parts: the plan is priced as one order (surcharge, coupon, tax) and split into equal payments.
   const wantsInstallments = fd(formData, "paymentOption") === "installments";
   // Tax for the country of the billing address (by-country tax), computed here, never taken from the browser.
-  const tax: TaxContext = { rules: db.taxRules, country: countryCode(input.country) };
+  // A business buyer's VAT number can make it an EU reverse-charge sale (no VAT, noted on the invoice).
+  const tax: TaxContext = { rules: db.taxRules, country: countryCode(input.country), vatId: input.vatId || null };
   const split = wantsInstallments ? installmentCheckout(item, coupon, settings, tax) : null;
   if (wantsInstallments && !split) {
     return { ok: false, error: "This course can no longer be paid in installments. Reload the page to see the current payment options." };

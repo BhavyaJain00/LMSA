@@ -72,7 +72,7 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
   const fieldErrors = { ...(gift.ok ? {} : gift.errors), ...validateBilling(input, settings.commerce.applyTax) };
   if (Object.keys(fieldErrors).length || !gift.ok) return { ok: false, error: Object.values(fieldErrors)[0] ?? "Please fix the errors below.", fieldErrors };
 
-  const summary = giftSummary(item, settings, { rules: db.taxRules, country: countryCode(input.country) });
+  const summary = giftSummary(item, settings, { rules: db.taxRules, country: countryCode(input.country), vatId: input.vatId || null });
   const expected = fd(formData, "expectedTotal");
   if (expected !== "" && Number(expected) !== summary.total) {
     return { ok: false, error: "The price changed while you were checking out. Please review the updated order summary and try again." };
