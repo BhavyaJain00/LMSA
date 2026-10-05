@@ -1,5 +1,5 @@
 import "server-only";
-import type { Database, Lesson, User } from "@/lib/types";
+import type { Course, Database, Lesson, User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
 import { getDb } from "@/lib/db/store";
 import { isEvaluator, isModerator, isStaff } from "@/lib/auth/session";
@@ -15,7 +15,8 @@ import { mediaPathKey, parseMediaSrc, sameMediaPath } from "./paths";
  *    enrolled learners on released, unlocked lessons, course managers, and
  *    anyone on an open free-preview lesson of a published course when guest
  *    access is on. Drip dates and enforced order apply to previews too.
- *  - Course promo videos: anyone who can see the course page.
+ *  - Course promo videos (and the HLS stream made from them): anyone who can
+ *    see the course page.
  *  - Live class recordings: learners of the batch, its managers and evaluators.
  *  - Files not referenced anywhere yet (fresh uploads in an editor): staff.
  *  - Moderators and admins: everything.
@@ -86,6 +87,14 @@ export function lessonReferencesPath(lesson: Pick<Lesson, "blocks">, path: strin
 }
 
 /**
+ * Whether a course's preview plays the upload at `path`: its video file, or
+ * any file of the HLS stream made from it (`videos/course/<id>/preview/hls/…`).
+ */
+export function courseReferencesPath(course: Pick<Course, "videoUrl" | "previewHlsUrl">, path: string, origins: readonly string[] = siteOrigins()): boolean {
+  return srcIsUpload(course.videoUrl, path, origins) || srcIsUpload(course.previewHlsUrl, path, origins) || insideHlsFolder(course.previewHlsUrl, path, origins);
+}
+
+/**
  * The lesson is open to this viewer for playback purposes: exactly when the
  * lesson page opens (`getLessonAccess`). A free preview is already `canView`
  * while previews are allowed; when it is not, the preview is held back by a
@@ -147,7 +156,7 @@ export async function authorizeMediaAccess(
   }
 
   for (const course of db.courses) {
-    if (!srcIsUpload(course.videoUrl, path, origins)) continue;
+    if (!courseReferencesPath(course, path, origins)) continue;
     referenced = true;
     if (canViewCourse(user, course)) return { ok: true, via: "course" };
   }

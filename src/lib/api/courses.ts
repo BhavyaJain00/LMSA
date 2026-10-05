@@ -7,6 +7,7 @@ import { mutate } from "@/lib/db/store";
 import { RESERVED_COURSE_SLUGS } from "@/lib/data/admin-courses";
 import { isBlockedVideoHost } from "@/components/admin/courses/blocks";
 import { syncContentIndex } from "@/lib/seo/content-sync";
+import { syncCoursePreviewTranscode } from "@/lib/media/transcode/queue";
 import { toDateKey, uid, uniqueSlug } from "@/lib/utils";
 import type { endpoints } from "./endpoints";
 import { conflict, notFound, validationError } from "./errors";
@@ -196,4 +197,6 @@ export function afterCourseWrite(course: Pick<Course, "id" | "slug">, previousSl
   revalidatePath("/");
   // Slug changes get a 308 redirect and search engines are pinged (see content-sync.ts).
   after(() => syncContentIndex().then(() => undefined));
+  // A new or replaced preview upload is converted for adaptive streaming; a removed one releases its stream.
+  after(() => syncCoursePreviewTranscode(course.id).then(() => undefined));
 }

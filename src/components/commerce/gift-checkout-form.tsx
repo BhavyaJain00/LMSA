@@ -104,6 +104,7 @@ export function GiftCheckoutForm({
   defaults,
   contactEmail,
   legal,
+  reverseCharge = false,
 }: {
   giftType: GiftItemType;
   itemId: string;
@@ -121,6 +122,8 @@ export function GiftCheckoutForm({
   defaults: BillingDefaults;
   contactEmail?: string;
   legal: AgreementLink[];
+  /** EU reverse charge applies to the priced gift (no VAT for this business buyer). */
+  reverseCharge?: boolean;
 }) {
   return (
     <BillingForm
@@ -141,6 +144,7 @@ export function GiftCheckoutForm({
       legal={legal}
       action={placeGiftOrderAction}
       gift
+      reverseCharge={reverseCharge}
       extraFields={(errors) => <RecipientFields errors={errors} giftType={giftType} itemId={itemId} />}
     />
   );

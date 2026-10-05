@@ -13,13 +13,21 @@ import { contentTypeForKey, runMediaMaintenance, type MediaMaintenanceResult } f
 import { detectFfmpeg, type FfmpegStatus } from "@/lib/media/transcode/ffmpeg";
 import { SUPPORTED_RENDITIONS, normalizeRenditions } from "@/lib/media/transcode/plan";
 import { SAFE_ID } from "@/lib/media/transcode/lesson-fields";
-import { getBlockMediaStatus, type BlockMediaStatus } from "@/lib/media/transcode/status";
-import { cancelTranscodeJob, enqueueTranscode, retryFailedTranscodes, retryTranscodeJob, syncAllTranscodes } from "@/lib/media/transcode/queue";
+import { getBlockMediaStatus, getCoursePreviewMediaStatus, type BlockMediaStatus, type CoursePreviewMediaStatus } from "@/lib/media/transcode/status";
+import {
+  cancelTranscodeJob,
+  enqueueCoursePreviewTranscode,
+  enqueueTranscode,
+  retryFailedTranscodes,
+  retryTranscodeJob,
+  syncAllTranscodes,
+} from "@/lib/media/transcode/queue";
 
 /**
  * Admin → Settings → Storage & video (CDN, adaptive streaming, renditions,
- * automatic captions, connection test, conversion queue) and the lesson
- * editor's per-video conversion controls (course managers).
+ * automatic captions, connection test, conversion queue), the lesson
+ * editor's per-video conversion controls and the course settings' preview
+ * video conversion controls (course managers).
  */
 
 const SETTINGS_PATH = "/admin/settings/storage";
@@ -108,7 +116,7 @@ export async function retryTranscodeJobAction(jobId: string): Promise<ActionResu
   if (!/^tcj_[a-z0-9]{8,32}$/.test(String(jobId))) return { ok: false, error: "This job no longer exists." };
   const res = await retryTranscodeJob(jobId);
   if (!res.ok) return { ok: false, error: res.message };
-  await audit(user, "media.transcode_retry", { type: "transcode_job", id: jobId }, { lessonId: res.job.lessonId });
+  await audit(user, "media.transcode_retry", { type: "transcode_job", id: jobId }, res.job.target?.kind === "course-preview" ? { courseId: res.job.target.courseId } : { lessonId: res.job.lessonId });
   revalidatePath(SETTINGS_PATH);
   return { ok: true, data: undefined, message: "Conversion queued again" };
 }
@@ -201,6 +209,48 @@ export async function cancelVideoBlockTranscodeAction(lessonId: string, blockId:
   await cancelTranscodeJob(job.id);
   await audit(loaded.user, "media.transcode_cancel", { type: "transcode_job", id: job.id }, { lessonId, blockId });
   const status = await getBlockMediaStatus(loaded.user, lessonId, blockId);
+  if (!status.ok) return { ok: false, error: status.error };
+  return { ok: true, data: status.status, message: "Conversion cancelled" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Course settings: the preview video                                   */
+/* ------------------------------------------------------------------ */
+
+async function loadManagedCourse(courseId: string): Promise<{ user: User } | { error: string }> {
+  if (!SAFE_ID.test(String(courseId))) return { error: "Invalid course." };
+  const user = await getCurrentUser();
+  if (!user) return { error: "Sign in again to continue." };
+  const course = await findById("courses", courseId);
+  if (!course) return { error: "This course no longer exists." };
+  if (!canManageCourse(user, course)) return { error: "You can't manage this course." };
+  if (!course.videoUrl) return { error: "Save the course with a preview video first." };
+  return { user };
+}
+
+/** Convert (or convert again, or retry) a course's uploaded preview video to HLS. */
+export async function transcodeCoursePreviewAction(courseId: string): Promise<ActionResult<CoursePreviewMediaStatus>> {
+  const loaded = await loadManagedCourse(courseId);
+  if ("error" in loaded) return { ok: false, error: loaded.error };
+  const res = await enqueueCoursePreviewTranscode(courseId, { force: true });
+  if (!res.ok) return { ok: false, error: res.message };
+  await audit(loaded.user, "media.transcode_start", { type: "course", id: courseId }, { video: "preview" });
+  const status = await getCoursePreviewMediaStatus(loaded.user, courseId);
+  if (!status.ok) return { ok: false, error: status.error };
+  return { ok: true, data: status.status, message: res.created ? "Conversion queued" : "This video is already being converted" };
+}
+
+/** Stop the running or queued conversion of a course's preview video. */
+export async function cancelCoursePreviewTranscodeAction(courseId: string): Promise<ActionResult<CoursePreviewMediaStatus>> {
+  const loaded = await loadManagedCourse(courseId);
+  if ("error" in loaded) return { ok: false, error: loaded.error };
+  const current = await getCoursePreviewMediaStatus(loaded.user, courseId);
+  if (!current.ok) return { ok: false, error: current.error };
+  const job = current.status.job;
+  if (!job || (job.status !== "queued" && job.status !== "running")) return { ok: false, error: "Nothing is being converted right now." };
+  await cancelTranscodeJob(job.id);
+  await audit(loaded.user, "media.transcode_cancel", { type: "transcode_job", id: job.id }, { courseId, video: "preview" });
+  const status = await getCoursePreviewMediaStatus(loaded.user, courseId);
   if (!status.ok) return { ok: false, error: status.error };
   return { ok: true, data: status.status, message: "Conversion cancelled" };
 }

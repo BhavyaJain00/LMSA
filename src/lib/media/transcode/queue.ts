@@ -24,6 +24,7 @@ import {
   needsConversion,
   patchTargetMedia,
   planEnqueue,
+  planStaleOutputRelease,
   posterKeyFor,
   readTargetMedia,
   referencedHlsVersions,
@@ -229,16 +230,56 @@ export async function syncLessonTranscodes(lessonId: string): Promise<number> {
 }
 
 /**
- * Queue the conversion of a course's preview video when it needs one (call
- * after saving a course): a new upload, a replaced file or a video that
- * waited for ffmpeg. Never throws; returns the number of new jobs (0 or 1).
+ * Clear the HLS output, conversion state and generated poster a target keeps
+ * for a file it no longer plays (a new upload, a link or no video), fail
+ * queued jobs for older files and stop a running one. The released HLS
+ * version is deleted right away unless something else still plays it (the
+ * orphan sweep catches anything left). Returns true when anything changed.
+ */
+export async function releaseStaleTargetOutput(target: TranscodeTarget): Promise<boolean> {
+  const origins = siteOrigins();
+  const hasWork = (db: Database) => {
+    const plan = planStaleOutputRelease({ target, media: readTargetMedia(db, target), jobs: db.transcodeJobs, siteOrigins: origins });
+    return !!plan.patch || plan.obsoleteJobIds.length > 0 || !!plan.abortJobId;
+  };
+  // Most saves change nothing here: look before taking the write lock.
+  if (!hasWork(await getDb())) return false;
+  const outcome = await mutate((db) => {
+    const plan = planStaleOutputRelease({ target, media: readTargetMedia(db, target), jobs: db.transcodeJobs, siteOrigins: origins });
+    const now = nowIso();
+    const obsolete = new Set(plan.obsoleteJobIds);
+    for (const j of db.transcodeJobs) if (obsolete.has(j.id)) Object.assign(j, { status: "failed", error: "Replaced by a newer video.", finishedAt: now });
+    const patch = plan.patch;
+    const changed = patch ? patchTargetMedia(db, target, () => patch) : false;
+    const stillUsed = plan.releasedVersion ? referencedHlsVersions(db, origins).has(plan.releasedVersion) : false;
+    return {
+      changed: changed || obsolete.size > 0 || !!plan.abortJobId,
+      abortJobId: plan.abortJobId,
+      releasedVersion: changed && !stillUsed ? plan.releasedVersion : null,
+      releasedPoster: changed ? plan.releasedPoster : null,
+    };
+  });
+  // The running job notices the abort, finds the target playing another file and fails quietly.
+  if (outcome.abortJobId && worker.current?.jobId === outcome.abortJobId) worker.current.abort.abort();
+  if (outcome.releasedVersion) await deleteHlsVersion(outcome.releasedVersion);
+  if (outcome.releasedPoster) await deleteGeneratedPoster(target, outcome.releasedPoster);
+  return outcome.changed;
+}
+
+/**
+ * Bring a course's preview video in line with its saved `videoUrl` (call
+ * after saving a course): output made from a replaced or removed video is
+ * released, and a new upload, a replaced file or a video that waited for
+ * ffmpeg is queued for conversion while adaptive streaming is on. Never
+ * throws; returns the number of new jobs (0 or 1).
  */
 export async function syncCoursePreviewTranscode(courseId: string): Promise<number> {
   try {
+    const target = coursePreviewTarget(courseId);
+    await releaseStaleTargetOutput(target);
     const settings = await getSettings();
     if (!settings.storage.transcodeToHls) return 0;
     const db = await getDb();
-    const target = coursePreviewTarget(courseId);
     if (!needsConversion(readTargetMedia(db, target), siteOrigins())) return 0;
     const res = await enqueueTargetTranscode(target);
     return res.ok && res.created ? 1 : 0;

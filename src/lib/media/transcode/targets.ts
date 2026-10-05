@@ -287,3 +287,68 @@ export function needsConversion(media: TargetMedia | null, siteOrigins: readonly
   const key = transcodeSourceKey(media.src, siteOrigins);
   return !!key && !(media.hlsUrl && media.storageKey === key && media.transcode?.status === "ready");
 }
+
+/* ------------------------------------------------------------------ */
+/* Releasing output of a replaced or removed video                      */
+/* ------------------------------------------------------------------ */
+
+export interface StaleOutputPlan {
+  /** Fields to clear on the target, or null when its stored output still belongs to its video. */
+  patch: TargetMediaPatch | null;
+  /** HLS version folder that stops being played (delete it unless something else plays it). */
+  releasedVersion: string | null;
+  /** Generated poster that stops being shown (course previews only). */
+  releasedPoster: string | null;
+  /** Queued jobs converting a file the target no longer plays. */
+  obsoleteJobIds: string[];
+  /** Running job converting a file the target no longer plays (abort it). */
+  abortJobId: string | null;
+}
+
+/**
+ * What to clean up when a target no longer plays the file its stored output
+ * was made from (a new upload, a link, or no video at all):
+ *  - the HLS URL, its source key and the conversion state are cleared, and
+ *    the HLS version folder is released;
+ *  - a course preview's generated poster is released as well (a lesson
+ *    block's poster may have been set by the editor and is left alone);
+ *  - a conversion state left behind by a job for an older file (pending,
+ *    processing or failed) is cleared even without stored output;
+ *  - queued jobs for older files become obsolete and a running one is aborted.
+ * The conversion of the current file, if any, is queued separately.
+ */
+export function planStaleOutputRelease(args: {
+  target: TranscodeTarget;
+  media: TargetMedia | null;
+  jobs: readonly TranscodeJob[];
+  siteOrigins?: readonly string[];
+}): StaleOutputPlan {
+  const { target, media } = args;
+  const origins = args.siteOrigins ?? [];
+  const none: StaleOutputPlan = { patch: null, releasedVersion: null, releasedPoster: null, obsoleteJobIds: [], abortJobId: null };
+  if (!media) return none;
+  const key = transcodeSourceKey(media.src, origins);
+  const own = args.jobs.filter((j) => isJobFor(j, target));
+  const obsoleteJobIds = own.filter((j) => j.status === "queued" && j.sourceKey !== key).map((j) => j.id);
+  const abortJobId = own.find((j) => j.status === "running" && j.sourceKey !== key)?.id ?? null;
+
+  const outputStale = !!(media.hlsUrl || media.storageKey) && (!key || media.storageKey !== key);
+  let patch: TargetMediaPatch | null = null;
+  let releasedVersion: string | null = null;
+  let releasedPoster: string | null = null;
+  if (outputStale) {
+    patch = { hlsUrl: undefined, storageKey: undefined, transcode: undefined };
+    releasedVersion = hlsVersionPrefix(media.hlsUrl, origins);
+    if (target.kind === "course-preview" && media.posterUrl) {
+      patch.posterUrl = undefined;
+      releasedPoster = media.posterUrl;
+    }
+  } else if (media.transcode && !media.hlsUrl) {
+    const latest = latestJobForTarget(args.jobs, target);
+    const state = media.transcode.status;
+    // "unavailable" describes the server (no ffmpeg), not a file: it only goes when there is nothing to convert.
+    const leftover = state === "unavailable" ? !key : !key || (!!latest && latest.sourceKey !== key);
+    if (leftover) patch = { transcode: undefined };
+  }
+  return { patch, releasedVersion, releasedPoster, obsoleteJobIds, abortJobId };
+}

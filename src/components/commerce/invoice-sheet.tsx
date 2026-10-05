@@ -16,13 +16,15 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
   const refunded = invoice.refundedAmount > 0;
   const taxName = invoice.taxCountryName ? `${invoice.taxLabel} · ${invoice.taxCountryName}` : invoice.taxLabel;
   const rate = invoice.taxRate !== null && invoice.taxRate > 0 ? f.number(invoice.taxRate) : null;
-  const taxLine = rate
-    ? invoice.taxInclusive
-      ? t("commerce.invoice.taxRateIncluded", { name: taxName, rate })
-      : t("commerce.invoice.taxRate", { name: taxName, rate })
-    : invoice.taxInclusive
-      ? t("commerce.invoice.taxIncluded", { name: taxName })
-      : taxName;
+  const taxLine = invoice.reverseCharge
+    ? t("commerce.invoice.taxReverse", { name: taxName })
+    : rate
+      ? invoice.taxInclusive
+        ? t("commerce.invoice.taxRateIncluded", { name: taxName, rate })
+        : t("commerce.invoice.taxRate", { name: taxName, rate })
+      : invoice.taxInclusive
+        ? t("commerce.invoice.taxIncluded", { name: taxName })
+        : taxName;
   const statusLabel = t(paymentStatusKey({ status: invoice.status, refundedAmount: invoice.refundedAmount, amount: invoice.total }));
   const stampTone =
     invoice.status === "refunded" ? "border-danger/40 text-danger" : refunded ? "border-warning/50 text-warning" : "border-success/50 text-success";
@@ -70,6 +72,32 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
       {/* Parties */}
       <section className="grid gap-6 border-b border-border py-6 sm:grid-cols-2" aria-label={t("commerce.invoice.billingDetails")}>
         <div className="min-w-0">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">{t("commerce.invoice.billedBy")}</h2>
+          <p className="mt-2 font-semibold">{invoice.seller.legalName}</p>
+          {(invoice.seller.addressLines.length > 0 || invoice.seller.countryName) && (
+            <address className="mt-1 text-sm not-italic leading-relaxed text-ink-muted">
+              {invoice.seller.addressLines.map((line, i) => (
+                <span key={i} className="block">
+                  {line}
+                </span>
+              ))}
+              {invoice.seller.countryName && <span className="block">{invoice.seller.countryName}</span>}
+            </address>
+          )}
+          {invoice.seller.taxIds.length > 0 && (
+            <dl className="mt-2 space-y-0.5 text-sm">
+              {invoice.seller.taxIds.map((id) => (
+                <div key={`${id.label}-${id.value}`} className="flex flex-wrap gap-x-2">
+                  <dt className="text-ink-muted">{id.label}</dt>
+                  <dd className="font-mono" dir="ltr">
+                    {id.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+        <div className="min-w-0">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">{t("commerce.invoice.billedTo")}</h2>
           <p className="mt-2 font-semibold">{invoice.buyer.name}</p>
           {invoice.buyer.email && (
@@ -86,8 +114,16 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
               ))}
             </address>
           )}
-          {(invoice.buyer.gstin || invoice.buyer.pan) && (
+          {(invoice.buyer.gstin || invoice.buyer.pan || invoice.buyer.taxId) && (
             <dl className="mt-2 space-y-0.5 text-sm">
+              {invoice.buyer.taxId && (
+                <div className="flex flex-wrap gap-x-2">
+                  <dt className="text-ink-muted">{invoice.buyer.taxIdKind === "vat" ? t("commerce.invoice.buyerVat") : t("commerce.invoice.buyerTaxId")}</dt>
+                  <dd className="font-mono" dir="ltr">
+                    {invoice.buyer.taxId}
+                  </dd>
+                </div>
+              )}
               {invoice.buyer.gstin && (
                 <div className="flex gap-2">
                   <dt className="text-ink-muted">GSTIN</dt>
@@ -103,7 +139,11 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
             </dl>
           )}
         </div>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm sm:justify-self-end">
+      </section>
+
+      {/* Invoice facts */}
+      <section className="border-b border-border py-5" aria-label={t("commerce.invoice.number")}>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] print:grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
           <Meta label={t("commerce.invoice.number")} mono>
             {invoice.invoiceNumber}
           </Meta>
@@ -160,8 +200,8 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
               − {m(invoice.discountAmount)}
             </Total>
           )}
-          {(invoice.discountAmount > 0 || invoice.taxAmount > 0) && <Total label={t("commerce.invoice.taxable")}>{m(invoice.taxableAmount)}</Total>}
-          {invoice.taxAmount > 0 && (
+          {(invoice.discountAmount > 0 || invoice.taxAmount > 0 || invoice.reverseCharge) && <Total label={t("commerce.invoice.taxable")}>{m(invoice.taxableAmount)}</Total>}
+          {(invoice.taxAmount > 0 || invoice.reverseCharge) && (
             <Total label={taxLine}>
               {m(invoice.taxAmount)}
             </Total>
@@ -185,6 +225,13 @@ export async function InvoiceSheet({ invoice, className }: { invoice: InvoiceVie
             </>
           )}
         </dl>
+
+        {invoice.reverseCharge && (
+          <div className="mt-5 rounded-lg border border-border-strong px-4 py-3 text-sm">
+            <p className="font-semibold uppercase tracking-wide">{t("commerce.invoice.reverseCharge")}</p>
+            <p className="mt-1 text-ink-muted">{t("commerce.invoice.reverseChargeNote", { name: invoice.taxLabel })}</p>
+          </div>
+        )}
       </section>
 
       <footer className="border-t border-border pt-5 text-xs leading-relaxed text-ink-muted">
@@ -201,7 +248,7 @@ function Meta({ label, children, mono }: { label: string; children: ReactNode; m
   return (
     <>
       <dt className="text-ink-muted">{label}</dt>
-      <dd className={cn("min-w-0 break-all sm:text-end", mono && "font-mono text-[13px]")}>{children}</dd>
+      <dd className={cn("min-w-0 break-all", mono && "font-mono text-[13px]")}>{children}</dd>
     </>
   );
 }

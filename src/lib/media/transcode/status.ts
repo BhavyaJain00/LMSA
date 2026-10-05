@@ -1,43 +1,52 @@
 import "server-only";
-import type { Course, Lesson, User, VideoTranscodeState } from "@/lib/types";
+import type { Course, Lesson, User } from "@/lib/types";
 import { getDb, getSettings } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { siteOrigins } from "../access";
 import { detectFfmpeg, FFMPEG_INSTALL_HINT } from "./ffmpeg";
 import { SAFE_ID, hlsMatchesSource, transcodeSourceKey, type VideoBlock } from "./lesson-fields";
-import { enqueueTranscode, isWorkerRunning, jobView, kickTranscodeWorker, latestJobFor, type TranscodeJobView } from "./queue";
+import {
+  enqueueTargetTranscode,
+  enqueueTranscode,
+  isWorkerRunning,
+  jobView,
+  kickTranscodeWorker,
+  latestJobFor,
+  latestJobForTarget,
+  releaseStaleTargetOutput,
+} from "./queue";
+import type { MediaStatusCore } from "./status-view";
+import { coursePreviewHlsMatches, coursePreviewTarget } from "./targets";
 
 /**
- * What the lesson editor shows under a video block: conversion state, the
- * latest job, ffmpeg availability and links. Shared by
- * `GET /api/media/status` and the editor's server actions.
+ * What the editors show under a video: conversion state, the latest job,
+ * ffmpeg availability and links — for a lesson video block (lesson editor)
+ * or a course's preview video (course settings). Shared by
+ * `GET /api/media/status` and the editors' server actions.
  */
 
-export interface BlockMediaStatus {
+export type { MediaStatusCore };
+
+export interface BlockMediaStatus extends MediaStatusCore {
   lessonId: string;
   blockId: string;
   courseId: string;
-  /** Adaptive streaming is switched on in Settings → Storage & video. */
-  enabled: boolean;
-  ffmpeg: { available: boolean; error: string | null; hint: string | null };
-  /** The block plays a file uploaded to this site that ffmpeg can convert. */
-  convertible: boolean;
-  /** The block exists in the saved lesson (unsaved blocks cannot be converted yet). */
-  saved: boolean;
-  /** Video URL of the saved block (the editor compares it with unsaved edits). */
-  savedSrc: string | null;
-  transcode: VideoTranscodeState | null;
-  /** An HLS stream made from the current file exists. */
-  hlsReady: boolean;
-  job: TranscodeJobView | null;
-  /** Rendition heights configured in settings (what a new conversion produces, capped at the source height). */
-  configuredRenditions: number[];
   transcriptId: string | null;
   transcriptHref: string;
   editHref: string;
 }
 
 export type StatusLookup = { ok: true; status: BlockMediaStatus } | { ok: false; status: 400 | 403 | 404; error: string };
+
+/** Conversion state of a course's preview video (`Course.videoUrl`). */
+export interface CoursePreviewMediaStatus extends MediaStatusCore {
+  courseId: string;
+  /** Poster frame captured by the conversion (shown when the course has no cover image). */
+  posterUrl: string | null;
+  editHref: string;
+}
+
+export type CoursePreviewStatusLookup = { ok: true; status: CoursePreviewMediaStatus } | { ok: false; status: 400 | 403 | 404; error: string };
 
 /** Find a lesson holding `blockId` (block ids are unique), optionally checking the lesson id. */
 function locate(lessons: readonly Lesson[], blockId: string, lessonId: string | null): { lesson: Lesson; block: VideoBlock } | null {
@@ -133,5 +142,63 @@ async function unsavedStatus(lesson: Lesson, course: Course, blockId: string): P
     transcriptId: null,
     transcriptHref: transcriptHref(course.id, lesson.id, blockId),
     editHref: `/admin/courses/${course.id}/lessons/${lesson.id}`,
+  };
+}
+
+/**
+ * Status of a course's preview video for a course manager. With `autoQueue`
+ * (the course settings poll it), output made from a replaced or removed
+ * video is released and a saved upload that has never been converted is
+ * queued now, so conversions start even when nothing else triggered them.
+ */
+export async function getCoursePreviewMediaStatus(user: User | null, courseId: string, opts: { autoQueue?: boolean } = {}): Promise<CoursePreviewStatusLookup> {
+  if (!SAFE_ID.test(courseId)) return { ok: false, status: 400, error: "Invalid course." };
+  let db = await getDb();
+  let course = db.courses.find((c) => c.id === courseId);
+  if (!course) return { ok: false, status: 404, error: "This course no longer exists." };
+  if (!canManageCourse(user, course)) return { ok: false, status: 403, error: "You can't manage this course." };
+
+  const settings = await getSettings();
+  const origins = siteOrigins();
+  const target = coursePreviewTarget(courseId);
+  if (opts.autoQueue) {
+    const reload = async () => {
+      db = await getDb();
+      course = db.courses.find((c) => c.id === courseId) ?? course!;
+    };
+    if (await releaseStaleTargetOutput(target)) await reload();
+    const key = transcodeSourceKey(course.videoUrl, origins);
+    if (settings.storage.transcodeToHls && key) {
+      const latest = latestJobForTarget(db.transcodeJobs, target);
+      const needs = !coursePreviewHlsMatches(course, origins) && (!latest || latest.sourceKey !== key || latest.status === "done");
+      if (needs) {
+        await enqueueTargetTranscode(target);
+        await reload();
+      } else if (latest && latest.status === "queued" && !isWorkerRunning()) {
+        kickTranscodeWorker();
+      }
+    }
+  }
+
+  const ffmpeg = await detectFfmpeg();
+  const key = transcodeSourceKey(course.videoUrl, origins);
+  const latest = latestJobForTarget(db.transcodeJobs, target);
+  const job = latest && key && latest.sourceKey === key ? jobView(latest, db.transcodeJobs) : null;
+  return {
+    ok: true,
+    status: {
+      courseId: course.id,
+      enabled: settings.storage.transcodeToHls,
+      ffmpeg: { available: ffmpeg.available, error: ffmpeg.error, hint: ffmpeg.available ? null : FFMPEG_INSTALL_HINT },
+      convertible: !!key,
+      saved: true,
+      savedSrc: course.videoUrl ?? "",
+      transcode: course.previewTranscode ?? null,
+      hlsReady: coursePreviewHlsMatches(course, origins),
+      job,
+      configuredRenditions: settings.storage.renditions,
+      posterUrl: course.previewPosterUrl ?? null,
+      editHref: `/admin/courses/${course.id}`,
+    },
   };
 }

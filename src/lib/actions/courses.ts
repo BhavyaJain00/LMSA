@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import type { ActionResult, CardGradient, Category, Course, Database, MemberType, User } from "@/lib/types";
 import type { CourseFormValues, EnrollCandidate, StudentProgressDetail } from "@/components/admin/courses/types";
 import { isBlockedVideoHost } from "@/components/admin/courses/blocks";
@@ -16,6 +17,7 @@ import { setFlash } from "@/lib/flash";
 import { audit } from "@/lib/audit";
 import { fd, fdBool, isValidUrl, toDateKey, uid, unique, uniqueSlug } from "@/lib/utils";
 import { MAX_PREREQUISITES, findPrerequisiteCycle } from "@/components/learn/drip-shared";
+import { syncCoursePreviewTranscode } from "@/lib/media/transcode/queue";
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -223,6 +225,8 @@ export async function createCourseAction(_prev: ActionResult | null, formData: F
   };
   await insert("courses", course);
   revalidateCourse(course);
+  // An uploaded preview video is converted for adaptive streaming in the background.
+  if (course.videoUrl) after(() => syncCoursePreviewTranscode(course.id).then(() => undefined));
   await setFlash("Course created successfully");
   redirect(`/admin/courses/${course.id}?tab=settings`);
 }
@@ -246,6 +250,8 @@ export async function updateCourseAction(_prev: ActionResult<{ slug: string }> |
   if (!next) return { ok: false, error: "This course no longer exists." };
   revalidateCourse(next);
   if (previousSlug !== next.slug) revalidatePath(`/courses/${previousSlug}`, "layout");
+  // A new or replaced preview upload is converted for adaptive streaming; a removed one releases its stream.
+  if (next.videoUrl || course.videoUrl) after(() => syncCoursePreviewTranscode(next.id).then(() => undefined));
   return {
     ok: true,
     data: { slug: next.slug },
@@ -579,6 +585,7 @@ export async function createCategoryAction(name: string): Promise<ActionResult<C
   if (existing) return { ok: true, data: existing, message: "Category already exists" };
   const category: Category = { id: uid("cat"), name: clean, slug: uniqueSlug(clean, db.categories.map((c) => c.slug)) };
   await insert("categories", category);
+  await audit(user, "category.create", { type: "category", id: category.id }, { name: category.name, slug: category.slug, source: "course_form" });
   revalidatePath("/courses");
   revalidatePath("/admin/courses", "layout");
   return { ok: true, data: category, message: "Category created successfully" };

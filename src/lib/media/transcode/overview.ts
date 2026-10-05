@@ -1,9 +1,14 @@
 import type { Database, TranscodeJob } from "@/lib/types";
+import { jobTarget } from "./targets";
 
 /**
  * Pure helpers for the conversion queue table in Settings → Storage & video:
  * status filter, search by lesson/course title, newest first, pagination.
+ * Rows cover lesson video blocks and course preview videos.
  */
+
+/** Title shown for a course preview job in the lesson column. */
+export const COURSE_PREVIEW_ROW_TITLE = "Course preview video";
 
 export const QUEUE_FILTERS = ["all", "queued", "running", "failed", "done"] as const;
 export type QueueFilter = (typeof QUEUE_FILTERS)[number];
@@ -22,10 +27,13 @@ export function parsePage(raw: string | string[] | undefined): number {
 
 export interface QueueRow {
   job: TranscodeJob;
+  /** What the job converts. */
+  kind: "lesson-block" | "course-preview";
+  /** Lesson title, or "Course preview video" for a course's preview. */
   lessonTitle: string | null;
   courseTitle: string | null;
   courseId: string | null;
-  /** Lesson editor link (null when the lesson was deleted). */
+  /** Lesson editor (or course editor) link; null when the lesson or course was deleted. */
   editHref: string | null;
 }
 
@@ -60,19 +68,35 @@ export function queuePage(
   const rows: QueueRow[] = [];
   for (const job of db.transcodeJobs) {
     if (opts.filter !== "all" && job.status !== opts.filter) continue;
-    const lesson = lessons.get(job.lessonId);
-    const course = lesson ? courses.get(lesson.courseId) : undefined;
+    const target = jobTarget(job);
+    let row: QueueRow;
+    if (target.kind === "course-preview") {
+      const course = courses.get(target.courseId);
+      row = {
+        job,
+        kind: "course-preview",
+        lessonTitle: course ? COURSE_PREVIEW_ROW_TITLE : null,
+        courseTitle: course?.title ?? null,
+        courseId: course?.id ?? null,
+        editHref: course ? `/admin/courses/${course.id}` : null,
+      };
+    } else {
+      const lesson = lessons.get(target.lessonId);
+      const course = lesson ? courses.get(lesson.courseId) : undefined;
+      row = {
+        job,
+        kind: "lesson-block",
+        lessonTitle: lesson?.title ?? null,
+        courseTitle: course?.title ?? null,
+        courseId: course?.id ?? null,
+        editHref: lesson && course ? `/admin/courses/${course.id}/lessons/${lesson.id}` : null,
+      };
+    }
     if (needle) {
-      const hay = `${lesson?.title ?? ""} ${course?.title ?? ""} ${job.sourceKey}`.toLowerCase();
+      const hay = `${row.lessonTitle ?? ""} ${row.courseTitle ?? ""} ${job.sourceKey}`.toLowerCase();
       if (!hay.includes(needle)) continue;
     }
-    rows.push({
-      job,
-      lessonTitle: lesson?.title ?? null,
-      courseTitle: course?.title ?? null,
-      courseId: course?.id ?? null,
-      editHref: lesson && course ? `/admin/courses/${course.id}/lessons/${lesson.id}` : null,
-    });
+    rows.push(row);
   }
   rows.sort((a, b) => compareJobs(a.job, b.job));
 

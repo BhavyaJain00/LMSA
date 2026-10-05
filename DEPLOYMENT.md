@@ -4,7 +4,7 @@ LearnLoop is a single Next.js server with an embedded SQLite database. Everythin
 
 Contents:
 
-1. [Requirements](#1-requirements)
+1. [Requirements and sizing](#1-requirements)
 2. [VPS with Docker and Caddy (recommended)](#2-vps-with-docker-and-caddy-recommended)
 3. [Without Docker: Linux with systemd or pm2, Windows](#3-without-docker)
 4. [Environment variables](#4-environment-variables)
@@ -26,6 +26,21 @@ Contents:
 - Ports 80 and 443 open to the internet (Caddy needs both to obtain and renew certificates).
 - **Docker route:** Docker Engine 24+ with the Compose plugin (v2.23+ for the optional cron service).
 - **Without Docker:** Node.js 24 (the database uses the built-in `node:sqlite` module), ffmpeg, and a reverse proxy for HTTPS (Caddy or nginx).
+
+### Sizing
+
+The app keeps every record in memory and writes only the records a request changed, one small SQLite transaction at a time. Run **one** app process per database (no cluster mode or second replica on the same `storage/` folder) and scale up with a larger server rather than more processes.
+
+`tests/data-sqlite-scale.test.ts` checks this at school scale on every `npm test`: 5,000 learners, 50 courses with 1,000 lessons, 50,000 enrollments, 100,000 lesson-progress and 100,000 video-progress records, which is about 256,000 records in a 93 MB database file. Measured on an 8-core desktop with Node 24.11:
+
+| What | Measured | Test fails above |
+| --- | --- | --- |
+| Cold start: `PRAGMA quick_check`, migrations, load all 256,300 records | 2.0 s, about 330 MB of memory afterwards | 20 s |
+| 1,000 sequential heartbeat-style `mutate()` calls, each saved in its own transaction (one record compared, one row written) | p50 1.2 ms, **p95 2.2 ms**, p99 3.3 ms | p95 15 ms |
+| 1,000 concurrent heartbeats on 400 records | saved in 1 transaction of 400 rows, 1.2 s in total | more than 3 transactions |
+| Background sweep of all 256,300 records (looks for edits made outside `mutate()`) | 96 slices, 0.8 s of work, longest slice 9.3 ms; repeats every 16 s at this size | slice over 50 ms |
+
+The figures print as test diagnostics (`node --test tests/data-sqlite-scale.test.ts`), so you can measure your own server. Saving cost depends on what changed, not on how big the school is. Memory grows with the number of records: allow about 1.5 GB of RAM per million records, plus the operating system and ffmpeg. A 2 vCPU / 4 GB server handles a school of this size with room to spare.
 
 ## 2. VPS with Docker and Caddy (recommended)
 

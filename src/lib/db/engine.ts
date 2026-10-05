@@ -885,7 +885,6 @@ export class StoreEngine {
         report.slices++;
         report.busyMs += slice.ms;
         report.maxSliceMs = Math.max(report.maxSliceMs, slice.ms);
-        if (process.env.LL_DEBUG_SWEEP && slice.ms > 15) console.log("SLOW", slice.ms.toFixed(1), cursor.names[cursor.collection], cursor.index, (slice as {dbg?: unknown}).dbg);
         if (!slice.ok) {
           // Compare the rest next time.
           report.complete = false;
@@ -925,11 +924,9 @@ export class StoreEngine {
    */
   private sweepSlice(cursor: SweepCursor): { ok: boolean; ms: number } {
     const started = performance.now();
-    const dbg: string[] = [];
-    const result = (ok: boolean) => ({ ok, ms: performance.now() - started, dbg });
+    const result = (ok: boolean) => ({ ok, ms: performance.now() - started });
     if (!this.db || !this.tracker || this.closed) return result(true);
     if ((this.pending.size || this.dirty) && !this.writeTracked()) return result(false);
-    dbg.push(`pre ${(performance.now() - started).toFixed(1)}`);
     const source = this.db as unknown as Loose;
     const nextCollection = () => {
       cursor.collection++;
@@ -975,7 +972,6 @@ export class StoreEngine {
       } else {
         cursor.index = end;
       }
-      dbg.push(`${name}@${cursor.index} ${(performance.now() - started).toFixed(1)} al=${aligned}`);
       if (performance.now() - started >= this.options.sweepSliceMs) break;
     }
     return result(true);

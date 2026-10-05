@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { ActionResult, PaymentItemType, Settings } from "@/lib/types";
 import type { CheckoutNext } from "@/lib/payments/types";
@@ -15,6 +15,8 @@ import { useFormAction } from "@/components/admin/settings/use-form-action";
 import { BILLING_SOURCES, COUNTRIES, INDIAN_STATES } from "./countries";
 import { launchStatusLabel, useCheckoutLauncher, usePreloadRazorpay } from "./checkout-launcher";
 import { setOrderBumpTicked } from "./order-bump-summary";
+import { normalizeVatId } from "@/lib/commerce/vat-id";
+import { validateVatId } from "@/lib/payments/billing-input";
 import { useT } from "@/i18n/client";
 import type { MessageKey } from "@/i18n/catalog";
 
@@ -40,6 +42,8 @@ export interface BillingDefaults {
   pincode: string;
   gstin: string;
   pan: string;
+  /** The buyer's VAT / tax number; with by-country tax, the one the summary was priced for. */
+  vatId?: string;
   source: string;
 }
 
@@ -122,6 +126,7 @@ export function BillingForm({
   action = placeOrderAction,
   extraFields,
   gift = false,
+  reverseCharge = false,
 }: {
   itemType: PaymentItemType;
   itemId: string;
@@ -154,27 +159,61 @@ export function BillingForm({
   extraFields?: (errors: Record<string, string>) => ReactNode;
   /** The order is a gift for someone else: changes the payment wording. */
   gift?: boolean;
+  /** EU reverse charge applies to the priced summary (no VAT for this business buyer). */
+  reverseCharge?: boolean;
 }) {
   const t = useT("account");
   const [country, setCountry] = useState(defaults.country);
   const router = useRouter();
   const pathname = usePathname();
   const [repricing, startRepricing] = useTransition();
+  // VAT number: with by-country tax it can remove VAT (EU reverse charge), so the summary is re-priced for it (`?vat=`).
+  const pricedVat = normalizeVatId(defaults.vatId);
+  const [vat, setVat] = useState(defaults.vatId ?? "");
+  const [vatHint, setVatHint] = useState<string | null>(null);
+  const [vatRepriced, setVatRepriced] = useState(false);
+  const vatChanged = repriceOnCountry && normalizeVatId(vat) !== pricedVat;
+  const repriceForVat = (): boolean => {
+    if (!vatChanged) return false;
+    const value = normalizeVatId(vat);
+    const query = new URLSearchParams(window.location.search);
+    query.set("vat", value);
+    if (country) query.set("country", country);
+    startRepricing(() => router.replace(`${pathname}?${query}`, { scroll: false }));
+    return true;
+  };
   const changeCountry = (value: string) => {
     setCountry(value);
+    setVatHint(null);
     if (!repriceOnCountry) return;
     const query = new URLSearchParams(window.location.search);
     if (value) query.set("country", value);
     else query.delete("country");
+    // The VAT number typed so far is priced together with the new country.
+    if (vatChanged) query.set("vat", normalizeVatId(vat));
     startRepricing(() => router.replace(`${pathname}?${query}`, { scroll: false }));
+  };
+  const checkVat = () => {
+    setVatHint(validateVatId(vat, country));
+    repriceForVat();
   };
   const [withBump, setWithBump] = useState(false);
   const launcher = useCheckoutLauncher();
-  const { onSubmit, pending, errors, formError } = useFormAction(action, {
+  const { onSubmit: submitOrder, pending, errors, formError } = useFormAction(action, {
     toastSuccess: false,
     toastError: false,
     onSuccess: (result) => void launcher.launch(result.data),
   });
+  // A VAT number typed but not priced yet (e.g. Enter pressed in the field): price it first, then let the buyer confirm.
+  const onSubmit = (e: FormEvent<HTMLFormElement>) => {
+    if (repriceForVat()) {
+      e.preventDefault();
+      setVatRepriced(true);
+      return;
+    }
+    setVatRepriced(false);
+    submitOrder(e);
+  };
   const bumped = !!bump && withBump;
   const free = (expectedTotal <= 0 && !bumped) || gateway === "none";
   const online = !free && (gateway === "stripe" || gateway === "razorpay");
@@ -324,6 +363,40 @@ export function BillingForm({
                 invalid={!!errors.source}
               />
             </Field>
+            <Field
+              label={t("commerce.billing.vatId")}
+              htmlFor="vatId"
+              error={errors.vatId ?? vatHint ?? undefined}
+              hint={errors.vatId || vatHint ? undefined : repriceOnCountry ? t("commerce.billing.vatIdReverseHint") : t("commerce.billing.vatIdHint")}
+            >
+              <Input
+                id="vatId"
+                name="vatId"
+                value={vat}
+                onChange={(e) => {
+                  setVat(e.target.value);
+                  setVatHint(null);
+                }}
+                onBlur={checkVat}
+                maxLength={24}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono uppercase"
+                dir="ltr"
+                invalid={!!(errors.vatId || vatHint)}
+              />
+            </Field>
+            {repriceOnCountry && (repricing && vatChanged ? (
+              <p className="-mt-2 flex items-center gap-1.5 text-xs text-ink-muted" aria-live="polite">
+                <Icon.Refresh className="size-3.5 animate-spin" aria-hidden="true" />
+                {t("commerce.billing.updatingVat")}
+              </p>
+            ) : reverseCharge && !vatChanged ? (
+              <p className="-mt-2 flex items-start gap-1.5 text-xs text-success" role="status">
+                <Icon.CheckCircle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                {t("commerce.billing.reverseCharge")}
+              </p>
+            ) : null)}
             {applyTax && (
               <>
                 <Field label={t("commerce.billing.gst")} htmlFor="gstin" error={errors.gstin} hint={errors.gstin ? undefined : t("commerce.billing.gstHint", { tax: taxLabel })}>
@@ -470,6 +543,11 @@ export function BillingForm({
             />
           </div>
           <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
+            {vatRepriced && !repricing && (
+              <p className="text-xs text-ink-muted" role="status">
+                {t("commerce.billing.vatRepriced")}
+              </p>
+            )}
             <Button
               type="submit"
               loading={busy}

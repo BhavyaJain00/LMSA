@@ -284,6 +284,12 @@ export function copyCourseGraph(source: CourseGraph, opts: CopyOptions): CourseC
   };
   delete course.publishedOn;
   delete course.publishAt;
+  // Like lesson videos: the preview's converted stream and generated poster belong to the original
+  // (they are deleted when it converts a new video). The copy plays the shared upload until it is converted itself.
+  delete course.previewHlsUrl;
+  delete course.previewTranscode;
+  delete course.previewStorageKey;
+  delete course.previewPosterUrl;
   const salesPage = copySalesPage(original.salesPage);
   if (salesPage) course.salesPage = salesPage;
 

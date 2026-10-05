@@ -1,11 +1,35 @@
-import type { BlockMediaStatus } from "./status";
+import type { VideoTranscodeState } from "@/lib/types";
+import type { TranscodeJobView } from "./queue";
 import { renditionLabel } from "./lesson-fields";
 
 /**
- * Pure view model for the conversion panel under a video block in the lesson
- * editor: what to say, which buttons to offer and how often to poll
- * `GET /api/media/status`. Shared by the editor component and tests.
+ * Pure view model for the conversion panels under a video block in the
+ * lesson editor and under the preview video in the course settings: what to
+ * say, which buttons to offer and how often to poll `GET /api/media/status`.
+ * Shared by the editor components and tests.
  */
+
+/** What `GET /api/media/status` reports for any converted video (lesson block or course preview). */
+export interface MediaStatusCore {
+  /** Adaptive streaming is switched on in Settings → Storage & video. */
+  enabled: boolean;
+  ffmpeg: { available: boolean; error: string | null; hint: string | null };
+  /** The saved video is a file uploaded to this site that ffmpeg can convert. */
+  convertible: boolean;
+  /** The video exists in the saved lesson or course (unsaved blocks cannot be converted yet). */
+  saved: boolean;
+  /** Video URL that is saved (the editor compares it with unsaved edits). */
+  savedSrc: string | null;
+  transcode: VideoTranscodeState | null;
+  /** An HLS stream made from the current file exists. */
+  hlsReady: boolean;
+  job: TranscodeJobView | null;
+  /** Rendition heights configured in settings (what a new conversion produces, capped at the source height). */
+  configuredRenditions: number[];
+}
+
+/** Whose video the panel describes: changes "Save the lesson"/"Learners" to "Save the course"/"Visitors". */
+export type MediaPanelSubject = "lesson" | "course";
 
 export type MediaPanelTone = "neutral" | "info" | "success" | "warning" | "danger";
 
@@ -42,16 +66,19 @@ function base(partial: Partial<MediaPanelView> & Pick<MediaPanelView, "title" | 
 }
 
 /**
- * @param status  latest answer of the status endpoint (null when the block is not saved yet)
- * @param src     the block's current (possibly unsaved) video URL
+ * @param status   latest answer of the status endpoint (null when the block is not saved yet)
+ * @param src      the current (possibly unsaved) video URL
+ * @param subject  a lesson video block (default) or a course's preview video
  */
-export function describeMediaStatus(status: BlockMediaStatus | null, src: string): MediaPanelView {
+export function describeMediaStatus(status: MediaStatusCore | null, src: string, subject: MediaPanelSubject = "lesson"): MediaPanelView {
+  const page = subject === "course" ? "course" : "lesson";
+  const viewers = subject === "course" ? "Visitors" : "Learners";
   if (!src.trim()) return base({ title: "Add a video", tone: "neutral", detail: "Upload a file to convert it for adaptive streaming." });
   if (!status || !status.saved) {
-    return base({ title: "Not saved yet", tone: "neutral", detail: "Save the lesson to convert this video for adaptive streaming.", pollMs: POLL_IDLE_MS });
+    return base({ title: "Not saved yet", tone: "neutral", detail: `Save the ${page} to convert this video for adaptive streaming.`, pollMs: POLL_IDLE_MS });
   }
   if (status.savedSrc !== src) {
-    return base({ title: "New video not saved", tone: "neutral", detail: "Save the lesson to convert the new video. Learners see the saved one until then.", pollMs: POLL_IDLE_MS });
+    return base({ title: "New video not saved", tone: "neutral", detail: `Save the ${page} to convert the new video. ${viewers} see the saved one until then.`, pollMs: POLL_IDLE_MS });
   }
   if (!status.convertible) {
     return base({ title: "Plays as linked", tone: "neutral", detail: "Only videos uploaded to this site are converted. Linked videos play exactly as they are." });
@@ -70,7 +97,7 @@ export function describeMediaStatus(status: BlockMediaStatus | null, src: string
       title: `Processing ${pct}%${heights.length ? ` (${renditionLabel(heights)})` : ""}`,
       tone: "info",
       progress: pct,
-      detail: status.hlsReady ? "Learners keep getting the previous stream until this one is ready." : "Learners get the original file until the conversion finishes.",
+      detail: status.hlsReady ? `${viewers} keep getting the previous stream until this one is ready.` : `${viewers} get the original file until the conversion finishes.`,
       cancel: true,
       renditions,
       pollMs: POLL_RUNNING_MS,
@@ -112,7 +139,7 @@ export function describeMediaStatus(status: BlockMediaStatus | null, src: string
     return base({
       title: "Failed",
       tone: "danger",
-      detail: `${reason} ${status.hlsReady ? "The previous stream keeps playing." : "Learners get the original file."}`.trim(),
+      detail: `${reason} ${status.hlsReady ? "The previous stream keeps playing." : `${viewers} get the original file.`}`.trim(),
       convert: "retry",
       renditions,
     });

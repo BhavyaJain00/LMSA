@@ -1213,6 +1213,17 @@ export interface Payment {
   buyerVatId?: string;
   /** EU reverse charge: no VAT was charged because the buyer is a business registered in another EU country. */
   reverseCharge?: boolean;
+  /**
+   * Seller details printed on the invoice, frozen when its number is assigned
+   * (an issued invoice never changes). Older invoices without it print the
+   * current Settings → Taxes seller details.
+   */
+  invoiceSeller?: {
+    legalName: string;
+    addressLines: string[];
+    countryName?: string;
+    taxIds: { label: string; value: string }[];
+  };
 }
 
 export interface Coupon {

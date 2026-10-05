@@ -450,8 +450,23 @@ function upsertNotification(db: Database, recipientId: string, sender: User, con
   db.notifications.push(notification);
 }
 
-function appendMessage(db: Database, conversation: Conversation, sender: User, body: string, now: string): Delivery {
+/**
+ * The timestamp for a new message: `now`, moved 1 ms past the conversation's
+ * latest message when that is not earlier. Messages sent within the same
+ * millisecond would otherwise sort by their random ids, and a poll cursor could
+ * then skip one of them for good.
+ */
+export function nextMessageTime(now: string, previous: readonly Pick<DirectMessage, "createdAt">[]): string {
+  let latest = "";
+  for (const m of previous) if (m.createdAt > latest) latest = m.createdAt;
+  if (!latest || latest < now) return now;
+  const bumped = Date.parse(latest) + 1;
+  return Number.isFinite(bumped) ? new Date(bumped).toISOString() : now;
+}
+
+function appendMessage(db: Database, conversation: Conversation, sender: User, body: string, sentAt: string): Delivery {
   const previous = db.directMessages.filter((m) => m.conversationId === conversation.id);
+  const now = nextMessageTime(sentAt, previous);
   const message: DirectMessage = { id: uid("dm"), conversationId: conversation.id, senderId: sender.id, body, readBy: [sender.id], createdAt: now };
   db.directMessages.push(message);
   conversation.lastMessageAt = now;

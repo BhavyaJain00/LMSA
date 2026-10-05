@@ -14,7 +14,7 @@ import {
   priceItemIn,
   validateCouponForBuyer,
 } from "@/lib/data/commerce";
-import { buyerTaxContext, requestCountry, viewerCurrency } from "@/lib/commerce/buyer";
+import { buyerTaxContext, checkoutVatId, requestCountry, viewerCurrency } from "@/lib/commerce/buyer";
 import { preferredCurrency } from "@/lib/commerce/currency";
 import { countryName } from "@/lib/commerce/tax";
 import { trackCheckoutView } from "@/lib/commerce/checkout-sessions";
@@ -109,7 +109,10 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   await trackCheckoutView(user, item);
   // By-country tax: the country picked in the form (`?country=`), else the last billing address, else a guess from the request.
   const pickedCountry = typeof sp.country === "string" && isKnownCountry(sp.country) ? sp.country : null;
-  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country);
+  // EU reverse charge: priced for the VAT number the form submits (typed: `?vat=`, else the last order's).
+  const vatId = checkoutVatId(sp.vat, saved?.buyerVatId);
+  const typedVat = typeof sp.vat === "string";
+  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country, vatId);
   const guessedCountry = !pickedCountry && !saved?.address?.country && tax.country ? countryName(tax.country) : "";
   const formCountry = pickedCountry ?? saved?.address?.country ?? (isKnownCountry(guessedCountry) ? guessedCountry : "");
   // Memberships that renew are billed at the plan's price every period, so coupons don't apply to them.
@@ -141,11 +144,13 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
     if (summary.coupon) query.set("coupon", summary.coupon.code);
     if (parts) query.set("pay", "installments");
     if (pickedCountry) query.set("country", pickedCountry);
+    if (typedVat) query.set("vat", vatId);
     return query.size ? `${basePath}?${query}` : basePath;
   };
   const keepQuery = new URLSearchParams();
   if (inParts) keepQuery.set("pay", "installments");
   if (pickedCountry) keepQuery.set("country", pickedCountry);
+  if (typedVat) keepQuery.set("vat", vatId);
   // Order bump: an upsell offered for this item, charged in the same payment (not with installments).
   const offer = !inParts ? await orderBumpFor(user, item, tax) : null;
   const bump: OrderBumpView | null = offer
@@ -260,6 +265,18 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               ) : undefined
             }
           />
+          {summary.reverseCharge && (
+            <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2.5 text-sm text-ink" role="status">
+              <Icon.Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
+              <span>
+                <strong>Reverse charge.</strong> No {summary.taxLabel} is charged: your business accounts for it in its own country. Your VAT number{" "}
+                <span className="font-mono" dir="ltr">
+                  {vatId}
+                </span>{" "}
+                is printed on the invoice.
+              </span>
+            </p>
+          )}
           {bump && <OrderBumpSummary title={bump.title} priceLabel={bump.priceLabel} totalWithBumpLabel={bump.totalWithBumpLabel} />}
           {currencies.length > 1 && <CurrencySwitcher currencies={currencies} current={summary.currency} />}
           {couponsAllowed && (
@@ -312,6 +329,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
             membership={membership}
             installments={installments}
             bump={bump}
+            reverseCharge={summary.reverseCharge}
             defaults={{
               billingName: saved?.billingName ?? user.name,
               line1: saved?.address?.line1 ?? "",
@@ -322,6 +340,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
               pincode: saved?.address?.pincode ?? "",
               gstin: saved?.gstin ?? "",
               pan: saved?.pan ?? "",
+              vatId,
               source: saved?.source ?? "",
             }}
           />

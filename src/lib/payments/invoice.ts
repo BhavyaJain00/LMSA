@@ -2,6 +2,8 @@ import "server-only";
 import type { Database, Payment, PaymentItemType, PaymentStatus, Settings, TaxRule, User } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { countryName, isTaxInclusive } from "@/lib/commerce/tax";
+import { invoiceSeller, type InvoiceSellerDetails, type InvoiceTaxRegistration } from "@/lib/commerce/invoice-seller";
+import { isEuCountry, normalizeVatId, parseEuVatId } from "@/lib/commerce/vat-id";
 
 /**
  * Invoice numbering and the printable invoice view model.
@@ -47,7 +49,14 @@ export function assignInvoiceNumber(db: Database, payment: Payment, now: Date = 
   if (payment.invoiceNumber) return payment.invoiceNumber;
   const year = invoiceYear(payment, now);
   payment.invoiceNumber = formatInvoiceNumber(year, maxSequence(db.payments, year) + 1);
+  // An issued invoice keeps the seller details it was issued with.
+  if (db.settings && !payment.invoiceSeller) payment.invoiceSeller = invoiceSellerFor(payment, db.settings, db.taxRules);
   return payment.invoiceNumber;
+}
+
+/** Seller details for an order's invoice under the current settings (its tax country decides an extra local registration). */
+export function invoiceSellerFor(payment: Pick<Payment, "taxCountry" | "address">, settings: Pick<Settings, "brand" | "legal" | "growth">, taxRules: readonly TaxRule[] | undefined): InvoiceSellerDetails {
+  return invoiceSeller(settings, taxRules, payment.taxCountry ?? payment.address?.country ?? null);
 }
 
 /**
@@ -101,6 +110,14 @@ export interface InvoiceView {
     email?: string;
     url?: string;
     footerText?: string;
+    /** Legal entity that issues the invoice (Settings → Taxes → Seller details, else Settings → Legal, else the brand). */
+    legalName: string;
+    /** Registered address, one line per entry. */
+    addressLines: string[];
+    /** Country of establishment, when the address does not already name it. */
+    countryName?: string;
+    /** VAT / GST registration numbers, the main one first. */
+    taxIds: InvoiceTaxRegistration[];
   };
   buyer: {
     name: string;
@@ -108,7 +125,16 @@ export interface InvoiceView {
     addressLines: string[];
     gstin?: string;
     pan?: string;
+    /** The buyer's VAT / tax number from checkout. */
+    taxId?: string;
+    /** Whether `taxId` is a well-formed EU VAT number ("VAT No.") or another tax number ("Tax ID"). */
+    taxIdKind?: "vat" | "other";
   };
+  /**
+   * EU reverse charge: no VAT was charged; the buyer accounts for it. The
+   * invoice prints the 0% line and the legal mention.
+   */
+  reverseCharge: boolean;
   item: {
     type: PaymentItemType;
     typeLabel: string;
@@ -186,6 +212,10 @@ export function buildInvoiceView(
       : refundedAmount > 0
         ? "Paid · partially refunded"
         : "Paid";
+  // Frozen when the invoice was numbered; invoices issued before seller details existed use the current ones.
+  const seller = payment.invoiceSeller ?? invoiceSellerFor(payment, settings, opts.taxRules);
+  const buyerTaxId = normalizeVatId(payment.buyerVatId) || undefined;
+  const reverseCharge = !!payment.reverseCharge && payment.taxAmount <= 0;
   return {
     invoiceNumber: payment.invoiceNumber,
     orderId: payment.orderId,
@@ -199,6 +229,10 @@ export function buildInvoiceView(
       email: settings.contact.email || undefined,
       url: settings.contact.url || undefined,
       footerText: settings.brand.footerText || undefined,
+      legalName: seller.legalName || settings.brand.name,
+      addressLines: seller.addressLines,
+      countryName: seller.countryName,
+      taxIds: seller.taxIds,
     },
     buyer: {
       name: payment.billingName,
@@ -206,17 +240,24 @@ export function buildInvoiceView(
       addressLines: formatAddressLines(payment.address),
       gstin: payment.gstin,
       pan: payment.pan,
+      taxId: buyerTaxId,
+      taxIdKind: buyerTaxId ? (parseEuVatId(buyerTaxId).ok ? "vat" : "other") : undefined,
     },
+    reverseCharge,
     item: { type: payment.itemType, typeLabel: ITEM_TYPE_LABELS[payment.itemType], title: payment.itemTitle },
     currency: payment.currency,
     originalAmount: payment.originalAmount,
     discountAmount: payment.discountAmount,
     couponCode: payment.couponCode,
     taxableAmount,
-    taxLabel: rule?.name || settings.commerce.taxLabel || "Tax",
+    taxLabel: rule?.name || (reverseCharge && isEuCountry(payment.taxCountry) ? "VAT" : settings.commerce.taxLabel || "Tax"),
     taxInclusive,
     taxCountryName: payment.taxCountry ? countryName(payment.taxCountry) : undefined,
-    taxRate: payment.taxAmount > 0 && payment.taxRate !== undefined ? payment.taxRate : deriveTaxRate(taxableAmount, payment.taxAmount, settings.commerce.taxPercentage),
+    taxRate: reverseCharge
+      ? 0
+      : payment.taxAmount > 0 && payment.taxRate !== undefined
+        ? payment.taxRate
+        : deriveTaxRate(taxableAmount, payment.taxAmount, settings.commerce.taxPercentage),
     taxAmount: payment.taxAmount,
     total: payment.amount,
     refundedAmount,

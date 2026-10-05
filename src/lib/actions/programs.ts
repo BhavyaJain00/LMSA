@@ -286,6 +286,14 @@ export async function addProgramCourseAction(programId: string, courseId: string
     const memberIds = db.programMembers.filter((m) => m.programId === program.id).map((m) => m.userId);
     report = await enrollMembersAsManager(program, user, memberIds, [course.id], parseEnrollOptions(options));
   }
+  await audit(user, "program.course_add", { type: "program", id: program.id }, {
+    courseId: course.id,
+    courseTitle: course.title,
+    grantPaidAccess: parseEnrollOptions(options).grantPaidAccess === true,
+    enrolled: report.enrolled,
+    granted: report.granted,
+    needsPurchase: report.needsPurchase.reduce((sum, item) => sum + item.members, 0),
+  });
   revalidateProgram(program);
   const message = reportMessage("Course added to program successfully", report, (n) => `${n === 1 ? "One member" : `${n} members`} can start it once they complete its prerequisites.`);
   return { ok: true, data: report, message };
@@ -294,8 +302,9 @@ export async function addProgramCourseAction(programId: string, courseId: string
 export async function removeProgramCourseAction(programId: string, courseId: string): Promise<ActionResult> {
   const guard = await guardProgram(programId);
   if (!guard.ok) return guard;
-  const { program } = guard;
+  const { program, db, user } = guard;
   if (!program.courseIds.includes(courseId)) return { ok: false, error: "This course is not part of the program." };
+  const courseTitle = db.courses.find((c) => c.id === courseId)?.title;
   await mutate((d) => {
     const row = d.programs.find((p) => p.id === program.id);
     if (!row) return;
@@ -303,6 +312,7 @@ export async function removeProgramCourseAction(programId: string, courseId: str
     row.updatedAt = new Date().toISOString();
     refreshMemberProgress(d, program.id);
   });
+  await audit(user, "program.course_remove", { type: "program", id: program.id }, { courseId, ...(courseTitle ? { courseTitle } : {}) });
   revalidateProgram(program);
   return { ok: true, data: undefined, message: "Course removed from program" };
 }
@@ -347,7 +357,14 @@ export async function addProgramMemberAction(programId: string, userId: string, 
   await mutate((d) => {
     d.programMembers.push({ id: uid("pm"), programId: program.id, userId: user.id, progress: 0, joinedAt: new Date().toISOString() });
   });
-  const report = await enrollMembersAsManager(program, actor, [user.id], startingCourseIds(program), parseEnrollOptions(options));
+  const enrollOptions = parseEnrollOptions(options);
+  const report = await enrollMembersAsManager(program, actor, [user.id], startingCourseIds(program), enrollOptions);
+  await audit(actor, "program.member_add", { type: "program", id: program.id }, {
+    userId: user.id,
+    grantPaidAccess: enrollOptions.grantPaidAccess === true,
+    enrolled: report.enrolled,
+    granted: report.granted,
+  });
   await notify(user.id, {
     type: "enrollment",
     subject: `You were added to the program ${program.title}`,
@@ -367,11 +384,13 @@ export async function addProgramMemberAction(programId: string, userId: string, 
 export async function removeProgramMemberAction(programId: string, userId: string): Promise<ActionResult> {
   const guard = await guardProgram(programId);
   if (!guard.ok) return guard;
-  const { program, db } = guard;
-  if (!db.programMembers.some((m) => m.programId === program.id && m.userId === userId)) return { ok: false, error: "This member is not part of the program." };
+  const { program, db, user: actor } = guard;
+  const member = db.programMembers.find((m) => m.programId === program.id && m.userId === userId);
+  if (!member) return { ok: false, error: "This member is not part of the program." };
   await mutate((d) => {
     d.programMembers = d.programMembers.filter((m) => !(m.programId === program.id && m.userId === userId));
   });
+  await audit(actor, "program.member_remove", { type: "program", id: program.id }, { userId, progress: member.progress });
   revalidateProgram(program);
   return { ok: true, data: undefined, message: "Member removed from program" };
 }

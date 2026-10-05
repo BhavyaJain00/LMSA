@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth/session";
 import { verificationError } from "@/lib/auth/verification";
 import { getDb } from "@/lib/db/store";
 import { getSavedBillingDetails, itemCurrencies, priceItemIn } from "@/lib/data/commerce";
-import { buyerTaxContext, viewerCurrency } from "@/lib/commerce/buyer";
+import { buyerTaxContext, checkoutVatId, viewerCurrency } from "@/lib/commerce/buyer";
 import { countryName } from "@/lib/commerce/tax";
 import { isKnownCountry } from "@/components/commerce/countries";
 import { CurrencySwitcher } from "@/components/commerce/currency-switcher";
@@ -153,7 +153,9 @@ export default async function GiftPage(props: PageProps<"/gift">) {
   const item = priceItemIn(check.item, wantedCurrency, settings);
   const currencies = itemCurrencies(check.item, settings);
   const pickedCountry = typeof sp.country === "string" && isKnownCountry(sp.country) ? sp.country : null;
-  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country);
+  // EU reverse charge: priced for the VAT number the form submits (typed: `?vat=`, else the last order's).
+  const vatId = checkoutVatId(sp.vat, saved?.buyerVatId);
+  const tax = await buyerTaxContext(db, pickedCountry ?? saved?.address?.country, vatId);
   const guessedCountry = !pickedCountry && !saved?.address?.country && tax.country ? countryName(tax.country) : "";
   const formCountry = pickedCountry ?? saved?.address?.country ?? (isKnownCountry(guessedCountry) ? guessedCountry : "");
   const summary = giftSummary(item, settings, tax);
@@ -206,6 +208,18 @@ export default async function GiftPage(props: PageProps<"/gift">) {
               </ul>
             }
           />
+          {summary.reverseCharge && (
+            <p className="flex items-start gap-2 rounded-lg border border-info/30 bg-info/10 px-3 py-2.5 text-sm text-ink" role="status">
+              <Icon.Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
+              <span>
+                <strong>Reverse charge.</strong> No {summary.taxLabel} is charged: your business accounts for it in its own country. Your VAT number{" "}
+                <span className="font-mono" dir="ltr">
+                  {vatId}
+                </span>{" "}
+                is printed on the invoice.
+              </span>
+            </p>
+          )}
           {currencies.length > 1 && <CurrencySwitcher currencies={currencies} current={summary.currency} />}
           <p className="text-xs text-ink-muted">
             Already have a code?{" "}
@@ -230,6 +244,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
             taxLabel={settings.commerce.taxLabel}
             contactEmail={settings.contact.email}
             legal={agreementDocuments("checkout", links)}
+            reverseCharge={summary.reverseCharge}
             defaults={{
               billingName: saved?.billingName ?? user.name,
               line1: saved?.address?.line1 ?? "",
@@ -240,6 +255,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
               pincode: saved?.address?.pincode ?? "",
               gstin: saved?.gstin ?? "",
               pan: saved?.pan ?? "",
+              vatId,
               source: saved?.source ?? "",
             }}
           />

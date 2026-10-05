@@ -117,6 +117,23 @@ function Notice({ tone, title, children }: { tone: "danger" | "warning" | "info"
   );
 }
 
+/**
+ * Sizing figures from `tests/data-sqlite-scale.test.ts` (its diagnostics print
+ * the same numbers). Keep in step with the "Sizing" part of DEPLOYMENT.md.
+ */
+const SCALE_MEASUREMENTS: readonly { label: string; value: string }[] = [
+  { label: "Start-up", value: "about 2 seconds to check the file and load every record into memory, using about 330 MB of memory" },
+  {
+    label: "Saving progress",
+    value: "1,000 video and lesson heartbeats in a row, each saved to disk on its own: 1.2 ms typical, 2.2 ms for 95% of them, 3.3 ms for 99%",
+  },
+  { label: "Bursts", value: "1,000 heartbeats at the same moment are saved together in one transaction of 400 records" },
+  {
+    label: "Background check",
+    value: "the check for edits made outside the store reads all 256,000 records in 96 short steps of at most 9 ms each, so pages keep responding while it runs",
+  },
+];
+
 function Command({ children }: { children: ReactNode }) {
   return <code className="whitespace-nowrap rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[13px] text-ink">{children}</code>;
 }
@@ -281,6 +298,24 @@ export default async function DataSettingsPage() {
               <Command>npm start</Command>, no cluster mode, no second replica or serverless instance on the same {sqlite ? "file" : "JSON file"}). A second process would wait for the
               write lock (up to {formatNumber(BUSY_TIMEOUT_MS / 1000)} seconds, then the change fails with “database is locked”){sqlite ? "" : " or overwrite the other process's changes"}.
               Scale up with a larger server rather than more processes.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-medium text-ink">How large a school one server handles</h4>
+            <p className="mt-0.5">
+              Measured by the scale test (<span className="font-mono">tests/data-sqlite-scale.test.ts</span>) on an 8-core desktop running Node 24, with a school of 5,000 learners,
+              50,000 enrollments and 200,000 lesson-progress and video-progress records (about 256,000 records, a 93 MB database file):
+            </p>
+            <ul className="mt-1.5 list-disc space-y-1 ps-5">
+              {SCALE_MEASUREMENTS.map((item) => (
+                <li key={item.label}>
+                  <span className="text-ink">{item.label}:</span> {item.value}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5">
+              Cost grows with what changes, not with the size of the school, so a busy site stays fast. Memory grows with the number of records: allow roughly 1.5 GB of RAM per
+              million records, plus the operating system and video conversion.
             </p>
           </div>
           <div>
