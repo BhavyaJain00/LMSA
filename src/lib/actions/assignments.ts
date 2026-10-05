@@ -13,6 +13,7 @@ import { evaluateBadges } from "@/lib/services/badges";
 import { logActivity } from "@/lib/services/activity";
 import { awardPoints, syncAssignmentPassPoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
+import { audit, auditEach, auditIdList } from "@/lib/audit";
 import { fd, fdBool, formatDateTime, isValidUrl, uid } from "@/lib/utils";
 import {
   ASSIGNMENT_STATUS_LABELS,
@@ -150,12 +151,22 @@ export async function deleteAssignmentsAction(ids: string[]): Promise<ActionResu
   const set = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string"));
   if (!set.size) return { ok: false, error: "Select at least one assignment." };
 
-  const count = await mutate((d) => {
-    const before = d.assignments.length;
+  const removed = await mutate((d) => {
+    const gone = d.assignments
+      .filter((a) => set.has(a.id))
+      .map((a) => ({ id: a.id, title: a.title, submissions: d.assignmentSubmissions.filter((s) => s.assignmentId === a.id).length }));
     d.assignments = d.assignments.filter((a) => !set.has(a.id));
     d.assignmentSubmissions = d.assignmentSubmissions.filter((s) => !set.has(s.assignmentId));
-    return before - d.assignments.length;
+    return gone;
   });
+  const count = removed.length;
+  await auditEach(
+    user,
+    "assignment.delete",
+    "assignment",
+    removed.map((a) => ({ id: a.id, meta: { title: a.title, submissions: a.submissions } })),
+    count > 1 ? { bulk: true } : undefined,
+  );
   revalidatePath("/admin/assignments");
   revalidatePath("/admin/assignments/submissions");
   for (const id of set) revalidatePath(`/assignments/${id}`);
@@ -410,6 +421,13 @@ export async function deleteAssignmentSubmissionsAction(ids: string[]): Promise<
     d.assignmentSubmissions = d.assignmentSubmissions.filter((s) => !set.has(s.id));
     return removed;
   });
+  if (affected.length) {
+    await audit(user, "assignment.submissions_delete", undefined, {
+      count: affected.length,
+      assignmentIds: auditIdList(Array.from(new Set(affected.map((s) => s.assignmentId)))),
+      submissionIds: auditIdList(affected.map((s) => s.id)),
+    });
+  }
   for (const s of affected) await revalidateAssignment(s.assignmentId, s.lessonId);
   return { ok: true, data: { count: affected.length }, message: "Submissions deleted successfully" };
 }

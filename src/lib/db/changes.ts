@@ -75,12 +75,30 @@ export function fingerprint(json: string): string {
   return hash("sha1", json, "base64");
 }
 
+/**
+ * A walk over the stored ids of one collection in stored order, a few at a
+ * time (see `ChangeTracker.walkIds`). It stays valid while documents are
+ * only updated or appended; `valid()` turns false once ids are deleted or
+ * renumbered, or everything is replaced.
+ */
+export interface StoredIdWalk {
+  /** The next stored id, or null after the last one. */
+  next(): string | null;
+  valid(): boolean;
+}
+
 export class ChangeTracker {
   private entries = new Map<string, Map<string, Entry>>();
   private settingsJson: string | null = null;
+  /** Bumped by reset(): every walk started before it is stale. */
+  private epoch = 0;
+  /** Per collection, bumped when ids are deleted or renumbered. */
+  private structure = new Map<string, number>();
 
   /** Adopt `collections` as the stored state (after loading or replacing everything). */
   reset(collections: Record<string, readonly unknown[]>, settings: unknown): void {
+    this.epoch++;
+    this.structure.clear();
     this.entries.clear();
     for (const [name, docs] of Object.entries(collections)) {
       const map = new Map<string, Entry>();
@@ -179,6 +197,7 @@ export class ChangeTracker {
     for (const [name, update] of pending.updates) {
       let map = this.entries.get(name);
       if (!map) this.entries.set(name, (map = new Map()));
+      if (update.deletes.length || update.order) this.structure.set(name, (this.structure.get(name) ?? 0) + 1);
       for (const [id, entry] of update.set) map.set(id, entry);
       for (const id of update.deletes) map.delete(id);
       if (update.order) {
@@ -196,6 +215,30 @@ export class ChangeTracker {
   /** Number of documents tracked for `name`. */
   size(name: string): number {
     return this.entries.get(name)?.size ?? 0;
+  }
+
+  /**
+   * Walk the stored ids of `name` in stored order. Comparing them, a chunk
+   * at a time, with the ids in the array proves that membership and order
+   * are unchanged without the single long pass an `identity` diff makes:
+   * updates keep an id's place and new documents are stored after the
+   * existing ones, so the walk survives commits of those between chunks.
+   */
+  walkIds(name: string): StoredIdWalk {
+    const epoch = this.epoch;
+    const structure = this.structure.get(name) ?? 0;
+    let map = this.entries.get(name);
+    if (!map) this.entries.set(name, (map = new Map()));
+    const keys = map.keys();
+    const valid = () => this.epoch === epoch && (this.structure.get(name) ?? 0) === structure;
+    return {
+      valid,
+      next: () => {
+        if (!valid()) return null;
+        const step = keys.next();
+        return step.done ? null : step.value;
+      },
+    };
   }
 }
 

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, Question, QuestionOption } from "@/lib/types";
 import { getCurrentUser, isCreator } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
+import { auditEach } from "@/lib/audit";
 import { uid } from "@/lib/utils";
 import { canEditQuestion, questionUsage, searchQuestionBank, type BankScope } from "@/lib/data/quiz";
 import {
@@ -187,9 +188,15 @@ export async function deleteQuestionsAction(ids: string[]): Promise<ActionResult
     toDelete.add(id);
   }
   if (toDelete.size) {
+    // Captured before the delete (the store snapshot is live and loses these rows).
+    const removed = Array.from(toDelete, (id) => {
+      const q = db.questions.find((x) => x.id === id);
+      return { id, meta: { text: q?.text.slice(0, 120) ?? id, type: q?.type ?? "" } };
+    });
     await mutate((d) => {
       d.questions = d.questions.filter((q) => !toDelete.has(q.id));
     });
+    await auditEach(user, "question.delete", "question", removed, toDelete.size > 1 ? { bulk: true } : undefined);
     revalidateBank();
   }
   return { ok: true, data: { deleted: toDelete.size, failed } };

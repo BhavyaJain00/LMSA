@@ -226,6 +226,15 @@ export interface Course {
   prices?: CurrencyPrice[];
   /** ISO date-time: the course becomes visible in the catalog from then on (scheduled publish). */
   publishAt?: string;
+  /* ----- round 3: adaptive streaming of the preview video (server-managed, never set by forms) ----- */
+  /** HLS master playlist made from the uploaded `videoUrl`; plays only while `previewStorageKey` matches it. */
+  previewHlsUrl?: string;
+  /** State of the HLS conversion of the preview video. */
+  previewTranscode?: VideoTranscodeState;
+  /** Storage key of the upload `previewHlsUrl` was made from. */
+  previewStorageKey?: string;
+  /** Poster frame captured during the conversion (used when the course has no cover image). */
+  previewPosterUrl?: string;
   createdById: string;
   createdAt: string;
   updatedAt: string;
@@ -1200,6 +1209,10 @@ export interface Payment {
   taxRate?: number;
   /** Set on a one-click upsell order: the order whose checkout offered it. */
   upsellOfPaymentId?: string;
+  /** The buyer's VAT / tax number, as entered at checkout (normalized, e.g. "DE123456789"); printed on the invoice. */
+  buyerVatId?: string;
+  /** EU reverse charge: no VAT was charged because the buyer is a business registered in another EU country. */
+  reverseCharge?: boolean;
 }
 
 export interface Coupon {
@@ -1454,6 +1467,16 @@ export interface Settings {
     taxMode: "none" | "by_country";
     /** Show and charge fixed prices in the buyer's currency when an item defines one. */
     multiCurrency: boolean;
+    /** Seller details printed on invoices (empty = Settings → Legal company name/address, then the brand name). */
+    sellerLegalName?: string;
+    /** Registered address of the seller, one line per row. */
+    sellerAddress?: string;
+    /** ISO 3166-1 alpha-2 country the seller is established in (decides EU reverse charge). */
+    sellerCountry?: string;
+    /** VAT / GST / sales-tax registration number printed on every invoice. */
+    sellerTaxId?: string;
+    /** Label of that number on invoices, e.g. "VAT No.", "GSTIN", "ABN" (empty = guessed from the number). */
+    sellerTaxIdLabel?: string;
   };
   marketplace: {
     /** Multi-instructor marketplace with revenue sharing. */
@@ -1611,10 +1634,20 @@ export interface UploadSession {
   completedUrl?: string;
 }
 
+/** What a transcode job converts: a lesson video block or a course's preview video. */
+export type TranscodeTarget = { kind: "lesson-block"; lessonId: string; blockId: string } | { kind: "course-preview"; courseId: string };
+
 /** A queued ffmpeg job converting an uploaded video to HLS. */
 export interface TranscodeJob {
   id: string;
+  /**
+   * What is converted. Jobs queued before course previews existed have no
+   * target and convert the lesson block named by `lessonId`/`blockId`.
+   */
+  target?: TranscodeTarget;
+  /** Lesson block jobs: the lesson (empty for other targets). */
   lessonId: string;
+  /** Lesson block jobs: the block (empty for other targets). */
   blockId: string;
   /** Storage key of the source video. */
   sourceKey: string;
@@ -1933,6 +1966,10 @@ export interface TaxRule {
   rate: number;
   /** Prices already include the tax (the tax is carved out instead of added). */
   inclusive: boolean;
+  /** The seller's own registration number for this tax in this country (printed on invoices of its buyers). */
+  registrationNumber?: string;
+  /** Label of that number, e.g. "UK VAT No." (empty = "<tax name> No."). */
+  registrationLabel?: string;
 }
 
 /** A started checkout, tracked for abandoned-checkout recovery emails. */

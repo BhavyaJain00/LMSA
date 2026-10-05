@@ -15,6 +15,7 @@ import { enrollUserInBatch, enrollUserInCourse } from "@/lib/services/enrollment
 import { notifyMany } from "@/lib/services/notifications";
 import { awardDiscussionReplyPoints, revokePoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { verificationError } from "@/lib/auth/verification";
 import { currencies } from "@/lib/config";
 import { fd, fdBool, isValidUrl, slugify, truncate, stripMarkdown, uid, uniqueSlug } from "@/lib/utils";
@@ -266,6 +267,7 @@ export async function createBatchAction(_prev: ActionResult<{ id: string }> | nu
     batch.slug = uniqueSlug(batch.title, d.batches.map((b) => b.slug));
     d.batches.push(batch);
   });
+  await audit(user, "batch.create", { type: "batch", id: batch.id }, { title: batch.title, slug: batch.slug, published: batch.published, paid: batch.paidBatch });
   revalidateBatch(batch);
   await setFlash("Batch created successfully", "success");
   redirect(`/admin/batches/${batch.id}?tab=settings`);
@@ -287,6 +289,9 @@ export async function updateBatchAction(_prev: ActionResult | null, formData: Fo
     return { ...row };
   });
   if (!saved) return { ok: false, error: "This batch no longer exists." };
+  if (wasPublished !== saved.published) {
+    await audit(user, saved.published ? "batch.publish" : "batch.unpublish", { type: "batch", id: saved.id }, { title: saved.title });
+  }
   if (!wasPublished && saved.published) await announcePublishedBatch(saved, user);
   if (oldSlug !== saved.slug) revalidatePath(`/batches/${oldSlug}`);
   revalidateBatch(saved);
@@ -311,6 +316,9 @@ export async function setBatchPublishedAction(batchId: string, published: boolea
       row.updatedAt = new Date().toISOString();
     }
   });
+  if (published !== batch.published) {
+    await audit(user, published ? "batch.publish" : "batch.unpublish", { type: "batch", id: batch.id }, { title: batch.title });
+  }
   if (published && !batch.published) await announcePublishedBatch({ ...batch, published: true }, user);
   revalidateBatch(batch);
   return { ok: true, data: undefined, message: published ? "Batch published" : "Batch unpublished" };
@@ -320,8 +328,9 @@ export async function setBatchPublishedAction(batchId: string, published: boolea
 export async function deleteBatchAction(batchId: string): Promise<ActionResult> {
   const guard = await guardManager(batchId);
   if (!guard.ok) return guard;
-  const { batch } = guard;
-  await mutate((d) => {
+  const { batch, user } = guard;
+  const removed = await mutate((d) => {
+    const students = d.batchEnrollments.filter((e) => e.batchId === batch.id).length;
     d.batches = d.batches.filter((b) => b.id !== batch.id);
     d.batchEnrollments = d.batchEnrollments.filter((e) => e.batchId !== batch.id);
     d.batchFeedback = d.batchFeedback.filter((f) => f.batchId !== batch.id);
@@ -333,7 +342,9 @@ export async function deleteBatchAction(batchId: string): Promise<ActionResult> 
     d.discussionReplies = d.discussionReplies.filter((r) => !topicIds.has(r.topicId));
     // Course enrollments stay (learners keep their progress) but are detached from the batch.
     for (const e of d.enrollments) if (e.batchId === batch.id) e.batchId = undefined;
+    return { students };
   });
+  await audit(user, "batch.delete", { type: "batch", id: batch.id }, { title: batch.title, slug: batch.slug, students: removed.students });
   revalidateBatch(batch);
   await setFlash("Batch deleted successfully", "success");
   redirect("/admin/batches");
@@ -384,7 +395,7 @@ export async function enrollInBatchAction(_prev: ActionResult | null, formData: 
 export async function addBatchStudentsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const guard = await guardManager(fd(formData, "batchId"));
   if (!guard.ok) return guard;
-  const { batch, db } = guard;
+  const { batch, db, user } = guard;
   const userIds = Array.from(new Set(formData.getAll("userIds").filter((v): v is string => typeof v === "string" && !!v)));
   const source = fd(formData, "source") || "Manual";
   if (!userIds.length) return { ok: false, error: "Please select a student to enroll.", fieldErrors: { userIds: "Select at least one student." } };
@@ -401,11 +412,17 @@ export async function addBatchStudentsAction(_prev: ActionResult | null, formDat
     return { ok: false, error: left ? `Only ${left} seat${left === 1 ? "" : "s"} left in this batch.` : "There are no seats available in this batch." };
   }
   let added = 0;
+  const addedIds: string[] = [];
   for (const id of toAdd) {
     const res = await enrollUserInBatch(id, batch.id, { source });
-    if (!res.ok) return { ok: false, error: res.error };
+    if (!res.ok) {
+      if (added) await audit(user, "batch.student_add", { type: "batch", id: batch.id }, { count: added, userIds: addedIds.join(","), source });
+      return { ok: false, error: res.error };
+    }
     added++;
+    addedIds.push(id);
   }
+  await audit(user, "batch.student_add", { type: "batch", id: batch.id }, { count: added, userIds: addedIds.join(","), source });
   await touchBatch(batch.id);
   revalidateBatch(batch);
   const skipped = already.length ? ` (${already.length} already enrolled)` : "";
@@ -416,7 +433,7 @@ export async function addBatchStudentsAction(_prev: ActionResult | null, formDat
 export async function removeBatchStudentAction(batchId: string, userId: string): Promise<ActionResult> {
   const guard = await guardManager(batchId);
   if (!guard.ok) return guard;
-  const { batch, db } = guard;
+  const { batch, db, user } = guard;
   if (!db.batchEnrollments.some((e) => e.batchId === batch.id && e.userId === userId)) {
     return { ok: false, error: "This student is not enrolled in the batch." };
   }
@@ -424,6 +441,7 @@ export async function removeBatchStudentAction(batchId: string, userId: string):
     d.batchEnrollments = d.batchEnrollments.filter((e) => !(e.batchId === batch.id && e.userId === userId));
     for (const c of d.liveClasses) if (c.batchId === batch.id) c.attendeeIds = c.attendeeIds.filter((id) => id !== userId);
   });
+  await audit(user, "batch.student_remove", { type: "batch", id: batch.id }, { userId });
   revalidateBatch(batch);
   return { ok: true, data: undefined, message: "Student removed from the batch" };
 }
@@ -450,9 +468,11 @@ export async function addBatchCourseAction(batchId: string, courseId: string): P
     }
   });
   // Existing students get access to the new course right away.
-  for (const e of db.batchEnrollments.filter((x) => x.batchId === batch.id)) {
+  const students = db.batchEnrollments.filter((x) => x.batchId === batch.id);
+  for (const e of students) {
     await enrollUserInCourse(e.userId, course.id, { batchId: batch.id, paymentId: e.paymentId, notifyInstructors: false });
   }
+  await audit(user, "batch.course_add", { type: "batch", id: batch.id }, { courseId: course.id, courseTitle: course.title, studentsEnrolled: students.length });
   revalidateBatch(batch);
   revalidatePath(`/courses/${course.slug}`);
   return { ok: true, data: undefined, message: "Course added to batch successfully" };
@@ -461,7 +481,7 @@ export async function addBatchCourseAction(batchId: string, courseId: string): P
 export async function removeBatchCourseAction(batchId: string, courseId: string): Promise<ActionResult> {
   const guard = await guardManager(batchId);
   if (!guard.ok) return guard;
-  const { batch } = guard;
+  const { batch, user, db } = guard;
   if (!batch.courseIds.includes(courseId)) return { ok: false, error: "This course is not part of the batch." };
   await mutate((d) => {
     const row = d.batches.find((b) => b.id === batch.id);
@@ -470,6 +490,8 @@ export async function removeBatchCourseAction(batchId: string, courseId: string)
       row.updatedAt = new Date().toISOString();
     }
   });
+  const courseTitle = db.courses.find((c) => c.id === courseId)?.title;
+  await audit(user, "batch.course_remove", { type: "batch", id: batch.id }, { courseId, ...(courseTitle ? { courseTitle } : {}) });
   revalidateBatch(batch);
   return { ok: true, data: undefined, message: "Course removed from the batch" };
 }

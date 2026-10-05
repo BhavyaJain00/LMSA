@@ -2,6 +2,7 @@ import { ImageResponse } from "next/og";
 import { getSettings } from "@/lib/db/store";
 import { clampText } from "@/lib/seo/text";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
+import { initials } from "@/lib/utils";
 
 /**
  * Generated 1200×630 share cards (`opengraph-image` routes). One layout for
@@ -22,6 +23,42 @@ export interface OgCardInput {
   facts?: string[];
   /** Average rating 1–5 with its review count (shown with a star). */
   rating?: { value: number; count: number } | null;
+  /**
+   * A person's picture beside the title (profiles). `src` must be a `data:`
+   * URI (see `loadAvatarDataUri`): the renderer never downloads anything.
+   * Without one, the initials are drawn on `color`.
+   */
+  avatar?: { name: string; src?: string | null; color?: string };
+}
+
+const AVATAR_SIZE = 200;
+
+function AvatarCircle({ avatar, accent }: { avatar: NonNullable<OgCardInput["avatar"]>; accent: string }) {
+  const frame = {
+    display: "flex",
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: 999,
+    border: `6px solid ${accent}`,
+    overflow: "hidden",
+  } as const;
+  const src = avatar.src && avatar.src.startsWith("data:image/") ? avatar.src : null;
+  if (src) {
+    return (
+      <div style={frame}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- rendered to PNG by next/og, not a page element */}
+        <img src={src} width={AVATAR_SIZE - 12} height={AVATAR_SIZE - 12} alt="" style={{ objectFit: "cover", borderRadius: 999 }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ ...frame, background: avatar.color && HEX.test(avatar.color) ? avatar.color : "#334155", color: "#ffffff", fontSize: 80, fontWeight: 700, letterSpacing: -1 }}>
+      {initials(avatar.name)}
+    </div>
+  );
 }
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -109,9 +146,12 @@ export async function renderOgCard(input: OgCardInput): Promise<ImageResponse> {
           ) : null}
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ display: "flex", fontSize: titleSize(title), fontWeight: 800, lineHeight: 1.08, letterSpacing: -1.5 }}>{title}</div>
-          {summary ? <div style={{ display: "flex", fontSize: 30, lineHeight: 1.35, color: "#cbd5e1" }}>{summary}</div> : null}
+        <div style={{ display: "flex", alignItems: "center", gap: 48 }}>
+          {input.avatar ? <AvatarCircle avatar={input.avatar} accent={accent} /> : null}
+          <div style={{ display: "flex", flexDirection: "column", flexGrow: 1, flexShrink: 1, gap: 20 }}>
+            <div style={{ display: "flex", fontSize: input.avatar ? Math.min(64, titleSize(title)) : titleSize(title), fontWeight: 800, lineHeight: 1.08, letterSpacing: -1.5 }}>{title}</div>
+            {summary ? <div style={{ display: "flex", fontSize: 30, lineHeight: 1.35, color: "#cbd5e1" }}>{summary}</div> : null}
+          </div>
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>

@@ -5,6 +5,7 @@ import { after } from "next/server";
 import type { ActionResult, Course, Lesson, LessonBlock, User } from "@/lib/types";
 import { findById, getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
+import { audit } from "@/lib/audit";
 import { canManageCourse } from "@/lib/data/courses";
 import { recomputeEnrollmentProgress, renumberOutline, touchCourseContent, withReviewNote } from "@/lib/data/admin-courses";
 import { computeLessonDuration, createBlock, sanitizeBlocks } from "@/components/admin/courses/blocks";
@@ -208,7 +209,7 @@ export async function moveLessonToChapterAction(lessonId: string, chapterId: str
 export async function deleteLessonAction(lessonId: string): Promise<ActionResult> {
   const loaded = await loadLesson(lessonId);
   if ("error" in loaded) return { ok: false, error: "You do not have permission to delete this lesson." };
-  const { user, course } = loaded;
+  const { user, course, lesson } = loaded;
 
   let reviewReset = false;
   await mutate((db) => {
@@ -236,6 +237,7 @@ export async function deleteLessonAction(lessonId: string): Promise<ActionResult
     recomputeEnrollmentProgress(db, course.id);
     reviewReset = touchCourseContent(db, course.id, user);
   });
+  await audit(user, "lesson.delete", { type: "lesson", id: lessonId }, { title: lesson.title, courseId: course.id, courseTitle: course.title, chapterId: lesson.chapterId });
   revalidateLessonPaths(course);
   return { ok: true, data: undefined, message: withReviewNote("Lesson deleted successfully", reviewReset) };
 }

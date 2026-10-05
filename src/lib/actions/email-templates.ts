@@ -7,6 +7,7 @@ import { getCurrentUser, hasRole } from "@/lib/auth/session";
 import { canManageBatch } from "@/lib/data/batches";
 import { fd, isValidEmail, splitList, uid } from "@/lib/utils";
 import { queueBatchMessage } from "@/lib/email";
+import { audit } from "@/lib/audit";
 
 /** Placeholders the template editor understands (see the Emails tab). */
 const KNOWN_PLACEHOLDERS = [
@@ -44,7 +45,7 @@ async function guard(batchId: string) {
 export async function saveEmailTemplateAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const g = await guard(fd(formData, "batchId"));
   if (!g.ok) return g;
-  const { batch, db } = g;
+  const { batch, db, user } = g;
   const templateId = fd(formData, "templateId");
   const existing = templateId ? db.emailTemplates.find((t) => t.id === templateId && t.batchId === batch.id) : null;
   if (templateId && !existing) return { ok: false, error: "This template no longer exists." };
@@ -69,17 +70,21 @@ export async function saveEmailTemplateAction(_prev: ActionResult | null, formDa
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
 
   const now = new Date().toISOString();
+  let savedId: string;
   if (existing) {
+    savedId = existing.id;
     await mutate((d) => {
       const row = d.emailTemplates.find((t) => t.id === existing.id);
       if (row) Object.assign(row, { name, subject, body, updatedAt: now });
     });
   } else {
     const template: EmailTemplate = { id: uid("tpl"), name, subject, body, batchId: batch.id, createdAt: now, updatedAt: now };
+    savedId = template.id;
     await mutate((d) => {
       d.emailTemplates.push(template);
     });
   }
+  await audit(user, existing ? "email_template.update" : "email_template.create", { type: "email_template", id: savedId }, { name, batchId: batch.id });
   revalidatePath(`/admin/batches/${batch.id}`);
   return { ok: true, data: undefined, message: existing ? "Email Template updated successfully" : "Email Template created successfully" };
 }
@@ -93,6 +98,7 @@ export async function deleteEmailTemplateAction(templateId: string): Promise<Act
   await mutate((d) => {
     d.emailTemplates = d.emailTemplates.filter((t) => t.id !== template.id);
   });
+  await audit(g.user, "email_template.delete", { type: "email_template", id: template.id }, { name: template.name, batchId: template.batchId });
   revalidatePath(`/admin/batches/${template.batchId}`);
   return { ok: true, data: undefined, message: "Email Template deleted" };
 }
@@ -145,6 +151,14 @@ export async function sendBatchEmailAction(
 
   const result = await queueBatchMessage({ batchId: batch.id, subject, body, audience: audience === "selected" ? "selected" : "all", userIds: audience === "selected" ? userIds : undefined, cc, senderId: user.id });
   if (!result.ok) return result.field ? { ok: false, error: result.error, fieldErrors: { [result.field]: result.error } } : { ok: false, error: result.error };
+  await audit(user, "batch.email_send", { type: "batch", id: batch.id }, {
+    subject,
+    ...(template ? { templateId: template.id } : {}),
+    audience: audience === "selected" ? "selected" : "all",
+    recipients: result.queued,
+    skipped: result.skipped,
+    cc: result.ccQueued ? cc.length : 0,
+  });
   revalidatePath(`/admin/batches/${batch.id}`);
   revalidatePath("/admin/emails");
   const parts = [`Email queued for ${result.queued} ${result.queued === 1 ? "student" : "students"}`];

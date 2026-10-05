@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, Coupon } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
+import { audit } from "@/lib/audit";
 import { normalizeCouponCode } from "@/lib/data/commerce";
 import { fd, fdBool, toDateKey, uid } from "@/lib/utils";
 
@@ -20,7 +21,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Create or update a coupon (Frappe: LMS Coupon). */
 export async function saveCouponAction(_prev: ActionResult<{ id: string }> | null, formData: FormData): Promise<ActionResult<{ id: string }>> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage coupons." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage coupons." };
   const db = await getDb();
 
   const id = fd(formData, "id");
@@ -122,31 +124,45 @@ export async function saveCouponAction(_prev: ActionResult<{ id: string }> | nul
       });
     }
   });
+  await audit(admin, existing ? "coupon.update" : "coupon.create", { type: "coupon", id: couponId }, {
+    code,
+    discountType,
+    value,
+    usageLimit,
+    enabled,
+    items: applicableItems.length,
+  });
   revalidateCoupons();
   return { ok: true, data: { id: couponId }, message: existing ? "Coupon updated successfully" : "Coupon created successfully" };
 }
 
 export async function setCouponEnabledAction(id: string, enabled: boolean): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage coupons." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage coupons." };
   const found = await mutate((d) => {
     const row = d.coupons.find((c) => c.id === id);
-    if (!row) return false;
+    if (!row) return null;
+    const changed = row.enabled !== enabled;
     row.enabled = enabled;
-    return true;
+    return { code: row.code, changed };
   });
   if (!found) return { ok: false, error: "Error updating coupon" };
+  if (found.changed) await audit(admin, enabled ? "coupon.enable" : "coupon.disable", { type: "coupon", id }, { code: found.code });
   revalidateCoupons();
   return { ok: true, data: undefined, message: enabled ? "Coupon enabled" : "Coupon disabled" };
 }
 
 export async function deleteCouponAction(id: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage coupons." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage coupons." };
   const removed = await mutate((d) => {
-    const before = d.coupons.length;
+    const row = d.coupons.find((c) => c.id === id);
+    if (!row) return null;
     d.coupons = d.coupons.filter((c) => c.id !== id);
-    return before !== d.coupons.length;
+    return { code: row.code, redemptions: row.redemptionCount };
   });
   if (!removed) return { ok: false, error: "Error deleting coupon" };
+  await audit(admin, "coupon.delete", { type: "coupon", id }, { code: removed.code, redemptions: removed.redemptions });
   revalidateCoupons();
   return { ok: true, data: undefined, message: "Coupon deleted successfully" };
 }

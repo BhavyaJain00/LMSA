@@ -12,6 +12,7 @@ import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
 import { issueCertificate } from "@/lib/services/progress";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd } from "@/lib/utils";
 
 function revalidateCourse(slug: string) {
@@ -30,6 +31,16 @@ function lessonReturnPath(formData: FormData, course: Course): string | null {
   const prefix = `/courses/${course.slug}/learn/`;
   if (!next || !next.startsWith(prefix)) return null;
   return /^\d{1,4}-\d{1,4}$/.test(next.slice(prefix.length)) ? next : null;
+}
+
+/** Gates a course manager skipped by enrolling themselves (empty when a learner could have enrolled the same way). */
+function staffEnrollmentBypasses(course: Course): string[] {
+  const out: string[] = [];
+  if (!course.published) out.push("unpublished");
+  if (course.upcoming) out.push("upcoming");
+  if (course.paidCourse && course.price > 0) out.push("payment");
+  if (course.prerequisiteCourseIds?.length) out.push("prerequisites");
+  return out;
 }
 
 async function courseFromForm(formData: FormData): Promise<Course | null> {
@@ -99,7 +110,12 @@ export async function enrollAction(_prev: ActionResult | null, formData: FormDat
   }
 
   // Paid enrollments already got a receipt; free self-enrollment gets a confirmation email.
-  await enrollUserInCourse(user.id, course.id, { memberType: manager ? "staff" : "student", paymentId, confirmationEmail: !paymentId });
+  const enrollment = await enrollUserInCourse(user.id, course.id, { memberType: manager ? "staff" : "student", paymentId, confirmationEmail: !paymentId });
+  // Course managers skip the publish, schedule, prerequisite and payment gates; record when they rely on that.
+  const bypassed = manager ? staffEnrollmentBypasses(course) : [];
+  if (bypassed.length) {
+    await audit(user, "enrollment.staff", { type: "enrollment", id: enrollment.id }, { courseId: course.id, courseTitle: course.title, userId: user.id, bypassed: bypassed.join(",") });
+  }
   revalidateCourse(course.slug);
 
   const next = await getNextLesson(course, user);

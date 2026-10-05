@@ -7,6 +7,7 @@ import { getCurrentUser, isCreator, isModerator } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { canManageCourse } from "@/lib/data/courses";
 import { setFlash } from "@/lib/flash";
+import { audit, auditEach, auditIdList } from "@/lib/audit";
 import { awardQuizPoints } from "@/lib/services/points";
 import { fd, fdNumber, uid } from "@/lib/utils";
 import {
@@ -292,6 +293,7 @@ export async function deleteQuizAction(quizId: string): Promise<ActionResult> {
     };
   }
   await mutate((d) => removeQuizCascade(d, quiz.id));
+  await audit(user, "quiz.delete", { type: "quiz", id: quiz.id }, { title: quiz.title, submissions, ...(quiz.courseId ? { courseId: quiz.courseId } : {}) });
   revalidateQuizPages();
   return { ok: true, data: undefined, message: "Quiz deleted successfully" };
 }
@@ -321,9 +323,15 @@ export async function deleteQuizzesAction(ids: string[]): Promise<ActionResult<{
     toDelete.push(id);
   }
   if (toDelete.length) {
+    // Captured before the cascade (the store snapshot is live and loses these rows).
+    const removed = toDelete.map((id) => ({
+      id,
+      meta: { title: db.quizzes.find((q) => q.id === id)?.title ?? id, submissions: db.quizSubmissions.filter((s) => s.quizId === id).length },
+    }));
     await mutate((d) => {
       for (const id of toDelete) removeQuizCascade(d, id);
     });
+    await auditEach(user, "quiz.delete", "quiz", removed, { bulk: true });
     revalidateQuizPages();
   }
   return { ok: true, data: { deleted: toDelete.length, failed } };
@@ -429,9 +437,15 @@ export async function deleteSubmissionsAction(ids: string[]): Promise<ActionResu
     else failed++;
   }
   if (allowed.size) {
+    const quizIds = Array.from(new Set(db.quizSubmissions.filter((s) => allowed.has(s.id)).map((s) => s.quizId)));
     await mutate((d) => {
       d.quizSubmissions = d.quizSubmissions.filter((s) => !allowed.has(s.id));
       d.quizViolations = d.quizViolations.filter((v) => !v.submissionId || !allowed.has(v.submissionId));
+    });
+    await audit(user, "quiz.submissions_delete", undefined, {
+      count: allowed.size,
+      quizIds: auditIdList(quizIds),
+      submissionIds: auditIdList(Array.from(allowed)),
     });
     revalidatePath("/admin/quizzes/submissions");
     revalidatePath("/admin/quizzes");

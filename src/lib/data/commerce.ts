@@ -535,6 +535,8 @@ export interface OrderSummary {
   taxInclusive: boolean;
   /** Buyer country the tax was resolved for (by-country tax only). */
   taxCountry: string | null;
+  /** EU reverse charge: a business buyer from another EU country pays no VAT (the invoice says so). */
+  reverseCharge: boolean;
   total: number;
   coupon: { id: string; code: string; discountType: Coupon["discountType"]; value: number } | null;
   usdEquivalent: number | null;

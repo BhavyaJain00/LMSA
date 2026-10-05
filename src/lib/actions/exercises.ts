@@ -13,6 +13,7 @@ import { canManageAssessments, completeLessonFromAssessment, toExerciseSubmissio
 import { logActivity } from "@/lib/services/activity";
 import { awardPoints } from "@/lib/services/points";
 import { setFlash } from "@/lib/flash";
+import { audit, auditEach, auditIdList } from "@/lib/audit";
 import { fd, uid } from "@/lib/utils";
 import {
   MAX_CODE_LENGTH,
@@ -475,12 +476,22 @@ export async function deleteExercisesAction(ids: string[]): Promise<ActionResult
   if (!canManageAssessments(user)) return { ok: false, error: "Your role can't manage programming exercises." };
   const set = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string"));
   if (!set.size) return { ok: false, error: "Select at least one exercise." };
-  const count = await mutate((d) => {
-    const before = d.exercises.length;
+  const deleted = await mutate((d) => {
+    const gone = d.exercises
+      .filter((e) => set.has(e.id))
+      .map((e) => ({ id: e.id, title: e.title, submissions: d.exerciseSubmissions.filter((s) => s.exerciseId === e.id).length }));
     d.exercises = d.exercises.filter((e) => !set.has(e.id));
     d.exerciseSubmissions = d.exerciseSubmissions.filter((s) => !set.has(s.exerciseId));
-    return before - d.exercises.length;
+    return gone;
   });
+  const count = deleted.length;
+  await auditEach(
+    user,
+    "exercise.delete",
+    "exercise",
+    deleted.map((e) => ({ id: e.id, meta: { title: e.title, submissions: e.submissions } })),
+    count > 1 ? { bulk: true } : undefined,
+  );
   revalidatePath("/admin/exercises");
   revalidatePath("/admin/exercises/submissions");
   revalidatePath("/exercises/submissions");
@@ -499,6 +510,13 @@ export async function deleteExerciseSubmissionsAction(ids: string[]): Promise<Ac
     d.exerciseSubmissions = d.exerciseSubmissions.filter((s) => !set.has(s.id));
     return gone;
   });
+  if (removed.length) {
+    await audit(user, "exercise.submissions_delete", undefined, {
+      count: removed.length,
+      exerciseIds: auditIdList(Array.from(new Set(removed.map((s) => s.exerciseId)))),
+      submissionIds: auditIdList(removed.map((s) => s.id)),
+    });
+  }
   revalidatePath("/admin/exercises/submissions");
   revalidatePath("/exercises/submissions");
   for (const s of removed) revalidatePath(`/exercises/${s.exerciseId}`);

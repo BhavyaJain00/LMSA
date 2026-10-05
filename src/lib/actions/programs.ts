@@ -12,6 +12,7 @@ import { verificationError } from "@/lib/auth/verification";
 import { enrollUserInCourse } from "@/lib/services/enrollment";
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd, fdBool, slugify, uid, uniqueSlug } from "@/lib/utils";
 import { needsPurchaseText, type ProgramEnrollOptions, type ProgramEnrollmentReport } from "@/components/programs/types";
 
@@ -191,6 +192,8 @@ export async function createProgramAction(_prev: unknown, formData: FormData): P
     program.slug = uniqueSlug(program.title, d.programs.map((p) => p.slug));
     d.programs.push(program);
   });
+  await audit(user, "program.create", { type: "program", id: program.id }, { title: program.title, slug: program.slug, published: program.published });
+  if (program.published) await audit(user, "program.publish", { type: "program", id: program.id }, { title: program.title });
   revalidateProgram(program);
   await setFlash("Program created successfully", "success");
   redirect(`/admin/programs/${program.id}`);
@@ -213,6 +216,9 @@ export async function updateProgramAction(_prev: unknown, formData: FormData): P
     const row = d.programs.find((p) => p.id === program.id);
     if (row) Object.assign(row, values, { updatedAt: new Date().toISOString() });
   });
+  if (program.published !== values.published) {
+    await audit(user, values.published ? "program.publish" : "program.unpublish", { type: "program", id: program.id }, { title: values.title });
+  }
   // Lifting the order restriction gives existing members access to every course (paid ones as described above).
   let report: ProgramEnrollmentReport | undefined;
   if (orderChanged && !values.enforceCourseOrder) {
@@ -230,11 +236,14 @@ export async function updateProgramAction(_prev: unknown, formData: FormData): P
 export async function deleteProgramAction(programId: string): Promise<ActionResult> {
   const guard = await guardProgram(programId);
   if (!guard.ok) return guard;
-  const { program } = guard;
-  await mutate((d) => {
+  const { program, user } = guard;
+  const removed = await mutate((d) => {
+    const members = d.programMembers.filter((m) => m.programId === program.id).length;
     d.programs = d.programs.filter((p) => p.id !== program.id);
     d.programMembers = d.programMembers.filter((m) => m.programId !== program.id);
+    return { members };
   });
+  await audit(user, "program.delete", { type: "program", id: program.id }, { title: program.title, slug: program.slug, members: removed.members, courses: program.courseIds.length });
   revalidateProgram(program);
   await setFlash("Program deleted successfully", "success");
   redirect("/admin/programs");

@@ -637,6 +637,13 @@ export async function enrollStudentAction(_prev: ActionResult | null, formData: 
       }
     });
   }
+  await audit(manager, "enrollment.create", { type: "enrollment", id: enrollment.id }, {
+    courseId: course.id,
+    courseTitle: course.title,
+    userId: student.id,
+    memberType,
+    purchasedCertificate,
+  });
   await notify(student.id, {
     type: "enrollment",
     subject: `You have been enrolled in ${course.title}`,
@@ -651,11 +658,18 @@ export async function enrollStudentAction(_prev: ActionResult | null, formData: 
 export async function removeStudentAction(courseId: string, userId: string): Promise<ActionResult> {
   const loaded = await loadManageable(courseId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
-  const { course } = loaded;
+  const { course, user: manager } = loaded;
   const db = await getDb();
   const enrollment = db.enrollments.find((e) => e.courseId === course.id && e.userId === userId);
   if (!enrollment) return { ok: false, error: "This student is not enrolled in the course." };
   await unenrollUserFromCourse(userId, course.id);
+  await audit(manager, "enrollment.delete", { type: "enrollment", id: enrollment.id }, {
+    courseId: course.id,
+    courseTitle: course.title,
+    userId,
+    progress: enrollment.progress,
+    paid: !!enrollment.paymentId,
+  });
   revalidateCourse(course);
   return { ok: true, data: undefined, message: "Student removed from the course" };
 }

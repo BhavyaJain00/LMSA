@@ -1,5 +1,6 @@
 import type { Settings, TaxRule } from "@/lib/types";
 import { currencyExponent } from "@/lib/payments/amounts";
+import { isEuCountry, isPlausibleTaxId, normalizeVatId, parseEuVatId } from "./vat-id";
 
 /**
  * Tax by buyer country (pure; shared by checkout, invoices and the admin
@@ -12,6 +13,12 @@ import { currencyExponent } from "@/lib/payments/amounts";
  *    of the price (exclusive) or carved out of it (inclusive). Countries
  *    without a rule fall back to the single rate when "Apply tax" is on, and
  *    pay no tax otherwise.
+ *
+ * EU reverse charge: under "by_country", a buyer who gives a well-formed VAT
+ * number of their (EU) billing country, when the seller is established in
+ * another EU country, pays no VAT; the invoice says "Reverse charge" and the
+ * buyer accounts for the VAT themselves. A tax-inclusive price is charged
+ * without the VAT it included.
  *
  * Amounts are app units (price × 100, see `formatPrice`). Every tax is
  * rounded half up once, on the order's taxable amount, to the smallest unit
@@ -189,12 +196,18 @@ export interface AppliedTax {
   country: string | null;
   /** The country's `TaxRule` (null = the default single rate or no tax). */
   ruleId: string | null;
+  /** EU reverse charge: the rate is 0 and the buyer accounts for the VAT. */
+  reverseCharge?: true;
+  /** Reverse charge on tax-inclusive prices: the rate of the VAT the prices include, removed from them. */
+  includedRate?: number;
 }
 
 /** Tax rules and the buyer's country (billing address, else a guess from the request). */
 export interface TaxContext {
   rules: readonly TaxRule[];
   country: string | null;
+  /** The buyer's VAT number from the billing form (EU reverse charge). */
+  vatId?: string | null;
 }
 
 export const NO_TAX: AppliedTax = { name: "Tax", rate: 0, inclusive: false, country: null, ruleId: null };
@@ -204,6 +217,42 @@ export function findTaxRule(rules: readonly TaxRule[], country: string | null | 
   return code ? (rules.find((r) => r.country.toUpperCase() === code) ?? null) : null;
 }
 
+/**
+ * Country the seller is established in: the one set under Taxes → Seller
+ * details, else the prefix of an EU VAT number given as the seller's tax ID.
+ */
+export function sellerTaxCountry(growth: Pick<Settings["growth"], "sellerCountry" | "sellerTaxId">): string | null {
+  const set = countryCode(growth.sellerCountry);
+  if (set) return set;
+  const vat = parseEuVatId(growth.sellerTaxId);
+  return vat.ok ? vat.country : null;
+}
+
+export interface ReverseChargeInput {
+  taxMode: Settings["growth"]["taxMode"];
+  /** ISO country of the seller (`sellerTaxCountry`). */
+  sellerCountry: string | null | undefined;
+  /** Buyer's billing country (name or code). */
+  buyerCountry: string | null | undefined;
+  /** VAT number the buyer entered. */
+  vatId: string | null | undefined;
+}
+
+/**
+ * EU reverse charge (Article 196 of the VAT Directive) applies when tax is
+ * charged by country, the seller is established in the EU, and the buyer
+ * gives a well-formed VAT number of their EU billing country, which is not
+ * the seller's.
+ */
+export function reverseChargeApplies(input: ReverseChargeInput): boolean {
+  if (input.taxMode !== "by_country") return false;
+  const seller = countryCode(input.sellerCountry);
+  const buyer = countryCode(input.buyerCountry);
+  if (!seller || !buyer || !isEuCountry(seller) || !isEuCountry(buyer) || seller === buyer) return false;
+  const vat = parseEuVatId(input.vatId);
+  return vat.ok && vat.country === buyer;
+}
+
 /** Which tax applies to a buyer from `country` under the platform's settings. */
 export function resolveTax(settings: Pick<Settings, "commerce" | "growth">, tax: TaxContext | null | undefined): AppliedTax {
   const c = settings.commerce;
@@ -211,8 +260,25 @@ export function resolveTax(settings: Pick<Settings, "commerce" | "growth">, tax:
   if (settings.growth.taxMode !== "by_country") return flat;
   const country = countryCode(tax?.country);
   const rule = tax ? findTaxRule(tax.rules, country) : null;
+  if (tax?.vatId && reverseChargeApplies({ taxMode: settings.growth.taxMode, sellerCountry: sellerTaxCountry(settings.growth), buyerCountry: country, vatId: tax.vatId })) {
+    const applied: AppliedTax = { name: rule?.name || "VAT", rate: 0, inclusive: false, country, ruleId: rule?.id ?? null, reverseCharge: true };
+    if (rule?.inclusive && rule.rate > 0) applied.includedRate = rule.rate;
+    return applied;
+  }
   if (rule) return { name: rule.name || "Tax", rate: Math.max(0, rule.rate), inclusive: rule.inclusive, country, ruleId: rule.id };
   return { ...flat, country };
+}
+
+/**
+ * The price a buyer is charged before discounts and tax: the list price,
+ * except under reverse charge on a tax-inclusive price, where the VAT the
+ * price included is removed (the business buyer pays the net price and
+ * accounts for the VAT themselves).
+ */
+export function priceForTax(amount: number, tax: Pick<AppliedTax, "reverseCharge" | "includedRate">, currency?: string): number {
+  const base = Math.max(0, Math.round(amount));
+  if (!tax.reverseCharge || !tax.includedRate || tax.includedRate <= 0 || base === 0) return base;
+  return roundForCurrency((base * 100) / (100 + tax.includedRate), currency);
 }
 
 /** Round half away from zero to a whole smallest unit, ignoring float noise (2.4999999 from 2.5). */
@@ -278,6 +344,10 @@ export interface TaxRuleInput {
   name: string;
   rate: string;
   inclusive: boolean;
+  /** The seller's registration number for this tax in this country (optional). */
+  registrationNumber?: string;
+  /** Its label on invoices (optional). */
+  registrationLabel?: string;
 }
 
 export type TaxRuleValidation = { ok: true; value: Omit<TaxRule, "id"> } | { ok: false; errors: Record<string, string> };
@@ -295,6 +365,26 @@ export function validateTaxRuleInput(input: TaxRuleInput, takenBy: (country: str
   const rate = Number(rawRate);
   if (!rawRate || !Number.isFinite(rate) || !/^\d{1,3}(\.\d{1,3})?$/.test(rawRate)) errors.rate = "Enter a rate in percent, e.g. 18 or 7.5.";
   else if (rate <= 0 || rate > 100) errors.rate = "The rate must be more than 0% and at most 100%.";
+  const registrationNumber = normalizeVatId(input.registrationNumber);
+  const registrationLabel = (input.registrationLabel ?? "").trim().replace(/\s+/g, " ");
+  if (registrationNumber) {
+    const eu = country && isEuCountry(country) ? parseEuVatId(registrationNumber) : null;
+    if (eu && !eu.ok) errors.registrationNumber = "Enter the VAT number with its country prefix, e.g. DE123456789.";
+    else if (eu?.ok && eu.country !== country) errors.registrationNumber = `This VAT number belongs to ${countryName(eu.country)}, not ${countryName(country!)}.`;
+    else if (!eu && !isPlausibleTaxId(registrationNumber)) errors.registrationNumber = "Use 4 to 20 letters and digits.";
+  }
+  if (registrationLabel.length > 30) errors.registrationLabel = "Keep the label under 30 characters.";
+  else if (registrationLabel && !registrationNumber) errors.registrationNumber = "Enter the number the label is for, or clear the label.";
   if (Object.keys(errors).length || !country) return { ok: false, errors };
-  return { ok: true, value: { country, name, rate, inclusive: input.inclusive } };
+  return {
+    ok: true,
+    value: {
+      country,
+      name,
+      rate,
+      inclusive: input.inclusive,
+      ...(registrationNumber ? { registrationNumber } : {}),
+      ...(registrationNumber && registrationLabel ? { registrationLabel } : {}),
+    },
+  };
 }

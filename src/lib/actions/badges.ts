@@ -5,6 +5,7 @@ import type { ActionResult, Badge } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { grantBadge } from "@/lib/services/badges";
+import { audit } from "@/lib/audit";
 import { isBadgeEvent } from "@/components/admin/settings/badge-events";
 import { fd, fdBool, isValidUrl, toDateKey, uid } from "@/lib/utils";
 
@@ -22,7 +23,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Create or update a badge definition (Frappe: LMS Badge). */
 export async function saveBadgeAction(_prev: ActionResult<{ id: string }> | null, formData: FormData): Promise<ActionResult<{ id: string }>> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage badges." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage badges." };
   const db = await getDb();
   const id = fd(formData, "id");
   const existing = id ? db.badges.find((b) => b.id === id) : null;
@@ -73,40 +75,55 @@ export async function saveBadgeAction(_prev: ActionResult<{ id: string }> | null
       d.badges.push(badge);
     }
   });
+  await audit(admin, existing ? "badge.update" : "badge.create", { type: "badge", id: badgeId }, {
+    title,
+    event,
+    ...(threshold !== undefined ? { threshold } : {}),
+    grantOnlyOnce,
+    enabled,
+  });
   revalidateBadges();
   return { ok: true, data: { id: badgeId }, message: existing ? "Badge updated successfully" : "Badge created successfully" };
 }
 
 export async function setBadgeEnabledAction(id: string, enabled: boolean): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage badges." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage badges." };
   const found = await mutate((d) => {
     const row = d.badges.find((b) => b.id === id);
-    if (!row) return false;
+    if (!row) return null;
+    const changed = row.enabled !== enabled;
     row.enabled = enabled;
-    return true;
+    return { title: row.title, changed };
   });
   if (!found) return { ok: false, error: "Error updating badge" };
+  if (found.changed) await audit(admin, enabled ? "badge.enable" : "badge.disable", { type: "badge", id }, { title: found.title });
   revalidateBadges();
   return { ok: true, data: undefined, message: enabled ? "Badge enabled" : "Badge disabled" };
 }
 
 /** Delete a badge and every assignment of it. */
 export async function deleteBadgeAction(id: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage badges." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage badges." };
   const removed = await mutate((d) => {
-    if (!d.badges.some((b) => b.id === id)) return false;
+    const badge = d.badges.find((b) => b.id === id);
+    if (!badge) return null;
+    const assignments = d.badgeAssignments.filter((a) => a.badgeId === id).length;
     d.badges = d.badges.filter((b) => b.id !== id);
     d.badgeAssignments = d.badgeAssignments.filter((a) => a.badgeId !== id);
-    return true;
+    return { title: badge.title, assignments };
   });
   if (!removed) return { ok: false, error: "Error deleting badge" };
+  await audit(admin, "badge.delete", { type: "badge", id }, { title: removed.title, assignments: removed.assignments });
   revalidateBadges();
   return { ok: true, data: undefined, message: "Badge deleted successfully" };
 }
 
 /** Award a badge to a member by hand (Frappe: Settings → Badge Assignments → Assign). */
 export async function assignBadgeAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can assign badges." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can assign badges." };
   const db = await getDb();
   const userId = fd(formData, "userId");
   const badgeId = fd(formData, "badgeId");
@@ -131,26 +148,28 @@ export async function assignBadgeAction(_prev: ActionResult | null, formData: Fo
 
   const before = new Set(db.badgeAssignments.map((a) => a.id));
   await grantBadge(member.id, badge.id);
-  if (issuedOn !== toDateKey()) {
-    await mutate((d) => {
-      const created = d.badgeAssignments.find((a) => !before.has(a.id) && a.badgeId === badge.id && a.userId === member.id);
-      if (created) created.issuedOn = issuedOn;
-    });
-  }
+  const assignmentId = await mutate((d) => {
+    const created = d.badgeAssignments.find((a) => !before.has(a.id) && a.badgeId === badge.id && a.userId === member.id);
+    if (created && issuedOn !== toDateKey()) created.issuedOn = issuedOn;
+    return created?.id ?? null;
+  });
+  await audit(admin, "badge.assign", { type: "badge", id: badge.id }, { title: badge.title, userId: member.id, issuedOn, ...(assignmentId ? { assignmentId } : {}) });
   revalidateBadges();
   revalidatePath(`/user/${member.username}`);
   return { ok: true, data: undefined, message: "Badge assigned successfully" };
 }
 
 export async function revokeBadgeAssignmentAction(id: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage badge assignments." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage badge assignments." };
   const removed = await mutate((d) => {
     const row = d.badgeAssignments.find((a) => a.id === id);
     if (!row) return null;
     d.badgeAssignments = d.badgeAssignments.filter((a) => a.id !== id);
-    return { username: d.users.find((u) => u.id === row.userId)?.username };
+    return { username: d.users.find((u) => u.id === row.userId)?.username, badgeId: row.badgeId, userId: row.userId, title: d.badges.find((b) => b.id === row.badgeId)?.title };
   });
   if (!removed) return { ok: false, error: "Error deleting badge assignment" };
+  await audit(admin, "badge.revoke", { type: "badge", id: removed.badgeId }, { assignmentId: id, userId: removed.userId, ...(removed.title ? { title: removed.title } : {}) });
   revalidateBadges();
   if (removed.username) revalidatePath(`/user/${removed.username}`);
   return { ok: true, data: undefined, message: "Badge assignment deleted successfully" };

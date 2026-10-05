@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 import { getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
+import { audit } from "@/lib/audit";
 import { RESERVED_COURSE_SLUGS, canCreateCourses, canEvaluateCertificates } from "@/lib/data/admin-courses";
 import { computeLessonDuration, isBlockedVideoHost, sanitizeBlocks } from "@/components/admin/courses/blocks";
 import { cardGradients, currencies } from "@/lib/config";
@@ -361,6 +362,19 @@ export async function importCourseFile(file: FormDataEntryValue | null): Promise
     d.courses.push(course);
     d.chapters.push(...chapters);
     d.lessons.push(...lessons);
+  });
+  await audit(user, "course.import", { type: "course", id: course.id }, {
+    title: course.title,
+    slug: course.slug,
+    file: file.name,
+    bytes: file.size,
+    chapters: chapters.length,
+    lessons: lessons.length,
+    quizzes: quizzes.length,
+    questions: questions.length,
+    assignments: assignments.length,
+    exercises: exercises.length,
+    warnings: warnings.length,
   });
 
   revalidatePath("/admin/courses");

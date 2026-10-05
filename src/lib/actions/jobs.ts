@@ -10,6 +10,7 @@ import { parseWorkMode } from "@/components/jobs/work-mode";
 import { isKnownCountry } from "@/components/commerce/countries";
 import { notify } from "@/lib/services/notifications";
 import { setFlash } from "@/lib/flash";
+import { audit } from "@/lib/audit";
 import { fd, fdBool, isValidEmail, isValidUrl, uid, uniqueSlug } from "@/lib/utils";
 
 /**
@@ -166,6 +167,13 @@ export async function setJobStatusAction(id: string, status: "open" | "closed"):
       row.updatedAt = new Date().toISOString();
     }
   });
+  if (job.status !== status) {
+    await audit(user, status === "closed" ? "job.close" : "job.reopen", { type: "job", id: job.id }, {
+      title: job.title,
+      company: job.company,
+      byOwner: job.postedById === user.id,
+    });
+  }
   revalidateJobs(job.slug, job.id);
   return { ok: true, data: undefined, message: status === "closed" ? "Job closed — it no longer accepts applications." : "Job reopened." };
 }
@@ -178,9 +186,17 @@ export async function deleteJobAction(id: string): Promise<ActionResult> {
   const job = db.jobs.find((j) => j.id === id);
   if (!job) return { ok: false, error: "This job opening no longer exists." };
   if (!canManageJob(user, job)) return { ok: false, error: "You are not permitted to manage this job opening." };
-  await mutate((d) => {
+  const applications = await mutate((d) => {
+    const count = d.jobApplications.filter((a) => a.jobId === id).length;
     d.jobs = d.jobs.filter((j) => j.id !== id);
     d.jobApplications = d.jobApplications.filter((a) => a.jobId !== id);
+    return count;
+  });
+  await audit(user, "job.delete", { type: "job", id: job.id }, {
+    title: job.title,
+    company: job.company,
+    applications,
+    byOwner: job.postedById === user.id,
   });
   revalidateJobs(job.slug, job.id);
   return { ok: true, data: undefined, message: "Job opening deleted" };

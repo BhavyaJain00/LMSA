@@ -112,6 +112,35 @@ export async function audit(
   }
 }
 
+/**
+ * Record one event per affected record of a bulk action (bulk deletes from
+ * the admin tables), so each record stays findable by its target and the
+ * detail drawer can show what was removed. Never throws.
+ *
+ * @example
+ *   await auditEach(user, "quiz.delete", "quiz", deleted.map((q) => ({ id: q.id, meta: { title: q.title } })), { bulk: true });
+ */
+export async function auditEach(
+  actor: { id: string } | null,
+  action: string,
+  targetType: string,
+  items: readonly { id: string; meta?: AuditEvent["meta"] }[],
+  shared?: AuditEvent["meta"],
+): Promise<void> {
+  for (const item of items) {
+    await audit(actor, action, { type: targetType, id: item.id }, { ...shared, ...item.meta });
+  }
+}
+
+/**
+ * Comma-separated ids for a bulk event's meta, capped so the value stays
+ * readable (the remainder is summarized as "+N more").
+ */
+export function auditIdList(ids: readonly string[], max = 20): string {
+  const shown = ids.slice(0, max).join(",");
+  return ids.length > max ? `${shown} +${ids.length - max} more` : shown;
+}
+
 /* ------------------------------------------------------------------ */
 /* Querying (admin audit log page and CSV export)                      */
 /* ------------------------------------------------------------------ */
@@ -335,6 +364,53 @@ const ACTION_LABELS: Record<string, string> = {
   "api.webhook.test": "Test webhook sent through the API",
   "api.webhook.resend": "Webhook delivery resent through the API",
   "api.webhook.secret_rotate": "Webhook secret rotated through the API",
+  "coupon.create": "Coupon created",
+  "coupon.update": "Coupon edited",
+  "coupon.enable": "Coupon enabled",
+  "coupon.disable": "Coupon disabled",
+  "coupon.delete": "Coupon deleted",
+  "category.create": "Category created",
+  "category.update": "Category edited",
+  "category.delete": "Category deleted",
+  "batch.create": "Batch created",
+  "batch.publish": "Batch published",
+  "batch.unpublish": "Batch unpublished",
+  "batch.delete": "Batch deleted",
+  "batch.student_add": "Students added to a batch",
+  "batch.student_remove": "Student removed from a batch",
+  "batch.course_add": "Course added to a batch",
+  "batch.course_remove": "Course removed from a batch",
+  "batch.email_send": "Batch email sent",
+  "program.create": "Program created",
+  "program.publish": "Program published",
+  "program.unpublish": "Program unpublished",
+  "program.delete": "Program deleted",
+  "job.close": "Job opening closed",
+  "job.reopen": "Job opening reopened",
+  "job.delete": "Job opening deleted",
+  "email_template.create": "Email template created",
+  "email_template.update": "Email template edited",
+  "email_template.delete": "Email template deleted",
+  "course.import": "Course imported",
+  "chapter.delete": "Chapter deleted",
+  "lesson.delete": "Lesson deleted",
+  "quiz.delete": "Quiz deleted",
+  "quiz.submissions_delete": "Quiz submissions deleted",
+  "question.delete": "Question deleted",
+  "assignment.delete": "Assignment deleted",
+  "assignment.submissions_delete": "Assignment submissions deleted",
+  "exercise.delete": "Programming exercise deleted",
+  "exercise.submissions_delete": "Exercise submissions deleted",
+  "badge.create": "Badge created",
+  "badge.update": "Badge edited",
+  "badge.enable": "Badge enabled",
+  "badge.disable": "Badge disabled",
+  "badge.delete": "Badge deleted",
+  "badge.assign": "Badge assigned",
+  "badge.revoke": "Badge assignment removed",
+  "enrollment.create": "Learner enrolled by staff",
+  "enrollment.delete": "Learner removed from a course",
+  "enrollment.staff": "Staff enrolled past course gates",
 };
 
 /** "peer_review.add" → "Peer review add" (labels for actions and targets without a dedicated one). */
@@ -493,6 +569,15 @@ const TARGET_LABELS: Record<string, string> = {
   sequence: "Email sequence",
   conversation: "Conversation",
   webhook: "Webhook",
+  coupon: "Coupon",
+  program: "Program",
+  job: "Job opening",
+  email_template: "Email template",
+  chapter: "Chapter",
+  quiz: "Quiz",
+  question: "Question",
+  exercise: "Programming exercise",
+  badge: "Badge",
 };
 
 /** Names of the action groups ("course.*") in the action filter. */
@@ -541,6 +626,17 @@ const GROUP_LABELS: Record<string, string> = {
   sequence: "Email sequences",
   message: "Messages",
   webhook: "Webhooks",
+  coupon: "Coupons",
+  batch: "Batches",
+  program: "Programs",
+  job: "Jobs",
+  email_template: "Email templates",
+  chapter: "Chapters",
+  quiz: "Quizzes",
+  question: "Question bank",
+  exercise: "Programming exercises",
+  badge: "Badges",
+  enrollment: "Enrollments",
 };
 
 /** Human label for an action group ("peer_review" → "Peer review"). */
@@ -642,6 +738,7 @@ export function auditTargetHref(event: AuditEvent, orderIdOf?: (paymentId: strin
   const { targetType: type, targetId: id } = event;
   if (!type || !id) return null;
   const removed = /\.(delete|revoke)$/.test(event.action);
+  const courseId = metaString(event, "courseId");
   const enc = encodeURIComponent;
   switch (type) {
     case "user":
@@ -649,7 +746,31 @@ export function auditTargetHref(event: AuditEvent, orderIdOf?: (paymentId: strin
     case "course":
       return removed ? null : `/admin/courses/${enc(id)}`;
     case "batch":
-      return `/admin/batches/${enc(id)}`;
+      return event.action === "batch.delete" ? null : `/admin/batches/${enc(id)}`;
+    case "program":
+      return removed ? null : `/admin/programs/${enc(id)}`;
+    case "coupon":
+      return "/admin/settings/coupons";
+    case "badge":
+      return event.action === "badge.delete" ? null : "/admin/settings/badges";
+    case "job":
+      return removed ? null : `/admin/jobs/${enc(id)}`;
+    case "email_template": {
+      const batchId = metaString(event, "batchId");
+      return batchId ? `/admin/batches/${enc(batchId)}?tab=emails` : null;
+    }
+    case "chapter":
+    case "lesson":
+      // Chapters and lessons are edited from their course outline (which outlives their deletion).
+      return courseId ? `/admin/courses/${enc(courseId)}?tab=outline` : null;
+    case "quiz":
+      return removed ? null : `/admin/quizzes/${enc(id)}`;
+    case "question":
+      return removed ? null : `/admin/questions/${enc(id)}`;
+    case "exercise":
+      return removed ? null : `/admin/exercises/${enc(id)}`;
+    case "enrollment":
+      return courseId ? `/admin/courses/${enc(courseId)}?tab=dashboard` : null;
     case "payment": {
       const orderId = metaString(event, "orderId") ?? orderIdOf?.(id);
       return removed || !orderId ? null : `/admin/settings/transactions?search=${enc(orderId)}`;
@@ -675,7 +796,7 @@ export function auditTargetHref(event: AuditEvent, orderIdOf?: (paymentId: strin
     case "rubric":
       return removed ? null : `/admin/rubrics/${enc(id)}`;
     case "assignment":
-      return `/admin/assignments/${enc(id)}`;
+      return removed ? null : `/admin/assignments/${enc(id)}`;
     case "plan":
     case "subscription":
       return "/admin/settings/plans";

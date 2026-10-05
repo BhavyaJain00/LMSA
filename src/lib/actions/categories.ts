@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, Category } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
+import { audit } from "@/lib/audit";
 import { fd, slugify, uid } from "@/lib/utils";
 
 async function requireAdmin() {
@@ -29,7 +30,8 @@ function validate(name: string, slug: string, id: string | null, categories: Cat
 
 /** Create a category (Frappe: LMS Category). Slug defaults to the slugified name. */
 export async function createCategoryAction(_prev: ActionResult<Category> | null, formData: FormData): Promise<ActionResult<Category>> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage categories." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage categories." };
   const db = await getDb();
   const name = fd(formData, "name");
   const slug = fd(formData, "slug") ? slugify(fd(formData, "slug")) : name ? slugify(name) : "";
@@ -39,12 +41,14 @@ export async function createCategoryAction(_prev: ActionResult<Category> | null,
   await mutate((d) => {
     d.categories.push(category);
   });
+  await audit(admin, "category.create", { type: "category", id: category.id }, { name, slug });
   revalidateCategories();
   return { ok: true, data: category, message: "Category added successfully" };
 }
 
 export async function updateCategoryAction(_prev: ActionResult<Category> | null, formData: FormData): Promise<ActionResult<Category>> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage categories." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage categories." };
   const db = await getDb();
   const id = fd(formData, "id");
   const current = db.categories.find((c) => c.id === id);
@@ -61,15 +65,23 @@ export async function updateCategoryAction(_prev: ActionResult<Category> | null,
     return { ...row };
   });
   if (!updated) return { ok: false, error: "This category no longer exists." };
+  await audit(admin, "category.update", { type: "category", id }, {
+    name,
+    slug,
+    ...(current.name !== name ? { previousName: current.name } : {}),
+    ...(current.slug !== slug ? { previousSlug: current.slug } : {}),
+  });
   revalidateCategories();
   return { ok: true, data: updated, message: "Category updated successfully" };
 }
 
 /** Unlink the category from every course and batch, then delete it. */
 export async function deleteCategoryAction(id: string): Promise<ActionResult<{ unlinked: number }>> {
-  if (!(await requireAdmin())) return { ok: false, error: "Only administrators can manage categories." };
+  const admin = await requireAdmin();
+  if (!admin) return { ok: false, error: "Only administrators can manage categories." };
   const result = await mutate((d) => {
-    if (!d.categories.some((c) => c.id === id)) return null;
+    const category = d.categories.find((c) => c.id === id);
+    if (!category) return null;
     let unlinked = 0;
     for (const course of d.courses) {
       if (course.categoryId === id) {
@@ -84,9 +96,10 @@ export async function deleteCategoryAction(id: string): Promise<ActionResult<{ u
       }
     }
     d.categories = d.categories.filter((c) => c.id !== id);
-    return { unlinked };
+    return { unlinked, name: category.name, slug: category.slug };
   });
   if (!result) return { ok: false, error: "Unable to delete category" };
+  await audit(admin, "category.delete", { type: "category", id }, { name: result.name, slug: result.slug, unlinked: result.unlinked });
   revalidateCategories();
-  return { ok: true, data: result, message: "Category deleted successfully" };
+  return { ok: true, data: { unlinked: result.unlinked }, message: "Category deleted successfully" };
 }

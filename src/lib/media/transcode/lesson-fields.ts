@@ -37,12 +37,23 @@ export function transcodeSourceKey(src: string | undefined, siteOrigins: readonl
   return key;
 }
 
-/** HLS version folder of a stored `hlsUrl` (`videos/l/b/hls/v1/`), or null. */
+/**
+ * Generated HLS version folders: `videos/<lessonId>/<blockId>/hls/<version>/`
+ * (lesson blocks) and `videos/course/<courseId>/preview/hls/<version>/`
+ * (course preview videos).
+ */
+export const HLS_VERSION_FOLDER = /^(videos\/(?:course\/[^/]+\/preview|[^/]+\/[^/]+)\/hls\/[^/]+\/)/;
+
+/** HLS version folder of a storage key inside one, or null. */
+export function hlsVersionFolderOfKey(key: string): string | null {
+  const m = HLS_VERSION_FOLDER.exec(key);
+  return m ? m[1]! : null;
+}
+
+/** HLS version folder of a stored `hlsUrl` (`videos/l/b/hls/v1/`, `videos/course/c/preview/hls/v1/`), or null. */
 export function hlsVersionPrefix(hlsUrl: string | undefined, siteOrigins: readonly string[] = []): string | null {
   const key = storageKeyFromUrl(hlsUrl, siteOrigins);
-  if (!key) return null;
-  const m = /^(videos\/[^/]+\/[^/]+\/hls\/[^/]+\/)/.exec(key);
-  return m ? m[1]! : null;
+  return key ? hlsVersionFolderOfKey(key) : null;
 }
 
 /** The block's HLS output was made from its current source file. */

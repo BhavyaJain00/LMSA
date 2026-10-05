@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionResult, Chapter, Course, User } from "@/lib/types";
 import { findById, getDb, mutate } from "@/lib/db/store";
 import { getCurrentUser } from "@/lib/auth/session";
+import { audit } from "@/lib/audit";
 import { canManageCourse } from "@/lib/data/courses";
 import { recomputeEnrollmentProgress, renumberOutline, touchCourseContent, withReviewNote } from "@/lib/data/admin-courses";
 import { fd, uid } from "@/lib/utils";
@@ -234,8 +235,10 @@ export async function deleteChapterAction(chapterId: string): Promise<ActionResu
   const { user, course, chapter } = loaded;
 
   let reviewReset = false;
+  let removedLessons = 0;
   await mutate((db) => {
     const lessonIds = new Set(db.lessons.filter((l) => l.chapterId === chapter.id).map((l) => l.id));
+    removedLessons = lessonIds.size;
     const topicIds = new Set(db.discussionTopics.filter((t) => t.refType === "lesson" && lessonIds.has(t.refId)).map((t) => t.id));
     const unlink = <T extends { lessonId?: string }>(row: T): T => {
       if (!row.lessonId || !lessonIds.has(row.lessonId)) return row;
@@ -263,6 +266,7 @@ export async function deleteChapterAction(chapterId: string): Promise<ActionResu
     recomputeEnrollmentProgress(db, course.id);
     reviewReset = touchCourseContent(db, course.id, user);
   });
+  await audit(user, "chapter.delete", { type: "chapter", id: chapter.id }, { title: chapter.title, courseId: course.id, courseTitle: course.title, lessons: removedLessons });
   revalidateOutline(course);
   return { ok: true, data: undefined, message: withReviewNote("Chapter deleted successfully", reviewReset) };
 }

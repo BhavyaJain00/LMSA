@@ -13,6 +13,7 @@ import { EducationTimeline, ProfileCompletenessCard, WorkTimeline } from "@/comp
 import { SocialLinks } from "@/components/profile/social-icons";
 import { notFoundMetadata, pageMetadata } from "@/lib/seo/metadata";
 import { guestsCanBrowse } from "@/lib/seo/visibility";
+import { isIndexableProfile } from "@/lib/seo/profile-card";
 import { instructorPath, profilePath } from "@/lib/seo/content-index";
 import { canonicalUrl } from "@/lib/seo/site";
 import { getProfileJsonLd } from "@/lib/data/seo";
@@ -31,15 +32,6 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-/**
- * Profiles of people who teach a published course are public landing pages
- * (indexed, with ProfilePage/Person markup); learner profiles stay out of the
- * index so joining the platform never puts someone's name in search results.
- */
-function isIndexableProfile(view: NonNullable<Awaited<ReturnType<typeof getProfileView>>>, guestsBrowse: boolean): boolean {
-  return guestsBrowse && view.user.enabled && view.stats.teaching > 0;
-}
-
 export async function generateMetadata(props: PageProps<"/user/[username]">): Promise<Metadata> {
   const { username } = await props.params;
   const [view, settings, t, locale] = await Promise.all([getProfileView(decodeURIComponent(username)), getSettings(), getT("account"), getLocale()]);
@@ -52,7 +44,9 @@ export async function generateMetadata(props: PageProps<"/user/[username]">): Pr
       description: [user.bio, user.headline, t("profile.metaDescription", { name: user.name, brand: settings.brand.name })],
       path: profilePath(user.username),
       type: "profile",
-      image: user.avatarUrl ? { url: user.avatarUrl, alt: user.name } : undefined,
+      // The generated share card (./opengraph-image.tsx): name, headline, picture and numbers for
+      // indexable profiles, the default site card for everyone else (never a learner's picture or numbers).
+      generatedImage: true,
       noindex: !indexable,
       follow: true,
       // Teachers also have an instructor page with the same person: that one is the canonical address.

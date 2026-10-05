@@ -82,7 +82,16 @@ export interface EngineStats {
   lastFlushAt: string | null;
   lastFlushMs: number | null;
   lastSweepAt: string | null;
+  /** Time the last sweep spent comparing (the sum of its slices). */
   lastSweepMs: number | null;
+  /** Longest slice of the last sweep: how long it held the event loop at once. */
+  lastSweepMaxSliceMs: number | null;
+  /** Documents the last sweep compared. */
+  lastSweepDocuments: number | null;
+  /** How long the first load took (open, integrity check, reading every document, fingerprints). */
+  loadMs: number | null;
+  /** Documents held in memory after the first load. */
+  loadedDocuments: number | null;
   /** Documents saved by the sweep that were changed where the engine could not see it. */
   untrackedWrites: number;
   externalReloads: number;
@@ -126,6 +135,26 @@ interface SweepCursor {
   names: string[];
   collection: number;
   index: number;
+  /** Documents compared so far. */
+  compared: number;
+}
+
+/** What one sweep did (see `sweepNow()`). */
+export interface SweepReport {
+  /** Collections it compared. */
+  collections: number;
+  /** Documents it serialized and compared. */
+  documents: number;
+  /** Slices it ran; requests are served between slices. */
+  slices: number;
+  /** Time spent comparing (the sum of the slices). */
+  busyMs: number;
+  /** Longest slice: the longest the event loop was held at once. */
+  maxSliceMs: number;
+  /** From start to end, including the time other work ran between slices. */
+  wallMs: number;
+  /** False when a write failed or the engine closed before every collection was compared (the rest is compared next time). */
+  complete: boolean;
 }
 
 export class StoreEngine {
@@ -182,6 +211,10 @@ export class StoreEngine {
       lastFlushMs: null,
       lastSweepAt: null,
       lastSweepMs: null,
+      lastSweepMaxSliceMs: null,
+      lastSweepDocuments: null,
+      loadMs: null,
+      loadedDocuments: null,
       untrackedWrites: 0,
       externalReloads: 0,
       pending: false,
@@ -285,6 +318,32 @@ export class StoreEngine {
     return { ...this.stats, pending: this.dirty || this.pending.size > 0 };
   }
 
+  /**
+   * Store the changes recorded so far now instead of when the coalesced
+   * write timer fires. It does the same work as that write (only the
+   * documents mutations touched are compared), so it costs what one flush
+   * costs; use it where a change must be on disk before answering, and
+   * `flush()` where edits made outside `mutate()` must be included too.
+   * Returns false when the write failed (the changes are kept and retried).
+   */
+  async writePending(): Promise<boolean> {
+    if (!this.db || this.closed) return true;
+    return this.enqueue(() => this.persistPending());
+  }
+
+  /**
+   * Run the background comparison now, over `names` (default: the
+   * collections handed out since the previous sweep), in the same small
+   * slices as the scheduled one. Resolves with what it did, or null when a
+   * sweep is already running, the engine is closed or the driver writes
+   * whole files anyway.
+   */
+  async sweepNow(names?: readonly string[]): Promise<SweepReport | null> {
+    if (!this.tracker || this.closed) return null;
+    await this.getDb();
+    return this.sweep(names);
+  }
+
   /** Write everything outstanding and release the storage. */
   close(reason: "exit" | "close" = "close"): void {
     if (this.closed) return;
@@ -302,11 +361,15 @@ export class StoreEngine {
   /* ------------------------------------------------------------------ */
 
   private async load(): Promise<Database> {
+    const started = performance.now();
     const { data, origin } = await this.driver.open(this.options.initialData);
     const db = this.options.normalize(data);
-    this.install(db, this.raw(db));
+    const stored = this.raw(db);
+    this.install(db, stored);
     this.stats.openedAt = new Date().toISOString();
     this.stats.origin = origin;
+    this.stats.loadMs = Math.round(performance.now() - started);
+    this.stats.loadedDocuments = Object.values(stored.collections).reduce((n, docs) => n + docs.length, 0);
     if (this.driver.incremental && !this.exitHandler) {
       // Last chance on shutdown: write what is outstanding and leave a complete database file.
       this.exitHandler = () => this.close("exit");
@@ -787,27 +850,52 @@ export class StoreEngine {
   /* Sweep (changes the engine could not see)                            */
   /* ------------------------------------------------------------------ */
 
-  private async sweep(): Promise<void> {
-    if (!this.tracker || this.sweeping || this.closed || !this.db) return;
+  /**
+   * Compare `names` (default: the collections handed out since the previous
+   * sweep) with storage, one short slice at a time with other work running
+   * in between, and store what differs.
+   */
+  private async sweep(names?: readonly string[]): Promise<SweepReport | null> {
+    if (!this.tracker || this.sweeping || this.closed || !this.db) return null;
     this.sweeping = true;
-    const cursor: SweepCursor = { names: [...this.accessed].filter((name) => this.known.has(name)), collection: 0, index: 0 };
-    this.accessed.clear();
-    let busy = 0;
+    const wallStarted = performance.now();
+    let selected: string[];
+    if (names) {
+      selected = [...new Set(names)].filter((name) => this.known.has(name));
+      for (const name of selected) this.accessed.delete(name);
+    } else {
+      selected = [...this.accessed].filter((name) => this.known.has(name));
+      this.accessed.clear();
+    }
+    const cursor: SweepCursor = { names: selected, collection: 0, index: 0, compared: 0 };
+    const report: SweepReport = { collections: selected.length, documents: 0, slices: 0, busyMs: 0, maxSliceMs: 0, wallMs: 0, complete: true };
     try {
-      while (cursor.collection < cursor.names.length && !this.closed) {
+      while (cursor.collection < cursor.names.length) {
+        if (this.closed) {
+          report.complete = false;
+          break;
+        }
         const slice = await this.enqueue(() => this.sweepSlice(cursor));
-        busy += slice.ms;
+        report.slices++;
+        report.busyMs += slice.ms;
+        report.maxSliceMs = Math.max(report.maxSliceMs, slice.ms);
         if (!slice.ok) {
           // Compare the rest next time.
+          report.complete = false;
           for (const name of cursor.names.slice(cursor.collection)) this.accessed.add(name);
           break;
         }
         // Let requests run between slices.
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      report.documents = cursor.compared;
+      report.wallMs = performance.now() - wallStarted;
       this.stats.lastSweepAt = new Date().toISOString();
-      this.stats.lastSweepMs = Math.round(busy);
-      this.nextSweepDelay = Math.max(this.options.sweepDelayMs, Math.round(busy * SWEEP_COST_FACTOR));
+      this.stats.lastSweepMs = Math.round(report.busyMs);
+      this.stats.lastSweepMaxSliceMs = Math.round(report.maxSliceMs * 10) / 10;
+      this.stats.lastSweepDocuments = report.documents;
+      this.nextSweepDelay = Math.max(this.options.sweepDelayMs, Math.round(report.busyMs * SWEEP_COST_FACTOR));
+      return report;
     } finally {
       this.sweeping = false;
       this.scheduleSweep();
@@ -837,6 +925,7 @@ export class StoreEngine {
         this.scheduleRetry();
         return result(false);
       }
+      cursor.compared += found.compared;
       for (const change of found.changeSet.collections) {
         this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
       }
