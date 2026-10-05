@@ -71,6 +71,8 @@ export async function ensureInstallmentSchedule(anchorId: string): Promise<Payme
         source: anchor.source,
         taxCountry: anchor.taxCountry,
         taxRate: anchor.taxRate,
+        ...(anchor.buyerVatId ? { buyerVatId: anchor.buyerVatId } : {}),
+        ...(anchor.reverseCharge ? { reverseCharge: true } : {}),
         gateway: anchor.gateway,
         status: "pending",
         createdAt: dates[n - 1]!,

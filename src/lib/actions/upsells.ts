@@ -137,6 +137,7 @@ export async function acceptUpsellAction(orderId: string): Promise<ActionResult<
     address: main.address,
     gstin: main.gstin,
     pan: main.pan,
+    ...(main.buyerVatId ? { buyerVatId: main.buyerVatId } : {}),
     source: main.source,
     // The one-click add-on is credited to the affiliate of the order it follows.
     ...(main.affiliateId ? { affiliateId: main.affiliateId } : {}),

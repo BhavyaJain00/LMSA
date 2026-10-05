@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Database } from "@/lib/types";
-import { ChangeTracker, changeSetSize, idOf, isEmptyChangeSet, type DiffMode, type DiffRequest, type PendingChanges } from "./changes";
+import { ChangeTracker, changeSetSize, idOf, isEmptyChangeSet, type DiffMode, type DiffRequest, type PendingChanges, type StoredIdWalk } from "./changes";
 import { isBusyError, type RawData } from "./sqlite-core.mjs";
 import type { OpenOrigin, StoreDriver } from "./driver";
 
@@ -105,6 +105,8 @@ const WARNING_INTERVAL_MS = 10 * 60 * 1000;
 /** The sweep waits at least this multiple of its own duration before running again (≈5% CPU). */
 const SWEEP_COST_FACTOR = 20;
 const SWEEP_CHUNK = 256;
+/** A sweep walk restarted this often (removals keep happening meanwhile) settles the collection with one identity diff. */
+const MAX_WALK_RESTARTS = 2;
 const INDEX_KEY = /^(?:0|[1-9]\d{0,9})$/;
 
 /** Array methods that return a member: the result is recorded as a candidate. */
@@ -137,6 +139,10 @@ interface SweepCursor {
   index: number;
   /** Documents compared so far. */
   compared: number;
+  /** Stored ids of the current collection, matched against the array chunk by chunk. */
+  walk: StoredIdWalk | null;
+  /** Times the current collection's walk was restarted after a concurrent removal or reorder. */
+  restarts: number;
 }
 
 /** What one sweep did (see `sweepNow()`). */
@@ -867,7 +873,7 @@ export class StoreEngine {
       selected = [...this.accessed].filter((name) => this.known.has(name));
       this.accessed.clear();
     }
-    const cursor: SweepCursor = { names: selected, collection: 0, index: 0, compared: 0 };
+    const cursor: SweepCursor = { names: selected, collection: 0, index: 0, compared: 0, walk: null, restarts: 0 };
     const report: SweepReport = { collections: selected.length, documents: 0, slices: 0, busyMs: 0, maxSliceMs: 0, wallMs: 0, complete: true };
     try {
       while (cursor.collection < cursor.names.length) {
@@ -905,9 +911,16 @@ export class StoreEngine {
   /**
    * Compare the next documents of the sweep, a chunk at a time, until the
    * time budget is used. Recorded changes are flushed first, so whatever a
-   * chunk finds was changed where the engine could not see it. A
-   * collection's last chunk also compares ids, which stores documents added
-   * or removed behind the store's back.
+   * chunk finds was changed where the engine could not see it.
+   *
+   * Each chunk is compared document by document (which also stores
+   * documents added behind the store's back), and its ids are matched
+   * against the stored ids in stored order. When every id lines up and no
+   * stored id is left over at the end, membership and order are unchanged,
+   * so a large collection never needs one long pass over all its ids. Only
+   * when they do not line up (a document removed, reordered or duplicated
+   * where the engine could not see it) is the collection settled with one
+   * `identity` diff.
    */
   private sweepSlice(cursor: SweepCursor): { ok: boolean; ms: number } {
     const started = performance.now();
@@ -915,30 +928,68 @@ export class StoreEngine {
     if (!this.db || !this.tracker || this.closed) return result(true);
     if ((this.pending.size || this.dirty) && !this.writeTracked()) return result(false);
     const source = this.db as unknown as Loose;
+    const nextCollection = () => {
+      cursor.collection++;
+      cursor.index = 0;
+      cursor.walk = null;
+      cursor.restarts = 0;
+    };
     while (cursor.collection < cursor.names.length) {
       const name = cursor.names[cursor.collection]!;
       const docs = Array.isArray(source[name]) ? (source[name] as unknown[]) : [];
-      const end = Math.min(docs.length, cursor.index + SWEEP_CHUNK);
-      const last = end >= docs.length;
-      const found = this.store([{ name, mode: last ? "identity" : "candidates", candidates: docs.slice(cursor.index, end) }], "sweep");
-      if (!found) {
-        this.scheduleRetry();
-        return result(false);
-      }
-      cursor.compared += found.compared;
-      for (const change of found.changeSet.collections) {
-        this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
-      }
-      if (found.changeSet.settings !== null) this.reportUntracked("the settings", 1);
-      if (last) {
-        cursor.collection++;
+      cursor.walk ??= this.tracker.walkIds(name);
+      if (!cursor.walk.valid()) {
+        // Ids were removed or renumbered by a tracked write between slices: walk again from the start.
+        if (++cursor.restarts > MAX_WALK_RESTARTS) {
+          if (!this.sweepStore(name, "identity", [], cursor)) return result(false);
+          nextCollection();
+          continue;
+        }
         cursor.index = 0;
+        cursor.walk = this.tracker.walkIds(name);
+      }
+      const end = Math.min(docs.length, cursor.index + SWEEP_CHUNK);
+      const chunk = docs.slice(cursor.index, end);
+      if (!this.sweepStore(name, "candidates", chunk, cursor)) return result(false);
+      // Membership and order: the chunk's ids must be the next stored ids.
+      const walk = cursor.walk;
+      let aligned = walk.valid();
+      for (let i = 0; aligned && i < chunk.length; i++) {
+        const id = idOf(chunk[i]);
+        if (id !== null && walk.next() !== id) aligned = false;
+      }
+      const last = end >= docs.length;
+      if (aligned && last && walk.next() !== null) aligned = false;
+      if (!aligned && walk.valid()) {
+        // A real difference (or a duplicate id): settle the whole collection at once.
+        if (!this.sweepStore(name, "identity", [], cursor)) return result(false);
+        nextCollection();
+      } else if (!aligned) {
+        // Invalidated during this chunk; the next round restarts the walk.
+        cursor.index = end;
+      } else if (last) {
+        nextCollection();
       } else {
         cursor.index = end;
       }
       if (performance.now() - started >= this.options.sweepSliceMs) break;
     }
     return result(true);
+  }
+
+  /** One sweep comparison: store what differs and report it as changes the engine could not see. */
+  private sweepStore(name: string, mode: DiffMode, candidates: unknown[], cursor: SweepCursor): boolean {
+    const found = this.store([{ name, mode, candidates }], "sweep");
+    if (!found) {
+      this.scheduleRetry();
+      return false;
+    }
+    cursor.compared += found.compared;
+    for (const change of found.changeSet.collections) {
+      this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
+    }
+    if (found.changeSet.settings !== null) this.reportUntracked("the settings", 1);
+    return true;
   }
 
   private reportUntracked(what: string, documents: number): void {

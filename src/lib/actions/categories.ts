@@ -57,6 +57,7 @@ export async function updateCategoryAction(_prev: ActionResult<Category> | null,
   const slug = slugify(fd(formData, "slug") || name);
   const errors = validate(name, slug, id, db.categories);
   if (Object.keys(errors).length) return { ok: false, error: "Unable to update category", fieldErrors: errors };
+  const previous = { name: current.name, slug: current.slug }; // `current` is the live store row
   const updated = await mutate((d) => {
     const row = d.categories.find((c) => c.id === id);
     if (!row) return null;
@@ -68,8 +69,8 @@ export async function updateCategoryAction(_prev: ActionResult<Category> | null,
   await audit(admin, "category.update", { type: "category", id }, {
     name,
     slug,
-    ...(current.name !== name ? { previousName: current.name } : {}),
-    ...(current.slug !== slug ? { previousSlug: current.slug } : {}),
+    ...(previous.name !== name ? { previousName: previous.name } : {}),
+    ...(previous.slug !== slug ? { previousSlug: previous.slug } : {}),
   });
   revalidateCategories();
   return { ok: true, data: updated, message: "Category updated successfully" };

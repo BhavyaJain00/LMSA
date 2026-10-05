@@ -308,6 +308,8 @@ export async function recordRenewalPayment(input: {
       pan: template?.pan,
       taxCountry: template?.taxCountry,
       taxRate: template?.taxRate,
+      ...(template?.buyerVatId ? { buyerVatId: template.buyerVatId } : {}),
+      ...(template?.reverseCharge ? { reverseCharge: true } : {}),
       source: "Renewal",
       gateway: input.gateway,
       gatewayOrderId: input.gatewayOrderId,

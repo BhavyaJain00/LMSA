@@ -212,11 +212,14 @@ export async function updateProgramAction(_prev: unknown, formData: FormData): P
   const { fieldErrors, values } = parseProgramForm(formData, db, program);
   if (Object.keys(fieldErrors).length) return { ok: false, error: Object.values(fieldErrors)[0]!, fieldErrors };
   const orderChanged = program.enforceCourseOrder !== values.enforceCourseOrder;
+  // `program` is the live store row: remember what the save changes before applying it.
+  const wasPublished = program.published;
+  const oldSlug = program.slug;
   await mutate((d) => {
     const row = d.programs.find((p) => p.id === program.id);
     if (row) Object.assign(row, values, { updatedAt: new Date().toISOString() });
   });
-  if (program.published !== values.published) {
+  if (wasPublished !== values.published) {
     await audit(user, values.published ? "program.publish" : "program.unpublish", { type: "program", id: program.id }, { title: values.title });
   }
   // Lifting the order restriction gives existing members access to every course (paid ones as described above).
@@ -225,7 +228,7 @@ export async function updateProgramAction(_prev: unknown, formData: FormData): P
     const memberIds = db.programMembers.filter((m) => m.programId === program.id).map((m) => m.userId);
     report = await enrollMembersAsManager({ ...program, ...values }, user, memberIds, program.courseIds, { grantPaidAccess: fdBool(formData, "grantPaidAccess") });
   }
-  if (program.slug !== values.slug) revalidatePath(`/programs/${program.slug}`);
+  if (oldSlug !== values.slug) revalidatePath(`/programs/${oldSlug}`);
   revalidateProgram({ id: program.id, slug: values.slug });
   const message = report
     ? reportMessage("Program updated successfully", report, (n) => `${n === 1 ? "One course enrollment waits" : `${n} course enrollments wait`} for members to complete prerequisites.`)

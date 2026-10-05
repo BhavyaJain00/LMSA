@@ -1,6 +1,8 @@
 import type { Payment } from "@/lib/types";
 import { BILLING_SOURCES, GSTIN_RE, PAN_RE, canonicalIndianState, isKnownCountry } from "@/components/commerce/countries";
 import { fd, fdBool } from "@/lib/utils";
+import { countryCode, countryName } from "@/lib/commerce/tax";
+import { exampleVatId, isEuCountry, isPlausibleTaxId, normalizeVatId, parseEuVatId } from "@/lib/commerce/vat-id";
 
 /**
  * The billing details every checkout form posts (course/batch/plan/bundle
@@ -17,6 +19,8 @@ export interface BillingInput {
   pincode: string;
   gstin: string;
   pan: string;
+  /** Optional VAT / tax number of a business buyer, normalized ("DE123456789"). */
+  vatId: string;
   source: string;
   consent: boolean;
 }
@@ -32,6 +36,7 @@ export function readBilling(formData: FormData): BillingInput {
     pincode: fd(formData, "pincode"),
     gstin: fd(formData, "gstin").toUpperCase(),
     pan: fd(formData, "pan").toUpperCase(),
+    vatId: normalizeVatId(fd(formData, "vatId")),
     source: fd(formData, "source"),
     consent: fdBool(formData, "consent"),
   };
@@ -56,6 +61,8 @@ export function validateBilling(input: BillingInput, applyTax: boolean): Record<
   } else if (input.state.length > 100) {
     errors.state = "Please enter a valid State/Province";
   }
+  const vatError = validateVatId(input.vatId, input.country);
+  if (vatError) errors.vatId = vatError;
   if (applyTax) {
     if (input.gstin && !GSTIN_RE.test(input.gstin)) errors.gstin = "Please enter a valid GST number.";
     if (input.gstin && !input.pan) errors.pan = "Please enter a valid pan number.";
@@ -64,8 +71,29 @@ export function validateBilling(input: BillingInput, applyTax: boolean): Record<
   return errors;
 }
 
+/**
+ * Check the buyer's optional VAT number against their billing country. A
+ * buyer from an EU country must give a well-formed VAT number of that
+ * country (with its prefix, "EL" for Greece); elsewhere any plausible tax
+ * number is accepted. Returns the error message, or null when it is fine.
+ */
+export function validateVatId(vatId: string, billingCountry: string): string | null {
+  const value = normalizeVatId(vatId);
+  if (!value) return null;
+  const country = countryCode(billingCountry);
+  const vat = parseEuVatId(value);
+  if (country && isEuCountry(country)) {
+    if (vat.ok) return vat.country === country ? null : `This VAT number is registered in ${countryName(vat.country)}. Use a VAT number of ${countryName(country)}, your billing country.`;
+    if (vat.reason === "format") return `This doesn't look like a valid ${countryName(vat.country ?? country)} VAT number, e.g. ${exampleVatId(vat.country ?? country)}.`;
+    return `Enter your VAT number with its country prefix, e.g. ${exampleVatId(country)}.`;
+  }
+  if (!vat.ok && vat.reason === "format") return `This doesn't look like a valid ${countryName(vat.country ?? "")} VAT number, e.g. ${exampleVatId(vat.country)}.`;
+  if (!vat.ok && !isPlausibleTaxId(value)) return "Please enter a valid VAT or tax number (4 to 20 letters and digits).";
+  return null;
+}
+
 /** The billing fields of an order row from validated input. */
-export function billingFields(input: BillingInput, applyTax: boolean): Pick<Payment, "billingName" | "address" | "gstin" | "pan" | "source"> {
+export function billingFields(input: BillingInput, applyTax: boolean): Pick<Payment, "billingName" | "address" | "gstin" | "pan" | "source" | "buyerVatId"> {
   return {
     billingName: input.billingName,
     address: {
@@ -78,6 +106,7 @@ export function billingFields(input: BillingInput, applyTax: boolean): Pick<Paym
     },
     gstin: applyTax ? input.gstin || undefined : undefined,
     pan: applyTax ? input.pan || undefined : undefined,
+    buyerVatId: input.vatId || undefined,
     source: input.source,
   };
 }

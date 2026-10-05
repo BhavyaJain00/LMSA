@@ -200,7 +200,11 @@ export async function openRenewalOrder(sub: Subscription, opts: { notifyMember?:
     .filter((p) => p.subscriptionId === sub.id && p.itemType === "plan" && p.status === "paid")
     .sort((a, b) => (b.paidAt ?? b.createdAt).localeCompare(a.paidAt ?? a.createdAt))[0];
   // Renewals are taxed for the member's billing country, as their first order was.
-  const summary = computeOrderSummary(itemFromPlan(plan), null, settings, { rules: db.taxRules, country: template?.taxCountry ?? template?.address?.country ?? null });
+  const summary = computeOrderSummary(itemFromPlan(plan), null, settings, {
+    rules: db.taxRules,
+    country: template?.taxCountry ?? template?.address?.country ?? null,
+    vatId: template?.buyerVatId ?? null,
+  });
   const gateway = settings.commerce.paymentGateway;
   const free = summary.total <= 0 || gateway === "none";
   const inserted = await insertPendingOrder({
@@ -221,6 +225,7 @@ export async function openRenewalOrder(sub: Subscription, opts: { notifyMember?:
     address: template?.address,
     gstin: template?.gstin,
     pan: template?.pan,
+    ...(template?.buyerVatId ? { buyerVatId: template.buyerVatId } : {}),
     source: "Renewal",
     gateway: summary.total <= 0 ? "free" : gateway,
     status: "pending",

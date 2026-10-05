@@ -2,7 +2,7 @@ import "server-only";
 import type { Database, Payment, Settings, Upsell, User } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
 import { checkBillingAccess, computeOrderSummary, getBillingItem, priceItemIn, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
-import type { TaxContext } from "./tax";
+import { priceForTax, resolveTax, type TaxContext } from "./tax";
 import { formatPrice } from "@/lib/utils";
 import { bundleCourses } from "./bundles";
 import { discountedPrice, itemRef, upsellFor, upsellPerformance, type UpsellItemType, type UpsellPerformance } from "./upsells";
@@ -28,7 +28,9 @@ export interface UpsellOffer {
 export function offerSummary(item: BillingItem, discountPercent: number, settings: Settings, tax?: TaxContext | null): OrderSummary {
   const price = discountedPrice(item.amount, discountPercent);
   const s = computeOrderSummary({ ...item, amount: price }, null, settings, tax);
-  return { ...s, originalAmount: item.amount, discountAmount: item.amount - price };
+  // Under reverse charge on a tax-inclusive price both prices lose the VAT they include, so the invoice still adds up.
+  const list = priceForTax(item.amount, resolveTax(settings, tax), item.currency);
+  return { ...s, originalAmount: list, discountAmount: Math.max(0, list - s.originalAmount) };
 }
 
 /**
@@ -72,7 +74,7 @@ export async function postPurchaseOfferFor(user: User, payment: Payment): Promis
   if (payment.itemType !== "course" && payment.itemType !== "bundle") return null;
   if (payment.installmentNumber) return null;
   const db = await getDb();
-  const tax: TaxContext = { rules: db.taxRules, country: payment.taxCountry ?? payment.address?.country ?? null };
+  const tax: TaxContext = { rules: db.taxRules, country: payment.taxCountry ?? payment.address?.country ?? null, vatId: payment.buyerVatId ?? null };
   const offer = await offerFor(user, { type: payment.itemType, id: payment.itemId, currency: payment.currency }, db.settings, db.upsells, tax);
   if (!offer) return null;
   // Already accepted (bump or one-click) from this order.

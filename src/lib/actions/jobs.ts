@@ -160,6 +160,7 @@ export async function setJobStatusAction(id: string, status: "open" | "closed"):
   if (!job) return { ok: false, error: "This job opening no longer exists." };
   if (!canManageJob(user, job)) return { ok: false, error: "You are not permitted to manage this job opening." };
   if (status !== "open" && status !== "closed") return { ok: false, error: "Invalid status." };
+  const previousStatus = job.status; // `job` is the live store row
   await mutate((d) => {
     const row = d.jobs.find((j) => j.id === id);
     if (row) {
@@ -167,7 +168,7 @@ export async function setJobStatusAction(id: string, status: "open" | "closed"):
       row.updatedAt = new Date().toISOString();
     }
   });
-  if (job.status !== status) {
+  if (previousStatus !== status) {
     await audit(user, status === "closed" ? "job.close" : "job.reopen", { type: "job", id: job.id }, {
       title: job.title,
       company: job.company,

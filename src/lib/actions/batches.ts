@@ -309,6 +309,8 @@ export async function setBatchPublishedAction(batchId: string, published: boolea
     if (!batch.instructorIds.length) missing.push("an instructor");
     if (missing.length) return { ok: false, error: `Add ${missing.join(", ")} before publishing.` };
   }
+  // `batch` is the live store row, so remember the previous state before changing it.
+  const wasPublished = batch.published;
   await mutate((d) => {
     const row = d.batches.find((b) => b.id === batch.id);
     if (row) {
@@ -316,10 +318,10 @@ export async function setBatchPublishedAction(batchId: string, published: boolea
       row.updatedAt = new Date().toISOString();
     }
   });
-  if (published !== batch.published) {
+  if (published !== wasPublished) {
     await audit(user, published ? "batch.publish" : "batch.unpublish", { type: "batch", id: batch.id }, { title: batch.title });
   }
-  if (published && !batch.published) await announcePublishedBatch({ ...batch, published: true }, user);
+  if (published && !wasPublished) await announcePublishedBatch({ ...batch, published: true }, user);
   revalidateBatch(batch);
   return { ok: true, data: undefined, message: published ? "Batch published" : "Batch unpublished" };
 }

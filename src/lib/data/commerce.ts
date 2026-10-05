@@ -14,7 +14,7 @@ import { installmentPlanPrice, isInstallmentOrder, offeredInstallmentPlan, split
 import { intervalNoun, isRecurringInterval, planAccessLabel } from "@/lib/commerce/plans";
 import { isOngoing, trialEligible, trialEnd } from "@/lib/commerce/subscriptions";
 import { bumpOrderId, isOrderBump } from "@/lib/commerce/upsells";
-import { applyTax, resolveTax, type TaxContext } from "@/lib/commerce/tax";
+import { applyTax, priceForTax, resolveTax, type TaxContext } from "@/lib/commerce/tax";
 import { pickPrice, selectableCurrencies } from "@/lib/commerce/currency";
 import {
   couponAppliesTo,
@@ -549,7 +549,9 @@ export interface OrderSummary {
  * rate applies.
  */
 export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, settings: Settings, tax?: TaxContext | null): OrderSummary {
-  const original = Math.max(0, Math.round(item.amount));
+  const applied = resolveTax(settings, tax);
+  // Reverse charge on a tax-inclusive price: the business buyer pays the price without the VAT it included.
+  const original = priceForTax(item.amount, applied, item.currency);
   let discount = 0;
   if (coupon) {
     discount =
@@ -559,7 +561,6 @@ export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, se
   }
   const subtotal = Math.max(0, original - discount);
   const c = settings.commerce;
-  const applied = resolveTax(settings, tax);
   const { taxAmount, total } = applyTax(subtotal, applied, item.currency);
   return {
     itemType: item.type,
@@ -574,6 +575,7 @@ export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, se
     taxPercentage: taxAmount > 0 ? applied.rate : 0,
     taxInclusive: taxAmount > 0 && applied.inclusive,
     taxCountry: applied.country,
+    reverseCharge: !!applied.reverseCharge,
     total,
     coupon: coupon ? { id: coupon.id, code: coupon.code, discountType: coupon.discountType, value: coupon.value } : null,
     usdEquivalent: c.showUsdEquivalent ? toUsdEquivalent(total, item.currency, c.applyRounding) : null,
@@ -581,7 +583,11 @@ export function computeOrderSummary(item: BillingItem, coupon: Coupon | null, se
 }
 
 /** The tax facts an order row keeps for its invoice (country and rate of a by-country tax, the rate of any tax). */
-export function orderTaxFields(summary: Pick<OrderSummary, "taxAmount" | "taxPercentage" | "taxCountry">): Pick<Payment, "taxCountry" | "taxRate"> {
+export function orderTaxFields(
+  summary: Pick<OrderSummary, "taxAmount" | "taxPercentage" | "taxCountry"> & { reverseCharge?: boolean },
+): Pick<Payment, "taxCountry" | "taxRate" | "reverseCharge"> {
+  // Reverse charge: a 0% rate on purpose, recorded so the invoice carries the "Reverse charge" note.
+  if (summary.reverseCharge) return { ...(summary.taxCountry ? { taxCountry: summary.taxCountry } : {}), taxRate: 0, reverseCharge: true };
   if (summary.taxAmount <= 0) return summary.taxCountry ? { taxCountry: summary.taxCountry } : {};
   return { ...(summary.taxCountry ? { taxCountry: summary.taxCountry } : {}), taxRate: summary.taxPercentage };
 }
@@ -649,11 +655,11 @@ export async function getPaymentByOrderId(orderId: string): Promise<Payment | nu
 }
 
 /** Most recent billing details the user entered, used to prefill checkout. */
-export async function getSavedBillingDetails(userId: string): Promise<Pick<Payment, "billingName" | "address" | "gstin" | "pan" | "source"> | null> {
+export async function getSavedBillingDetails(userId: string): Promise<Pick<Payment, "billingName" | "address" | "gstin" | "pan" | "source" | "buyerVatId"> | null> {
   const db = await getDb();
   const last = db.payments.filter((p) => p.userId === userId && p.address).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   if (!last) return null;
-  return { billingName: last.billingName, address: last.address, gstin: last.gstin, pan: last.pan, source: last.source };
+  return { billingName: last.billingName, address: last.address, gstin: last.gstin, pan: last.pan, source: last.source, buyerVatId: last.buyerVatId };
 }
 
 /** Tell admins that a manual order is waiting for confirmation. */
