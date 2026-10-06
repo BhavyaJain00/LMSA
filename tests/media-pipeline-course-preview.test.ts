@@ -126,7 +126,7 @@ describe("course preview target: storage keys", () => {
 
   it("collects HLS versions referenced by lesson blocks and course previews", () => {
     const refs = targets.referencedHlsVersions({
-      lessons: [makeLesson({ id: "les_r", blocks: [{ id: "blk_r", type: "video", src: SRC, hlsUrl: "/uploads/videos/les_r/blk_r/hls/a/master.m3u8" }] })],
+      lessons: [makeLesson({ id: "les_r", courseId: "crs_cp", chapterId: "chp_r", blocks: [{ id: "blk_r", type: "video", src: SRC, hlsUrl: "/uploads/videos/les_r/blk_r/hls/a/master.m3u8" }] })],
       courses: [makeCourse({ id: "crs_cp", videoUrl: SRC, previewHlsUrl: HLS })],
     });
     assert.deepEqual([...refs].sort(), ["videos/course/crs_cp/preview/hls/v1/", "videos/les_r/blk_r/hls/a/"]);
@@ -330,7 +330,7 @@ describe("course preview conversion panel", () => {
 
   it("lists course preview jobs in the queue table", () => {
     const db = {
-      lessons: [makeLesson({ id: "les_q", courseId: "crs_cp", title: "Welcome" })],
+      lessons: [makeLesson({ id: "les_q", courseId: "crs_cp", chapterId: "chp_q", title: "Welcome" })],
       courses: [makeCourse({ id: "crs_cp", title: "Photography" })],
       transcodeJobs: [job({ id: "p" }), job({ id: "l", target: undefined, lessonId: "les_q", blockId: "blk_q" }), job({ id: "gone", target: { kind: "course-preview", courseId: "crs_gone" } })],
     };

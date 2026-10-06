@@ -3,7 +3,13 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/client";
 
-/** Card-shaped placeholder shared by the sign-in, sign-up and account-recovery screens. */
+/**
+ * Card-shaped placeholder for the account-recovery screens (forgot password,
+ * reset password, email confirmation). Sign-in, sign-up and two-step
+ * verification deliberately have no loading screen: they redirect signed-in
+ * members, and without a Suspense boundary above them that redirect is a real
+ * 307 instead of a streamed page that redirects in the browser.
+ */
 export default function AuthLoading() {
   const t = useT("common");
   return (
