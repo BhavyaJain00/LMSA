@@ -89,6 +89,21 @@ function MembershipNotice({ view }: { view: MemberMembershipView }) {
       </Notice>
     );
   }
+  if (view.pendingPlan) {
+    const next = view.pendingPlan;
+    return (
+      <Notice tone="info" icon={<Icon.Refresh className="text-info" />} actions={payRenewal ?? undefined}>
+        <strong>
+          You&apos;re moving to {next.name} ({formatPrice(next.price, next.currency)}
+          {intervalSuffix(next.interval)}).
+        </strong>{" "}
+        {sub.status === "trialing" && !view.gatewayManaged
+          ? "The new plan starts with the first renewal after your trial."
+          : `The new plan starts when your membership renews on ${formatDate(sub.currentPeriodEnd)}.`}{" "}
+        Until then you keep {view.plan?.name ?? "your current plan"} and its courses.
+      </Notice>
+    );
+  }
   if (sub.status === "trialing") {
     return (
       <Notice tone="info" icon={<Icon.Gift className="text-info" />} actions={payRenewal ?? undefined}>
@@ -113,21 +128,6 @@ function MembershipNotice({ view }: { view: MemberMembershipView }) {
         }
       >
         <strong>This membership was cancelled.</strong> Your access runs until {formatDate(sub.currentPeriodEnd)}.
-      </Notice>
-    );
-  }
-  if (view.pendingPlan) {
-    const next = view.pendingPlan;
-    return (
-      <Notice tone="info" icon={<Icon.Refresh className="text-info" />} actions={payRenewal ?? undefined}>
-        <strong>
-          You&apos;re moving to {next.name} ({formatPrice(next.price, next.currency)}
-          {intervalSuffix(next.interval)}).
-        </strong>{" "}
-        {sub.status === "trialing" && !view.gatewayManaged
-          ? "The new plan starts with the first renewal after your trial."
-          : `The new plan starts when your membership renews on ${formatDate(sub.currentPeriodEnd)}.`}{" "}
-        Until then you keep {view.plan?.name ?? "your current plan"} and its courses.
       </Notice>
     );
   }

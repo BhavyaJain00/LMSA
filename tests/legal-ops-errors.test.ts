@@ -52,7 +52,7 @@ function group(overrides: Partial<ErrorEvent> = {}): ErrorEvent {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 function clearAlertBudget() {
-  (globalThis as unknown as { __llErrorAlerts?: number[] }).__llErrorAlerts = [];
+  (globalThis as unknown as { __llErrorAlertSlots?: Record<string, number[]> }).__llErrorAlertSlots = {};
 }
 
 describe("error log: redaction and normalization", () => {
@@ -112,10 +112,10 @@ describe("error log: grouping", () => {
   it("adds a new group, then counts repeats of the same message and path", () => {
     const events: ErrorEvent[] = [];
     const first = addErrorOccurrence(events, { message: "Item 1 missing", path: "/x", digest: "d1" }, new Date(FIXED_NOW), newId);
-    assert.equal(first.isNew, true);
+    assert.equal(first!.isNew, true);
     const later = new Date(Date.parse(FIXED_NOW) + 60_000);
     const second = addErrorOccurrence(events, { message: "Item 2 missing", path: "/x", digest: "d2", userId: "usr_1" }, later, newId);
-    assert.equal(second.isNew, false);
+    assert.equal(second!.isNew, false);
     assert.equal(events.length, 1);
     assert.equal(events[0]!.count, 2);
     assert.equal(events[0]!.lastSeenAt, later.toISOString());
@@ -129,7 +129,7 @@ describe("error log: grouping", () => {
   it("reopens a resolved group when it happens again", () => {
     const events = [group({ message: "Boom", path: "/a", resolved: true })];
     const result = addErrorOccurrence(events, { message: "Boom", path: "/a" }, new Date(), newId);
-    assert.equal(result.reopened, true);
+    assert.equal(result!.reopened, true);
     assert.equal(events[0]!.resolved, false);
     assert.equal(events[0]!.count, 2);
   });

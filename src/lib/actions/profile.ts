@@ -229,6 +229,7 @@ export async function updateProfileAction(_prev: ActionResult<{ username: string
     skills,
     education,
     workExperience,
+    updatedAt: new Date().toISOString(),
   });
 
   revalidateProfile(target.username, username);
@@ -275,7 +276,7 @@ export async function setUserRoleAction(userId: string, role: Role, enabled: boo
   if (roles.length === 0) return { ok: false, error: "A member needs at least one role." };
   const ordered = ALL_ROLES.filter((r) => roles.includes(r));
 
-  await update("users", target.id, { roles: ordered });
+  await update("users", target.id, { roles: ordered, updatedAt: new Date().toISOString() });
   await audit(viewer, "user.roles", { type: "user", id: target.id }, { from: target.roles.join(","), to: ordered.join(",") });
   if (enabled && target.id !== viewer.id) {
     await notify(target.id, {

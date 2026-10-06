@@ -28,8 +28,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Runtime secrets are not needed (or wanted) at build time: the start-up
-# checks in src/lib/env-check.ts skip `next build`.
-RUN npm run build
+# checks in src/lib/env-check.ts skip `next build`. Pages prerendered during
+# the build (the web manifest reads the settings) open a database; keep that
+# throw-away database outside /app, without demo data, so nothing from the
+# build can end up in the image or seed the production volume.
+ENV SEED_DEMO_DATA=false     SQLITE_PATH=/tmp/learnloop-build/lms.sqlite     DATA_FILE=/tmp/learnloop-build/db.json     UPLOAD_DIR=/tmp/learnloop-build/uploads
+# The build output must never carry data or secrets (next.config.ts already
+# excludes them from tracing; this is the belt to those braces).
+RUN npm run build   && rm -rf .next/standalone/storage .next/standalone/.env .next/standalone/.env.* .next/standalone/tests
 
 # ---------------------------------------------------------------------------
 # 3. Runtime
@@ -61,7 +67,9 @@ COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/src/lib/db/sqlite-core.mjs /app/src/lib/db/backup-core.mjs ./src/lib/db/
 
 # Persistent data; the image cache (.next/cache) must be writable too.
-RUN mkdir -p /app/storage /app/.next/cache && chown -R node:node /app/storage /app/.next/cache
+# /app/storage starts empty: Docker seeds a new named volume from the image's
+# copy of this folder, so it must never contain a database or backups.
+RUN rm -rf /app/storage && mkdir -p /app/storage /app/.next/cache && chown -R node:node /app/storage /app/.next/cache
 VOLUME ["/app/storage"]
 
 USER node

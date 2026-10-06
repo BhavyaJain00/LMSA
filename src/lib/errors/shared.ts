@@ -100,8 +100,13 @@ export function groupingMessage(message: string): string {
     .trim();
 }
 
-export function errorGroupKey(message: string, path: string | undefined): string {
-  return `${groupingMessage(message)}|${path ?? ""}`;
+/**
+ * Group key: message + route, in separate namespaces for server errors and
+ * browser reports. Anyone can send a browser report, so a report must never
+ * land in (and overwrite the stack of, or reopen) a group the server logged.
+ */
+export function errorGroupKey(message: string, path: string | undefined, method?: string): string {
+  return `${method === BROWSER_METHOD ? "browser" : "server"}|${groupingMessage(message)}|${path ?? ""}`;
 }
 
 /** Normalize an occurrence before it is stored or matched. */
@@ -118,15 +123,33 @@ export function sanitizeErrorInput(input: ErrorInput): ErrorInput {
   };
 }
 
+/** New groups browser reports may open per rolling hour (occurrences of existing groups are always counted). */
+export const MAX_NEW_BROWSER_GROUPS_PER_HOUR = 30;
+
+/** Browser-reported groups first seen in the hour before `now`. */
+export function recentBrowserGroupCount(events: readonly ErrorEvent[], now: Date): number {
+  const since = now.getTime() - 60 * 60 * 1000;
+  let n = 0;
+  for (const e of events) if (isBrowserError(e) && new Date(e.createdAt).getTime() > since) n++;
+  return n;
+}
+
 /**
  * Add one occurrence to the log (in place). Returns the group and whether it
- * is new. A resolved group that happens again is reopened.
+ * is new, or null when a browser report would open a new group beyond
+ * `MAX_NEW_BROWSER_GROUPS_PER_HOUR` (the report is dropped). A resolved group
+ * that happens again is reopened. Browser reports only ever match browser groups.
  */
-export function addErrorOccurrence(events: ErrorEvent[], rawInput: ErrorInput, now: Date, newId: () => string): { event: ErrorEvent; isNew: boolean; reopened: boolean } {
+export function addErrorOccurrence(
+  events: ErrorEvent[],
+  rawInput: ErrorInput,
+  now: Date,
+  newId: () => string,
+): { event: ErrorEvent; isNew: boolean; reopened: boolean } | null {
   const input = sanitizeErrorInput(rawInput);
-  const key = errorGroupKey(input.message, input.path);
+  const key = errorGroupKey(input.message, input.path, input.method);
   const nowIso = now.toISOString();
-  const existing = events.find((e) => errorGroupKey(e.message, e.path) === key);
+  const existing = events.find((e) => errorGroupKey(e.message, e.path, e.method) === key);
   if (existing) {
     const reopened = existing.resolved === true;
     existing.count = (existing.count || 0) + 1;
@@ -139,6 +162,7 @@ export function addErrorOccurrence(events: ErrorEvent[], rawInput: ErrorInput, n
     if (reopened) existing.resolved = false;
     return { event: existing, isNew: false, reopened };
   }
+  if (input.method === BROWSER_METHOD && recentBrowserGroupCount(events, now) >= MAX_NEW_BROWSER_GROUPS_PER_HOUR) return null;
   const event: ErrorEvent = {
     id: newId(),
     message: input.message,
@@ -156,10 +180,16 @@ export function addErrorOccurrence(events: ErrorEvent[], rawInput: ErrorInput, n
   return { event, isNew: true, reopened: false };
 }
 
-/** Drop the oldest groups beyond `max`: resolved ones first. Returns the kept list. */
+/**
+ * Drop the oldest groups beyond `max` and return the kept list. Browser
+ * reports (which anyone can send) go first, so a flood of them can never push
+ * server errors out of the log; within each source resolved groups go before
+ * open ones.
+ */
 export function capErrorGroups(events: ErrorEvent[], max: number = MAX_ERROR_GROUPS): ErrorEvent[] {
   if (events.length <= max) return events;
   const ranked = [...events].sort((a, b) => {
+    if (isBrowserError(a) !== isBrowserError(b)) return isBrowserError(a) ? -1 : 1;
     if (!!a.resolved !== !!b.resolved) return a.resolved ? -1 : 1;
     return a.lastSeenAt.localeCompare(b.lastSeenAt);
   });

@@ -220,7 +220,7 @@ describe("/developers view models", () => {
     const enroll = docs.find((d) => d.id === "createEnrollment")!;
     assert.deepEqual(enroll.alsoReturns.map((r) => r.status), [200]);
     assert.ok(enroll.bodyRules.some((rule) => rule.includes("`userId` or `email`")));
-    assert.deepEqual(enroll.errors.map((e) => e.status), [400, 401, 403, 404, 429, 500]);
+    assert.deepEqual(enroll.errors.map((e) => e.status), [400, 401, 403, 404, 413, 415, 429, 500]);
     const patch = docs.find((d) => d.id === "updateCourse")!;
     assert.ok(patch.bodyRules.some((rule) => rule.startsWith("Send at least one field")));
     assert.equal(docs.find((d) => d.id === "getKeyInfo")!.scope, null);

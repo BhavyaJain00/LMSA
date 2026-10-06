@@ -6,8 +6,9 @@ import { getDb } from "@/lib/db/store";
 import { settleEvents } from "@/lib/events";
 import { resolveCourseAccess } from "@/lib/commerce/access";
 import { joinCourseWithMembership } from "@/lib/commerce/membership-service";
-import { subscriptionGrantsAccess } from "@/lib/commerce/subscriptions";
+import { GRACE_DAYS, subscriptionGrantsAccess } from "@/lib/commerce/subscriptions";
 import { reconcileStripeSession } from "@/lib/payments/gateway";
+import { applyRefund } from "@/lib/payments/fulfillment";
 import { parseStripeEvent, parseStripeSession } from "@/lib/payments/stripe";
 import { handleStripeEvent } from "@/lib/payments/webhooks";
 import { makeCourse, makePayment, makeUser, resetDb } from "./helpers/db";
@@ -297,7 +298,12 @@ describe("invoice.payment_failed and recovery", () => {
     const db = await getDb();
     const row = db.subscriptions[0]!;
     assert.equal(row.status, "past_due");
-    assert.equal(subscriptionGrantsAccess(row, Date.parse(row.currentPeriodEnd) + 2 * DAY * 1000), true);
+    // The grace runs from the failed charge, not from the end of the (unpaid) period Stripe reports.
+    assert.ok(row.pastDueSince);
+    const failedAt = Date.parse(row.pastDueSince!);
+    assert.equal(subscriptionGrantsAccess(row, failedAt + (GRACE_DAYS - 1) * DAY * 1000), true);
+    assert.equal(subscriptionGrantsAccess(row, failedAt + (GRACE_DAYS + 1) * DAY * 1000), false);
+    assert.equal(subscriptionGrantsAccess(row, Date.parse(row.currentPeriodEnd) + 2 * DAY * 1000), false);
     assert.equal(db.notifications.filter((n) => n.userId === member.id && /^Action needed: payment for All access/.test(n.subject)).length, 1);
     assert.equal(db.payments.length, 1, "a failed invoice records no order");
   });
@@ -320,6 +326,36 @@ describe("invoice.payment_failed and recovery", () => {
     assert.equal(db.subscriptions[0]!.status, "expired");
     assert.equal(subscriptionGrantsAccess(db.subscriptions[0]!), false);
     assert.ok(db.notifications.some((n) => n.userId === member.id && /has expired/.test(n.subject)));
+  });
+});
+
+describe("refunding the charge of a Stripe membership", () => {
+  it("ends the membership now and cancels the Stripe subscription so it is not charged again", async () => {
+    await handleStripeEvent(event("invoice.paid", invoice()));
+    await settleEvents();
+    assert.equal((await membership())?.status, "active");
+    const now = Math.floor(Date.now() / 1000);
+    remote.subscription = stripeSub({ status: "canceled", ended_at: now, canceled_at: now });
+    calls = [];
+    const res = await applyRefund("pay_m1", { amount: 1900 });
+    assert.ok(res.ok);
+    const row = await membership();
+    assert.equal(row?.status, "cancelled");
+    assert.equal(subscriptionGrantsAccess(row!), false);
+    await settleEvents();
+    assert.ok(calls.includes(`DELETE /v1/subscriptions/${SUB_ID}`), calls.join(", "));
+    assert.equal((await membership())?.status, "cancelled");
+  });
+
+  it("asks the administrators to cancel it in Stripe when Stripe can't be reached", async () => {
+    await handleStripeEvent(event("invoice.paid", invoice()));
+    await settleEvents();
+    remote.subscription = null;
+    await applyRefund("pay_m1", { amount: 1900 });
+    await settleEvents();
+    const db = await getDb();
+    assert.equal(db.subscriptions[0]?.status, "cancelled");
+    assert.ok(db.notifications.some((n) => n.userId === admin.id && /^Cancel the Stripe subscription of order ORD-PAY_M1/.test(n.subject)));
   });
 });
 

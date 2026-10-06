@@ -241,7 +241,7 @@ export const endpoints = {
     path: "/users",
     tag: "Users",
     summary: "List members",
-    description: "`updated_since` matches members created, verified or active since that time.",
+    description: "`updated_since` matches members created, edited (name, email, roles, status, profile), verified or active since that time.",
     scope: "users:read",
     query: s.object(
       {

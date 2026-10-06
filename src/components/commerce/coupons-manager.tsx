@@ -15,7 +15,7 @@ import { cn, formatDate, formatPrice } from "@/lib/utils";
 import { useFormAction } from "@/components/admin/settings/use-form-action";
 
 export interface CouponRowData extends Coupon {
-  items: { type: "course" | "batch"; id: string; title: string }[];
+  items: { type: Coupon["applicableItems"][number]["type"]; id: string; title: string }[];
   expired: boolean;
   exhausted: boolean;
 }
@@ -204,7 +204,9 @@ function CouponFormDialog({
 }) {
   const [code, setCode] = useState(coupon?.code ?? "");
   const [discountType, setDiscountType] = useState<Coupon["discountType"]>(coupon?.discountType ?? "percentage");
-  const [selected, setSelected] = useState<string[]>(coupon?.applicableItems.map((a) => `${a.type}:${a.id}`) ?? []);
+  const [selected, setSelected] = useState<string[]>(coupon?.applicableItems.filter((a) => a.type === "course" || a.type === "batch").map((a) => `${a.type}:${a.id}`) ?? []);
+  // Bundle and membership targets (personal checkout recovery codes) are kept as they are when the coupon is saved.
+  const fixedItems = coupon?.items.filter((i) => i.type === "bundle" || i.type === "plan") ?? [];
   const [itemSearch, setItemSearch] = useState("");
   const { onSubmit, pending, errors, dirty, markDirty } = useFormAction(saveCouponAction, { onSuccess: onClose });
   const formId = coupon ? `coupon-form-${coupon.id}` : "coupon-form-new";
@@ -331,12 +333,17 @@ function CouponFormDialog({
             <p className="text-sm font-medium text-ink">Applicable For</p>
             <p className="text-xs text-ink-muted">The courses and batches this coupon can be redeemed on. Leave empty to allow every course and batch.</p>
           </div>
+          {fixedItems.length > 0 && (
+            <p className="mb-2 text-xs text-ink-muted">
+              Also limited to {fixedItems.map((i) => `${i.type === "plan" ? "the membership" : "the bundle"} “${i.title}”`).join(", ")} (kept when you save).
+            </p>
+          )}
           {selected.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {selected.map((key) => {
                 const t = byKey.get(key);
                 return (
-                  <span key={key} className="inline-flex max-w-full items-center gap-1 rounded-full bg-accent/10 py-0.5 pl-2.5 pr-1 text-xs font-medium text-accent">
+                  <span key={key} className="inline-flex max-w-full items-center gap-1 rounded-full bg-accent/10 py-0.5 ps-2.5 pe-1 text-xs font-medium text-accent">
                     <span className="truncate">{t ? t.title : "Deleted item"}</span>
                     <button type="button" onClick={() => toggleItem(key)} className="rounded-full p-0.5 hover:bg-accent/20" aria-label={`Remove ${t?.title ?? "item"}`}>
                       <Icon.X className="size-3" />

@@ -5,8 +5,11 @@
  * In production a missing or short APP_SECRET, or an APP_URL that is not
  * HTTPS, stops the server from starting: media signing, 2FA encryption,
  * unsubscribe and calendar links all depend on the secret, and cookies,
- * emails, payment callbacks and canonical URLs on the URL. Everything else is
- * a warning. Checks never run during `next build`.
+ * emails, payment callbacks and canonical URLs on the URL. So does a
+ * standalone server (`node .next/standalone/server.js`, which changes into
+ * its own folder) whose data paths are relative: the database and uploads
+ * would live inside the build output, which the next `next build` deletes.
+ * Everything else is a warning. Checks never run during `next build`.
  *
  * Pure apart from `runStartupChecks` (which only logs or throws), so the
  * rules are unit tested directly. Values are never echoed back.
@@ -38,12 +41,37 @@ function value(env: Env, key: string): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/** An absolute POSIX or Windows path (`/var/lib/x`, `C:\data\x`, `\\server\share`). */
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || p.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(p);
+}
+
+/**
+ * True when `cwd` is inside a Next standalone build folder. The generated
+ * `server.js` runs `process.chdir(__dirname)`, so relative data paths resolve
+ * inside `.next/standalone`, and `next build` empties `.next`.
+ */
+export function isInsideBuildOutput(cwd: string): boolean {
+  return /[\\/]\.next[\\/]standalone(?:[\\/]|$)/.test(cwd);
+}
+
+/** Data-path variables that must be absolute for a standalone server, with their defaults. */
+const DATA_PATH_DEFAULTS: { key: string; fallback: string; when?: (env: Env) => boolean }[] = [
+  { key: "SQLITE_PATH", fallback: "storage/lms.sqlite", when: (env) => value(env, "DB_DRIVER").toLowerCase() !== "json" },
+  // Also decides where the app secret file, storage/seo and (JSON driver) backups live.
+  { key: "DATA_FILE", fallback: "storage/db.json" },
+  { key: "UPLOAD_DIR", fallback: "storage/uploads" },
+];
+
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1" || hostname.endsWith(".localhost");
 }
 
-/** Evaluate the rules for `env`. `production` means NODE_ENV=production. */
-export function checkEnvironment(env: Env, options: { production: boolean }): EnvCheckResult {
+/**
+ * Evaluate the rules for `env`. `production` means NODE_ENV=production;
+ * `cwd` is the server's working directory (the data-path rule is skipped without it).
+ */
+export function checkEnvironment(env: Env, options: { production: boolean; cwd?: string }): EnvCheckResult {
   const { production } = options;
   const errors: EnvIssue[] = [];
   const warnings: EnvIssue[] = [];
@@ -105,6 +133,19 @@ export function checkEnvironment(env: Env, options: { production: boolean }): En
     if (value(env, "DB_DRIVER").toLowerCase() === "json") warn("DB_DRIVER", "DB_DRIVER=json rewrites the whole database file on every change. Use the default SQLite driver in production.");
   }
 
+  // Data inside the build output is deleted by the next `next build`.
+  if (production && options.cwd && isInsideBuildOutput(options.cwd)) {
+    for (const spec of DATA_PATH_DEFAULTS) {
+      if (spec.when && !spec.when(env)) continue;
+      const configured = value(env, spec.key) || spec.fallback;
+      if (isAbsolutePath(configured)) continue;
+      fail(
+        spec.key,
+        `${spec.key} is a relative path and the server runs from .next/standalone, so the data would be stored inside the build output and deleted by the next \`npm run build\`. Set SQLITE_PATH, DATA_FILE and UPLOAD_DIR to absolute paths outside the project folder (see DEPLOYMENT.md, "Without Docker").`,
+      );
+    }
+  }
+
   // Reverse proxy.
   const hopsRaw = value(env, "TRUST_PROXY_HOPS");
   if (hopsRaw && !/^\d+$/.test(hopsRaw)) {
@@ -161,7 +202,7 @@ const g = globalThis as unknown as { __llEnvCheck?: EnvCheckResult };
 
 /** Result of the checks run at startup (computed on demand if they have not run yet). */
 export function getStartupCheckResult(): EnvCheckResult {
-  return (g.__llEnvCheck ??= checkEnvironment(process.env, { production: process.env.NODE_ENV === "production" }));
+  return (g.__llEnvCheck ??= checkEnvironment(process.env, { production: process.env.NODE_ENV === "production", cwd: process.cwd() }));
 }
 
 /**
@@ -170,7 +211,7 @@ export function getStartupCheckResult(): EnvCheckResult {
  */
 export function runStartupChecks(): EnvCheckResult | null {
   if (isBuildPhase()) return null;
-  const result = checkEnvironment(process.env, { production: process.env.NODE_ENV === "production" });
+  const result = checkEnvironment(process.env, { production: process.env.NODE_ENV === "production", cwd: process.cwd() });
   g.__llEnvCheck = result;
   for (const issue of result.warnings) console.warn(`[config] ${issue.key}: ${issue.message}`);
   if (result.errors.length) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { outputsMatch, TEST_TIMEOUT_MS, type RunnerTestCase, type TestResultView } from "./shared";
+import { BLOCKED_MESSAGE, RUNNER_FRAME_URL, RUNNER_WORKER_URL } from "./js-runner-source";
 
 /**
  * In-browser JavaScript test runner.
@@ -13,115 +14,22 @@ import { outputsMatch, TEST_TIMEOUT_MS, type RunnerTestCase, type TestResultView
  * trimmed before comparison.
  *
  * Two modes:
- * - direct: the worker is created from a Blob URL by this page. The worker
- *   shares the page's origin, which is fine for code the viewer wrote
- *   themselves (the learner's own editor).
+ * - direct: the worker is loaded from RUNNER_WORKER_URL. It shares the
+ *   page's origin, which is fine for code the viewer wrote themselves (the
+ *   learner's own editor).
  * - isolated: for code the viewer did NOT write (reviewing a submission),
- *   the workers are created inside a hidden `<iframe sandbox="allow-scripts">`.
- *   That document has an opaque origin, so the code cannot make same-origin
- *   requests with the viewer's cookies (admin pages, server actions, uploads).
+ *   the workers are created inside a hidden `<iframe sandbox="allow-scripts">`
+ *   loaded from RUNNER_FRAME_URL. That document has an opaque origin, so the
+ *   code cannot make same-origin requests with the viewer's cookies (admin
+ *   pages, server actions, uploads).
+ *
+ * Both documents are served with their own Content Security Policy, the only
+ * one on the site that allows `new Function` (see `js-runner-source.ts`).
  *
  * Hidden tests sent to learners carry no input or expected output
  * (`serverOnly`); they are reported as "checked on submit" and graded by the
  * server sandbox.
  */
-const WORKER_SOURCE = `
-"use strict";
-function fmt(v) {
-  try {
-    if (typeof v === "string") return v;
-    if (v === undefined) return "undefined";
-    if (typeof v === "function") return "[Function " + (v.name || "anonymous") + "]";
-    if (typeof v === "bigint") return v.toString() + "n";
-    return JSON.stringify(v);
-  } catch (e) {
-    return String(v);
-  }
-}
-function describe(e) {
-  try {
-    var n = e && e.name;
-    var m = e && e.message;
-    return n && m ? String(n) + ": " + String(m) : String(m || e);
-  } catch (e2) {
-    return "Unknown error";
-  }
-}
-self.onmessage = async function (event) {
-  var data = event.data || {};
-  var logs = [];
-  var push = function () {
-    var parts = [];
-    for (var i = 0; i < arguments.length; i++) parts.push(fmt(arguments[i]));
-    if (logs.length < 100) logs.push(parts.join(" ").slice(0, 2000));
-  };
-  var sandboxConsole = { log: push, info: push, warn: push, error: push, debug: push, table: push };
-  var started = Date.now();
-  try {
-    var factory = new Function("console", data.code + "\\n;return typeof solve === 'function' ? solve : undefined;");
-    var solve = factory(sandboxConsole);
-    if (typeof solve !== "function") throw new Error("Define a function named solve(input) that returns the answer.");
-    var result = solve(data.input);
-    if (result !== null && result !== undefined && typeof result.then === "function") result = await result;
-    var output = result === undefined || result === null ? "" : String(result);
-    self.postMessage({ ok: true, output: output.slice(0, 10000), logs: logs, durationMs: Date.now() - started });
-  } catch (err) {
-    self.postMessage({ ok: false, error: describe(err), logs: logs, durationMs: Date.now() - started });
-  }
-};
-`;
-
-const BLOCKED_MESSAGE = "Your browser blocked the code runner (Web Workers are unavailable).";
-
-/**
- * Document loaded into the sandboxed iframe. It receives one `run` message
- * per test, runs it in a fresh worker (Blob URL first, `data:` URL as a
- * fallback; both have an opaque origin here) and posts the reply back.
- */
-const ISOLATED_DOCUMENT = `<!doctype html><html><head><meta charset="utf-8"></head><body><script>
-(function () {
-  var SRC = ${JSON.stringify(WORKER_SOURCE).replace(/</g, "\\u003c")};
-  var blobUrl = null;
-  try { blobUrl = URL.createObjectURL(new Blob([SRC], { type: "text/javascript" })); } catch (e) { blobUrl = null; }
-  function makeWorker() {
-    if (blobUrl) { try { return new Worker(blobUrl); } catch (e) { /* fall through */ } }
-    return new Worker("data:text/javascript;charset=utf-8," + encodeURIComponent(SRC));
-  }
-  var current = null;
-  function send(msg) { parent.postMessage(msg, "*"); }
-  window.addEventListener("message", function (ev) {
-    if (ev.source !== parent) return;
-    var d = ev.data || {};
-    if (d.type === "cancel") { if (current) { try { current.terminate(); } catch (e) {} current = null; } return; }
-    if (d.type !== "run") return;
-    var w;
-    try { w = makeWorker(); } catch (e) {
-      send({ type: "result", id: d.id, reply: { ok: false, error: ${JSON.stringify(BLOCKED_MESSAGE)}, logs: [], durationMs: 0 } });
-      return;
-    }
-    current = w;
-    var started = Date.now();
-    var done = false;
-    var timer = 0;
-    function fin(r) {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { w.terminate(); } catch (e) {}
-      if (current === w) current = null;
-      send({ type: "result", id: d.id, reply: r });
-    }
-    timer = setTimeout(function () {
-      fin({ ok: false, error: "Execution timed out after " + d.timeoutMs / 1000 + "s.", logs: [], durationMs: d.timeoutMs });
-    }, d.timeoutMs);
-    w.onmessage = function (e) { fin(e.data); };
-    w.onerror = function (e) { e.preventDefault(); fin({ ok: false, error: e.message || "The code could not be executed.", logs: [], durationMs: Date.now() - started }); };
-    w.postMessage({ code: d.code, input: d.input });
-  });
-  send({ type: "ready" });
-})();
-</script></body></html>`;
-
 interface WorkerReply {
   ok: boolean;
   output?: string;
@@ -147,7 +55,7 @@ function normalizeReply(raw: unknown, fallbackMs: number): WorkerReply {
 type RunOne = (code: string, input: string, timeoutMs: number, signal?: AbortSignal) => Promise<WorkerReply>;
 
 /* ------------------------------------------------------------------ */
-/* Direct mode: Blob URL worker created by this page                   */
+/* Direct mode: same-origin worker script                              */
 /* ------------------------------------------------------------------ */
 
 function directRunner(url: string): RunOne {
@@ -204,7 +112,7 @@ function createIsolatedHost(): Promise<IsolatedHost | null> {
     frame.tabIndex = -1;
     frame.title = "Code runner";
     frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden;";
-    frame.srcdoc = ISOLATED_DOCUMENT;
+    frame.src = RUNNER_FRAME_URL;
 
     let seq = 0;
     let ready = false;
@@ -303,9 +211,8 @@ export async function runTestsInBrowser(code: string, tests: RunnerTestCase[], o
       cleanup = () => undefined;
     }
   } else {
-    const url = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" }));
-    runOne = directRunner(url);
-    cleanup = () => URL.revokeObjectURL(url);
+    runOne = directRunner(RUNNER_WORKER_URL);
+    cleanup = () => undefined;
   }
 
   const results: TestResultView[] = [];

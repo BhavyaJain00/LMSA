@@ -5,12 +5,15 @@ import { NextResponse } from "next/server";
 import { siteConfig } from "@/lib/config";
 import { databaseEnv, mediaEnv } from "@/lib/server-env";
 import { getDb } from "@/lib/db/store";
+import { getCurrentUser, isAdmin } from "@/lib/auth/session";
+import { publicHealthReport, type HealthCheck as Check, type HealthReport } from "./report";
 
 /**
  * GET /api/health — liveness/readiness probe for Docker, load balancers and
- * uptime monitors. Public and secret-free: reports only whether the
- * database answers, the storage folders are writable and ffmpeg is present,
- * plus the app version and uptime.
+ * uptime monitors. Public and secret-free: anonymous callers only learn
+ * whether the database answers, the storage folders are writable and ffmpeg
+ * is present, plus the app version. Signed-in administrators also see the
+ * ffmpeg build, per-check timings and the process uptime (see `report.ts`).
  *
  * 200 = healthy (ffmpeg missing only degrades: videos fall back to MP4);
  * 503 = the database or storage is failing. Results are cached for a few
@@ -18,16 +21,6 @@ import { getDb } from "@/lib/db/store";
  */
 
 export const dynamic = "force-dynamic";
-
-type Check = { ok: boolean; ms: number; detail?: string };
-
-interface HealthReport {
-  status: "ok" | "degraded" | "error";
-  version: string;
-  uptimeSeconds: number;
-  checkedAt: string;
-  checks: { database: Check; storage: Check; ffmpeg: Check };
-}
 
 const CACHE_MS = 5_000;
 const FFMPEG_CACHE_MS = 5 * 60_000;
@@ -119,7 +112,13 @@ export async function GET() {
   const cached = g.__llHealth;
   const report = cached && Date.now() - cached.at < CACHE_MS ? cached.report : await buildReport();
   if (!cached || cached.report !== report) g.__llHealth = { report, at: Date.now() };
-  return NextResponse.json(report, {
+  let admin = false;
+  try {
+    admin = isAdmin(await getCurrentUser());
+  } catch {
+    admin = false;
+  }
+  return NextResponse.json(admin ? report : publicHealthReport(report), {
     status: report.status === "error" ? 503 : 200,
     headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
   });

@@ -304,14 +304,16 @@ describe("member self-service (memberships managed here)", () => {
     assert.ok(!ended.ok);
   });
 
-  it("switches between recurring plans and keeps the period", async () => {
+  it("schedules a switch between recurring plans for the next renewal and keeps the period", async () => {
     const before = await theSub();
     const res = await changeMembershipPlan(before, yearly);
     assert.ok(res.ok);
     const row = await theSub();
-    assert.equal(row.planId, yearly.id);
+    // Nothing is charged for the difference here, so the current plan runs until the renewal.
+    assert.equal(row.planId, monthly.id);
+    assert.equal(row.pendingPlanId, yearly.id);
     assert.equal(row.currentPeriodEnd, before.currentPeriodEnd);
-    assert.ok(!(await changeMembershipPlan(row, yearly)).ok, "already on this plan");
+    assert.ok(!(await changeMembershipPlan(row, yearly)).ok, "already scheduled for this plan");
     assert.ok(!(await changeMembershipPlan(row, lifetime)).ok, "lifetime plans are bought, not switched to");
     assert.ok(!(await changeMembershipPlan(row, { ...monthly, active: false })).ok, "retired plans cannot be joined");
     assert.ok(!(await changeMembershipPlan(sub({ status: "cancelled" }), yearly)).ok);

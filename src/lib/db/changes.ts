@@ -10,8 +10,9 @@ import type { ChangeSet, CollectionChanges } from "./sqlite-core.mjs";
  * chosen by the engine from what it saw the code do:
  *
  *  - `candidates`: only the listed documents are compared (documents returned
- *    by `find`/`filter`, pushed, or assigned to an index). Cost is
- *    proportional to what the mutation touched: the hot path.
+ *    by `find`/`filter`, pushed, or assigned to an index), and the listed
+ *    `removed` documents are deleted. Cost is proportional to what the
+ *    mutation touched: the hot path.
  *  - `identity`: the array's membership or order changed (splice, removal,
  *    sort, whole-array replacement). Every id is looked up; only documents
  *    that are new, sit at an id under a different object, or are candidates
@@ -25,6 +26,13 @@ import type { ChangeSet, CollectionChanges } from "./sqlite-core.mjs";
  * candidate objects carry the same id (a stale copy next to its replacement)
  * that cannot be decided without looking, so the collection is scanned as in
  * `identity` mode and the object actually in the array wins.
+ *
+ * Removed documents (taken out with `splice`, `pop`, `shift`, a shorter
+ * `length` or `removeWhere`) are deleted by id without looking at the rest of
+ * the collection, but only when that is certain: the object removed is the
+ * one stored under its id and no candidate carries that id. Anything else (a
+ * removed copy, a document removed and put back) is settled by an `identity`
+ * scan instead.
  *
  * Array order is part of a collection's state. The tracker's maps keep ids
  * in stored order (the order rows come back in), new documents are stored
@@ -42,6 +50,12 @@ export interface DiffRequest {
   mode: DiffMode;
   /** Documents that may have changed (used by `candidates` and `identity`). */
   candidates?: Iterable<unknown>;
+  /**
+   * Documents taken out of the array since the last write (used by
+   * `candidates`; a scan finds removals by itself). They are never compared
+   * as candidates.
+   */
+  removed?: Iterable<unknown>;
 }
 
 interface Entry {
@@ -142,10 +156,20 @@ export class ChangeTracker {
         update.set.push([id, { ref: doc, print }]);
       };
 
-      const listed = request.mode === "candidates" ? candidatesById(request.candidates) : null;
+      let listed = request.mode === "candidates" ? candidatesById(request.candidates, request.removed) : null;
+      let removedIds: string[] = [];
+      if (listed && request.removed.size) {
+        const ids = removalsById(request.removed, listed.byId, stored);
+        if (ids) removedIds = ids;
+        else listed = null;
+      }
       if (listed) {
         invalid = listed.invalid;
         for (const [id, doc] of listed.byId) consider(id, doc);
+        for (const id of removedIds) {
+          change.deletes.push(id);
+          update.deletes.push(id);
+        }
       } else {
         const present = new Set<string>();
         /** Ids in array order. */
@@ -246,10 +270,12 @@ export class ChangeTracker {
  * Candidates keyed by id, or null when two different objects claim the same
  * id (the caller then scans the collection to see which one is in it).
  */
-function candidatesById(candidates: Iterable<unknown>): { byId: Map<string, object>; invalid: number } | null {
+function candidatesById(candidates: Iterable<unknown>, removed: ReadonlySet<unknown>): { byId: Map<string, object>; invalid: number } | null {
   const byId = new Map<string, object>();
   let invalid = 0;
   for (const doc of candidates) {
+    // Returned by a read before it was taken out of the array: no longer a member.
+    if (removed.size && removed.has(doc)) continue;
     const id = idOf(doc);
     if (id === null) {
       invalid++;
@@ -262,10 +288,33 @@ function candidatesById(candidates: Iterable<unknown>): { byId: Map<string, obje
   return { byId, invalid };
 }
 
+/**
+ * Ids to delete for documents taken out of the array, or null when that
+ * cannot be decided without scanning the collection: a removed object that
+ * is not the one stored under its id (a copy, or one of two documents
+ * sharing an id), or an id that a candidate still carries (a document
+ * removed and put back, which may also have moved).
+ */
+function removalsById(removed: Iterable<unknown>, members: ReadonlyMap<string, object>, stored: ReadonlyMap<string, Entry>): string[] | null {
+  const ids: string[] = [];
+  for (const doc of removed) {
+    const id = idOf(doc);
+    if (id === null) continue;
+    if (members.has(id)) return null;
+    const entry = stored.get(id);
+    // Never stored (added and removed again before a write): nothing to delete.
+    if (!entry) continue;
+    if (entry.ref !== doc) return null;
+    ids.push(id);
+  }
+  return ids;
+}
+
 interface MergedRequest {
   name: string;
   mode: DiffMode;
   candidates: Set<unknown>;
+  removed: Set<unknown>;
 }
 
 const RANK: Record<DiffMode, number> = { candidates: 0, identity: 1, full: 2 };
@@ -276,12 +325,13 @@ function mergeRequests(requests: Iterable<DiffRequest>): Map<string, MergedReque
   for (const request of requests) {
     let merged = out.get(request.name);
     if (!merged) {
-      merged = { name: request.name, mode: request.mode, candidates: new Set() };
+      merged = { name: request.name, mode: request.mode, candidates: new Set(), removed: new Set() };
       out.set(request.name, merged);
     } else if (RANK[request.mode] > RANK[merged.mode]) {
       merged.mode = request.mode;
     }
     if (request.candidates) for (const doc of request.candidates) merged.candidates.add(doc);
+    if (request.removed) for (const doc of request.removed) merged.removed.add(doc);
   }
   return out;
 }

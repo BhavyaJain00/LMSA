@@ -147,7 +147,7 @@ export const COLLECTIONS: CollectionName[] = [
 /* ------------------------------------------------------------------ */
 
 /** Bump when the engine's behaviour changes so a hot reload replaces the running one. */
-const ENGINE_VERSION = 4;
+const ENGINE_VERSION = 5;
 
 interface EngineHolder {
   engine: StoreEngine;
@@ -390,13 +390,8 @@ export async function removeWhere<K extends CollectionName>(
   name: K,
   predicate: (doc: CollectionDoc<K>) => boolean,
 ): Promise<number> {
-  return mutate((db) => {
-    const rows = db[name] as CollectionDoc<K>[];
-    const keep = rows.filter((r) => !predicate(r));
-    const removed = rows.length - keep.length;
-    if (removed) (db[name] as CollectionDoc<K>[]) = keep;
-    return removed;
-  });
+  // Compacts the array in place and records only the removed documents, so the write deletes their ids and nothing else.
+  return engine().removeWhere(name, predicate as (doc: unknown) => boolean);
 }
 
 export async function getSettings() {

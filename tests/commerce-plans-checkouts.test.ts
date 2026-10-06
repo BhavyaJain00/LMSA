@@ -1,6 +1,7 @@
 import { after, before, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import type { CheckoutSession, MembershipPlan, Payment } from "@/lib/types";
+import type { Bundle, CheckoutSession, MembershipPlan, Payment } from "@/lib/types";
+import { validateCoupon } from "@/lib/data/commerce";
 import { getDb } from "@/lib/db/store";
 import { settleEvents } from "@/lib/events";
 import { createSession } from "@/lib/auth/session";
@@ -226,11 +227,12 @@ const monthly: MembershipPlan = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
-async function setup(fixture: { sessions?: CheckoutSession[]; payments?: Payment[]; enrollments?: ReturnType<typeof makeEnrollment>[]; enabled?: boolean; emailEnabled?: boolean; couponPercent?: number } = {}) {
+async function setup(fixture: { sessions?: CheckoutSession[]; payments?: Payment[]; enrollments?: ReturnType<typeof makeEnrollment>[]; enabled?: boolean; emailEnabled?: boolean; couponPercent?: number; bundles?: Bundle[] } = {}) {
   await resetDb({
     users: [buyer, optedOut, admin],
     courses: [course, course2],
     plans: [monthly],
+    bundles: fixture.bundles ?? [],
     checkoutSessions: fixture.sessions ?? [],
     payments: fixture.payments ?? [],
     enrollments: fixture.enrollments ?? [],
@@ -243,6 +245,7 @@ async function setup(fixture: { sessions?: CheckoutSession[]; payments?: Payment
         abandonedCheckoutDelaysHours: DELAYS,
         abandonedCheckoutCouponPercent: fixture.couponPercent ?? 15,
         subscriptionsEnabled: true,
+        bundlesEnabled: true,
       },
     },
   });
@@ -322,6 +325,20 @@ describe("reminder run", () => {
     assert.match(mail.subject, /15% off Python/);
     assert.ok(mail.html.includes(coupon.code));
     assert.ok(mail.html.includes(`?coupon=${coupon.code}`));
+  });
+
+  it("limits the coupon of a bundle checkout to that bundle and to the buyer who left it", async () => {
+    const pack: Bundle = { id: "bnd_pack", slug: "pack", title: "Pack", description: "", courseIds: [course.id, course2.id], price: 7000, currency: "USD", published: true, createdAt: ago(5 * DAY), updatedAt: ago(5 * DAY) };
+    await setup({ bundles: [pack], sessions: [session({ itemType: "bundle", itemId: pack.id, lastStepAt: ago(73 * HOUR), reminderCount: 2 })] });
+    const run = await processAbandonedCheckouts({ force: true });
+    assert.equal(run.coupons, 1);
+    const db = await getDb();
+    const coupon = db.coupons.find((c) => c.code === db.checkoutSessions[0]!.couponSent)!;
+    assert.deepEqual(coupon.applicableItems, [{ type: "bundle", id: pack.id }]);
+    assert.equal(coupon.ownerUserId, buyer.id);
+    assert.equal((await validateCoupon(coupon.code, { type: "course", id: course.id, currency: "USD" }, buyer.id)).ok, false, "not site-wide");
+    assert.equal((await validateCoupon(coupon.code, { type: "bundle", id: pack.id, currency: "USD" }, optedOut.id)).ok, false, "not for someone else");
+    assert.equal((await validateCoupon(coupon.code, { type: "bundle", id: pack.id, currency: "USD" }, buyer.id)).ok, true);
   });
 
   it("sends no coupon for memberships that renew, or when the discount is 0%", async () => {

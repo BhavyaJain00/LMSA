@@ -142,7 +142,7 @@ export function serializeUser(user: User, ctx: SerializeContext): ApiUser {
 }
 
 export function userStamps(user: User): Timestamps {
-  return { createdAt: user.createdAt, updatedAt: latest(user.createdAt, user.emailVerifiedAt, user.lastActiveAt) };
+  return { createdAt: user.createdAt, updatedAt: latest(user.createdAt, user.updatedAt, user.emailVerifiedAt, user.lastActiveAt) };
 }
 
 /* ------------------------------------------------------------------ */

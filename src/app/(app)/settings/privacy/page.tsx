@@ -5,7 +5,7 @@ import { getDb } from "@/lib/db/store";
 import { isTwoFactorActive } from "@/lib/auth/account-status";
 import { readConsentCookie } from "@/lib/legal/consent";
 import { legalLinks } from "@/lib/legal/links";
-import { personalDataSections, summarizeSections } from "@/lib/legal/export";
+import { countPersonalData } from "@/lib/legal/export";
 import { billedSubscriptions, isLastAdmin } from "@/lib/legal/erase";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui/card";
@@ -48,7 +48,7 @@ export default async function PrivacySettingsPage(props: PageProps<"/settings/pr
   const [db, consent, links, t, f] = await Promise.all([getDb(), readConsentCookie(), legalLinks(), getT("account"), getFormatter()]);
   const settings = db.settings;
 
-  const summary = summarizeSections(personalDataSections(db, user.id) ?? []).filter((s) => s.count > 0);
+  const summary = (countPersonalData(db, user.id) ?? []).filter((s) => s.count > 0);
   const totalRecords = summary.reduce((n, s) => n + s.count, 0);
   const requests = db.dataRequests.filter((r) => r.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const lastExport = requests.find((r) => r.type === "export");

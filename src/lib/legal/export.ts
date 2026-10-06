@@ -1,4 +1,4 @@
-import type { CollectionName, Database, User } from "@/lib/types";
+import type { CollectionName, Conversation, Database, DirectMessage, User } from "@/lib/types";
 
 /**
  * "Download my data" (GDPR right of access / portability).
@@ -109,180 +109,243 @@ export function exportableUser(user: User): Row {
 }
 
 /**
+ * Receives each section as its source rows (already filtered to the member)
+ * plus the function that turns one row into its exported form. The export
+ * maps every row; the privacy page only counts them.
+ */
+type SectionSink = <T extends object>(key: string, description: string, rows: readonly T[], map: (row: T) => Row) => void;
+
+const copy = (row: object): Row => ({ ...row });
+
+/**
+ * A conversation as one participant may see it. Report details (who reported
+ * it, why, which moderator closed the report) are moderation data: they are
+ * included only for the member who filed the report, never for the person
+ * who was reported.
+ */
+export function exportableConversation(c: Conversation, userId: string): Row {
+  const row: Row = { id: c.id, participantIds: [...c.participantIds] };
+  if (c.courseId !== undefined) row.courseId = c.courseId;
+  if (c.subject !== undefined) row.subject = c.subject;
+  row.createdAt = c.createdAt;
+  row.lastMessageAt = c.lastMessageAt;
+  if (c.reportedBy === userId) {
+    row.reportedByYou = true;
+    if (c.reportedAt !== undefined) row.reportedAt = c.reportedAt;
+    if (c.reportReason !== undefined) row.reportReason = c.reportReason;
+    if (c.reportedMessageId !== undefined) row.reportedMessageId = c.reportedMessageId;
+    if (c.reportResolvedAt !== undefined) row.reportResolvedAt = c.reportResolvedAt;
+  }
+  return row;
+}
+
+/** A direct message without the id of a moderator who removed it (the member's own removals keep it). */
+export function exportableDirectMessage(m: DirectMessage, userId: string): Row {
+  return m.removedBy !== undefined && m.removedBy !== userId ? omit(m, ["removedBy"]) : { ...m };
+}
+
+/**
  * Every section of the export for `userId` (empty sections included, so the
  * file shows what was checked). Returns null when the user does not exist.
  */
 export function personalDataSections(db: Database, userId: string): ExportSection[] | null {
   const user = db.users.find((u) => u.id === userId);
   if (!user) return null;
-  const email = user.email.trim().toLowerCase();
   const sections: ExportSection[] = [];
-  const add = (key: string, description: string, rows: Row[]) => sections.push({ key, description, rows });
+  collectPersonalData(db, user, (key, description, rows, map) => sections.push({ key, description, rows: rows.map(map) }));
+  return sections;
+}
 
-  add("account", "Your profile and account settings", [exportableUser(user)]);
+/**
+ * Number of records per section, using the same rules as the export but
+ * without copying any row (for the privacy page). Null when the user does not exist.
+ */
+export function countPersonalData(db: Database, userId: string): { key: string; description: string; count: number }[] | null {
+  const user = db.users.find((u) => u.id === userId);
+  if (!user) return null;
+  const counts: { key: string; description: string; count: number }[] = [];
+  collectPersonalData(db, user, (key, description, rows) => counts.push({ key, description, count: rows.length }));
+  return counts;
+}
+
+function collectPersonalData(db: Database, user: User, add: SectionSink): void {
+  const userId = user.id;
+  const email = user.email.trim().toLowerCase();
+
+  add("account", "Your profile and account settings", [user], exportableUser);
   add(
     "sessions",
     "Devices currently signed in",
-    db.sessions.filter((s) => s.userId === userId).map((s) => omit(s, ["tokenHash"])),
+    db.sessions.filter((s) => s.userId === userId),
+    (s) => omit(s, ["tokenHash"]),
   );
   add(
     "loginEvents",
     "Sign-in history",
-    db.loginEvents.filter((e) => e.userId === userId || sameEmail(e.email, email)).map((e) => ({ ...e })),
+    db.loginEvents.filter((e) => e.userId === userId || sameEmail(e.email, email)),
+    copy,
   );
   add(
     "authTokens",
     "Password-reset, email-confirmation and sign-in codes issued (the codes themselves are never stored)",
-    db.authTokens.filter((t) => t.userId === userId).map((t) => omit(t, ["tokenHash"])),
+    db.authTokens.filter((t) => t.userId === userId),
+    (t) => omit(t, ["tokenHash"]),
   );
 
   for (const spec of BY_USER_ID) {
     add(
       spec.name,
       spec.description,
-      rowsOf(db, spec.name)
-        .filter((r) => r.userId === userId)
-        .map((r) => (spec.omit ? omit(r, spec.omit) : { ...r })),
+      rowsOf(db, spec.name).filter((r) => r.userId === userId),
+      (r) => (spec.omit ? omit(r, spec.omit) : { ...r }),
     );
   }
 
   // Exercise results: never reveal the inputs/expected outputs of hidden tests.
-  const hiddenTests = new Set(db.exercises.flatMap((e) => e.testCases.filter((t) => t.hidden).map((t) => `${e.id}:${t.id}`)));
+  let hiddenTests: Set<string> | undefined;
+  const isHiddenTest = (exerciseId: string, testCaseId: string) =>
+    (hiddenTests ??= new Set(db.exercises.flatMap((e) => e.testCases.filter((t) => t.hidden).map((t) => `${e.id}:${t.id}`)))).has(`${exerciseId}:${testCaseId}`);
   add(
     "exerciseSubmissions",
     "Programming exercise submissions",
-    db.exerciseSubmissions
-      .filter((s) => s.userId === userId)
-      .map((s) => ({
-        ...s,
-        testResults: s.testResults.map((r) => (hiddenTests.has(`${s.exerciseId}:${r.testCaseId}`) ? omit(r, ["input", "expectedOutput"]) : { ...r })),
-      })),
+    db.exerciseSubmissions.filter((s) => s.userId === userId),
+    (s) => ({
+      ...s,
+      testResults: s.testResults.map((r) => (isHiddenTest(s.exerciseId, r.testCaseId) ? omit(r, ["input", "expectedOutput"]) : { ...r })),
+    }),
   );
 
   add(
     "payments",
     "Orders, invoices and refunds",
-    db.payments.filter((p) => p.userId === userId).map((p) => omit(p, ["checkoutUrl"])),
+    db.payments.filter((p) => p.userId === userId),
+    (p) => omit(p, ["checkoutUrl"]),
   );
+  const myEmails = db.emails.filter((e) => e.userId === userId || sameEmail(e.to, email));
   add(
     "emails",
     "Emails sent to you (bodies of password-reset and confirmation emails are left out)",
-    db.emails
-      .filter((e) => e.userId === userId || sameEmail(e.to, email))
-      .map((e) => (ONE_TIME_LINK_CATEGORIES.has(e.category) ? omit(e, ["html", "text"]) : omit(e, ["html"]))),
+    myEmails,
+    (e) => (ONE_TIME_LINK_CATEGORIES.has(e.category) ? omit(e, ["html", "text"]) : omit(e, ["html"])),
   );
-  const myEmailIds = new Set(db.emails.filter((e) => e.userId === userId || sameEmail(e.to, email)).map((e) => e.id));
+  const myEmailIds = new Set(myEmails.map((e) => e.id));
   add(
     "emailEvents",
     "Opens and clicks recorded for those emails",
-    db.emailEvents.filter((e) => myEmailIds.has(e.emailId)).map((e) => ({ ...e })),
+    db.emailEvents.filter((e) => myEmailIds.has(e.emailId)),
+    copy,
   );
 
-  const topics = db.discussionTopics.filter((t) => t.authorId === userId);
-  add("discussionTopics", "Discussion threads you started", topics.map((t) => ({ ...t })));
-  add("discussionReplies", "Discussion replies you posted", db.discussionReplies.filter((r) => r.authorId === userId).map((r) => ({ ...r })));
+  add("discussionTopics", "Discussion threads you started", db.discussionTopics.filter((t) => t.authorId === userId), copy);
+  add("discussionReplies", "Discussion replies you posted", db.discussionReplies.filter((r) => r.authorId === userId), copy);
 
   const conversations = db.conversations.filter((c) => c.participantIds.includes(userId));
   const conversationIds = new Set(conversations.map((c) => c.id));
-  add("conversations", "Direct-message conversations you take part in", conversations.map((c) => ({ ...c })));
-  add("directMessages", "Messages in those conversations", db.directMessages.filter((m) => conversationIds.has(m.conversationId)).map((m) => ({ ...m })));
+  add("conversations", "Direct-message conversations you take part in", conversations, (c) => exportableConversation(c, userId));
+  add(
+    "directMessages",
+    "Messages in those conversations",
+    db.directMessages.filter((m) => conversationIds.has(m.conversationId)),
+    (m) => exportableDirectMessage(m, userId),
+  );
 
   const aiConversationIds = new Set(db.aiConversations.filter((c) => c.userId === userId).map((c) => c.id));
-  add("aiMessages", "Questions you asked the AI teaching assistant and its answers", db.aiMessages.filter((m) => aiConversationIds.has(m.conversationId)).map((m) => ({ ...m })));
+  add("aiMessages", "Questions you asked the AI teaching assistant and its answers", db.aiMessages.filter((m) => aiConversationIds.has(m.conversationId)), copy);
 
-  add(
-    "peerReviewsGiven",
-    "Peer reviews you wrote",
-    db.peerReviews.filter((r) => r.reviewerId === userId).map((r) => ({ ...r })),
-  );
+  add("peerReviewsGiven", "Peer reviews you wrote", db.peerReviews.filter((r) => r.reviewerId === userId), copy);
   const mySubmissionIds = new Set(db.assignmentSubmissions.filter((s) => s.userId === userId).map((s) => s.id));
   add(
     "peerReviewsReceived",
     "Peer reviews of your submissions (reviewers are anonymous)",
-    db.peerReviews.filter((r) => mySubmissionIds.has(r.submissionId) && r.status === "submitted").map((r) => omit(r, ["reviewerId"])),
+    db.peerReviews.filter((r) => mySubmissionIds.has(r.submissionId) && r.status === "submitted"),
+    (r) => omit(r, ["reviewerId"]),
   );
 
   add(
     "liveClassAttendance",
     "Live classes you attended",
-    db.liveClasses.filter((l) => l.attendeeIds.includes(userId)).map((l) => ({ id: l.id, batchId: l.batchId, title: l.title, date: l.date, time: l.time, timezone: l.timezone })),
+    db.liveClasses.filter((l) => l.attendeeIds.includes(userId)),
+    (l) => ({ id: l.id, batchId: l.batchId, title: l.title, date: l.date, time: l.time, timezone: l.timezone }),
   );
-  add("evaluatorSlots", "Your evaluation availability", db.evaluatorSlots.filter((s) => s.evaluatorId === userId).map((s) => ({ ...s })));
+  add("evaluatorSlots", "Your evaluation availability", db.evaluatorSlots.filter((s) => s.evaluatorId === userId), copy);
 
-  add("leads", "Newsletter and lead-magnet sign-ups made with your email", db.leads.filter((l) => sameEmail(l.email, email)).map((l) => ({ ...l })));
+  add("leads", "Newsletter and lead-magnet sign-ups made with your email", db.leads.filter((l) => sameEmail(l.email, email)), copy);
   add(
     "checkoutSessions",
     "Checkouts you started",
-    db.checkoutSessions.filter((c) => c.userId === userId || sameEmail(c.email, email)).map((c) => ({ ...c })),
+    db.checkoutSessions.filter((c) => c.userId === userId || sameEmail(c.email, email)),
+    copy,
   );
   add(
     "sequenceEnrollments",
     "Automatic email sequences you receive",
-    db.sequenceEnrollments.filter((s) => s.userId === userId || sameEmail(s.email, email)).map((s) => ({ ...s })),
+    db.sequenceEnrollments.filter((s) => s.userId === userId || sameEmail(s.email, email)),
+    copy,
   );
   add(
     "gifts",
     "Gifts you bought, received or redeemed",
-    db.gifts.filter((g) => g.purchaserId === userId || g.redeemedBy === userId || sameEmail(g.recipientEmail, email)).map((g) => ({ ...g })),
+    db.gifts.filter((g) => g.purchaserId === userId || g.redeemedBy === userId || sameEmail(g.recipientEmail, email)),
+    copy,
   );
 
   const affiliates = db.affiliates.filter((a) => a.userId === userId);
   const affiliateIds = new Set(affiliates.map((a) => a.id));
-  add("affiliates", "Your affiliate account", affiliates.map((a) => ({ ...a })));
+  add("affiliates", "Your affiliate account", affiliates, copy);
   add(
     "affiliateReferrals",
     "Visits referred by your affiliate links (visitor ids left out)",
-    db.affiliateReferrals.filter((r) => affiliateIds.has(r.affiliateId)).map((r) => omit(r, ["visitorId"])),
+    db.affiliateReferrals.filter((r) => affiliateIds.has(r.affiliateId)),
+    (r) => omit(r, ["visitorId"]),
   );
-  add("commissions", "Affiliate commissions", db.commissions.filter((c) => affiliateIds.has(c.affiliateId)).map((c) => ({ ...c })));
-  add("earnings", "Instructor earnings", db.earnings.filter((e) => e.instructorId === userId).map((e) => ({ ...e })));
+  add("commissions", "Affiliate commissions", db.commissions.filter((c) => affiliateIds.has(c.affiliateId)), copy);
+  add("earnings", "Instructor earnings", db.earnings.filter((e) => e.instructorId === userId), copy);
   add(
     "payouts",
     "Payouts to you",
-    db.payouts.filter((p) => p.instructorId === userId || (p.affiliateId !== undefined && affiliateIds.has(p.affiliateId))).map((p) => ({ ...p })),
+    db.payouts.filter((p) => p.instructorId === userId || (p.affiliateId !== undefined && affiliateIds.has(p.affiliateId))),
+    copy,
   );
 
   add(
     "organizations",
     "Teams you own or manage",
-    db.organizations.filter((o) => o.ownerId === userId || o.managerIds.includes(userId)).map((o) => ({ ...o })),
+    db.organizations.filter((o) => o.ownerId === userId || o.managerIds.includes(userId)),
+    copy,
   );
   add(
     "orgSeats",
     "Team seats assigned to you",
-    db.orgSeats.filter((s) => s.userId === userId || sameEmail(s.email, email)).map((s) => omit(s, ["inviteTokenHash"])),
+    db.orgSeats.filter((s) => s.userId === userId || sameEmail(s.email, email)),
+    (s) => omit(s, ["inviteTokenHash"]),
   );
   add(
     "apiKeys",
     "API keys you created (the keys themselves are never stored)",
-    db.apiKeys.filter((k) => k.createdById === userId).map((k) => omit(k, ["keyHash"])),
+    db.apiKeys.filter((k) => k.createdById === userId),
+    (k) => omit(k, ["keyHash"]),
   );
 
-  add(
-    "auditEventsByYou",
-    "Administrative actions you performed",
-    db.auditEvents.filter((e) => e.actorId === userId).map((e) => ({ ...e })),
-  );
+  add("auditEventsByYou", "Administrative actions you performed", db.auditEvents.filter((e) => e.actorId === userId), copy);
   add(
     "auditEventsAboutYou",
     "Administrative actions that concerned your account",
-    db.auditEvents
-      .filter((e) => e.actorId !== userId && e.targetType === "user" && e.targetId === userId)
-      .map((e) => ({ id: e.id, action: e.action, createdAt: e.createdAt })),
+    db.auditEvents.filter((e) => e.actorId !== userId && e.targetType === "user" && e.targetId === userId),
+    (e) => ({ id: e.id, action: e.action, createdAt: e.createdAt }),
   );
   add(
     "errorReports",
     "Errors that happened while you were using the site",
-    db.errorEvents.filter((e) => e.userId === userId).map((e) => ({ id: e.id, message: e.message, path: e.path, count: e.count, createdAt: e.createdAt, lastSeenAt: e.lastSeenAt })),
+    db.errorEvents.filter((e) => e.userId === userId),
+    (e) => ({ id: e.id, message: e.message, path: e.path, count: e.count, createdAt: e.createdAt, lastSeenAt: e.lastSeenAt }),
   );
 
   add(
     "authoredContent",
     "Content you created or teach (listed by title; the content stays on the platform)",
     AUTHORED.flatMap((spec) => rowsOf(db, spec.name).filter((r) => spec.by(r, userId)).map((r) => ({ type: spec.name, id: r.id, title: spec.title(r) }))),
+    copy,
   );
-
-  return sections;
 }
 
 /** Number of records per section (shown on the privacy page and stored with the request). */

@@ -69,6 +69,7 @@ export async function createMember(db: Database, input: CreateUserInput): Promis
     if (emailTaken(d, input.email)) return "email";
     const taken = new Set(d.users.map((u) => u.username.toLowerCase()));
     if (input.username && taken.has(input.username)) return "username";
+    const now = new Date().toISOString();
     const row: User = {
       id: uid("usr"),
       username: input.username || deriveUsername(input.email, input.name, taken),
@@ -81,7 +82,8 @@ export async function createMember(db: Database, input: CreateUserInput): Promis
       bio: text(input.bio),
       enabled: true,
       personaCaptured: false,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     d.users.push(row);
     return row;
@@ -142,6 +144,8 @@ export async function updateMember(db: Database, id: string, input: UpdateUserIn
     if (input.roles !== undefined) row.roles = input.roles.length ? [...input.roles] : ["student"];
     if (input.enabled !== undefined) row.enabled = input.enabled;
     const changed = (Object.keys(input) as (keyof UpdateUserInput)[]).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(row[key]));
+    // Lets `updated_since` sync pick the change up (an email change also clears emailVerifiedAt, which would move the stamp backwards).
+    if (changed.length) row.updatedAt = new Date().toISOString();
     return { user: { ...row }, changed };
   });
   if (result === "missing") throw notFound("user", id);

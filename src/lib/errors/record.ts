@@ -13,23 +13,26 @@ import { addErrorOccurrence, BROWSER_METHOD, capErrorGroups, normalizeRoutePath,
  * log an error must not cause another one.
  */
 
-/** New error groups notify administrators in-app, at most this many per hour. */
-const ALERTS_PER_HOUR = 10;
-const g = globalThis as unknown as { __llErrorAlerts?: number[] };
+/**
+ * New error groups notify administrators in-app, at most this many per hour.
+ * Browser reports (which anyone can send) have their own, smaller budget, so
+ * they can never use up the alerts meant for server errors.
+ */
+const ALERTS_PER_HOUR = { server: 10, browser: 3 } as const;
+type AlertSource = keyof typeof ALERTS_PER_HOUR;
+const g = globalThis as unknown as { __llErrorAlertSlots?: Partial<Record<AlertSource, number[]>> };
 
-function takeAlertSlot(now: number): boolean {
-  const recent = (g.__llErrorAlerts ?? []).filter((t) => now - t < 60 * 60 * 1000);
-  if (recent.length >= ALERTS_PER_HOUR) {
-    g.__llErrorAlerts = recent;
-    return false;
-  }
+function takeAlertSlot(source: AlertSource, now: number): boolean {
+  const slots = (g.__llErrorAlertSlots ??= {});
+  const recent = (slots[source] ?? []).filter((t) => now - t < 60 * 60 * 1000);
+  slots[source] = recent;
+  if (recent.length >= ALERTS_PER_HOUR[source]) return false;
   recent.push(now);
-  g.__llErrorAlerts = recent;
   return true;
 }
 
 async function alertAdmins(event: ErrorEvent, reopened: boolean): Promise<void> {
-  if (!takeAlertSlot(Date.now())) return;
+  if (!takeAlertSlot(event.method === BROWSER_METHOD ? "browser" : "server", Date.now())) return;
   const db = await getDb();
   const admins = db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id);
   const where = event.path ? ` on ${event.path}` : "";
@@ -48,10 +51,12 @@ export async function recordError(input: ErrorInput): Promise<ErrorEvent | null>
   try {
     const result = await mutate((db) => {
       const outcome = addErrorOccurrence(db.errorEvents, input, new Date(), () => uid("err"));
+      if (!outcome) return null;
       const capped = capErrorGroups(db.errorEvents);
       if (capped !== db.errorEvents) db.errorEvents = capped;
       return { ...outcome, event: { ...outcome.event } };
     });
+    if (!result) return null;
     if (result.isNew || result.reopened) {
       void alertAdmins(result.event, result.reopened).catch(() => undefined);
       void maybePurgeExpiredRecords();

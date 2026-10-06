@@ -39,9 +39,12 @@ export function errorDescription(status: number): string {
   return ERROR_DESCRIPTIONS[status] ?? "The request could not be completed.";
 }
 
-/** Every error status an endpoint documents: its own plus the shared ones, ascending. */
-export function errorStatusesFor(def: Pick<EndpointDef, "errors">): number[] {
-  return [...new Set([...def.errors, ...SHARED_ERROR_STATUSES])].sort((a, b) => a - b);
+/** Statuses every endpoint with a JSON body can return while the body is read (invalid JSON, too large, wrong content type). */
+export const BODY_ERROR_STATUSES: readonly number[] = [400, 413, 415];
+
+/** Every error status an endpoint documents: its own, the shared ones and, with a body, the body-reading ones, ascending. */
+export function errorStatusesFor(def: Pick<EndpointDef, "errors" | "body">): number[] {
+  return [...new Set([...def.errors, ...SHARED_ERROR_STATUSES, ...(def.body ? BODY_ERROR_STATUSES : [])])].sort((a, b) => a - b);
 }
 
 const ERROR_REF = { $ref: "#/components/schemas/Error" };

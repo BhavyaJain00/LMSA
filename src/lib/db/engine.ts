@@ -22,15 +22,21 @@ import type { OpenOrigin, StoreDriver } from "./driver";
  *     documents themselves are never wrapped, so spreads, comparisons and
  *     serialization behave exactly as before.
  *       - Writes are always recorded: `push` and index assignment record
- *         the new documents; `splice`, `pop`, `shift`, `unshift`, `sort`,
- *         `reverse`, shrinking `length`, replacing a document with one of
- *         another id, or assigning a whole new array switch the collection
- *         to an identity diff (ids and their order compared, removed ids
- *         deleted).
+ *         the new documents; `splice`, `pop`, `shift` and shrinking
+ *         `length` record the documents they take out, which are deleted by
+ *         id (the rest keep their order, so nothing else is looked at).
+ *         `unshift`, `sort`, `reverse`, inserting before other documents,
+ *         replacing a document with one of another id, or assigning a whole
+ *         new array switch the collection to an identity diff (ids and their
+ *         order compared, removed ids deleted). Assigning back the result of
+ *         the collection's own `filter` (`db.x = db.x.filter(keep)`, the
+ *         usual delete idiom) is recorded as the removal it is.
  *       - Reads are recorded only inside a `mutate()` callback (and anything
  *         it awaits, via AsyncLocalStorage): `find`, `filter`, `at`,
  *         `findIndex` and index reads record the documents they return as
- *         candidates, which are serialized and compared at flush. Calls that
+ *         candidates, which are serialized and compared at flush (a
+ *         `filter` result assigned back as the whole collection is the
+ *         exception: its documents only stayed where they were). Calls that
  *         hand out every element (`forEach`, `map`, `reduce`, iteration,
  *         `slice`, …) switch the collection to a full comparison. Pure
  *         tests (`some`, `every`, `includes`, `indexOf`) record nothing.
@@ -40,8 +46,10 @@ import type { OpenOrigin, StoreDriver } from "./driver";
  *     changed later, say) are still stored — and logged, because such edits
  *     should be made on a document obtained inside `mutate()`. Its interval
  *     grows with its cost so it never takes more than about 5% of the CPU.
- *  3. `flush()`, backups, process exit and `close()` compare everything, so
- *     afterwards the storage equals memory whatever the code did.
+ *  3. `flush()`, process exit and `close()` compare everything in one pass,
+ *     so afterwards the storage equals memory whatever the code did.
+ *     Backups and restores use `settle()` instead, which does the same
+ *     comparison in the sweep's short slices so requests keep being served.
  *
  * Another process writing to the same SQLite file (the `db:restore` script,
  * for instance) is noticed through `PRAGMA data_version`; the cache is then
@@ -125,6 +133,15 @@ type WriteReason = "flush" | "sweep" | "exit" | "close" | "reload";
 interface PendingCollection {
   mode: DiffMode;
   candidates: Set<object>;
+  /** Documents taken out of the array (deleted by id at the next write). */
+  removed: Set<object>;
+  /**
+   * Arrays returned by `filter` inside a mutation, with the documents each
+   * returned (a copy, so later changes to the array lose none). Those
+   * documents are candidates, unless the array is assigned back as the
+   * whole collection.
+   */
+  filtered: Map<unknown[], unknown[]>;
 }
 
 /** Marks the code running inside a mutate() callback; cleared when the callback returns. */
@@ -190,6 +207,8 @@ export class StoreEngine {
   private failures = 0;
   private sweepTimer: NodeJS.Timeout | null = null;
   private sweeping = false;
+  /** The sweep that is running, so `settle()` can wait for it. */
+  private sweepRun: Promise<SweepReport | null> | null = null;
   private nextSweepDelay: number;
   private lastExternalCheck = 0;
   /** Another process changed the storage and the cache has not been reloaded yet. */
@@ -272,15 +291,46 @@ export class StoreEngine {
   }
 
   /**
+   * Make the storage equal memory without holding the event loop for long
+   * (before a snapshot): every collection is compared in the background
+   * sweep's short slices, with other requests and mutations running in
+   * between, then the changes those made meanwhile are written. Unlike
+   * `flush()` this never runs one pass over the whole database, so it is
+   * what backups use. Returns false when a write failed (logged and retried).
+   */
+  async settle(): Promise<boolean> {
+    await this.getDb();
+    if (this.closed) return true;
+    if (!this.tracker) return this.dirty ? this.enqueue(() => this.persistPending()) : true;
+    for (;;) {
+      if (this.closed) return false;
+      // One sweep at a time: wait for a running one, then compare everything (it may have covered only some collections).
+      if (this.sweepRun) {
+        await this.sweepRun.catch(() => null);
+        continue;
+      }
+      const report = await this.sweep(this.collections);
+      if (!report) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        continue;
+      }
+      if (!report.complete) return false;
+      return this.writePending();
+    }
+  }
+
+  /**
    * Run `fn` with the whole store to itself: every earlier mutation has
-   * finished and everything in memory has been written first.
+   * finished and everything in memory has been written first (compared in
+   * short slices beforehand, see `settle()`, so the queue is only held for
+   * the changes made since).
    */
   async exclusive<T>(fn: (ctx: ExclusiveContext) => T | Promise<T>): Promise<T> {
     await this.getDb();
+    const failed = () => new Error(this.stats.lastError?.message ?? "Pending changes could not be written to the database.");
+    if (!(await this.settle())) throw failed();
     return this.enqueue(async () => {
-      if (!(await this.persistEverything())) {
-        throw new Error(this.stats.lastError?.message ?? "Pending changes could not be written to the database.");
-      }
+      if (!(await this.persistRecorded())) throw failed();
       return fn({
         driver: this.driver,
         data: () => this.raw(this.db!),
@@ -293,6 +343,40 @@ export class StoreEngine {
   async replaceAll(data: RawData, source: string): Promise<void> {
     await this.getDb();
     await this.enqueue(() => this.replaceAllNow(data, source));
+  }
+
+  /**
+   * Remove the documents of `name` that match `predicate`, as a mutation.
+   * The array is compacted in place (it stays the same array) and only the
+   * removed documents are recorded, so the write deletes their ids and
+   * looks at nothing else. Returns how many were removed. If `predicate`
+   * throws, nothing is removed.
+   */
+  removeWhere(name: string, predicate: (doc: unknown) => boolean): Promise<number> {
+    return this.mutate(() => {
+      const raw = (this.db as unknown as Loose)[name];
+      if (!this.known.has(name) || !Array.isArray(raw)) return 0;
+      if (this.tracker) this.touch(name);
+      // Decide first, so a throwing predicate leaves the array as it was.
+      const drop: number[] = [];
+      for (let i = 0; i < raw.length; i++) if (predicate(raw[i])) drop.push(i);
+      if (!drop.length) return 0;
+      const removed: unknown[] = [];
+      let write = 0;
+      let next = 0;
+      for (let read = 0; read < raw.length; read++) {
+        if (next < drop.length && drop[next] === read) {
+          removed.push(raw[read]);
+          next++;
+          continue;
+        }
+        if (write !== read) raw[write] = raw[read];
+        write++;
+      }
+      raw.length = write;
+      this.recordRemoval(name, removed);
+      return removed.length;
+    });
   }
 
   /** Register collections added after the engine was created (development hot reload). */
@@ -429,12 +513,56 @@ export class StoreEngine {
 
   private pendingFor(name: string): PendingCollection {
     let entry = this.pending.get(name);
-    if (!entry) this.pending.set(name, (entry = { mode: "candidates", candidates: new Set() }));
+    if (!entry) this.pending.set(name, (entry = { mode: "candidates", candidates: new Set(), removed: new Set(), filtered: new Map() }));
     return entry;
   }
 
   private note(name: string, doc: unknown): void {
-    if (doc && typeof doc === "object") this.pendingFor(name).candidates.add(doc);
+    if (!doc || typeof doc !== "object") return;
+    const entry = this.pendingFor(name);
+    // A document taken out earlier is in the array again (put back, or a second copy): settle membership by scanning.
+    if (entry.removed.size && entry.removed.has(doc)) this.escalate(name, "identity");
+    entry.candidates.add(doc);
+  }
+
+  /** Documents taken out of `name`: deleted by id at the next write, never compared as candidates. */
+  private recordRemoval(name: string, docs: readonly unknown[]): void {
+    if (!this.tracker || !docs.length) return;
+    const entry = this.pendingFor(name);
+    for (const doc of docs) {
+      if (!doc || typeof doc !== "object") continue;
+      entry.candidates.delete(doc);
+      entry.removed.add(doc);
+    }
+  }
+
+  /**
+   * `next` replaces the array of `name`. When it is a `filter` result of
+   * that collection that kept the remaining documents in their order (the
+   * delete idiom `db.x = db.x.filter(keep)`), record what it removed and
+   * what it added after them, and forget that `filter` call's documents as
+   * candidates: they only stayed where they were. Returns false for any
+   * other array, which then needs an identity diff.
+   */
+  private adoptFiltered(name: string, current: unknown, next: unknown): boolean {
+    if (!Array.isArray(current) || !Array.isArray(next)) return false;
+    const entry = this.pending.get(name);
+    if (!entry?.filtered.has(next)) return false;
+    const removed: unknown[] = [];
+    let kept = 0;
+    for (const doc of current) {
+      if (kept < next.length && next[kept] === doc) kept++;
+      else removed.push(doc);
+    }
+    if (kept < next.length) {
+      // Anything after the kept documents must be new; one of the removed ones there means the order changed.
+      const gone = new Set(removed);
+      for (let i = kept; i < next.length; i++) if (gone.has(next[i])) return false;
+    }
+    entry.filtered.delete(next);
+    this.recordRemoval(name, removed);
+    for (let i = kept; i < next.length; i++) this.note(name, next[i]);
+    return true;
   }
 
   private escalate(name: string, mode: "identity" | "full"): void {
@@ -460,8 +588,10 @@ export class StoreEngine {
       set: (target, key, value) => {
         if (typeof key === "string" && this.known.has(key)) {
           this.touch(key);
-          this.escalate(key, "identity");
-          Reflect.set(target, key, (value && this.unwrapped.get(value as object)) ?? value);
+          const next: unknown = (value && typeof value === "object" && this.unwrapped.get(value)) || value;
+          const current: unknown = Reflect.get(target, key);
+          if (next !== current && !this.adoptFiltered(key, current, next)) this.escalate(key, "identity");
+          Reflect.set(target, key, next);
           this.changed();
           return true;
         }
@@ -524,7 +654,11 @@ export class StoreEngine {
     });
     methods.set("filter", (...args) => {
       const found = call("filter", args) as unknown[];
-      if (this.inMutation()) added(found);
+      if (found.length && this.inMutation()) {
+        const entry = this.pendingFor(name);
+        if (entry.removed.size && found.some((doc) => entry.removed.has(doc as object))) membership();
+        entry.filtered.set(found, found.slice());
+      }
       return found;
     });
     methods.set("push", (...items) => {
@@ -541,21 +675,34 @@ export class StoreEngine {
       return length;
     });
     methods.set("splice", (...args) => {
-      membership();
-      added(args.slice(2));
-      const removed = call("splice", args);
+      const before = raw.length;
+      const inserted = args.slice(2);
+      const removed = call("splice", args) as unknown[];
+      if (inserted.length && sameIds(removed, inserted)) {
+        // Documents replaced by copies in place (`splice(i, 1, copy)`): membership and order are unchanged.
+        const entry = this.pendingFor(name);
+        for (const doc of removed) if (doc && typeof doc === "object") entry.candidates.delete(doc);
+        added(inserted);
+      } else {
+        // Inserted before other documents: the order changed.
+        if (inserted.length && spliceStart(args[0], before) + inserted.length !== raw.length) membership();
+        this.recordRemoval(name, removed);
+        added(inserted);
+      }
       changed();
       return removed;
     });
     methods.set("pop", () => {
-      membership();
+      const before = raw.length;
       const removed = raw.pop();
+      if (before) this.recordRemoval(name, [removed]);
       changed();
       return removed;
     });
     methods.set("shift", () => {
-      membership();
+      const before = raw.length;
       const removed = raw.shift();
+      if (before) this.recordRemoval(name, [removed]);
       changed();
       return removed;
     });
@@ -600,10 +747,17 @@ export class StoreEngine {
         return methods.get(key) ?? Reflect.get(target, key);
       },
       set: (target, key, value) => {
+        if (key === "length") {
+          // Shortening the array removes its tail; the rest keeps its order.
+          const length = Number(value);
+          const tail = Number.isInteger(length) && length >= 0 && length < target.length ? target.slice(length) : null;
+          const ok = Reflect.set(target, key, value);
+          if (ok && tail) this.recordRemoval(name, tail);
+          changed();
+          return ok;
+        }
         if (typeof key === "string") {
-          if (key === "length") {
-            if (typeof value === "number" && value < target.length) membership();
-          } else if (INDEX_KEY.test(key)) {
+          if (INDEX_KEY.test(key)) {
             const previous = (target as unknown as Loose)[key];
             if (previous !== value) {
               if (previous !== undefined) {
@@ -642,7 +796,22 @@ export class StoreEngine {
   private takePending(): DiffRequest[] {
     const requests: DiffRequest[] = [];
     for (const [name, entry] of this.pending) {
-      if (this.known.has(name)) requests.push({ name, mode: entry.mode, candidates: entry.candidates });
+      if (!this.known.has(name)) continue;
+      const { candidates, filtered } = entry;
+      requests.push({
+        name,
+        mode: entry.mode,
+        // Iterable more than once (a failed write puts them back).
+        candidates: filtered.size
+          ? {
+              *[Symbol.iterator]() {
+                yield* candidates;
+                for (const docs of filtered.values()) yield* docs;
+              },
+            }
+          : candidates,
+        removed: entry.removed,
+      });
     }
     this.pending.clear();
     return requests;
@@ -651,8 +820,12 @@ export class StoreEngine {
   /** Put requests back after a failed write so the next attempt finds them again. */
   private restorePending(requests: readonly DiffRequest[]): void {
     for (const request of requests) {
+      const entry = this.pendingFor(request.name);
       if (request.mode !== "candidates") this.escalate(request.name, request.mode);
-      for (const doc of request.candidates ?? []) this.note(request.name, doc);
+      for (const doc of request.removed ?? []) if (doc && typeof doc === "object") entry.removed.add(doc);
+      for (const doc of request.candidates ?? []) {
+        if (doc && typeof doc === "object" && !entry.removed.has(doc)) entry.candidates.add(doc);
+      }
     }
   }
 
@@ -739,7 +912,17 @@ export class StoreEngine {
     return ok;
   }
 
-  /** Write every difference between memory and storage (flush(), backups, exclusive operations). */
+  /** Write what was recorded (whole file for non-incremental drivers), whether or not the flush timer is due. */
+  private async persistRecorded(): Promise<boolean> {
+    if (!this.db || this.closed) return true;
+    if (!this.tracker) {
+      this.cancelFlushTimer();
+      return this.dirty ? this.persistWhole() : true;
+    }
+    return this.writeTracked();
+  }
+
+  /** Write every difference between memory and storage in one pass (flush()). */
   private async persistEverything(): Promise<boolean> {
     if (!this.db || this.closed) return true;
     if (!this.tracker) {
@@ -861,9 +1044,17 @@ export class StoreEngine {
    * sweep) with storage, one short slice at a time with other work running
    * in between, and store what differs.
    */
-  private async sweep(names?: readonly string[]): Promise<SweepReport | null> {
-    if (!this.tracker || this.sweeping || this.closed || !this.db) return null;
+  private sweep(names?: readonly string[]): Promise<SweepReport | null> {
+    if (!this.tracker || this.sweeping || this.closed || !this.db) return Promise.resolve(null);
     this.sweeping = true;
+    const run = this.runSweep(names).finally(() => {
+      if (this.sweepRun === run) this.sweepRun = null;
+    });
+    this.sweepRun = run;
+    return run;
+  }
+
+  private async runSweep(names?: readonly string[]): Promise<SweepReport | null> {
     const wallStarted = performance.now();
     let selected: string[];
     if (names) {
@@ -1034,4 +1225,20 @@ export class StoreEngine {
     this.stats.externalReloads++;
     console.info("[store] the database was changed by another process; reloaded it.");
   }
+}
+
+/** Where `splice(start, ...)` starts in an array of `length` (the spec's clamping of `start`). */
+function spliceStart(start: unknown, length: number): number {
+  const n = Math.trunc(Number(start)) || 0;
+  return n < 0 ? Math.max(0, length + n) : Math.min(n, length);
+}
+
+/** True when `removed` and `inserted` are documents with the same ids in the same order (a replacement in place). */
+function sameIds(removed: readonly unknown[], inserted: readonly unknown[]): boolean {
+  if (removed.length !== inserted.length) return false;
+  for (let i = 0; i < removed.length; i++) {
+    const id = idOf(removed[i]);
+    if (id === null || id !== idOf(inserted[i])) return false;
+  }
+  return true;
 }

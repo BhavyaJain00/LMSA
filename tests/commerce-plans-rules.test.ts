@@ -231,7 +231,10 @@ describe("subscription lifecycle", () => {
     assert.equal(advanceSubscription(over, NOW), "past_due");
     assert.equal(advanceSubscription({ ...over, cancelAtPeriodEnd: true }, NOW), "cancelled");
     assert.equal(advanceSubscription(sub({ currentPeriodEnd: iso(NOW - (GRACE_DAYS + 1) * DAY) }), NOW), "expired");
-    assert.equal(advanceSubscription(sub({ status: "trialing", currentPeriodEnd: iso(NOW - HOUR) }), NOW), "past_due");
+    // A trial that was never paid ends with it; one whose order awaits confirmation gets the grace period.
+    assert.equal(advanceSubscription(sub({ status: "trialing", currentPeriodEnd: iso(NOW - HOUR) }), NOW), "expired");
+    assert.equal(advanceSubscription(sub({ status: "trialing", currentPeriodEnd: iso(NOW - HOUR) }), NOW, { awaitingPayment: true }), "past_due");
+    assert.equal(advanceSubscription(sub({ status: "trialing", currentPeriodEnd: iso(NOW + HOUR) }), NOW), null);
     assert.equal(advanceSubscription(sub({ status: "past_due", currentPeriodEnd: iso(NOW - DAY) }), NOW), null);
     assert.equal(advanceSubscription(sub({ status: "past_due", currentPeriodEnd: iso(NOW - GRACE_DAYS * DAY) }), NOW), "expired");
     assert.equal(advanceSubscription(sub({ status: "cancelled", currentPeriodEnd: iso(NOW - 99 * DAY) }), NOW), null);

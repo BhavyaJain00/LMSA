@@ -205,6 +205,7 @@ export async function updateMemberProfileAction(_prev: ActionResult | null, form
     row.location = location || undefined;
     row.bio = bio || undefined;
     if (changeEmail) row.email = email;
+    row.updatedAt = new Date().toISOString();
   });
   await audit(actor, "user.update", { type: "user", id }, { emailChanged: !!changeEmail, usernameChanged: username !== target.username });
   revalidateMember(id, username);
@@ -239,7 +240,7 @@ export async function updateMemberRolesAction(_prev: ActionResult | null, formDa
 
   await mutate((d) => {
     const row = d.users.find((u) => u.id === id);
-    if (row) row.roles = roles;
+    if (row) Object.assign(row, { roles, updatedAt: new Date().toISOString() });
   });
   await audit(actor, "user.roles", { type: "user", id }, { from: target.roles.join(","), to: roles.join(",") });
   revalidateMember(id, target.username);
@@ -260,7 +261,7 @@ export async function setMemberEnabledAction(id: string, enabled: boolean): Prom
   }
   await mutate((d) => {
     const row = d.users.find((u) => u.id === id);
-    if (row) row.enabled = enabled;
+    if (row) Object.assign(row, { enabled, updatedAt: new Date().toISOString() });
   });
   if (!enabled) await destroyAllSessions(id);
   await audit(actor, enabled ? "user.enable" : "user.disable", { type: "user", id });

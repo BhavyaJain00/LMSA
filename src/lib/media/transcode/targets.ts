@@ -383,7 +383,7 @@ export function planStaleOutputRelease(args: {
     releasedVersion = hlsVersionPrefix(media.hlsUrl, origins);
     if (hasGeneratedPoster(target, media, origins)) {
       patch.posterUrl = undefined;
-      releasedPoster = media.posterUrl;
+      releasedPoster = media.posterUrl ?? null;
     }
   } else if (media.transcode && !media.hlsUrl) {
     const latest = latestJobForTarget(args.jobs, target);

@@ -83,6 +83,8 @@ export interface User {
   enabled: boolean;
   lastActiveAt?: string;
   createdAt: string; // ISO date
+  /** Round 3 (platform-api): when the account's details (name, email, roles, status, profile) last changed; feeds `updated_since` on /api/v1/users. */
+  updatedAt?: string;
 
   /* ----- round 2: account security, email, calendar ----- */
   /** Set once the user confirmed their email address. */
