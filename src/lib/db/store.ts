@@ -399,9 +399,18 @@ export async function getSettings() {
   return db.settings;
 }
 
-/** Replace the database with fresh demo data (one transaction with SQLite). */
+/** Fresh demo data in the storage format (see `BackupManager.replaceWith`). */
+export async function buildDemoData(): Promise<RawData> {
+  return toRawData(await buildSeedDatabase());
+}
+
+/**
+ * Replace the database with fresh demo data (one transaction with SQLite).
+ * No backup is taken: use `BackupManager.replaceWith(await buildDemoData(), …)`
+ * to keep the current data as a safety backup.
+ */
 export async function resetDatabase(): Promise<void> {
-  await engine().replaceAll(toRawData(await buildSeedDatabase()), "demo-reset");
+  await engine().replaceAll(await buildDemoData(), "demo-reset");
 }
 
 /** The current contents in the db.json format (JSON export and "Download backup"). */

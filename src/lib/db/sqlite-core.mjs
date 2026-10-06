@@ -789,6 +789,9 @@ export function readBackupData(file) {
 function withBackupConnection(file, integrity, fn) {
   /** @type {SqliteConnection | null} */
   let conn = null;
+  // A copy of a WAL-mode database (a raw copy of the live file, say) makes even a read-only
+  // connection create -wal and -shm files that it cannot remove; remove those it created.
+  const created = SIDECAR_SUFFIXES.filter((suffix) => !fs.existsSync(file + suffix));
   try {
     conn = openDatabase(file, { readOnly: true });
     if (integrity) {
@@ -803,6 +806,19 @@ function withBackupConnection(file, integrity, fn) {
     throw isCorruptionError(err) ? new Error(UNREADABLE_BACKUP) : err;
   } finally {
     conn?.close();
+    for (const suffix of created) removeQuietly(file + suffix);
+  }
+}
+
+/** Files SQLite may keep next to a database file. */
+const SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"];
+
+/** Remove a file if it exists; a failure (the file is in use) is not an error here. */
+function removeQuietly(/** @type {string} */ file) {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // Left for the next deleteBackupFile() of this backup.
   }
 }
 
@@ -947,10 +963,11 @@ export function listBackupFiles(dir) {
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : b.name.localeCompare(a.name)));
 }
 
-/** Delete a backup and its manifest. */
+/** Delete a backup, its manifest and any -wal/-shm/-journal file SQLite left next to it. */
 export function deleteBackupFile(/** @type {string} */ file) {
   fs.rmSync(file, { force: true });
   fs.rmSync(manifestPath(file), { force: true });
+  for (const suffix of SIDECAR_SUFFIXES) fs.rmSync(file + suffix, { force: true });
 }
 
 /**

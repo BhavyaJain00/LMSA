@@ -340,6 +340,32 @@ export function probeDatabase(file) {
 }
 
 /**
+ * Move `from` to `to`, which must not exist. A rename when both are on the
+ * same filesystem; otherwise (EXDEV: another drive, a network share, a
+ * mounted volume) a copy that refuses to overwrite, then the source is
+ * removed. A failed copy leaves no partial target behind.
+ *
+ * @param {string} from
+ * @param {string} to
+ */
+export function moveFile(from, to) {
+  try {
+    fs.renameSync(from, to);
+    return;
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err)?.code !== "EXDEV") throw err;
+  }
+  try {
+    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    // EEXIST: the target is someone else's file; anything else may have left a partial copy.
+    if (/** @type {NodeJS.ErrnoException} */ (err)?.code !== "EEXIST") fs.rmSync(to, { force: true });
+    throw err;
+  }
+  fs.rmSync(from, { force: true });
+}
+
+/**
  * Back up the configured database without the app: `VACUUM INTO` for
  * SQLite (safe while the app is running), a validated copy for the JSON
  * driver. With `out` the snapshot is written to that path instead of the
@@ -390,7 +416,7 @@ export function backupOffline(config, options = {}) {
 
     if (options.out) {
       fs.mkdirSync(path.dirname(options.out), { recursive: true });
-      fs.renameSync(tmp, options.out);
+      moveFile(tmp, options.out);
       return { file: options.out, entry: null, created: true, pruned: [], records: summary.records, counts: summary.counts };
     }
     const published = publishBackup(tmp, dir, kind, {

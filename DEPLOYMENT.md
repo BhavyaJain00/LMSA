@@ -1,6 +1,6 @@
 # Deploying LearnLoop
 
-LearnLoop is a single Next.js server with an embedded SQLite database. Everything it stores (database, uploads, video renditions, backups) lives in one folder, `storage/`. A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
+LearnLoop is a single Next.js server with an embedded SQLite database. Everything it stores (database, uploads, video renditions, backups) lives in one data folder: the `/app/storage` volume with Docker, or a folder outside the project such as `/opt/learnloop/storage` without Docker (see section 3 for why it must be outside). A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
 
 Contents:
 
@@ -130,14 +130,26 @@ curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs ffmpeg
 
 sudo useradd --system --create-home --home-dir /opt/learnloop learnloop
+# The data folder lives OUTSIDE the project (see "Where the data lives" below).
+sudo -u learnloop mkdir -p /opt/learnloop/storage
 sudo -u learnloop git clone <your repository URL> /opt/learnloop/app
 cd /opt/learnloop/app
-sudo -u learnloop cp .env.example .env   # fill it in (section 4), with TRUST_PROXY_HOPS=1
+sudo -u learnloop cp .env.example .env   # fill it in (section 4), with TRUST_PROXY_HOPS=1 and the data paths below
 sudo -u learnloop npm ci
 sudo -u learnloop npm run build
 # The standalone server needs the static files next to it:
 sudo -u learnloop cp -r public .next/standalone/ && sudo -u learnloop cp -r .next/static .next/standalone/.next/
 ```
+
+**Where the data lives.** Add these lines to `.env` (absolute paths):
+
+```sh
+SQLITE_PATH=/opt/learnloop/storage/lms.sqlite
+DATA_FILE=/opt/learnloop/storage/db.json
+UPLOAD_DIR=/opt/learnloop/storage/uploads
+```
+
+The standalone server (`.next/standalone/server.js`) changes into its own folder when it starts, so the default relative paths (`storage/…`) would put the database, uploads and backups inside `.next/standalone/`, and the next `npm run build` deletes that folder with everything in it. In production the server therefore refuses to start from `.next/standalone` while any of these three paths is relative. Backups (`/opt/learnloop/storage/backups/`), the SEO files (`/opt/learnloop/storage/seo/`) and the app's other small files follow the database into the same folder, and the `npm run db:*` scripts read the same `.env`, so they work on the same data.
 
 `/etc/systemd/system/learnloop.service`:
 
@@ -149,11 +161,12 @@ Wants=network-online.target
 
 [Service]
 User=learnloop
-WorkingDirectory=/opt/learnloop/app
+# server.js changes into its own folder anyway; the data is NOT here but in the
+# absolute SQLITE_PATH / DATA_FILE / UPLOAD_DIR from .env (/opt/learnloop/storage).
+WorkingDirectory=/opt/learnloop/app/.next/standalone
 EnvironmentFile=/opt/learnloop/app/.env
 Environment=NODE_ENV=production PORT=3000 HOSTNAME=127.0.0.1
-# Data paths are relative to WorkingDirectory, so storage/ stays in the project folder.
-ExecStart=/usr/bin/node .next/standalone/server.js
+ExecStart=/usr/bin/node /opt/learnloop/app/.next/standalone/server.js
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -190,12 +203,16 @@ With nginx instead, set `client_max_body_size 0;` (large video uploads), `proxy_
 npm install -g pm2
 npm ci && npm run build
 # copy public/ and .next/static/ next to the standalone server as shown above
-pm2 start .next/standalone/server.js --name learnloop --cwd "$(pwd)" --time
+pm2 start .next/standalone/server.js --name learnloop --time
 pm2 save
 pm2 startup        # Linux: prints the command that starts pm2 at boot
 ```
 
-pm2 does not read `.env` by itself for the standalone server: export the variables in the shell first, or use an `ecosystem.config.cjs` with an `env` block (`NODE_ENV: "production"`, `APP_URL`, `APP_SECRET`, …). On Windows, start pm2 at boot with `pm2-installer` or the Task Scheduler (`pm2 resurrect` at log-on), install ffmpeg with `winget install Gyan.FFmpeg`, and put Caddy for Windows (`caddy run` as a service via `sc.exe` or NSSM) in front for HTTPS. Use Windows paths in `.env` only if the default `storage\` folder inside the project is not where you want the data.
+As with systemd, keep the data outside the project and give the server absolute paths (see "Where the data lives" above): `SQLITE_PATH=/opt/learnloop/storage/lms.sqlite`, `DATA_FILE=/opt/learnloop/storage/db.json`, `UPLOAD_DIR=/opt/learnloop/storage/uploads`, or on Windows for example `SQLITE_PATH=D:\learnloop-data\lms.sqlite`, `DATA_FILE=D:\learnloop-data\db.json`, `UPLOAD_DIR=D:\learnloop-data\uploads`. The server refuses to start with relative paths, because they would resolve inside `.next\standalone`, which every build deletes.
+
+pm2 does not read `.env` by itself for the standalone server: export the variables in the shell first, or use an `ecosystem.config.cjs` with an `env` block (`NODE_ENV: "production"`, `APP_URL`, `APP_SECRET`, the three data paths, …). On Windows, start pm2 at boot with `pm2-installer` or the Task Scheduler (`pm2 resurrect` at log-on), install ffmpeg with `winget install Gyan.FFmpeg`, and put Caddy for Windows (`caddy run` as a service via `sc.exe` or NSSM) in front for HTTPS.
+
+**Installed earlier with relative paths?** Your data may be in `.next/standalone/storage/`. Before the next build: stop the app, move that folder's contents to the new data folder (`mv .next/standalone/storage/* /opt/learnloop/storage/`), set the three absolute paths in `.env`, then build and start again.
 
 ## 4. Environment variables
 
@@ -215,7 +232,8 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | with Razorpay | See section 7. |
 | `STORAGE_DRIVER`, `S3_*` | no | Object storage, see [section 9](#9-object-storage-s3--r2-and-a-cdn). |
 | `DB_DRIVER` | no | `sqlite` (default). `json` is for development only. |
-| `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | no | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source), `storage/uploads`. |
+| `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | without Docker | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source; its folder also holds `seo/`), `storage/uploads`. Docker: keep the defaults (`docker-compose.yml` sets them). Without Docker: **absolute** paths outside the project, see section 3; a production server started from `.next/standalone` refuses relative ones. |
+| `IMAGE_HOSTS` | no | Extra HTTPS hosts the image optimizer (`/_next/image`) may fetch from, comma-separated (`cdn.example.com,*.example.org`). `APP_URL`, `S3_PUBLIC_BASE_URL` and the S3 bucket are always allowed; every other host is refused so the optimizer cannot be used as an open proxy. Read at build time. |
 | `MAX_VIDEO_UPLOAD_MB`, `MAX_FILE_UPLOAD_MB` | no | Upload limits in MB (defaults 10240, i.e. 10 GB, and 25). Video uploads are chunked and resumable, so files over 5 GB work; a reverse proxy only needs to accept one chunk per request. |
 | `SESSION_DAYS`, `SESSION_COOKIE_NAME`, `COOKIE_SECURE` | no | Sign-in session length (30), cookie name, HTTPS-only cookie (on by default in production). |
 | `FFMPEG_PATH`, `FFPROBE_PATH` | no | When ffmpeg is not on the `PATH`. |
@@ -256,11 +274,11 @@ On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `A
 
 ## 6. Backups and restores
 
-The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & restore* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in `storage/backups/`, taken safely while the app runs.
+The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & restore* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in the `backups/` folder next to the database (`/app/storage/backups/` in Docker, `/opt/learnloop/storage/backups/` in the section 3 layout), taken safely while the app runs.
 
-The `storage/` folder must be writable by the app and persisted together with the database: besides the database and uploads it holds `storage/seo/` (the IndexNow key and generated SEO files) and `storage/backups/`.
+The data folder must be writable by the app and persisted together with the database: besides the database and uploads it holds `seo/` (the IndexNow key and generated SEO files) and `backups/`.
 
-**Uploads are not inside the database backup.** Back up the whole `storage/` folder (or the `learnloop_storage` volume), or use object storage (section 9) for uploads.
+**Uploads are not inside the database backup.** Back up the whole data folder (the `learnloop_storage` volume, or `/opt/learnloop/storage`), or use object storage (section 9) for uploads.
 
 ### Nightly backup with an off-site copy
 
@@ -273,7 +291,7 @@ A backup on the same disk does not survive a lost server. Copy it elsewhere ever
      sync /data remote:learnloop-backups/storage --exclude "hls/**"
 ```
 
-Without Docker: `cd /opt/learnloop/app && node scripts/db-backup.mjs --auto && rclone sync storage remote:learnloop-backups/storage`. Keep at least 30 days of copies (enable bucket versioning or lifecycle rules) and encrypt them (`rclone crypt`): they contain personal data.
+Without Docker (data in `/opt/learnloop/storage`, section 3): `cd /opt/learnloop/app && node scripts/db-backup.mjs --auto && rclone sync /opt/learnloop/storage remote:learnloop-backups/storage --exclude "hls/**"`. Check once that the folder you copy really holds `lms.sqlite` and `backups/`. Keep at least 30 days of copies (enable bucket versioning or lifecycle rules) and encrypt them (`rclone crypt`): they contain personal data.
 
 ### Restoring
 
@@ -287,7 +305,7 @@ docker compose run --rm --no-deps app node scripts/db-restore.mjs <backup name o
 docker compose start app
 ```
 
-A restore first saves the current data as a "safety" backup, so it can itself be undone. Without Docker the same commands are `npm run db:backup -- --list` and `npm run db:restore -- <backup>`. To move to a new server, copy the whole `storage/` folder (with the app stopped) and the same `.env` (the same `APP_SECRET`, or 2FA and signed links stop working).
+A restore first saves the current data as a "safety" backup, so it can itself be undone. Without Docker the same commands are `npm run db:backup -- --list` and `npm run db:restore -- <backup>`. To move to a new server, copy the whole data folder (with the app stopped) and the same `.env` (the same `APP_SECRET`, or 2FA and signed links stop working).
 
 ## 7. Payments: Stripe and Razorpay webhooks
 
@@ -372,7 +390,7 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 
 ## 11. Monitoring: health check and error log
 
-- `GET /api/health` returns `200` with `{"status":"ok"}` (or `"degraded"` when only ffmpeg is missing) and `503` when the database or storage fails. It shows the version, uptime and per-check timings, never configuration values. Docker uses it as the container `HEALTHCHECK`; point an uptime monitor (UptimeRobot, Better Stack, …) at it too.
+- `GET /api/health` returns `200` with `{"status":"ok"}` (or `"degraded"` when only ffmpeg is missing) and `503` when the database or storage fails. Anyone sees only the status, the app version and whether each check passed; a signed-in administrator also sees the ffmpeg build, per-check timings and the uptime. It never shows configuration values. Docker uses it as the container `HEALTHCHECK`; point an uptime monitor (UptimeRobot, Better Stack, …) at it too.
 - *Admin → Error log* groups server errors (failed pages, API routes, server actions) and errors visitors saw in their browser by message and page, with the stack trace, count and last occurrence. Administrators get an in-app notification for each new error; a resolved error reopens if it happens again. Request bodies, query strings and cookies are never stored.
 - *Admin → Audit log* records administrative actions, with CSV export. Both logs are purged after the retention period set in *Admin → Settings → Legal pages*.
 
@@ -382,7 +400,7 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 2. Get the new code: `git pull`.
 3. Rebuild and restart:
    - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).
-   - systemd/pm2: `npm ci && npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`.
+   - systemd/pm2: `npm ci && npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`. The build replaces `.next/` completely, which is why the data must live outside it (section 3); if `.next/standalone/storage/` exists, move it out first as described there.
 4. Database changes are applied automatically when the server starts. Check `/api/health` and *Admin → Error log*.
 5. After upgrading to a release that changes gamification, open *Admin → Settings → Points & leaderboard* and click **Recalculate points** once so existing activity is scored with the new rules.
 

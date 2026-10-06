@@ -910,7 +910,7 @@ export async function cleanupOrphanedHls(now = Date.now()): Promise<number> {
       removed += await storage.deletePrefix(prefix).catch(() => 0);
     }
   }
-  return removed + (await cleanupOrphanedPosters(now));
+  return removed;
 }
 
 /**

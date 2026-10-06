@@ -274,6 +274,33 @@ describe("UploadTask (chunked)", () => {
     assert.equal(h.sleeps.length, 0);
   });
 
+  it("keeps the server's error code so the field can translate it, and stops on a full disk", async () => {
+    const quota = harness();
+    quota.server.faults.push(() => result(429, { ok: false, error: "You can upload up to 500 MB per day and have used 499 MB.", code: "quota" }));
+    const a = makeTask(quota, videoFile());
+    a.task.start();
+    const aFinal = await runUntil(a.task, ["done", "error"]);
+    assert.equal(aFinal.phase, "error");
+    assert.equal(aFinal.errorCode, "quota");
+    assert.match(aFinal.error ?? "", /500 MB per day/);
+
+    const full = harness();
+    full.server.faults.push(() => result(507, { ok: false, error: "The server is running out of storage space.", code: "disk-full" }));
+    const b = makeTask(full, videoFile());
+    b.task.start();
+    const bFinal = await runUntil(b.task, ["done", "error"]);
+    assert.equal(bFinal.phase, "error");
+    assert.equal(bFinal.errorCode, "disk-full");
+    assert.equal(full.sleeps.length, 0, "a full disk is not retried");
+
+    const unknown = harness();
+    unknown.server.faults.push(() => result(415, { ok: false, error: "Unsupported file type: video/x-flv", code: "<script>" }));
+    const c = makeTask(unknown, videoFile());
+    c.task.start();
+    const cFinal = await runUntil(c.task, ["done", "error"]);
+    assert.equal(cFinal.errorCode, null, "unknown codes are ignored");
+  });
+
   it("treats the unfinished-uploads limit as final but waits out a rate limit", async () => {
     const limited = harness();
     limited.server.faults.push(() => result(429, { ok: false, error: "You have 6 unfinished uploads." }));

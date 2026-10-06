@@ -3,7 +3,7 @@ import path from "node:path";
 import { isRemoteStorage, migrateLocalToRemote } from "@/lib/storage";
 import { UPLOAD_MIME_TYPES } from "./files";
 import { cleanupStaleUploads, type UploadCleanupResult } from "./resumable";
-import { cleanupOrphanedHls, getQueueCounts, isWorkerRunning, kickTranscodeWorker, pruneTranscodeJobs, syncAllTranscodes, type QueueCounts } from "./transcode/queue";
+import { cleanupOrphanedHls, cleanupOrphanedPosters, getQueueCounts, isWorkerRunning, kickTranscodeWorker, pruneTranscodeJobs, syncAllTranscodes, type QueueCounts } from "./transcode/queue";
 
 /**
  * One pass of media housekeeping (run by `/api/cron/media` and from
@@ -19,6 +19,8 @@ export interface MediaMaintenanceResult {
   queued: number;
   prunedJobs: number;
   removedHlsVersions: number;
+  /** Generated poster frames no lesson or course shows any more. */
+  removedPosters: number;
   migrated: { moved: number; failed: number; more: boolean } | null;
   queue: QueueCounts;
   workerRunning: boolean;
@@ -45,6 +47,7 @@ export async function runMediaMaintenance(): Promise<MediaMaintenanceResult> {
   const queued = await step("queue", () => syncAllTranscodes(), 0);
   const prunedJobs = await step("prune", () => pruneTranscodeJobs(), 0);
   const removedHlsVersions = await step("orphans", () => cleanupOrphanedHls(), 0);
+  const removedPosters = await step("posters", () => cleanupOrphanedPosters(), 0);
   const migrated = isRemoteStorage()
     ? await step(
         "migrate",
@@ -58,5 +61,5 @@ export async function runMediaMaintenance(): Promise<MediaMaintenanceResult> {
   // Resume jobs left queued (e.g. by a restart) even when nothing new was queued.
   kickTranscodeWorker();
   const queue = await getQueueCounts();
-  return { uploads, queued, prunedJobs, removedHlsVersions, migrated, queue, workerRunning: isWorkerRunning(), errors };
+  return { uploads, queued, prunedJobs, removedHlsVersions, removedPosters, migrated, queue, workerRunning: isWorkerRunning(), errors };
 }

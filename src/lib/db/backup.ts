@@ -253,8 +253,9 @@ export class BackupManager {
   /** Snapshot the current data into the backups folder. */
   async create(options: { kind: BackupKind; reason?: string; createdBy?: string; date?: Date; protect?: readonly string[] }): Promise<BackupInfo> {
     await this.engine.getDb();
-    // Everything in memory reaches the storage first, so the snapshot is complete.
-    await this.engine.flush();
+    // Everything in memory reaches the storage first, so the snapshot is complete. It is compared
+    // in short slices (settle(), not flush()), so a large database does not stall other requests.
+    await this.engine.settle();
     return this.write(options);
   }
 
@@ -307,7 +308,8 @@ export class BackupManager {
    */
   async exportTo(format: BackupFormat): Promise<{ file: string; sizeBytes: number }> {
     await this.engine.getDb();
-    await this.engine.flush();
+    // Only the SQLite snapshot reads the storage; the other exports are written from memory.
+    if (format === "sqlite" && this.engine.driver.kind === "sqlite") await this.engine.settle();
     removeStaleTempFiles(this.dir);
     const tmp = tempBackupPath(this.dir, format);
     try {
@@ -426,6 +428,24 @@ export class BackupManager {
       return { restored: toInfo(entry), safety, records, counts, warnings: check.warnings };
     } catch (err) {
       throw explain(err, "restore the backup");
+    }
+  }
+
+  /**
+   * Replace the whole database with `data` (the demo data reset), keeping
+   * the current contents as a safety backup. The backup and the replacement
+   * run in one exclusive section, like `restore()`: no change can be made
+   * after the backup is taken and then be discarded by the replacement.
+   */
+  async replaceWith(data: RawData, options: { source: string; reason: string; createdBy?: string }): Promise<BackupInfo> {
+    try {
+      return await this.engine.exclusive(async (ctx) => {
+        const saved = await this.write({ kind: "safety", reason: options.reason, createdBy: options.createdBy });
+        await ctx.replaceAll(data, options.source);
+        return saved;
+      });
+    } catch (err) {
+      throw explain(err, "replace the data");
     }
   }
 

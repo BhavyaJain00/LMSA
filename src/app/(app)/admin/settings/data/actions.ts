@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionResult } from "@/lib/types";
 import { createSession } from "@/lib/auth/session";
-import { getDb, resetDatabase } from "@/lib/db/store";
+import { buildDemoData, getDb } from "@/lib/db/store";
 import { getBackupManager, type IntegrityReport, type RestorePreview } from "@/lib/db/backup";
 import { authorizeBackupAdmin, backupActorLabel, describeBackupFailure } from "@/lib/db/backup-admin";
 import { audit } from "@/lib/audit";
@@ -158,9 +158,10 @@ export async function reloadDemoDataAction(_prev: ActionResult | null, formData:
   let safetyName: string;
   try {
     const manager = await getBackupManager();
-    const safety = await manager.create({ kind: "safety", reason: "Before reloading the demo data", createdBy: backupActorLabel(actor) });
+    const demo = await buildDemoData();
+    // The safety backup and the reset run as one exclusive step, so nothing saved in between is lost.
+    const safety = await manager.replaceWith(demo, { source: "demo-reset", reason: "Before reloading the demo data", createdBy: backupActorLabel(actor) });
     safetyName = safety.name;
-    await resetDatabase();
     await audit(actor, "data.reset", AUDIT_TARGET, { safetyBackup: safetyName });
   } catch (err) {
     return { ok: false, error: describeBackupFailure(err, "The demo data could not be reloaded. Nothing was changed.").error };

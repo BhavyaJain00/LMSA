@@ -538,10 +538,10 @@ describe("tax report", () => {
 
   it("exports the report as CSV", () => {
     const csv = taxReportToCsv(taxReport(db, { from: null, to: null, country: "GB" }).lines).split("\n");
-    assert.equal(csv[0], "Paid at,Invoice,Order,Billing name,Country,Tax,Rate %,Included in price,Net,Tax amount,Total,Currency,Refunded,Buyer VAT No.,Reverse charge");
+    assert.equal(csv[0], "Paid at,Invoice,Order,Billing name,Country,Tax,Rate %,Included in price,Net,Tax amount,Total,Currency,Refunded,Buyer VAT No.,Reverse charge,VAT No. verified (VIES)");
     assert.equal(csv.length, 3);
-    // No buyer VAT number and no reverse charge on these sales: the last two cells are empty and "no".
-    assert.ok(csv.some((l) => l.includes('"Jo, ""Jr"""') && l.endsWith(",VAT,20,no,100.00,20.00,120.00,USD,no,,no")));
+    // No buyer VAT number and no reverse charge on these sales: the VAT cells are empty, "no" and empty.
+    assert.ok(csv.some((l) => l.includes('"Jo, ""Jr"""') && l.endsWith(",VAT,20,no,100.00,20.00,120.00,USD,no,,no,")));
   });
 
   it("lists the items that can carry fixed prices", () => {
