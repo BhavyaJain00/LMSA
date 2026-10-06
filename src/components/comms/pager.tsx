@@ -29,7 +29,7 @@ export function Pager({
       </p>
       <div className="flex gap-2">
         {page > 1 ? (
-          <ButtonLink href={hrefFor(page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4" />}>
+          <ButtonLink href={hrefFor(page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
             Previous
           </ButtonLink>
         ) : (
@@ -38,7 +38,7 @@ export function Pager({
           </span>
         )}
         {page < pageCount ? (
-          <ButtonLink href={hrefFor(page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4" />}>
+          <ButtonLink href={hrefFor(page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}>
             Next
           </ButtonLink>
         ) : (

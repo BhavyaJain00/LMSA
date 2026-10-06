@@ -49,7 +49,7 @@ export function AiSetupNotice({ reason, isAdmin, courseSettingsHref, compact, cl
           <p className="mt-1 text-xs text-ink-faint">Only course staff see this message.</p>
           {href && (
             <Link href={href} className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-              {linkLabel} <Icon.ArrowRight className="size-3.5" />
+              {linkLabel} <Icon.ArrowRight className="size-3.5 rtl:rotate-180" />
             </Link>
           )}
         </div>

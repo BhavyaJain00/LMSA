@@ -26,7 +26,7 @@ export function PeerReviewList({ rows, rubric, reviewerOptions }: { rows: StaffR
           <div className="min-w-0 flex-1">
             <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
               <span className="font-medium text-ink">{r.reviewer.name}</span>
-              <Icon.ArrowRight className="size-3.5 shrink-0 text-ink-faint" aria-hidden="true" />
+              <Icon.ArrowRight className="size-3.5 shrink-0 text-ink-faint rtl:rotate-180" aria-hidden="true" />
               <span className="sr-only">reviews the work of</span>
               <Link href={`/admin/assignments/submissions/${r.submissionId}`} className="font-medium text-ink hover:underline">
                 {r.author.name}

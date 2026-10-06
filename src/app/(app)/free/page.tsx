@@ -130,7 +130,7 @@ export default async function FreeResourcesPage() {
               </h2>
               <p className="mt-1 text-sm text-ink-muted">Complete courses you can take at no cost.</p>
             </div>
-            <ButtonLink href="/courses" variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4" />}>
+            <ButtonLink href="/courses" variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
               All courses
             </ButtonLink>
           </div>
@@ -144,7 +144,7 @@ export default async function FreeResourcesPage() {
             <h2 id="free-articles" className="text-2xl font-semibold tracking-tight text-ink">
               Free guides on the blog
             </h2>
-            <ButtonLink href="/blog" variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4" />}>
+            <ButtonLink href="/blog" variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
               All articles
             </ButtonLink>
           </div>

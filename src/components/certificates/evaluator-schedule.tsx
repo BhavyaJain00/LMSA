@@ -115,13 +115,13 @@ export function EvaluatorSchedule({
           </h3>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon-sm" aria-label="Previous" title="Previous week" onClick={() => setWeekStart(addDaysToKey(weekStart, -7))}>
-              <Icon.ChevronLeft className="size-4" />
+              <Icon.ChevronLeft className="size-4 rtl:rotate-180" />
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setWeekStart(startOfWeekKey(today))} disabled={weekStart === startOfWeekKey(today)}>
               Today
             </Button>
             <Button variant="ghost" size="icon-sm" aria-label="Next" title="Next week" onClick={() => setWeekStart(addDaysToKey(weekStart, 7))}>
-              <Icon.ChevronRight className="size-4" />
+              <Icon.ChevronRight className="size-4 rtl:rotate-180" />
             </Button>
           </div>
         </div>

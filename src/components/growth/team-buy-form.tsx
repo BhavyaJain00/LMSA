@@ -194,7 +194,7 @@ export function TeamBuyForm({ courses, team, checkoutReady, defaultName = "", de
             {!quoted.ok && chosen.length > 0 && seats > 0 && <FormError message={quoted.error} />}
             <div className="space-y-2">
               {checkoutReady && (
-                <Button type="submit" name="mode" value="checkout" className="w-full" loading={pending} disabled={!quoted.ok} rightIcon={<Icon.ArrowRight className="size-4" />}>
+                <Button type="submit" name="mode" value="checkout" className="w-full" loading={pending} disabled={!quoted.ok} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                   Continue to checkout
                 </Button>
               )}

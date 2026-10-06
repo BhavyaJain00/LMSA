@@ -116,7 +116,7 @@ function Pagination({ page, pageCount, total, noun, href }: { page: number; page
       {pageCount > 1 && (
         <div className="flex items-center gap-2">
           {page > 1 && (
-            <ButtonLink href={href(page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4" />}>
+            <ButtonLink href={href(page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
               Newer
             </ButtonLink>
           )}
@@ -124,7 +124,7 @@ function Pagination({ page, pageCount, total, noun, href }: { page: number; page
             Page {page} of {pageCount}
           </span>
           {page < pageCount && (
-            <ButtonLink href={href(page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4" />}>
+            <ButtonLink href={href(page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}>
               Older
             </ButtonLink>
           )}

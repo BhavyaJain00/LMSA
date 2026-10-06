@@ -48,11 +48,11 @@ export default async function VideoAnalyticsPage(props: PageProps<"/admin/course
             <Link href="/admin/courses" className="hover:text-ink hover:underline">
               Courses
             </Link>
-            <Icon.ChevronRight className="size-3.5" />
+            <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
             <Link href={`/admin/courses/${course.id}?tab=dashboard`} className="max-w-60 truncate hover:text-ink hover:underline">
               {course.title}
             </Link>
-            <Icon.ChevronRight className="size-3.5" />
+            <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
             <span className="text-ink" aria-current="page">
               Video analytics
             </span>
@@ -61,7 +61,7 @@ export default async function VideoAnalyticsPage(props: PageProps<"/admin/course
         title="Video analytics"
         description="See how far learners get in each video, where they drop off and which parts they replay."
         actions={
-          <ButtonLink href={`/admin/courses/${course.id}?tab=dashboard`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          <ButtonLink href={`/admin/courses/${course.id}?tab=dashboard`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
             Course dashboard
           </ButtonLink>
         }

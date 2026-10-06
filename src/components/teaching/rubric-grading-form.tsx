@@ -160,7 +160,7 @@ export function RubricGradingForm({
           )}
           {nextHref && (
             <Link href={nextHref} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-              Next to grade <Icon.ArrowRight className="size-4" />
+              Next to grade <Icon.ArrowRight className="size-4 rtl:rotate-180" />
             </Link>
           )}
         </div>

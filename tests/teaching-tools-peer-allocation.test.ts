@@ -118,7 +118,7 @@ describe("first allocation (balanced round-robin)", () => {
 });
 
 describe("incremental allocation (rolling submissions)", () => {
-  it("keeps every submitter at k reviews to write as learners submit one by one", () => {
+  it("never gives a submission or a reviewer more than k as learners submit one by one", () => {
     for (const wanted of [1, 2, 3]) {
       const everyone = cohort(10);
       const existing: PeerPair[] = [];
@@ -129,34 +129,59 @@ describe("incremental allocation (rolling submissions)", () => {
         assertSound(submissions, existing);
         const k = Math.min(wanted, n - 1);
         const { received, load } = tally(submissions, existing);
-        for (const s of submissions) assert.equal(load.get(s.authorId), k, `k=${wanted}, ${n} submitted: ${s.authorId} has ${k} reviews to write`);
-        // Earlier submissions are covered by the learners who submitted after them.
-        for (const s of submissions.slice(0, Math.max(0, n - 1 - k))) assert.ok(received.get(s.id)! >= k, `k=${wanted}, ${n} submitted: ${s.id} has its ${k} reviewers`);
-        const counts = [...received.values()];
-        assert.equal(counts.reduce((a, b) => a + b, 0), n * k);
+        for (const s of submissions) {
+          assert.ok(received.get(s.id)! <= k, `k=${wanted}, ${n} submitted: ${s.id} is not reviewed more than ${k} times`);
+          assert.ok(load.get(s.authorId)! <= k, `k=${wanted}, ${n} submitted: ${s.authorId} has at most ${k} reviews to write`);
+        }
+        // Everyone but the latest few submitters is fully paired: k reviews received and k to write.
+        for (const s of submissions.slice(0, Math.max(0, n - k))) {
+          assert.equal(received.get(s.id), k, `k=${wanted}, ${n} submitted: ${s.id} has its ${k} reviewers`);
+          assert.equal(load.get(s.authorId), k, `k=${wanted}, ${n} submitted: ${s.authorId} has ${k} reviews to write`);
+        }
       }
       // Planning again without new submissions changes nothing.
       assert.deepEqual(planPeerAssignments({ submissions: everyone, existing, reviewsPerSubmission: wanted, seed: "asg_roll" }), []);
     }
   });
 
-  it("gives the last submitter reviewers once their submission may overflow", () => {
+  it("keeps the spread even for a long rolling cohort (no early submission reviewed twice as often)", () => {
+    for (const wanted of [2, 3]) {
+      const everyone = cohort(9);
+      const existing: PeerPair[] = [];
+      for (let n = 1; n <= everyone.length; n++) existing.push(...planPeerAssignments({ submissions: everyone.slice(0, n), existing, reviewsPerSubmission: wanted, seed: "asg_even" }));
+      const { received } = tally(everyone, existing);
+      assert.ok(Math.max(...received.values()) <= wanted, `k=${wanted}: received ${[...received.values()]}`);
+    }
+  });
+
+  it("gives the last submitter reviewers and reviews to write once their submission may overflow", () => {
     const submissions = cohort(5);
     const existing = planPeerAssignments({ submissions: submissions.slice(0, 4), existing: [], reviewsPerSubmission: 2, seed: "asg_o" });
     const late = submissions[4]!;
 
     const first = planPeerAssignments({ submissions, existing, reviewsPerSubmission: 2, seed: "asg_o" });
-    assert.ok(first.every((p) => p.reviewerId === late.authorId), "everyone else already has a full load: only the newcomer gets work");
-    assert.equal(first.length, 2);
-    const waiting = [...existing, ...first];
-    assert.equal(tally(submissions, waiting).received.get(late.id), 0);
+    assert.deepEqual(first, [], "everyone is fully reviewed and fully loaded: the newcomer waits for the next classmate");
 
-    const topUp = planPeerAssignments({ submissions, existing: waiting, reviewsPerSubmission: 2, seed: "asg_o", overflow: new Set([late.id]) });
-    assertSound(submissions, [...waiting, ...topUp]);
-    assert.equal(topUp.length, 2);
-    assert.ok(topUp.every((p) => p.submissionId === late.id));
-    const { load } = tally(submissions, [...waiting, ...topUp]);
+    const topUp = planPeerAssignments({ submissions, existing, reviewsPerSubmission: 2, seed: "asg_o", overflow: new Set([late.id]) });
+    assertSound(submissions, [...existing, ...topUp]);
+    assert.equal(topUp.filter((p) => p.submissionId === late.id).length, 2, "the late submission gets its two reviewers");
+    assert.equal(topUp.filter((p) => p.reviewerId === late.authorId).length, 2, "and the late submitter gets two reviews to write");
+    const { load, received } = tally(submissions, [...existing, ...topUp]);
     assert.ok(Math.max(...load.values()) <= 3, "the extra reviews are spread: nobody gets more than one on top");
+    assert.ok(Math.max(...received.values()) <= 3);
+  });
+
+  it("pairs a waiting newcomer with the next one to submit", () => {
+    const submissions = cohort(6);
+    const existing = planPeerAssignments({ submissions: submissions.slice(0, 4), existing: [], reviewsPerSubmission: 2, seed: "asg_p" });
+    assert.deepEqual(planPeerAssignments({ submissions: submissions.slice(0, 5), existing, reviewsPerSubmission: 2, seed: "asg_p" }), []);
+    const added = planPeerAssignments({ submissions, existing, reviewsPerSubmission: 2, seed: "asg_p" });
+    assertSound(submissions, [...existing, ...added]);
+    const { load, received } = tally(submissions, [...existing, ...added]);
+    for (const s of submissions) {
+      assert.equal(received.get(s.id), 2);
+      assert.equal(load.get(s.authorId), 2);
+    }
   });
 
   it("replaces a removed reviewer without ever recreating the excluded pair", () => {

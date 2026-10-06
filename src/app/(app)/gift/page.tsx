@@ -107,7 +107,7 @@ export default async function GiftPage(props: PageProps<"/gift">) {
                       <p className="text-sm text-ink-muted">From {g.purchaserName}</p>
                     </div>
                     {g.status === "redeemed" ? (
-                      <ButtonLink href={g.href} variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4" />}>
+                      <ButtonLink href={g.href} variant="outline" size="sm" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                         Open
                       </ButtonLink>
                     ) : (

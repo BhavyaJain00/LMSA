@@ -88,7 +88,7 @@ export default async function QuizSubmissionsPage(props: PageProps<"/admin/quizz
           <span className="flex-1">
             <span className="font-medium">{pendingCount}</span> {pendingCount === 1 ? "attempt is" : "attempts are"} waiting for grading
           </span>
-          <Icon.ArrowRight className="size-4 text-ink-muted" />
+          <Icon.ArrowRight className="size-4 text-ink-muted rtl:rotate-180" />
         </Link>
       )}
 

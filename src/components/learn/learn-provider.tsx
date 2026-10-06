@@ -133,7 +133,7 @@ export function LearnProvider({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => setZen(false)}
-          className="fixed right-3 top-3 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-surface-1/90 px-3 py-1.5 text-xs font-medium text-ink-muted shadow-card backdrop-blur transition-colors hover:text-ink animate-fade-in"
+          className="fixed end-3 top-3 z-50 inline-flex items-center gap-2 rounded-full border border-border bg-surface-1/90 px-3 py-1.5 text-xs font-medium text-ink-muted shadow-card backdrop-blur transition-colors hover:text-ink animate-fade-in"
         >
           <FocusExitIcon className="size-4" />
           {t("learn.zen.exit")}

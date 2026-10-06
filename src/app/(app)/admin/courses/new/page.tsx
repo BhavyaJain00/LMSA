@@ -37,7 +37,7 @@ export default async function NewCoursePage() {
             <Link href="/admin/courses" className="hover:text-ink hover:underline">
               Courses
             </Link>
-            <Icon.ChevronRight className="size-3.5" />
+            <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
             <span className="text-ink">New</span>
           </nav>
         }

@@ -56,21 +56,21 @@ export function CueList({
           </span>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="xs" onClick={() => onPage(0)} disabled={page === 0} aria-label="First page">
-              <Icon.ChevronLeft className="size-3.5" />
-              <Icon.ChevronLeft className="-ml-2.5 size-3.5" />
+              <Icon.ChevronLeft className="size-3.5 rtl:rotate-180" />
+              <Icon.ChevronLeft className="-ms-2.5 size-3.5 rtl:rotate-180" />
             </Button>
-            <Button variant="ghost" size="xs" onClick={() => onPage(page - 1)} disabled={page === 0} leftIcon={<Icon.ChevronLeft className="size-3.5" />}>
+            <Button variant="ghost" size="xs" onClick={() => onPage(page - 1)} disabled={page === 0} leftIcon={<Icon.ChevronLeft className="size-3.5 rtl:rotate-180" />}>
               Previous
             </Button>
             <span className="px-1.5 tabular-nums" aria-current="page">
               Page {page + 1} of {pages}
             </span>
-            <Button variant="ghost" size="xs" onClick={() => onPage(page + 1)} disabled={page >= pages - 1} rightIcon={<Icon.ChevronRight className="size-3.5" />}>
+            <Button variant="ghost" size="xs" onClick={() => onPage(page + 1)} disabled={page >= pages - 1} rightIcon={<Icon.ChevronRight className="size-3.5 rtl:rotate-180" />}>
               Next
             </Button>
             <Button variant="ghost" size="xs" onClick={() => onPage(pages - 1)} disabled={page >= pages - 1} aria-label="Last page">
-              <Icon.ChevronRight className="size-3.5" />
-              <Icon.ChevronRight className="-ml-2.5 size-3.5" />
+              <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
+              <Icon.ChevronRight className="-ms-2.5 size-3.5 rtl:rotate-180" />
             </Button>
           </div>
         </nav>

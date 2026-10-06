@@ -6,12 +6,17 @@
  * headless browsers and HTTP libraries are not visitors; counting them would
  * inflate clicks and skew funnels. An empty user agent is treated as a bot
  * too — every real browser sends one.
+ *
+ * Crawlers are matched by their crawler names, never by a brand alone: the
+ * DuckDuckGo browser ("DuckDuckGo/5") and Pinterest's in-app browser
+ * ("[Pinterest/iOS]") are real people.
  */
 
 const BOT_PATTERN = new RegExp(
   [
-    "bot\\b",
-    "bot/",
+    // Words ending in "bot" (Googlebot, PinterestBot, DuckDuckBot, ...), but not the Cubot phone brand.
+    "(?<!cu)bot\\b",
+    "(?<!cu)bot/",
     "crawl",
     "spider",
     "slurp",
@@ -23,7 +28,6 @@ const BOT_PATTERN = new RegExp(
     "embedly",
     "quora link",
     "outbrain",
-    "pinterest",
     "vkshare",
     "w3c_validator",
     "whatsapp",
@@ -69,7 +73,6 @@ const BOT_PATTERN = new RegExp(
     "chrome-lighthouse",
     "yandex",
     "baiduspider",
-    "duckduckgo",
     "petalbot",
     "bytespider",
     "gptbot",

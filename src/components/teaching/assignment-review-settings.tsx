@@ -13,7 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import { submitWithoutReset } from "@/components/assessments/form-submit";
 import { NotSavedBadge } from "@/components/assessments/status-badges";
 import { LocalDateTime } from "@/components/assessments/client-time";
-import { PEER_LIMITS, type PeerConfig } from "@/lib/teaching/peer-shared";
+import { PEER_LIMITS, isAnonymityLocked, type PeerConfig } from "@/lib/teaching/peer-shared";
 
 /**
  * "Rubric & peer review" card on the assignment edit page: pick the rubric
@@ -55,6 +55,7 @@ export function AssignmentReviewSettings({
     return res;
   }, null);
   const errors = state && !state.ok ? state.fieldErrors : undefined;
+  const anonymityLocked = isAnonymityLocked(peer, stats.assigned);
 
   return (
     <form onSubmit={submitWithoutReset(action)} onChange={() => setDirty(true)} noValidate>
@@ -136,13 +137,33 @@ export function AssignmentReviewSettings({
                     />
                   </Field>
                 </div>
-                <Switch
-                  id="review-anonymous"
-                  name="anonymous"
-                  defaultChecked={peer.anonymous}
-                  label="Anonymous"
-                  description="Reviewers and authors don't see each other's names. Instructors always do."
-                />
+                {anonymityLocked ? (
+                  <>
+                    {/* A disabled checkbox is not submitted: send the locked value explicitly. */}
+                    <input type="hidden" name="anonymous" value="on" />
+                    <Switch
+                      id="review-anonymous"
+                      checked
+                      disabled
+                      readOnly
+                      label="Anonymous"
+                      description="Reviewers and authors don't see each other's names. Instructors always do. Reviews were already handed out anonymously, so this stays on to keep that promise."
+                    />
+                  </>
+                ) : (
+                  <Switch
+                    id="review-anonymous"
+                    name="anonymous"
+                    defaultChecked={peer.anonymous}
+                    label="Anonymous"
+                    description="Reviewers and authors don't see each other's names. Instructors always do."
+                  />
+                )}
+                {errors?.anonymous && (
+                  <p className="text-xs text-danger" role="alert">
+                    {errors.anonymous}
+                  </p>
+                )}
                 <Switch
                   id="review-required"
                   name="requiredForCompletion"
@@ -167,7 +188,7 @@ export function AssignmentReviewSettings({
           <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
             {peer.enabled ? (
               <Link href={`/peer-reviews/manage/${assignmentId}`} className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
-                Manage peer reviews ({stats.completed} of {stats.assigned} done) <Icon.ArrowRight className="size-4" aria-hidden="true" />
+                Manage peer reviews ({stats.completed} of {stats.assigned} done) <Icon.ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
               </Link>
             ) : (
               <span />

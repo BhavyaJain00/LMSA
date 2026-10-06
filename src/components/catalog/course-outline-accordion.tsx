@@ -219,8 +219,9 @@ export function CourseOutlineAccordion({
                 >
                   <Icon.ChevronRight
                     className={cn(
-                      "size-4 shrink-0 text-ink-muted transition-transform duration-200 motion-reduce:transition-none rtl:rotate-180",
-                      isOpen && "rotate-90 rtl:rotate-90",
+                      "size-4 shrink-0 text-ink-muted transition-transform duration-200 motion-reduce:transition-none",
+                      // Closed: points toward the inline end (flipped in RTL). Open: points down in both directions.
+                      isOpen ? "rotate-90" : "rtl:rotate-180",
                     )}
                     aria-hidden="true"
                   />

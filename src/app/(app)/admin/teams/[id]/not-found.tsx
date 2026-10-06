@@ -9,7 +9,7 @@ export default function AdminTeamNotFound() {
       title="Team not found"
       description="This team doesn't exist anymore, or the link is wrong."
       action={
-        <ButtonLink href="/admin/teams" variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+        <ButtonLink href="/admin/teams" variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
           All teams
         </ButtonLink>
       }

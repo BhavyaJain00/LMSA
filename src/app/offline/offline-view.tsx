@@ -247,7 +247,7 @@ export function OfflineView({ brandName, tagline, logoUrl }: { brandName: string
                             {page.savedLabel && ` · saved ${page.savedLabel}`}
                           </span>
                         </span>
-                        <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint" />
+                        <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint rtl:rotate-180" />
                       </a>
                     </li>
                   ))}

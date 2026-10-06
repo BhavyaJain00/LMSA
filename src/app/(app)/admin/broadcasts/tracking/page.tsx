@@ -279,14 +279,14 @@ export default async function EmailTrackingPage(props: PageProps<"/admin/broadca
             </p>
             <div className="flex gap-2">
               {events.page > 1 ? (
-                <ButtonLink href={`/admin/broadcasts/tracking${query(filters, { page: events.page - 1 })}`} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4" />}>
+                <ButtonLink href={`/admin/broadcasts/tracking${query(filters, { page: events.page - 1 })}`} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
                   Newer
                 </ButtonLink>
               ) : (
                 <span className="inline-flex h-8 items-center rounded-lg border border-border px-3 text-ink-faint">Newer</span>
               )}
               {events.page < events.pageCount ? (
-                <ButtonLink href={`/admin/broadcasts/tracking${query(filters, { page: events.page + 1 })}`} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4" />}>
+                <ButtonLink href={`/admin/broadcasts/tracking${query(filters, { page: events.page + 1 })}`} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}>
                   Older
                 </ButtonLink>
               ) : (

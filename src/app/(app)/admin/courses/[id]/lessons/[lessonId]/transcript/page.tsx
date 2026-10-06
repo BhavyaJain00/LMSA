@@ -50,15 +50,15 @@ export default async function TranscriptEditorPage(props: PageProps<"/admin/cour
       <Link href="/admin/courses" className="hidden shrink-0 hover:text-ink hover:underline sm:inline">
         Courses
       </Link>
-      <Icon.ChevronRight className="hidden size-3.5 shrink-0 sm:block" />
+      <Icon.ChevronRight className="hidden size-3.5 shrink-0 sm:block rtl:rotate-180" />
       <Link href={`/admin/courses/${course.id}?tab=outline`} className="max-w-[40%] truncate hover:text-ink hover:underline">
         {course.title}
       </Link>
-      <Icon.ChevronRight className="size-3.5 shrink-0" />
+      <Icon.ChevronRight className="size-3.5 shrink-0 rtl:rotate-180" />
       <Link href={lessonEditHref} className="min-w-0 truncate hover:text-ink hover:underline">
         {lesson.title}
       </Link>
-      <Icon.ChevronRight className="size-3.5 shrink-0" />
+      <Icon.ChevronRight className="size-3.5 shrink-0 rtl:rotate-180" />
       <span className="shrink-0 text-ink">Transcript</span>
     </nav>
   );
@@ -72,7 +72,7 @@ export default async function TranscriptEditorPage(props: PageProps<"/admin/cour
           title="This lesson has no video"
           description="Transcripts belong to a lesson video. Add a video block in the lesson editor, then come back to write or generate its transcript."
           action={
-            <ButtonLink href={lessonEditHref} leftIcon={<Icon.ArrowLeft className="size-4" />}>
+            <ButtonLink href={lessonEditHref} leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
               Back to the lesson editor
             </ButtonLink>
           }
@@ -100,7 +100,7 @@ export default async function TranscriptEditorPage(props: PageProps<"/admin/cour
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <ButtonLink href={lessonEditHref} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          <ButtonLink href={lessonEditHref} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
             Lesson editor
           </ButtonLink>
           {learnHref && (
@@ -141,7 +141,7 @@ export default async function TranscriptEditorPage(props: PageProps<"/admin/cour
           title="This video block has no file yet"
           description="Upload a video or paste its address in the lesson editor first. The transcript is timed against that file."
           action={
-            <ButtonLink href={lessonEditHref} leftIcon={<Icon.ArrowLeft className="size-4" />}>
+            <ButtonLink href={lessonEditHref} leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
               Back to the lesson editor
             </ButtonLink>
           }

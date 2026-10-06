@@ -594,7 +594,7 @@ async function enrollInTeamCourses(userId: string, courseIds: readonly string[])
   for (const courseId of courseIds) await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
 }
 
-export type JoinProblem = "invalid" | "expired" | "revoked" | "used" | "full" | "already_member" | "disabled";
+export type JoinProblem = "invalid" | "expired" | "revoked" | "used" | "full" | "already_member" | "disabled" | "wrong_account";
 
 export const JOIN_PROBLEM_MESSAGES: Record<JoinProblem, string> = {
   invalid: "This invitation link is not valid. Check that you opened the latest invitation email, or ask your team manager for a new one.",
@@ -604,7 +604,14 @@ export const JOIN_PROBLEM_MESSAGES: Record<JoinProblem, string> = {
   full: "This team has no free seat right now. Ask your team manager to free one up.",
   already_member: "You already have a seat on this team.",
   disabled: "Your account can't accept invitations right now.",
+  wrong_account:
+    "This invitation is for another email address. Sign in with the account that uses the invited address, or ask your team manager to send the seat to your account's address.",
 };
+
+/** Whether `account` is the one an invitation to `seat.email` was meant for (its current address, any case). */
+export function inviteMatchesAccount(seat: Pick<OrgSeat, "email">, account: Pick<User, "email">): boolean {
+  return seat.email.trim().toLowerCase() === account.email.trim().toLowerCase();
+}
 
 /** The seat an invitation token belongs to (constant-time comparison over the stored hashes). */
 function seatForToken(d: Pick<Database, "orgSeats">, rawToken: string): OrgSeat | undefined {
@@ -671,7 +678,12 @@ export async function pendingInvitesFor(user: Pick<User, "id" | "email" | "email
 
 export type AcceptResult = { ok: true; team: { id: string; name: string }; courses: TeamCourseView[] } | { ok: false; problem: JoinProblem };
 
-/** Turn an invitation into the member's seat (inside one serialized write), then enroll them. */
+/**
+ * Turn an invitation into the member's seat (inside one serialized write),
+ * then enroll them. The seat only goes to the account that uses the invited
+ * address (read from the stored account, never from the caller): a
+ * forwarded or leaked link cannot hand a paid seat to someone else.
+ */
 async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pick<User, "id" | "name">, now: Date): Promise<AcceptResult> {
   const outcome = await mutate((d) => {
     const seat = find(d);
@@ -680,6 +692,7 @@ async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pi
     if (problem || !seat || !org) return { problem: problem ?? ("invalid" as const) };
     const account = d.users.find((u) => u.id === user.id);
     if (!account?.enabled) return { problem: "disabled" as const };
+    if (!inviteMatchesAccount(seat, account)) return { problem: "wrong_account" as const };
     const seats = d.orgSeats.filter((s) => s.orgId === org.id);
     if (seats.some((s) => s.id !== seat.id && s.status === "active" && s.userId === user.id)) return { problem: "already_member" as const };
     if (seats.filter((s) => s.status === "active").length >= org.seatCount) return { problem: "full" as const };
@@ -701,7 +714,7 @@ async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pi
   return { ok: true, team: { id: org.id, name: org.name }, courses };
 }
 
-/** Accept the invitation behind an emailed link. Single use: the seat is bound to the account that accepts it. */
+/** Accept the invitation behind an emailed link, with the account that uses the invited address. Single use. */
 export async function acceptInvite(rawToken: string, user: Pick<User, "id" | "name">, now: Date = new Date()): Promise<AcceptResult> {
   return activateSeat((d) => seatForToken(d, rawToken), user, now);
 }

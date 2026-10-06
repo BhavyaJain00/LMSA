@@ -42,11 +42,11 @@ export default async function LessonEditorPage(props: PageProps<"/admin/courses/
         <Link href="/admin/courses" className="shrink-0 hover:text-ink hover:underline">
           Courses
         </Link>
-        <Icon.ChevronRight className="size-3.5 shrink-0" />
+        <Icon.ChevronRight className="size-3.5 shrink-0 rtl:rotate-180" />
         <Link href={outlineHref} className="truncate hover:text-ink hover:underline">
           {course.title}
         </Link>
-        <Icon.ChevronRight className="size-3.5 shrink-0" />
+        <Icon.ChevronRight className="size-3.5 shrink-0 rtl:rotate-180" />
         <span className="truncate text-ink">{lesson.title}</span>
       </nav>
       <LessonEditor

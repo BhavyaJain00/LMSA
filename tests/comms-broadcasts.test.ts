@@ -39,7 +39,7 @@ import { deliverDueEmails } from "@/lib/email/outbox";
 import { resetEmailQuotas } from "@/lib/email/quota";
 import { getDb, mutate } from "@/lib/db/store";
 import { GET as cronGET } from "@/app/api/cron/comms/route";
-import { makeUser, resetDb } from "./helpers/db";
+import { makeCourse, makeUser, resetDb } from "./helpers/db";
 
 const T0 = Date.parse("2026-03-01T10:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -556,6 +556,25 @@ describe("scheduled broadcasts", () => {
     const note = (await getDb()).notifications.find((n) => n.userId === admin.id);
     assert.match(note?.subject ?? "", /was not sent/);
     assert.equal(note?.link, `/admin/broadcasts/${b.id}`);
+  });
+
+  it("refuse to start when a course of the audience was deleted after saving, instead of widening it", async () => {
+    await resetDb({ users: [admin, ...members(3)], courses: [makeCourse({ id: "crs_gone" })] });
+    const now = await draft({ segment: { notEnrolledCourseIds: ["crs_gone"] } });
+    const later = await draft({ segment: { notEnrolledCourseIds: ["crs_gone"] } });
+    assert.ok((await scheduleBroadcast(later.id, iso(T0 + 3_600_000), 60, T0)).ok);
+    await mutate((db) => {
+      db.courses = db.courses.filter((c) => c.id !== "crs_gone");
+    });
+    const started = await startBroadcast(now.id, { now: T0 });
+    assert.equal(started.ok, false);
+    assert.match((started as { error: string }).error, /no longer exists/);
+    assert.equal((await row(now.id)).status, "draft");
+
+    const run = await processBroadcasts(T0 + 3_600_000);
+    assert.equal(run.started, 0);
+    assert.equal((await row(later.id)).status, "draft", "the scheduled one goes back to a draft");
+    assert.equal((await campaignEmails(now.id)).length + (await campaignEmails(later.id)).length, 0, "nobody was emailed");
   });
 });
 

@@ -221,7 +221,7 @@ export function DeliveryLog({ rows, apiEnabled }: { rows: DeliveryRow[]; apiEnab
                 <time dateTime={row.createdAt} title={formatDateTime(row.createdAt)}>
                   {relativeTime(row.createdAt)}
                 </time>
-                <Icon.ChevronRight className="hidden size-4 text-ink-faint sm:block" />
+                <Icon.ChevronRight className="hidden size-4 text-ink-faint sm:block rtl:rotate-180" />
               </span>
             </button>
           </li>

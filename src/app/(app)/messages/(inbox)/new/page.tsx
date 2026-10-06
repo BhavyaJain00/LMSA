@@ -32,7 +32,7 @@ export default async function NewMessagePage(props: PageProps<"/messages/new">) 
     <section aria-labelledby="new-message-heading" className="rounded-card border border-border bg-surface-1 p-4 sm:p-6 lg:min-h-112">
       <div className="mb-5 flex items-center gap-2">
         <Link href="/messages" className="-ml-1 rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink lg:hidden" aria-label="Back to conversations">
-          <Icon.ArrowLeft className="size-5" />
+          <Icon.ArrowLeft className="size-5 rtl:rotate-180" />
         </Link>
         <h2 id="new-message-heading" className="text-lg font-semibold text-ink">
           New message

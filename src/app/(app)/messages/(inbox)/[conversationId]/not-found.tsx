@@ -9,7 +9,7 @@ export default function ConversationNotFound() {
       </span>
       <h2 className="text-base font-semibold text-ink">Conversation not found</h2>
       <p className="mt-1 max-w-sm text-sm text-ink-muted">It may have been removed, or you aren&apos;t part of it.</p>
-      <ButtonLink href="/messages" variant="outline" size="sm" className="mt-4" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+      <ButtonLink href="/messages" variant="outline" size="sm" className="mt-4" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
         Back to messages
       </ButtonLink>
     </div>

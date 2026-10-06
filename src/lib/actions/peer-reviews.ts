@@ -13,6 +13,8 @@ import { scoreRubric, type RubricSelection } from "@/lib/teaching/rubric-shared"
 import {
   PEER_LIMITS,
   activePeerConfig,
+  isAnonymityLocked,
+  nextAnonymity,
   normalizePeerConfig,
   peerReviewRequirements,
   reviewDueAt,
@@ -170,21 +172,30 @@ export async function saveAssignmentReviewSettingsAction(
       fieldErrors.dueDays = `Give reviewers between ${PEER_LIMITS.dueDaysMin} and ${PEER_LIMITS.dueDaysMax} days.`;
     }
   }
+  const previous = normalizePeerConfig(assignment.peerReview as PeerConfig | undefined);
+  const reviewCount = db.peerReviews.filter((r) => r.assignmentId === assignmentId).length;
+  const requestedAnonymous = enabled ? fdBool(formData, "anonymous") : previous.anonymous;
+  if (!requestedAnonymous && isAnonymityLocked(previous, reviewCount)) {
+    fieldErrors.anonymous = "Reviews were already handed out anonymously, so anonymity stays on for this assignment.";
+  }
   const keys = Object.keys(fieldErrors);
   if (keys.length) return { ok: false, error: fieldErrors[keys[0]!]!, fieldErrors };
 
-  const previous = normalizePeerConfig(assignment.peerReview as PeerConfig | undefined);
-  const peer = normalizePeerConfig({
+  let peer = normalizePeerConfig({
     enabled,
     reviewsPerSubmission: enabled ? reviews : previous.reviewsPerSubmission,
     dueDays: enabled ? dueDays : previous.dueDays,
-    anonymous: enabled ? fdBool(formData, "anonymous") : previous.anonymous,
+    anonymous: requestedAnonymous,
     requiredForCompletion: enabled ? fdBool(formData, "requiredForCompletion") : previous.requiredForCompletion,
     excluded: previous.excluded,
   });
   await mutate((d) => {
     const row = d.assignments.find((a) => a.id === assignmentId);
     if (!row) return;
+    // Re-check against the stored state: reviews may have been handed out since the read above.
+    const current = normalizePeerConfig(row.peerReview as PeerConfig | undefined);
+    const count = d.peerReviews.filter((r) => r.assignmentId === assignmentId).length;
+    peer = { ...peer, anonymous: nextAnonymity(current, count, peer.anonymous) };
     row.rubricId = rubricId || undefined;
     row.peerReview = peer;
     row.updatedAt = new Date().toISOString();

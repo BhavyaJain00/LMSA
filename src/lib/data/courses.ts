@@ -366,9 +366,14 @@ export function flattenOutline<L extends LessonWithState>(outline: { lessons: L[
   return outline.flatMap((c) => c.lessons);
 }
 
+/**
+ * Resolve a `<chapter>-<lesson>` ref against an outline. Lessons are matched by
+ * their `lessonNumber`, not their array position: a learner's outline leaves out
+ * scheduled lessons but keeps the numbering gapped, so positions shift.
+ */
 export function findLessonByNumbers(outline: ChapterWithLessons[], chapterNumber: number, lessonNumber: number): LessonWithState | null {
   const chapter = outline[chapterNumber - 1];
-  return chapter?.lessons[lessonNumber - 1] ?? null;
+  return chapter?.lessons.find((l) => l.lessonNumber === lessonNumber) ?? null;
 }
 
 /** Parse "2-3" into chapter/lesson numbers. */

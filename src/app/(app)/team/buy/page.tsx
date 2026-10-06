@@ -97,7 +97,7 @@ export default async function TeamBuyPage(props: PageProps<"/team/buy">) {
             title="These seats can't be bought online"
             description="The team's courses are free, no longer on sale, or priced in different currencies. Contact us and we'll add the seats for you."
             action={
-              <ButtonLink href={teamHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+              <ButtonLink href={teamHref} variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
                 Back to the team
               </ButtonLink>
             }

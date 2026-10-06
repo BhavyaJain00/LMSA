@@ -139,7 +139,7 @@ export function BundleCard({ bundle, headingLevel = "h2", priority, className }:
             </p>
             <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent" aria-hidden="true">
               View bundle
-              <Icon.ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+              <Icon.ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none rtl:rotate-180 rtl:group-hover:-translate-x-0.5" />
             </span>
           </div>
         </div>

@@ -9,7 +9,7 @@ export default function AffiliateNotFound() {
       title="Affiliate not found"
       description="This affiliate doesn't exist anymore, or the link is wrong."
       action={
-        <ButtonLink href="/admin/affiliates" variant="outline" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+        <ButtonLink href="/admin/affiliates" variant="outline" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
           All affiliates
         </ButtonLink>
       }

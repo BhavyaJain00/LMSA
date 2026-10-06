@@ -737,10 +737,10 @@ export function TranscriptEditor({ lessonId, lessonTitle, video, initial, initia
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <Button size="sm" variant="ghost" onClick={undo} disabled={!history.past.length} aria-label="Undo" title="Undo (Ctrl+Z)">
-                  <Icon.ArrowLeft className="size-4" />
+                  <Icon.ArrowLeft className="size-4 rtl:rotate-180" />
                 </Button>
                 <Button size="sm" variant="ghost" onClick={redo} disabled={!history.future.length} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">
-                  <Icon.ArrowRight className="size-4" />
+                  <Icon.ArrowRight className="size-4 rtl:rotate-180" />
                 </Button>
                 <Button size="sm" variant="outline" onClick={addAtPlayhead} leftIcon={<Icon.Plus className="size-4" />} title="New caption at the playhead (Alt+N)">
                   Add

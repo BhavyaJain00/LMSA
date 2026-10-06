@@ -4,6 +4,7 @@ import type { Conversation, DirectMessage, User } from "@/lib/types";
 import {
   DENY_MESSAGES,
   MESSAGE_LIMITS,
+  REPLY_BLOCKED_MESSAGES,
   MESSAGE_RATES,
   buildMessagingDirectory,
   canReply,
@@ -24,6 +25,7 @@ import {
   threadAccess,
   type DirectorySource,
   type MessagingMember,
+  type ReplyContext,
 } from "@/lib/comms/messages-core";
 import {
   buildThread,
@@ -110,13 +112,28 @@ describe("message permissions", () => {
     assert.equal((decideMessaging(ON, m("ann"), m("teacher"), d, "c2") as { courseId?: string }).courseId, "c1", "an unrelated course is ignored");
   });
 
+  const ctx = (over: Partial<ReplyContext> = {}): ReplyContext => ({
+    isEnabled: () => true,
+    isStaff: (id) => isMessagingStaff(m(id, id === "mod" ? ["moderator"] : ["student"]), dir),
+    areClassmates: (a, b) => [...(dir.learning.get(a) ?? [])].some((k) => dir.learning.get(b)?.has(k)),
+    ...over,
+  });
+
   it("lets any participant reply while messaging is on and someone else is still active", () => {
     const conversation = { participantIds: ["ann", "teacher"] };
-    const active = () => true;
-    assert.equal(canReply(ON, conversation, m("ann"), active).ok, true, "a learner can answer an instructor who wrote first");
-    assert.deepEqual(canReply(ON, conversation, m("eve"), active), { ok: false, reason: "not_allowed" });
-    assert.deepEqual(canReply(ON, conversation, m("ann"), () => false), { ok: false, reason: "unavailable" });
-    assert.deepEqual(canReply({ enabled: false }, conversation, m("ann"), active), { ok: false, reason: "disabled" });
+    assert.equal(canReply(ON, conversation, m("ann"), ctx()).ok, true, "a learner can answer an instructor who wrote first");
+    assert.deepEqual(canReply(ON, conversation, m("eve"), ctx()), { ok: false, reason: "not_allowed" });
+    assert.deepEqual(canReply(ON, conversation, m("ann"), ctx({ isEnabled: () => false })), { ok: false, reason: "unavailable" });
+    assert.deepEqual(canReply({ enabled: false, studentToStudent: true }, conversation, m("ann"), ctx()), { ok: false, reason: "disabled" });
+  });
+
+  it("applies the learner-to-learner rule to existing conversations too", () => {
+    const peers = { participantIds: ["ann", "bob"] };
+    assert.deepEqual(canReply(PEERS, peers, m("ann"), ctx()), { ok: true, via: "classmate" });
+    assert.deepEqual(canReply(ON, peers, m("ann"), ctx()), { ok: false, reason: "students_off" }, "switching the setting off stops old conversations");
+    assert.deepEqual(canReply(PEERS, { participantIds: ["ann", "cat"] }, m("ann"), ctx()), { ok: false, reason: "not_allowed" }, "no shared course any more");
+    assert.equal(canReply(ON, { participantIds: ["cat", "mod"] }, m("cat"), ctx()).ok, true, "conversations with staff stay open");
+    assert.equal(canReply(ON, { participantIds: ["ann", "teacher"] }, m("teacher"), ctx()).ok, true);
   });
 
   it("shows threads to participants, and to moderators only once reported", () => {
@@ -352,6 +369,30 @@ describe("starting and replying", () => {
     assert.equal(db.notifications.filter((n) => n.userId === teacher.id).length, 1, "the in-app notification still arrives");
   });
 
+  it("stops learner-to-learner replies once the setting is switched off or they stop sharing a course", async () => {
+    await seed({ studentToStudent: true });
+    const opened = await start(ann, bob, "Study group?");
+    assert.ok((await sendMessage(bob, opened.conversationId, "Sure")).ok);
+    await mutate((db) => {
+      db.settings.messaging.studentToStudent = false;
+    });
+    assert.deepEqual(await sendMessage(ann, opened.conversationId, "Still on?"), { ok: false, error: REPLY_BLOCKED_MESSAGES.students_off });
+    const viaStart = await startConversation(ann, { recipientId: bob.id, body: "Hello again" });
+    assert.equal(viaStart.ok, false, "starting again doesn't reopen the old conversation");
+    let db = await getDb();
+    assert.equal(messageLinkFor(db, ann, bob.id), null);
+    const thread = buildThread(db, bob, opened.conversationId);
+    assert.ok(thread.ok && thread.thread.replyBlocked === REPLY_BLOCKED_MESSAGES.students_off);
+
+    await mutate((d) => {
+      d.settings.messaging.studentToStudent = true;
+      d.enrollments = d.enrollments.filter((e) => e.userId !== bob.id);
+    });
+    assert.deepEqual(await sendMessage(ann, opened.conversationId, "Hi?"), { ok: false, error: REPLY_BLOCKED_MESSAGES.not_allowed });
+    db = await getDb();
+    assert.equal(db.directMessages.filter((x) => x.conversationId === opened.conversationId).length, 2, "nothing was added");
+  });
+
   it("rate limits bursts of messages", async () => {
     const opened = await start(teacher, ann);
     let blocked: string | null = null;
@@ -447,6 +488,39 @@ describe("inbox, threads and polling", () => {
     assert.equal(row.removedBy, mod.id);
     assert.equal(countUnreadMessages(await getDb(), teacher.id), 0);
   });
+
+  it("keeps the text of a removed message for moderators, so a sender can't erase reported evidence", async () => {
+    const opened = await start(teacher, ann, "You are useless, quit the course");
+    assert.ok((await reportConversation(ann, opened.conversationId, "Abusive message", opened.message.id)).ok);
+    assert.ok((await removeMessage(teacher, opened.message.id)).ok, "the sender may still hide it from the conversation");
+    const db = await getDb();
+    const stored = db.directMessages.find((x) => x.id === opened.message.id)!;
+    assert.equal(stored.body, "");
+    assert.equal(stored.removedBody, "You are useless, quit the course");
+
+    const modThread = buildThread(db, mod, opened.conversationId);
+    assert.ok(modThread.ok);
+    if (modThread.ok) {
+      const shown = modThread.thread.messages.find((x) => x.id === opened.message.id)!;
+      assert.equal(shown.removed, true);
+      assert.equal(shown.removedByRole, "sender");
+      assert.equal(shown.removedText, "You are useless, quit the course");
+      assert.equal(modThread.thread.report?.messageId, opened.message.id);
+    }
+    for (const viewer of [ann, teacher]) {
+      const t = buildThread(db, viewer, opened.conversationId);
+      assert.ok(t.ok);
+      if (t.ok) {
+        const shown = t.thread.messages.find((x) => x.id === opened.message.id)!;
+        assert.equal(shown.body, "");
+        assert.equal(shown.removedText, undefined, "participants never get the removed text");
+      }
+    }
+    const polled = await pollThread(mod, opened.conversationId, null, [], false);
+    assert.equal(polled?.messages.find((x) => x.id === opened.message.id)?.removedText, "You are useless, quit the course");
+    const participantPoll = await pollThread(ann, opened.conversationId, null, [], false);
+    assert.equal(participantPoll?.messages.find((x) => x.id === opened.message.id)?.removedText, undefined);
+  });
 });
 
 describe("recipients and message buttons", () => {
@@ -522,17 +596,61 @@ describe("reports and moderation", () => {
     const annThread = buildThread(db, ann, opened.conversationId);
     assert.ok(annThread.ok && annThread.thread.reportedByViewer && annThread.thread.report?.reason === undefined, "participants don't see the reason or reporter");
 
-    assert.equal(listReports(db).counts.open, 1);
-    assert.equal(listReports(db, { q: "advertising" }).rows.length, 1);
-    assert.equal(listReports(db, { q: "nothing-like-this" }).rows.length, 0);
+    assert.equal(listReports(db, mod.id).counts.open, 1);
+    assert.equal(listReports(db, mod.id, { q: "advertising" }).rows.length, 1);
+    assert.equal(listReports(db, mod.id, { q: "nothing-like-this" }).rows.length, 0);
     assert.equal((await resolveReport(ann, opened.conversationId)).ok, false);
     assert.ok((await resolveReport(mod, opened.conversationId)).ok);
     db = await getDb();
-    assert.deepEqual(listReports(db).counts, { open: 0, resolved: 1 });
-    assert.equal(listReports(db, { status: "resolved" }).rows[0].resolvedBy, "Moe Moderator");
-    const csv = reportCsvRows(db);
+    assert.deepEqual(listReports(db, mod.id).counts, { open: 0, resolved: 1 });
+    assert.equal(listReports(db, mod.id, { status: "resolved" }).rows[0].resolvedBy, "Moe Moderator");
+    const csv = reportCsvRows(db, mod.id);
     assert.equal(csv.length, 2);
     assert.equal(csv[1][7], "resolved");
     assert.ok(!csv.flat().some((cell) => cell.includes("Buy my other course")), "message bodies are not exported");
+  });
+
+  it("never tells the reported member that they were reported", async () => {
+    const opened = await start(teacher, ann, "Rude message");
+    assert.ok((await reportConversation(ann, opened.conversationId, "Harassment", opened.message.id)).ok);
+    const db = await getDb();
+    assert.equal(listInbox(db, ann.id).items[0].report, "open", "the reporter sees their own report");
+    assert.equal(listInbox(db, teacher.id).items[0].report, null, "the other participant sees nothing");
+    const reported = buildThread(db, teacher, opened.conversationId);
+    assert.ok(reported.ok);
+    if (reported.ok) {
+      assert.equal(reported.thread.report, null);
+      assert.equal(reported.thread.reportedByViewer, false);
+    }
+    const reporter = buildThread(db, ann, opened.conversationId);
+    assert.ok(reporter.ok);
+    if (reporter.ok) {
+      assert.equal(reporter.thread.report?.status, "open");
+      assert.equal(reporter.thread.report?.reportedBy, undefined);
+      assert.equal(reporter.thread.report?.messageId, undefined);
+    }
+    assert.equal(db.notifications.filter((n) => n.userId === teacher.id && /reported/i.test(n.subject)).length, 0);
+  });
+
+  it("leaves a report about a moderator to the other moderators", async () => {
+    await mutate((db) => {
+      db.users.push(makeUser({ id: "usr_mod2", username: "mod2", name: "Mia Moderator", email: "mod2@example.com", roles: ["moderator"] }));
+    });
+    const opened = await start(mod, cat, "Your profile breaks the rules.");
+    assert.ok((await reportConversation(cat, opened.conversationId, "The moderator is threatening me")).ok);
+    let db = await getDb();
+    assert.equal(db.notifications.filter((n) => n.userId === mod.id && n.subject === "A conversation was reported").length, 0, "the accused moderator isn't notified");
+    assert.equal(db.notifications.filter((n) => n.userId === "usr_mod2" && n.subject === "A conversation was reported").length, 1);
+    assert.equal(listReports(db, mod.id).counts.open, 0, "hidden from the accused moderator");
+    assert.equal(reportCsvRows(db, mod.id).length, 1, "only the header");
+    assert.equal(listReports(db, "usr_mod2").counts.open, 1);
+    const ownView = buildThread(db, mod, opened.conversationId);
+    assert.ok(ownView.ok && ownView.thread.access === "participant" && ownView.thread.report === null);
+
+    const own = await resolveReport(mod, opened.conversationId);
+    assert.equal(own.ok, false);
+    db = await getDb();
+    assert.equal(db.conversations.find((c) => c.id === opened.conversationId)?.reported, true, "still open");
+    assert.ok((await resolveReport(db.users.find((u) => u.id === "usr_mod2")!, opened.conversationId)).ok);
   });
 });

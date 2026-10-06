@@ -92,7 +92,7 @@ export default async function InvoicePage(props: PageProps<"/billing/invoice/[or
           actions={
             <>
               <PrintButton variant="primary" />
-              <ButtonLink href={orderHref} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+              <ButtonLink href={orderHref} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
                 Order details
               </ButtonLink>
               {dashboardUrl && (

@@ -67,7 +67,7 @@ class Parser {
       if (ch === "{" && depth < MAX_DEPTH) {
         const start = this.pos;
         this.pos++;
-        const arg = this.argument(depth);
+        const arg = this.argument(depth, inPlural);
         if (arg) {
           flush();
           nodes.push(arg);
@@ -82,8 +82,12 @@ class Parser {
     return nodes;
   }
 
-  /** After `{`: a placeholder up to and including its closing `}`, or null when malformed. */
-  argument(depth: number): Node | null {
+  /**
+   * After `{`: a placeholder up to and including its closing `}`, or null when malformed.
+   * `inPlural` is true inside a plural branch: a select nested there inherits it, so `#`
+   * in the select's branches is still the enclosing plural's number.
+   */
+  argument(depth: number, inPlural: boolean): Node | null {
     this.ws();
     const name = this.word();
     if (!name) return null;
@@ -140,7 +144,7 @@ class Parser {
       this.ws();
       if (this.src[this.pos] !== "{") return null;
       this.pos++;
-      const branch = this.message(depth + 1, plural);
+      const branch = this.message(depth + 1, plural || inPlural);
       if (this.src[this.pos] !== "}") return null;
       this.pos++;
       options[selector] = branch;

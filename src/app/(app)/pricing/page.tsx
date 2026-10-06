@@ -81,7 +81,7 @@ export default async function PricingPage() {
         title="Memberships aren't available right now"
         description="There are no membership plans on sale at the moment. You can still enroll in courses one by one."
         action={
-          <ButtonLink href="/courses" rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink href="/courses" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Browse courses
           </ButtonLink>
         }

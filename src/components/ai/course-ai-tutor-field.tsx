@@ -138,7 +138,7 @@ export function CourseAiTutorField({ courseId, state }: { courseId: string; stat
             {info.index.clarifications ? ` and ${formatNumber(info.index.clarifications)} instructor clarifications` : ""}.
           </span>
           <Link href={`/admin/ai?course=${courseId}&tab=recent`} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
-            Review answers <Icon.ArrowRight className="size-3.5" />
+            Review answers <Icon.ArrowRight className="size-3.5 rtl:rotate-180" />
           </Link>
         </div>
       )}

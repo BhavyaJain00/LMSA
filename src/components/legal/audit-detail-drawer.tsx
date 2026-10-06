@@ -142,7 +142,7 @@ export function AuditDetailDrawer({ detail, closeHref }: { detail: AuditDetail; 
                   </span>
                   {detail.target.href && (
                     <Link href={detail.target.href} className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline">
-                      Open <Icon.ArrowRight className="size-3.5" />
+                      Open <Icon.ArrowRight className="size-3.5 rtl:rotate-180" />
                     </Link>
                   )}
                 </>

@@ -9,7 +9,7 @@ export default function EmailNotFound() {
       title="Email not found"
       description="It may have been deleted or cleaned up from the outbox."
       action={
-        <ButtonLink href="/admin/emails" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+        <ButtonLink href="/admin/emails" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
           Back to the outbox
         </ButtonLink>
       }

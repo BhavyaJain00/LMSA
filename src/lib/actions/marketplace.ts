@@ -104,9 +104,18 @@ export async function rejectInstructorAction(_prev: ActionResult | null, formDat
   }
   const result = await reviewInstructorApplication(admin.id, id, { decision: "reject", reason });
   if (!result.ok) return { ok: false, error: result.error };
-  await audit(admin, "marketplace.reject", { type: "instructor", id }, { user: result.userName, from: result.previous });
+  await audit(admin, "marketplace.reject", { type: "instructor", id }, { user: result.userName, from: result.previous, roleRevoked: result.roleRevoked });
+  if (result.roleRevoked) await audit(admin, "user.roles", { type: "user", id: result.profile.userId }, { removed: "course_creator", reason: "instructor suspended" });
   revalidateMarketplace(id);
-  return { ok: true, data: undefined, message: result.previous === "approved" ? `${result.userName} was suspended` : `Application from ${result.userName} declined` };
+  revalidatePath("/admin/members");
+  if (result.previous !== "approved") return { ok: true, data: undefined, message: `Application from ${result.userName} declined` };
+  return {
+    ok: true,
+    data: undefined,
+    message: result.roleRevoked
+      ? `${result.userName} was suspended and can no longer create courses`
+      : `${result.userName} was suspended (they keep the course creator role they had before approval)`,
+  };
 }
 
 export async function updateInstructorTermsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {

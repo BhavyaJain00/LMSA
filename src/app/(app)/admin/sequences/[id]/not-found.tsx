@@ -9,7 +9,7 @@ export default function SequenceNotFound() {
       title="Sequence not found"
       description="It may have been deleted by another member of the team."
       action={
-        <ButtonLink href="/admin/sequences" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+        <ButtonLink href="/admin/sequences" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
           Back to sequences
         </ButtonLink>
       }

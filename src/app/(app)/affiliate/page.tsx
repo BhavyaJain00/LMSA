@@ -293,12 +293,12 @@ export default async function AffiliatePage(props: PageProps<"/affiliate">) {
                 </p>
                 <div className="flex gap-2">
                   {commissionsPage.page > 1 && (
-                    <ButtonLink href={pageHref(commissionsPage.page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4" />}>
+                    <ButtonLink href={pageHref(commissionsPage.page - 1)} variant="outline" size="sm" leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
                       Newer
                     </ButtonLink>
                   )}
                   {commissionsPage.page < commissionsPage.pageCount && (
-                    <ButtonLink href={pageHref(commissionsPage.page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4" />}>
+                    <ButtonLink href={pageHref(commissionsPage.page + 1)} variant="outline" size="sm" rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}>
                       Older
                     </ButtonLink>
                   )}

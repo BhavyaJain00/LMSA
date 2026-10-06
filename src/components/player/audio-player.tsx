@@ -63,7 +63,9 @@ export function AudioPlayer({ src, title, className }: { src: string; title?: st
       </button>
       <div className="min-w-0 flex-1">
         {title && <p className="mb-1 truncate text-sm font-medium text-ink">{title}</p>}
-        <div className="flex items-center gap-2">
+        {/* Media timelines run left to right in every language (as in VideoPlayer), so the native
+            thumb and the painted fill stay in step in right-to-left pages too. */}
+        <div dir="ltr" className="flex items-center gap-2">
           <span className="w-10 shrink-0 font-mono text-[11px] tabular-nums text-ink-muted">{formatTime(time)}</span>
           <input
             type="range"
@@ -76,7 +78,7 @@ export function AudioPlayer({ src, title, className }: { src: string; title?: st
             className="ll-range h-1 flex-1 cursor-pointer"
             style={{ background: `linear-gradient(to right, var(--accent) ${pct}%, var(--surface-3) ${pct}%)` }}
           />
-          <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-ink-muted">{formatTime(duration)}</span>
+          <span className="w-10 shrink-0 text-end font-mono text-[11px] tabular-nums text-ink-muted">{formatTime(duration)}</span>
         </div>
       </div>
       <button type="button" onClick={cycleRate} className="shrink-0 rounded-md px-2 py-1 font-mono text-xs text-ink-muted hover:bg-surface-2" title={t("global.player.speed")}>

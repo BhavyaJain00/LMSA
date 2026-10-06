@@ -166,7 +166,7 @@ export default async function ErrorDetailPage(props: PageProps<"/admin/errors/[i
       </div>
 
       <div className="mt-6">
-        <ButtonLink href="/admin/errors" variant="ghost" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+        <ButtonLink href="/admin/errors" variant="ghost" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
           Back to the error log
         </ButtonLink>
       </div>

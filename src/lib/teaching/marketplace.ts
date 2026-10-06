@@ -5,6 +5,7 @@ import { getDb, mutate } from "@/lib/db/store";
 import { notify, notifyMany } from "@/lib/services/notifications";
 import { formatPrice, uid } from "@/lib/utils";
 import { methodLabel } from "@/lib/growth/affiliates-shared";
+import { seatsOrderOf } from "@/lib/growth/teams-shared";
 import {
   allocateToCourses,
   earningTotals,
@@ -56,7 +57,11 @@ function adminIds(db: Pick<Database, "users">): string[] {
   return db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id);
 }
 
-/** Courses an order pays for, weighted by list price (for splitting a bundle). */
+/**
+ * Courses an order pays for (split by list price when there are several):
+ * a course, a bundle's courses, a gift's course or bundle, or the courses of
+ * the team a seats (B2B) order was bought for.
+ */
 function coursesOfOrder(db: Database, payment: Payment): Course[] {
   let itemType: string = payment.itemType;
   let itemId = payment.itemId;
@@ -66,8 +71,14 @@ function coursesOfOrder(db: Database, payment: Payment): Course[] {
     itemType = gift.itemType;
     itemId = gift.itemId;
   }
-  const ids = itemType === "course" ? [itemId] : itemType === "bundle" ? (db.bundles.find((b) => b.id === itemId)?.courseIds ?? []) : [];
-  return ids.map((id) => db.courses.find((c) => c.id === id)).filter((c): c is Course => !!c);
+  let ids: readonly string[] = [];
+  if (itemType === "course") ids = [itemId];
+  else if (itemType === "bundle") ids = db.bundles.find((b) => b.id === itemId)?.courseIds ?? [];
+  else if (itemType === "seats") {
+    const order = seatsOrderOf(payment);
+    ids = (order && db.organizations.find((o) => o.id === order.orgId)?.courseIds) || [];
+  }
+  return [...new Set(ids)].map((id) => db.courses.find((c) => c.id === id)).filter((c): c is Course => !!c);
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,13 +139,24 @@ export async function submitInstructorApplication(user: Pick<User, "id" | "name"
 
 export type ReviewDecision = { decision: "approve"; sharePercent: number } | { decision: "reject"; reason: string };
 export type ReviewResult =
-  | { ok: true; profile: InstructorProfile; previous: InstructorProfile["status"]; roleGranted: boolean; userName: string }
+  | {
+      ok: true;
+      profile: InstructorProfile;
+      previous: InstructorProfile["status"];
+      /** Approval added the course_creator role. */
+      roleGranted: boolean;
+      /** Suspension removed the course_creator role the approval had added. */
+      roleRevoked: boolean;
+      userName: string;
+    }
   | { ok: false; error: string };
 
 /**
  * Approve (with a revenue share; grants the course_creator role) or reject
  * (with a reason) an application. Approved instructors can also be moved to
- * rejected, which stops new earnings; earned money stays payable.
+ * rejected (suspended): new earnings stop, earned money stays payable, and the
+ * course_creator role is removed again when the approval was what granted it
+ * (a role held before applying is left alone).
  */
 export async function reviewInstructorApplication(adminId: string, profileId: string, review: ReviewDecision): Promise<ReviewResult> {
   const result = await mutate((d): ReviewResult => {
@@ -144,6 +166,7 @@ export async function reviewInstructorApplication(adminId: string, profileId: st
     if (!user) return { ok: false, error: "The applicant's account no longer exists." };
     const previous = profile.status;
     let roleGranted = false;
+    let roleRevoked = false;
     profile.reviewedAt = new Date().toISOString();
     if (review.decision === "approve") {
       profile.status = "approved";
@@ -152,12 +175,21 @@ export async function reviewInstructorApplication(adminId: string, profileId: st
       if (!user.roles.includes("course_creator") && !user.roles.includes("admin")) {
         user.roles = [...user.roles, "course_creator"];
         roleGranted = true;
+        // Remembered so a suspension takes back only what the approval gave.
+        profile.roleGranted = true;
       }
     } else {
       profile.status = "rejected";
       profile.rejectionReason = review.reason;
+      if (previous === "approved" && profile.roleGranted) {
+        if (user.roles.includes("course_creator")) {
+          user.roles = user.roles.filter((r) => r !== "course_creator");
+          roleRevoked = true;
+        }
+        profile.roleGranted = undefined;
+      }
     }
-    return { ok: true, profile: { ...profile }, previous, roleGranted, userName: user.name };
+    return { ok: true, profile: { ...profile }, previous, roleGranted, roleRevoked, userName: user.name };
   });
   if (!result.ok) return result;
   const p = result.profile;
@@ -224,7 +256,7 @@ export type CreditEarningsResult =
  * earns from their own purchase.
  */
 export async function creditEarnings(paymentId: string): Promise<CreditEarningsResult> {
-  const result = await mutate((d): CreditEarningsResult & { titles?: Map<string, string> } => {
+  const result = await mutate((d): CreditEarningsResult & { titles?: Map<string, string>; team?: boolean } => {
     if (!d.settings.marketplace.enabled) return { credited: false, reason: "disabled" };
     const payment = d.payments.find((p) => p.id === paymentId);
     if (!payment) return { credited: false, reason: "missing" };
@@ -263,7 +295,7 @@ export async function creditEarnings(paymentId: string): Promise<CreditEarningsR
     }
     if (!rows.length) return { credited: false, reason: "no_instructors" };
     d.earnings.push(...rows);
-    return { credited: true, earnings: rows.map((r) => ({ ...r })), titles };
+    return { credited: true, earnings: rows.map((r) => ({ ...r })), titles, team: payment.itemType === "seats" };
   });
 
   if (result.credited) {
@@ -275,7 +307,7 @@ export async function creditEarnings(paymentId: string): Promise<CreditEarningsR
       await notify(instructorId, {
         type: "system",
         subject: `You earned ${formatPrice(amount, rows[0].currency)} from a sale`,
-        message: `A learner bought ${titles.join(", ")}. The amount is added to your next payout.`,
+        message: `${result.team ? "A team bought seats for" : "A learner bought"} ${titles.join(", ")}. The amount is added to your next payout.`,
         link: "/teach/earnings",
         email: false,
         dedupeKey: `earning:${paymentId}:${instructorId}`,

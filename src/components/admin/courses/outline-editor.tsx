@@ -624,7 +624,7 @@ export function OutlineEditor({
                     aria-controls={`chapter-panel-${chapter.id}`}
                     className="flex min-w-0 flex-1 items-start gap-2 rounded-lg text-left"
                   >
-                    <Icon.ChevronRight className={cn("mt-0.5 size-5 shrink-0 text-ink-faint transition-transform", open && "rotate-90")} />
+                    <Icon.ChevronRight className={cn("mt-0.5 size-5 shrink-0 text-ink-faint transition-transform", open ? "rotate-90" : "rtl:rotate-180")} />
                     <span className="min-w-0">
                       <span className="block text-xs font-medium uppercase tracking-wide text-ink-faint">Chapter {ci + 1}</span>
                       <span className="block truncate text-base font-semibold text-ink">{chapter.title}</span>

@@ -53,7 +53,7 @@ export default async function GradeSubmissionPage(props: PageProps<"/admin/quizz
               href={quiz ? `/admin/quizzes/submissions?quiz=${quiz.id}` : "/admin/quizzes/submissions"}
               variant="outline"
               size="sm"
-              leftIcon={<Icon.ArrowLeft className="size-4" />}
+              leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}
             >
               All submissions
             </ButtonLink>

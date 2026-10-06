@@ -199,27 +199,27 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
 
       <div className="sticky top-14 z-20 -mx-4 mb-6 border-b border-border bg-surface/95 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="flex flex-wrap items-center gap-2">
-          <ButtonLink href={outlineHref} variant="ghost" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          <ButtonLink href={outlineHref} variant="ghost" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
             Outline
           </ButtonLink>
           <div className="hidden items-center gap-1 sm:flex">
             {prevHref ? (
               <Link href={prevHref} className="inline-flex size-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label="Previous lesson" title="Previous lesson">
-                <Icon.ChevronLeft className="size-4" />
+                <Icon.ChevronLeft className="size-4 rtl:rotate-180" />
               </Link>
             ) : (
               <span className="inline-flex size-8 items-center justify-center text-ink-faint opacity-40" aria-hidden="true">
-                <Icon.ChevronLeft className="size-4" />
+                <Icon.ChevronLeft className="size-4 rtl:rotate-180" />
               </span>
             )}
             <span className="font-mono text-xs text-ink-muted">{index}</span>
             {nextHref ? (
               <Link href={nextHref} className="inline-flex size-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label="Next lesson" title="Next lesson">
-                <Icon.ChevronRight className="size-4" />
+                <Icon.ChevronRight className="size-4 rtl:rotate-180" />
               </Link>
             ) : (
               <span className="inline-flex size-8 items-center justify-center text-ink-faint opacity-40" aria-hidden="true">
-                <Icon.ChevronRight className="size-4" />
+                <Icon.ChevronRight className="size-4 rtl:rotate-180" />
               </span>
             )}
           </div>
@@ -331,7 +331,7 @@ export function LessonEditor({ courseId, lesson, index, chapterTitle, learnHref,
                   <Badge tone="neutral" size="xs">
                     private
                   </Badge>
-                  <Icon.ChevronRight className="ml-auto size-4 text-ink-faint transition-transform group-open:rotate-90" />
+                  <Icon.ChevronRight className="ms-auto size-4 text-ink-faint transition-transform group-open:rotate-90 rtl:rotate-180" />
                 </summary>
                 <div className="border-t border-border p-3">
                   <p className="mb-2 text-xs text-ink-muted">Only instructors and moderators see these notes on the lesson page.</p>

@@ -1,14 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { siteConfig } from "@/lib/config";
 import { ANON_COOKIE, CONSENT_MAX_AGE, isValidAnonId } from "@/lib/legal/consent-shared";
-import { REF_CLICK_HEADER, REF_COOKIE, REF_COOKIE_MAX_AGE, REF_PARAM, formatRefCookie, normalizeCode, sanitizeLandingPath } from "./affiliates-shared";
+import { REF_CLICK_HEADER, REF_COOKIE, REF_COOKIE_MAX_AGE, REF_PARAM, formatRefCookie, normalizeCode, parseRefClicks, sanitizeLandingPath } from "./affiliates-shared";
 
 /**
  * Visitor cookies set by `src/proxy.ts` (growth area):
  *
- *  - `ll_ref`: `?ref=CODE` on any page stores `CODE.<click time>` (last
- *    click wins). The code is only checked for shape here; the server
- *    ignores unknown or inactive codes and enforces the attribution window.
+ *  - `ll_ref`: `?ref=CODE` on any page stores `CODE.<click time>` in front
+ *    of the previous clicks (the last few are kept, newest first). The code
+ *    is only checked for shape here, so the server credits the newest click
+ *    of an active affiliate inside the attribution window: a link with an
+ *    unknown or paused code cannot wipe a valid referral.
  *  - `ll_anon`: random visitor id (the same cookie the consent evidence
  *    uses), created when missing. It links referral clicks to later
  *    sign-ups and purchases without any personal data.
@@ -58,7 +60,10 @@ export function trackVisitor(request: NextRequest): VisitorTracking {
   const refCode = prefetch ? null : normalizeCode(request.nextUrl.searchParams.get(REF_PARAM));
   const anon = request.cookies.get(ANON_COOKIE)?.value;
   if (!isValidAnonId(anon)) writes.push({ name: ANON_COOKIE, value: randomVisitorId(), maxAge: CONSENT_MAX_AGE });
-  if (refCode) writes.push({ name: REF_COOKIE, value: formatRefCookie(refCode, Date.now()), maxAge: REF_COOKIE_MAX_AGE });
+  if (refCode) {
+    const previous = parseRefClicks(request.cookies.get(REF_COOKIE)?.value);
+    writes.push({ name: REF_COOKIE, value: formatRefCookie(refCode, Date.now(), previous), maxAge: REF_COOKIE_MAX_AGE });
+  }
 
   const spoofedClick = request.headers.has(REF_CLICK_HEADER);
   let forwarded: Headers | null = null;

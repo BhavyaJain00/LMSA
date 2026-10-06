@@ -38,11 +38,11 @@ export default async function CourseSalesPagePage(props: PageProps<"/admin/cours
             <Link href="/admin/courses" className="hover:text-ink hover:underline">
               Courses
             </Link>
-            <Icon.ChevronRight className="size-3.5" aria-hidden="true" />
+            <Icon.ChevronRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
             <Link href={`/admin/courses/${course.id}`} className="max-w-60 truncate hover:text-ink hover:underline">
               {course.title}
             </Link>
-            <Icon.ChevronRight className="size-3.5" aria-hidden="true" />
+            <Icon.ChevronRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
             <span className="text-ink" aria-current="page">
               Sales page
             </span>
@@ -65,7 +65,7 @@ export default async function CourseSalesPagePage(props: PageProps<"/admin/cours
           </span>
         }
         actions={
-          <ButtonLink href={`/admin/courses/${course.id}`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          <ButtonLink href={`/admin/courses/${course.id}`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
             Back to the course
           </ButtonLink>
         }

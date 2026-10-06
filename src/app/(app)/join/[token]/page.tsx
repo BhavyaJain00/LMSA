@@ -77,7 +77,7 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
           tone="success"
           title={`You're on the ${lookup.teamName ?? "team"} team`}
           action={
-            <ButtonLink href="/team" rightIcon={<Icon.ArrowRight className="size-4" />}>
+            <ButtonLink href="/team" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
               Go to your courses
             </ButtonLink>
           }

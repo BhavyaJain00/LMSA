@@ -109,7 +109,7 @@ export function LessonHelpDialog({ open, onClose }: { open: boolean; onClose: ()
                 <SectionIcon icon={section.icon} />
               </span>
               <span className="flex-1 text-sm font-medium text-ink">{section.title}</span>
-              <Icon.ChevronRight className="size-4 text-ink-faint transition-transform group-open:rotate-90" />
+              <Icon.ChevronRight className="size-4 text-ink-faint transition-transform group-open:rotate-90 rtl:rotate-180" />
             </summary>
             <div className="space-y-2 border-t border-border px-4 py-3 text-sm leading-relaxed text-ink-muted [&_code]:rounded [&_code]:bg-surface-2 [&_code]:px-1 [&_code]:font-mono [&_code]:text-xs [&_kbd]:rounded [&_kbd]:border [&_kbd]:border-border-strong [&_kbd]:bg-surface-2 [&_kbd]:px-1 [&_kbd]:font-mono [&_kbd]:text-[11px] [&_strong]:font-medium [&_strong]:text-ink">
               {section.body}

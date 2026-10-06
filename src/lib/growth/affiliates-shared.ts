@@ -75,14 +75,24 @@ export interface RefCookie {
   at: number;
 }
 
-/** Cookie value for a click on `code` at `atMs`. */
-export function formatRefCookie(code: string, atMs: number): string {
-  return `${code}.${Math.floor(atMs / 1000)}`;
+/**
+ * Clicks kept in the `ll_ref` cookie, newest first. More than one is kept so
+ * a link with an unknown, paused or mistyped code (which only the server can
+ * tell) does not wipe the click of an active affiliate.
+ */
+export const MAX_REF_CLICKS = 3;
+
+/**
+ * Cookie value for a click on `code` at `atMs`, followed by the earlier
+ * clicks `previous` (newest first; another click on the same code is
+ * replaced by this one): `CODE.<seconds>~OTHER.<seconds>`.
+ */
+export function formatRefCookie(code: string, atMs: number, previous: readonly RefCookie[] = []): string {
+  const clicks = [{ code, at: atMs }, ...previous.filter((p) => p.code !== code)].slice(0, MAX_REF_CLICKS);
+  return clicks.map((c) => `${c.code}.${Math.floor(c.at / 1000)}`).join("~");
 }
 
-/** Parse the `ll_ref` cookie; null for anything malformed or dated in the future. */
-export function parseRefCookie(value: string | undefined | null, nowMs: number = Date.now()): RefCookie | null {
-  if (!value) return null;
+function parseOneClick(value: string, nowMs: number): RefCookie | null {
   const dot = value.lastIndexOf(".");
   if (dot <= 0) return null;
   const code = normalizeCode(value.slice(0, dot));
@@ -92,6 +102,22 @@ export function parseRefCookie(value: string | undefined | null, nowMs: number =
   // Allow a little clock skew between the proxy and this server.
   if (at > nowMs + 5 * 60 * 1000) return null;
   return { code, at };
+}
+
+/** Every well-formed click in the `ll_ref` cookie, newest first (at most `MAX_REF_CLICKS`). */
+export function parseRefClicks(value: string | undefined | null, nowMs: number = Date.now()): RefCookie[] {
+  if (!value || value.length > 400) return [];
+  const out: RefCookie[] = [];
+  for (const part of value.split("~").slice(0, MAX_REF_CLICKS)) {
+    const click = parseOneClick(part, nowMs);
+    if (click && !out.some((c) => c.code === click.code)) out.push(click);
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/** The newest click of the `ll_ref` cookie; null for anything malformed or dated in the future. */
+export function parseRefCookie(value: string | undefined | null, nowMs: number = Date.now()): RefCookie | null {
+  return parseRefClicks(value, nowMs)[0] ?? null;
 }
 
 /** Attribution window in whole days, clamped to 1–365. */

@@ -134,7 +134,7 @@ export function LessonReleaseSection({
           </Badge>
         )}
         {state.dirty && <span className="size-1.5 rounded-full bg-warning" aria-label="Changed" />}
-        <Icon.ChevronRight className="ml-auto size-4 text-ink-faint transition-transform group-open:rotate-90" aria-hidden="true" />
+        <Icon.ChevronRight className="ms-auto size-4 text-ink-faint transition-transform group-open:rotate-90 rtl:rotate-180" aria-hidden="true" />
       </summary>
       <div className="border-t border-border p-3 sm:p-4">
         {state.status === "loading" ? (

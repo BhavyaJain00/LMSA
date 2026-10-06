@@ -148,6 +148,17 @@ describe("i18n formatMessage: plurals per locale", () => {
     assert.equal(formatMessage("Order #{id}", { id: 42 }), "Order #42");
     assert.equal(formatMessage("{role, select, other {#1}}", { role: "x" }), "#1");
   });
+
+  it("# inside a select nested in a plural is the plural's number", () => {
+    assert.equal(formatMessage("{n, plural, other {{g, select, other {# items}}}}", { n: 3, g: "x" }), "3 items");
+    const msg = "{count, plural, one {{role, select, admin {# admin} other {# member}}} other {{role, select, admin {# admins} other {# members}}}}";
+    assert.equal(formatMessage(msg, { count: 1, role: "admin" }), "1 admin");
+    assert.equal(formatMessage(msg, { count: 1200, role: "student" }), "1,200 members");
+    assert.equal(formatMessage(msg, { count: 1200, role: "student" }, "fr"), "1 200 members");
+    // Deeper nesting keeps the context; a select at the top level still prints # literally.
+    assert.equal(formatMessage("{n, plural, other {{a, select, other {{b, select, other {#!}}}}}}", { n: 2, a: "x", b: "y" }), "2!");
+    assert.equal(formatMessage("{a, select, other {{n, plural, other {#}} #}}", { a: "x", n: 5 }), "5 #");
+  });
 });
 
 describe("i18n template analysis", () => {

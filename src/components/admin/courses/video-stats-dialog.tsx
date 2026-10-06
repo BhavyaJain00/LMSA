@@ -95,7 +95,7 @@ export function VideoStatsDialog({ open, onClose, stats }: { open: boolean; onCl
             )}
             {detailHref && (
               <Link href={detailHref} className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline">
-                Full video analytics <Icon.ArrowRight className="size-4" />
+                Full video analytics <Icon.ArrowRight className="size-4 rtl:rotate-180" />
               </Link>
             )}
           </div>

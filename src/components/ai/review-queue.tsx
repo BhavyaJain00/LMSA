@@ -161,7 +161,7 @@ export function ReviewQueue({ items }: { items: ReviewQueueItem[] }) {
                       href={`/admin/ai/conversations/${item.conversationId}?message=${item.id}#m-${item.id}`}
                       className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
                     >
-                      Full conversation <Icon.ArrowRight className="size-3.5" />
+                      Full conversation <Icon.ArrowRight className="size-3.5 rtl:rotate-180" />
                     </Link>
                   </div>
                 </div>

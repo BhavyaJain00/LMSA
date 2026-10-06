@@ -44,7 +44,7 @@ export default async function AskAiPage(props: PageProps<"/courses/[slug]/ask">)
     return (
       <div className="mx-auto max-w-2xl py-6">
         <Link href={courseHref} className="mb-4 inline-flex items-center gap-1 text-sm text-ink-muted hover:text-ink">
-          <Icon.ArrowLeft className="size-4" /> {course.title}
+          <Icon.ArrowLeft className="size-4 rtl:rotate-180" /> {course.title}
         </Link>
         {setup ? (
           <AiSetupNotice

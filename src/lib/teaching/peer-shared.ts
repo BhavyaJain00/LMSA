@@ -87,6 +87,21 @@ export function normalizePeerConfig(raw: Partial<PeerConfig> | null | undefined)
   };
 }
 
+/**
+ * Anonymity is a promise made to the people who already wrote or received
+ * reviews: once an anonymous assignment has handed out any review, it can't be
+ * switched off again (labels are built from the current setting, so turning it
+ * off would reveal every name). Turning it on is always allowed.
+ */
+export function isAnonymityLocked(current: Pick<PeerConfig, "anonymous">, reviewCount: number): boolean {
+  return current.anonymous && reviewCount > 0;
+}
+
+/** The anonymity to store: the requested value, unless the current one is locked on. */
+export function nextAnonymity(current: Pick<PeerConfig, "anonymous">, reviewCount: number, requested: boolean): boolean {
+  return isAnonymityLocked(current, reviewCount) ? true : requested;
+}
+
 /** `excluded` with one more pair (no duplicates, capped). */
 export function withExcludedPair(excluded: readonly PeerPair[] | undefined, pair: PeerPair): PeerPair[] {
   const rest = (excluded ?? []).filter((p) => p.submissionId !== pair.submissionId || p.reviewerId !== pair.reviewerId);
@@ -180,9 +195,17 @@ export function effectiveReviewCount(submitters: number, reviewsPerSubmission: n
  *      give it to the eligible reviewer with the lightest load, never
  *      exceeding k per reviewer unless the submission is in `overflow`;
  *   2. every submitter still below k reviews to write gets the submissions
- *      with the fewest reviews so far, so a learner who submits after
- *      everyone else is covered still has their k reviews to do (those
- *      submissions simply receive one more).
+ *      with the fewest reviews so far, but only those still below k. A
+ *      learner who submits after everyone else is covered is therefore left
+ *      short until the next classmate submits (pass 1 then pairs them up),
+ *      instead of piling extra reviews onto the earliest submissions. Once
+ *      the reviewer's own submission is in `overflow` (it waited long
+ *      enough, or the deadline passed) this cap is lifted, so nobody is
+ *      left without reviews to write for good.
+ *
+ * In rolling mode this keeps every submission at no more than k reviews and
+ * every reviewer at no more than k to write until `overflow` kicks in; the
+ * last few submitters are the ones who wait.
  *
  * k = min(reviewsPerSubmission, submitters - 1), so a cohort of one gets no
  * reviews and a cohort of two review each other once.
@@ -262,8 +285,13 @@ export function planPeerAssignments(input: PeerPlanInput): PeerPair[] {
     }
     if (reviewer === null) break;
     const reviewerId = reviewer.authorId;
+    // Only submissions still short of k, so early work is not reviewed far more often than
+    // configured; once the reviewer's own submission has waited long enough (or the deadline
+    // passed) they get their full share regardless.
+    const uncapped = input.overflow?.has(reviewer.id) ?? false;
     const candidates = submissions.filter((s) => {
       if (s.authorId === reviewerId) return false;
+      if (!uncapped && received.get(s.id)! >= k) return false;
       const key = pairKey(s.id, reviewerId);
       return !taken.has(key) && !excluded.has(key);
     });

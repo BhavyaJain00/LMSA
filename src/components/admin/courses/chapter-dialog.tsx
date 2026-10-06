@@ -109,7 +109,7 @@ export function ChapterDialog({ courseId, state: dialog, onClose }: { courseId: 
             <Badge tone={releaseLabel ? "accent" : "neutral"} size="xs">
               {releaseLabel ?? "Immediately"}
             </Badge>
-            <Icon.ChevronRight className="ml-auto size-4 text-ink-faint transition-transform group-open:rotate-90" aria-hidden="true" />
+            <Icon.ChevronRight className="ms-auto size-4 text-ink-faint transition-transform group-open:rotate-90 rtl:rotate-180" aria-hidden="true" />
           </summary>
           <div className="border-t border-border p-3 sm:p-4">
             <p className="mb-3 text-xs text-ink-muted">Drip this chapter: every lesson in it waits until the chapter is released. Lessons can add their own, later schedule.</p>

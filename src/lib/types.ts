@@ -2464,6 +2464,8 @@ export interface InstructorProfile {
   payoutEmail?: string;
   createdAt: string;
   reviewedAt?: string;
+  /** True when approval added the course_creator role (it is removed again on suspension). */
+  roleGranted?: boolean;
 }
 
 /** An instructor's share of one paid order. */

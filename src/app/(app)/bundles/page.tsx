@@ -64,7 +64,7 @@ export default async function BundlesPage(props: PageProps<"/bundles">) {
               Manage bundles
             </ButtonLink>
           ) : (
-            <ButtonLink href="/courses" rightIcon={<Icon.ArrowRight className="size-4" />}>
+            <ButtonLink href="/courses" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
               Browse courses
             </ButtonLink>
           )

@@ -79,7 +79,7 @@ function ThreadHeader({
   return (
     <header className="flex items-center gap-3 border-b border-border px-3 py-2.5 sm:px-4">
       <Link href="/messages" className="-ml-1 rounded-lg p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink lg:hidden" aria-label="Back to conversations">
-        <Icon.ArrowLeft className="size-5" />
+        <Icon.ArrowLeft className="size-5 rtl:rotate-180" />
       </Link>
       {first && <Avatar name={first.name} src={first.avatarUrl} size="sm" className={cn(!first.active && "opacity-50")} />}
       <div className="min-w-0 flex-1">

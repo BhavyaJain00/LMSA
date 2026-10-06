@@ -199,7 +199,7 @@ export function BroadcastComposer({
           <ButtonLink href={broadcast ? `/admin/broadcasts/${broadcast.id}` : "/admin/broadcasts"} variant="outline">
             Cancel
           </ButtonLink>
-          <Button type="submit" form={formId} loading={pending} rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <Button type="submit" form={formId} loading={pending} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             {broadcast ? "Save and review" : "Save draft and review"}
           </Button>
         </div>

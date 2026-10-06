@@ -62,7 +62,7 @@ export default async function AiConversationReviewPage(props: PageProps<"/admin/
           </span>
         }
         actions={
-          <ButtonLink href={`/admin/ai?course=${course.id}&tab=recent`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4" />}>
+          <ButtonLink href={`/admin/ai?course=${course.id}&tab=recent`} variant="outline" size="sm" leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
             Back to the queue
           </ButtonLink>
         }

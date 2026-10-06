@@ -100,7 +100,7 @@ export default async function RedeemPage(props: PageProps<"/redeem">) {
                     <Icon.CheckCircle className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
                     You redeemed this gift. It&apos;s in your account.
                   </p>
-                  <ButtonLink href={gift.href} className="w-full" rightIcon={<Icon.ArrowRight className="size-4" />}>
+                  <ButtonLink href={gift.href} className="w-full" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                     {gift.itemType === "plan" ? "Browse courses" : "Start learning"}
                   </ButtonLink>
                 </div>

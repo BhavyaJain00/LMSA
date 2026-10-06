@@ -33,7 +33,7 @@ export function LessonFrame({ children, sidebar }: { children: ReactNode; sideba
       <div className="min-w-0">{children}</div>
       {sidebar &&
         (overlay ? (
-          <div className="min-w-0 lg:fixed lg:inset-y-0 lg:right-0 lg:z-40 lg:flex lg:w-[min(26rem,40vw)] lg:flex-col lg:border-l lg:border-border lg:bg-surface-1 lg:shadow-pop lg:[&>aside]:border-l-0 animate-fade-in">
+          <div className="min-w-0 lg:fixed lg:inset-y-0 lg:end-0 lg:z-40 lg:flex lg:w-[min(26rem,40vw)] lg:flex-col lg:border-s lg:border-border lg:bg-surface-1 lg:shadow-pop lg:[&>aside]:border-s-0 animate-fade-in">
             <div className="hidden h-14 shrink-0 items-center border-b border-border px-3 lg:flex">
               <button
                 type="button"

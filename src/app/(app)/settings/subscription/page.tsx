@@ -190,7 +190,7 @@ export default async function SubscriptionSettingsPage(props: PageProps<"/settin
             }
             action={
               plansOnSale ? (
-                <ButtonLink href="/pricing" rightIcon={<Icon.ArrowRight className="size-4" />}>
+                <ButtonLink href="/pricing" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                   See membership plans
                 </ButtonLink>
               ) : (
@@ -263,7 +263,7 @@ export default async function SubscriptionSettingsPage(props: PageProps<"/settin
                       <Icon.BookOpen className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden="true" />
                       Every published course, including the ones added while you&apos;re a member.
                     </p>
-                    <ButtonLink href="/courses" size="sm" variant="outline" rightIcon={<Icon.ArrowRight className="size-4" />}>
+                    <ButtonLink href="/courses" size="sm" variant="outline" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
                       Browse courses
                     </ButtonLink>
                   </div>

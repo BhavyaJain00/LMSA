@@ -274,7 +274,7 @@ export function AskAiWorkspace({ courseId, courseTitle, courseHref, lesson, star
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <Link href={courseHref} className="inline-flex max-w-full items-center gap-1 text-sm text-ink-muted hover:text-ink">
-            <Icon.ArrowLeft className="size-4 shrink-0" /> <span className="truncate">{courseTitle}</span>
+            <Icon.ArrowLeft className="size-4 shrink-0 rtl:rotate-180" /> <span className="truncate">{courseTitle}</span>
           </Link>
           <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-tight text-ink sm:text-2xl">
             <Icon.Sparkles className="size-5 text-accent" /> Ask AI

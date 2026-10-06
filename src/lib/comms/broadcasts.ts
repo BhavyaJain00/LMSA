@@ -17,7 +17,7 @@ import {
 } from "./broadcast-core";
 import { checkContent, parseRecipientRef, recipientRef } from "./campaign-core";
 import { prepareCampaign, renderCampaignEmail } from "./render";
-import { describeSegment, evaluateSegment, leadBlock, leadRecipient, memberBlock, memberRecipient, normalizeSegmentFilter, segmentInputProblem, type SegmentRecipient } from "./segments";
+import { describeSegment, evaluateSegment, leadBlock, leadRecipient, memberBlock, memberRecipient, normalizeSegmentFilter, segmentInputProblem, staleSegmentCourses, type SegmentRecipient } from "./segments";
 import { getCampaignEventSummary } from "./tracking";
 import { broadcastTrackingId, type EventSummary } from "./tracking-core";
 
@@ -174,6 +174,11 @@ export async function startBroadcast(id: string, opts: { rate?: unknown; now?: n
   if (!isEditable(current)) return { ok: false, error: current.status === "sending" ? "This broadcast is already being sent." : "This broadcast has already been sent." };
   const checked = checkContent(current, "broadcast");
   if (Object.keys(checked.errors).length) return { ok: false, error: "The message isn't ready to send yet. Open it and fix the highlighted fields.", fieldErrors: checked.errors };
+  // A course deleted after the draft was saved would change who the audience reaches
+  // ("not enrolled in" a deleted course matches everyone), so refuse to send until it's chosen again.
+  if (staleSegmentCourses(current.segment, new Set(db.courses.map((c) => c.id)))) {
+    return { ok: false, error: "A course in this audience no longer exists. Edit the audience and choose the courses again before sending." };
+  }
   const { recipients } = evaluateSegment(db, current.segment, now);
   if (!recipients.length) return { ok: false, error: "Nobody matches this audience right now, so there is no one to send to. Adjust the audience and try again." };
   const refs = recipients.map(recipientRef);

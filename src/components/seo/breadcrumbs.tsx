@@ -41,7 +41,7 @@ export function Breadcrumbs({ items, className, structuredData = true }: { items
                 ) : (
                   <span className="truncate">{item.name}</span>
                 )}
-                {!last && <Icon.ChevronRight className="size-3.5 shrink-0 text-ink-faint" aria-hidden="true" />}
+                {!last && <Icon.ChevronRight className="size-3.5 shrink-0 text-ink-faint rtl:rotate-180" aria-hidden="true" />}
               </li>
             );
           })}

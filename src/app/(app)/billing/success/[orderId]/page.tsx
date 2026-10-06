@@ -113,7 +113,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       // While the plan is paused or cancelled the lessons are locked: only the course page is offered.
       if (!plan || (plan.status !== "paused" && plan.status !== "cancelled")) {
         actions.push(
-          <ButtonLink key="go" href={next ? lessonHref(course.slug, next) : `/courses/${course.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink key="go" href={next ? lessonHref(course.slug, next) : `/courses/${course.slug}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Start learning
           </ButtonLink>,
         );
@@ -134,7 +134,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       const first = included[0];
       if (first) {
         actions.push(
-          <ButtonLink key="go" href={`/courses/${first.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink key="go" href={`/courses/${first.slug}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Start with {first.title}
           </ButtonLink>,
         );
@@ -154,7 +154,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       );
       if (!seated) tone = "warning";
       actions.push(
-        <ButtonLink key="go" href={`/batches/${batch.slug}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+        <ButtonLink key="go" href={`/batches/${batch.slug}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
           Go to batch
         </ButtonLink>,
       );
@@ -171,7 +171,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       } else {
         message = <>Your certificate is unlocked. Finish every lesson of <strong className="text-ink">{course.title}</strong> to receive it.</>;
         actions.push(
-          <ButtonLink key="cert" href={`/courses/${course.slug}/certification`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink key="cert" href={`/courses/${course.slug}/certification`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Go to certification
           </ButtonLink>,
           <ButtonLink key="course" href={`/courses/${course.slug}`} variant="outline">
@@ -197,7 +197,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
           </>
         );
         actions.push(
-          <ButtonLink key="courses" href="/courses" rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink key="courses" href="/courses" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Browse courses
           </ButtonLink>,
         );
@@ -229,7 +229,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       );
       if (team && own) {
         actions.push(
-          <ButtonLink key="team" href={`/team?org=${encodeURIComponent(team.slug)}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+          <ButtonLink key="team" href={`/team?org=${encodeURIComponent(team.slug)}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
             Invite your team
           </ButtonLink>,
         );
@@ -287,7 +287,7 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
       </>
     );
     actions.push(
-      <ButtonLink key="main" href={`/billing/success/${encodeURIComponent(mainOrder.orderId)}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+      <ButtonLink key="main" href={`/billing/success/${encodeURIComponent(mainOrder.orderId)}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
         Go to the order
       </ButtonLink>,
     );

@@ -352,7 +352,7 @@ function LessonHistoryDialog({ lessonId, dirty, onRestored, onClose }: LessonHis
         <section className={cn("min-w-0", !mobileDetail && "hidden lg:block")} aria-label="Selected version" aria-live="polite">
           {selected && (
             <div className="space-y-4">
-              <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileDetail(false)} leftIcon={<Icon.ArrowLeft className="size-4" />}>
+              <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileDetail(false)} leftIcon={<Icon.ArrowLeft className="size-4 rtl:rotate-180" />}>
                 All versions
               </Button>
               <div className="flex flex-wrap items-start gap-3 rounded-xl border border-border bg-surface-2/50 p-3">

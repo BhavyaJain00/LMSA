@@ -91,7 +91,7 @@ function CreatedEndpointDialog({ created, onClose }: { created: CreatedWebhook |
             Done
           </Button>
           {created && (
-            <ButtonLink href={`${BASE}/${created.id}`} rightIcon={<Icon.ArrowRight className="size-4" />}>
+            <ButtonLink href={`${BASE}/${created.id}`} rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
               Send a test event
             </ButtonLink>
           )}

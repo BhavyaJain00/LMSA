@@ -124,7 +124,7 @@ export async function linkMemberToReferral(input: { userId: string; code: string
 }
 
 /** Referral clicks linked to a member, newest click first. */
-function memberClicks(db: Pick<Database, "analyticsEvents">, userId: string): { affiliateId: string; at: number }[] {
+export function memberClicks(db: Pick<Database, "analyticsEvents">, userId: string): { affiliateId: string; at: number }[] {
   return db.analyticsEvents
     .filter((e) => e.name === REFERRAL_EVENT && e.userId === userId && e.itemId)
     .map((e) => ({ affiliateId: e.itemId as string, at: Date.parse(e.createdAt) }))

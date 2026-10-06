@@ -361,7 +361,7 @@ export function RubricEditor({ initial, canEdit, gradedCount = 0 }: { initial: R
                               {canEdit && (
                                 <span className="flex items-center">
                                   <IconButton label={`Move level ${li + 1} left`} size="icon-sm" disabled={li === 0} onClick={() => updateCriterion(ci, { levels: move(c.levels, li, li - 1) })}>
-                                    <Icon.ChevronLeft className="size-3.5" />
+                                    <Icon.ChevronLeft className="size-3.5 rtl:rotate-180" />
                                   </IconButton>
                                   <IconButton
                                     label={`Move level ${li + 1} right`}
@@ -369,7 +369,7 @@ export function RubricEditor({ initial, canEdit, gradedCount = 0 }: { initial: R
                                     disabled={li === c.levels.length - 1}
                                     onClick={() => updateCriterion(ci, { levels: move(c.levels, li, li + 1) })}
                                   >
-                                    <Icon.ChevronRight className="size-3.5" />
+                                    <Icon.ChevronRight className="size-3.5 rtl:rotate-180" />
                                   </IconButton>
                                   <IconButton
                                     label={`Remove level ${li + 1}`}

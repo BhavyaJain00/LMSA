@@ -54,7 +54,7 @@ export default async function MessageModerationPage(props: PageProps<"/messages/
         description="Conversations members reported. Moderators can read a reported conversation, remove messages that break the rules and resolve the report."
         breadcrumbs={
           <Link href="/messages" className="mb-1 inline-flex items-center gap-1 text-xs text-ink-muted hover:text-ink">
-            <Icon.ArrowLeft className="size-3.5" /> Messages
+            <Icon.ArrowLeft className="size-3.5 rtl:rotate-180" /> Messages
           </Link>
         }
         actions={

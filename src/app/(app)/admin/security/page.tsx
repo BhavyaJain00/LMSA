@@ -360,7 +360,7 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
                   href={`/admin/security${queryString({ ...baseParams, page: page - 1 })}`}
                   variant="outline"
                   size="sm"
-                  leftIcon={<Icon.ChevronLeft className="size-4" />}
+                  leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}
                 >
                   Newer
                 </ButtonLink>
@@ -373,7 +373,7 @@ export default async function LoginActivityPage(props: PageProps<"/admin/securit
                   href={`/admin/security${queryString({ ...baseParams, page: page + 1 })}`}
                   variant="outline"
                   size="sm"
-                  rightIcon={<Icon.ChevronRight className="size-4" />}
+                  rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}
                 >
                   Older
                 </ButtonLink>
