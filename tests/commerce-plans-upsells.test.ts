@@ -2,6 +2,7 @@ import { after, before, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import type { Payment, Upsell } from "@/lib/types";
 import { getDb } from "@/lib/db/store";
+import { stripeEnv } from "@/lib/server-env";
 import { settleEvents } from "@/lib/events";
 import { createSession } from "@/lib/auth/session";
 import { fulfillPayment, markPaymentFailed } from "@/lib/payments/fulfillment";
@@ -128,7 +129,7 @@ const a = makeCourse({ id: "crs_a", slug: "a", title: "Basics", paidCourse: true
 const b = makeCourse({ id: "crs_b", slug: "b", title: "Advanced", paidCourse: true, price: 4000, currency: "USD" });
 const inr = makeCourse({ id: "crs_inr", slug: "inr", title: "Rupee course", paidCourse: true, price: 400000, currency: "INR" });
 
-async function setup(fixture: { upsells?: Upsell[]; payments?: Payment[]; enrollments?: ReturnType<typeof makeEnrollment>[]; gateway?: "manual" | "none" } = {}) {
+async function setup(fixture: { upsells?: Upsell[]; payments?: Payment[]; enrollments?: ReturnType<typeof makeEnrollment>[]; gateway?: "manual" | "none" | "stripe" } = {}) {
   await resetDb({
     users: [buyer, admin],
     courses: [a, b, inr],
@@ -213,6 +214,26 @@ describe("order bump", () => {
     assert.equal(bump.itemId, b.id);
     assert.equal(bump.amount, 3000);
     assert.equal(bump.discountAmount, 1000);
+  });
+});
+
+describe("a checkout with an order bump that never reaches the gateway", () => {
+  it("drops the add-on with its order, so both can be bought again", async () => {
+    const key = stripeEnv.secretKey;
+    stripeEnv.secretKey = "sk_test_outage123";
+    const outage = mock.method(globalThis, "fetch", async () => {
+      throw new TypeError("fetch failed");
+    });
+    try {
+      await setup({ gateway: "stripe" });
+      await createSession(buyer.id);
+      const res = await placeOrderAction(null, form({ itemType: "course", itemId: a.id, expectedTotal: "5000", bump: "ups_1", bumpExpected: "3000", ...billing }));
+      assert.ok(!res.ok);
+      assert.deepEqual((await getDb()).payments, [], "no orphaned add-on order is left behind");
+    } finally {
+      outage.mock.restore();
+      stripeEnv.secretKey = key;
+    }
   });
 });
 

@@ -2293,6 +2293,12 @@ export interface DirectMessage {
   /** Round 3 comms: removed by its sender or by a moderator; the body is cleared. */
   removedAt?: string;
   removedBy?: string;
+  /**
+   * The text of a removed message, kept for moderators only (a reported
+   * conversation can still be checked after the sender removed the evidence).
+   * Never sent to participants or included in another member's data export.
+   */
+  removedBody?: string;
 }
 
 /* ------------------------------------------------------------------ */

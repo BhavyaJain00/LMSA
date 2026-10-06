@@ -8,12 +8,13 @@ import { isSafeAddress } from "@/lib/email/mime";
 import { resolveEmailPreferences } from "@/lib/email/preferences";
 import { preferencesUrl, unsubscribeUrl } from "@/lib/email/signing";
 import { emailUrl, renderEmail } from "@/lib/email/templates/layout";
-import { notifyModerators } from "@/lib/services/notifications";
+import { notifyMany } from "@/lib/services/notifications";
 import { uid } from "@/lib/utils";
 import {
   DENY_MESSAGES,
   MESSAGE_LIMITS,
   MESSAGE_RATES,
+  REPLY_BLOCKED_MESSAGES,
   REPORT_CSV_HEADER,
   buildMessagingDirectory,
   canReply,
@@ -21,6 +22,7 @@ import {
   countUnread,
   decideMessaging,
   findDirectConversation,
+  hasStaffRole,
   isMessageModerator,
   isMessagingStaff,
   isUnreadFor,
@@ -36,8 +38,10 @@ import {
   type MessagingDirectory,
   type MessagingMember,
   type MessagingPolicy,
+  type ReplyContext,
   type ReportStatus,
   type ThreadAccess,
+  teacherIds,
 } from "./messages-core";
 
 /**
@@ -82,6 +86,8 @@ export interface MessageView {
   removed: boolean;
   /** "sender" or "moderator" for removed messages. */
   removedByRole?: "sender" | "moderator";
+  /** The text of a removed message: only in the moderator view of a reported conversation. */
+  removedText?: string;
   createdAt: string;
 }
 
@@ -133,15 +139,20 @@ function member(user: User): MessagingMember {
   return { id: user.id, roles: user.roles, enabled: user.enabled };
 }
 
-function roleLabel(user: User, directory: MessagingDirectory): string | undefined {
+/** Ids of everyone who teaches a course or batch (for role labels and reply checks; never reads enrollments). */
+function teachersOf(db: Database): Set<string> {
+  return teacherIds(db);
+}
+
+function roleLabel(user: User, teachers: ReadonlySet<string>): string | undefined {
   if (user.roles.includes("admin")) return "Admin";
   if (user.roles.includes("moderator")) return "Moderator";
-  if ((directory.teaching.get(user.id)?.size ?? 0) > 0 || user.roles.includes("course_creator")) return "Instructor";
+  if (teachers.has(user.id) || user.roles.includes("course_creator")) return "Instructor";
   if (user.roles.includes("batch_evaluator")) return "Evaluator";
   return undefined;
 }
 
-function participantView(user: User | undefined, id: string, directory: MessagingDirectory): ParticipantView {
+function participantView(user: User | undefined, id: string, teachers: ReadonlySet<string>): ParticipantView {
   if (!user) return { id, name: "Deleted member", username: "", active: false };
   return {
     id: user.id,
@@ -149,14 +160,58 @@ function participantView(user: User | undefined, id: string, directory: Messagin
     username: user.username,
     avatarUrl: user.avatarUrl,
     headline: user.headline,
-    role: roleLabel(user, directory),
+    role: roleLabel(user, teachers),
     active: user.enabled,
   };
 }
 
-function messageView(m: DirectMessage): MessageView {
-  if (m.removedAt) return { id: m.id, senderId: m.senderId, body: "", removed: true, removedByRole: m.removedBy === m.senderId ? "sender" : "moderator", createdAt: m.createdAt };
+/** A message for the client. Moderators also see the text of removed messages (the evidence of a report). */
+function messageView(m: DirectMessage, forModerator = false): MessageView {
+  if (m.removedAt) {
+    const view: MessageView = { id: m.id, senderId: m.senderId, body: "", removed: true, removedByRole: m.removedBy === m.senderId ? "sender" : "moderator", createdAt: m.createdAt };
+    if (forModerator && m.removedBody) view.removedText = m.removedBody;
+    return view;
+  }
   return { id: m.id, senderId: m.senderId, body: m.body, removed: false, createdAt: m.createdAt };
+}
+
+/**
+ * What `canReply` needs, looked up only for the members it asks about:
+ * staff status from roles and the course/batch instructor lists, and (only for
+ * learner-to-learner conversations) the shared courses and batches.
+ */
+function replyContext(db: Database, teachers: ReadonlySet<string> = teachersOf(db)): ReplyContext {
+  const users = new Map(db.users.map((u) => [u.id, u]));
+  const learning = new Map<string, Set<string>>();
+  const keysOf = (userId: string): Set<string> => {
+    let keys = learning.get(userId);
+    if (keys) return keys;
+    keys = new Set();
+    for (const e of db.enrollments) if (e.userId === userId) keys.add(`course:${e.courseId}`);
+    for (const e of db.batchEnrollments) if (e.userId === userId) keys.add(`batch:${e.batchId}`);
+    learning.set(userId, keys);
+    return keys;
+  };
+  return {
+    isEnabled: (id) => users.get(id)?.enabled === true,
+    isStaff: (id) => {
+      const user = users.get(id);
+      return !!user && (hasStaffRole(user.roles) || teachers.has(id));
+    },
+    areClassmates: (a, b) => {
+      const mine = keysOf(a);
+      if (!mine.size) return false;
+      for (const key of keysOf(b)) if (mine.has(key)) return true;
+      return false;
+    },
+  };
+}
+
+/** Why `viewer` can't reply in `conversation` (null when they can). */
+function replyBlockedFor(db: Database, conversation: Conversation, viewer: User, access: Exclude<ThreadAccess, null>, teachers?: ReadonlySet<string>): string | null {
+  if (access === "moderator") return "You're viewing this reported conversation as a moderator.";
+  const decision = canReply(messagingPolicy(db.settings), conversation, member(viewer), replyContext(db, teachers));
+  return decision.ok ? null : REPLY_BLOCKED_MESSAGES[decision.reason];
 }
 
 /** Messages per conversation, chronological. */
@@ -264,7 +319,7 @@ export interface InboxPage {
 }
 
 export function listInbox(db: Database, userId: string, query: InboxQuery = {}): InboxPage {
-  const directory = directoryOf(db);
+  const teachers = teachersOf(db);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const courses = new Map(db.courses.map((c) => [c.id, c]));
   const mine = db.conversations.filter((c) => c.participantIds.includes(userId));
@@ -277,7 +332,7 @@ export function listInbox(db: Database, userId: string, query: InboxQuery = {}):
     if (!messages.length) continue;
     const unread = countUnread(messages, userId);
     unreadTotal += unread;
-    const others = c.participantIds.filter((id) => id !== userId).map((id) => participantView(users.get(id), id, directory));
+    const others = c.participantIds.filter((id) => id !== userId).map((id) => participantView(users.get(id), id, teachers));
     const last = [...messages].reverse().find((m) => !m.removedAt) ?? messages[messages.length - 1];
     rows.push({
       id: c.id,
@@ -288,7 +343,9 @@ export function listInbox(db: Database, userId: string, query: InboxQuery = {}):
       preview: last.removedAt ? "Message removed" : messagePreview(last.body),
       previewMine: last.senderId === userId,
       unread,
-      report: reportStatus(c),
+      // Only the member who filed the report sees it: in a one-to-one conversation, showing it to
+      // the other participant would tell them who reported them.
+      report: c.reportedBy === userId ? reportStatus(c) : null,
     });
   }
   const q = (query.q ?? "").trim();
@@ -314,14 +371,20 @@ export interface ThreadQuery {
 
 export type ThreadResult = { ok: true; thread: ThreadView } | { ok: false; status: 404 };
 
+/** A conversation's messages, chronological (one pass over the messages). */
+function conversationMessages(db: Database, conversationId: string): DirectMessage[] {
+  return messagesByConversation(db, new Set([conversationId])).get(conversationId) ?? [];
+}
+
 export function buildThread(db: Database, viewer: User, conversationId: string, query: ThreadQuery = {}): ThreadResult {
   const conversation = db.conversations.find((c) => c.id === conversationId);
   if (!conversation) return { ok: false, status: 404 };
   const access = threadAccess(conversation, viewer);
   if (!access) return { ok: false, status: 404 };
-  const directory = directoryOf(db);
+  const moderator = access === "moderator";
+  const teachers = teachersOf(db);
   const users = new Map(db.users.map((u) => [u.id, u]));
-  const all = messagesByConversation(db, new Set([conversation.id])).get(conversation.id) ?? [];
+  const all = conversationMessages(db, conversation.id);
   const limit = Math.min(200, Math.max(1, Math.floor(query.limit ?? MESSAGE_LIMITS.threadPage)));
   let end = all.length;
   if (query.beforeId) {
@@ -331,14 +394,9 @@ export function buildThread(db: Database, viewer: User, conversationId: string, 
   const start = Math.max(0, end - limit);
   const page = all.slice(start, end);
   const course = conversation.courseId ? db.courses.find((c) => c.id === conversation.courseId) : undefined;
-  const policy = messagingPolicy(db.settings);
-  let replyBlocked: string | null = null;
-  if (access === "moderator") replyBlocked = "You're viewing this reported conversation as a moderator.";
-  else {
-    const decision = canReply(policy, conversation, member(viewer), (id) => users.get(id)?.enabled === true);
-    if (!decision.ok) replyBlocked = decision.reason === "unavailable" ? "The other member's account is no longer active, so you can't reply." : DENY_MESSAGES[decision.reason];
-  }
   const status = reportStatus(conversation);
+  // Participants only learn about a report they filed themselves; the other member is never told.
+  const showReport = !!status && !!conversation.reportedAt && (moderator || conversation.reportedBy === viewer.id);
   return {
     ok: true,
     thread: {
@@ -346,22 +404,22 @@ export function buildThread(db: Database, viewer: User, conversationId: string, 
       access,
       subject: conversation.subject,
       course: course ? { id: course.id, title: course.title, slug: course.slug } : undefined,
-      participants: conversation.participantIds.map((id) => participantView(users.get(id), id, directory)),
-      messages: page.map(messageView),
+      participants: conversation.participantIds.map((id) => participantView(users.get(id), id, teachers)),
+      messages: page.map((m) => messageView(m, moderator)),
       hasOlder: start > 0,
       seenMessageId: access === "participant" ? lastSeenOwnMessageId(all, viewer.id, conversation.participantIds) : null,
-      replyBlocked,
+      replyBlocked: replyBlockedFor(db, conversation, viewer, access, teachers),
       report:
-        status && conversation.reportedAt
+        showReport && status && conversation.reportedAt
           ? {
               status,
-              reportedBy: access === "moderator" && conversation.reportedBy ? participantView(users.get(conversation.reportedBy), conversation.reportedBy, directory) : undefined,
+              reportedBy: moderator && conversation.reportedBy ? participantView(users.get(conversation.reportedBy), conversation.reportedBy, teachers) : undefined,
               reportedAt: conversation.reportedAt,
-              reason: access === "moderator" ? conversation.reportReason : undefined,
-              messageId: access === "moderator" ? conversation.reportedMessageId : undefined,
-              count: conversation.reportCount ?? 1,
+              reason: moderator ? conversation.reportReason : undefined,
+              messageId: moderator ? conversation.reportedMessageId : undefined,
+              count: moderator ? (conversation.reportCount ?? 1) : 1,
               resolvedAt: conversation.reportResolvedAt,
-              resolvedBy: conversation.reportResolvedBy ? users.get(conversation.reportResolvedBy)?.name : undefined,
+              resolvedBy: moderator && conversation.reportResolvedBy ? users.get(conversation.reportResolvedBy)?.name : undefined,
             }
           : null,
       reportedByViewer: !!conversation.reported && conversation.reportedBy === viewer.id,
@@ -381,22 +439,29 @@ export interface ThreadUpdate {
 /**
  * Polling: new messages after a cursor, removals among the messages the
  * client already shows, and the read receipt. Marks the thread read for a
- * participant who has it open (`markRead`).
+ * participant who has it open (`markRead`). Reads the conversation's messages
+ * once and never builds the participant views (the client already has them).
  */
 export async function pollThread(viewer: User, conversationId: string, afterId: string | null, knownIds: readonly string[], markRead: boolean): Promise<ThreadUpdate | null> {
   if (markRead) await markConversationRead(viewer.id, conversationId);
   const db = await getDb();
-  const result = buildThread(db, viewer, conversationId, { limit: 200 });
-  if (!result.ok) return null;
-  const all = (messagesByConversation(db, new Set([conversationId])).get(conversationId) ?? []).map(messageView);
-  let fresh = all;
+  const conversation = db.conversations.find((c) => c.id === conversationId);
+  const access = conversation ? threadAccess(conversation, viewer) : null;
+  if (!conversation || !access) return null;
+  const messages = conversationMessages(db, conversationId);
+  let fresh = messages;
   if (afterId) {
-    const index = all.findIndex((m) => m.id === afterId);
-    fresh = index >= 0 ? all.slice(index + 1) : all.slice(-MESSAGE_LIMITS.threadPage);
+    const index = messages.findIndex((m) => m.id === afterId);
+    fresh = index >= 0 ? messages.slice(index + 1) : messages.slice(-MESSAGE_LIMITS.threadPage);
   }
   const known = new Set(knownIds);
-  const removedIds = all.filter((m) => m.removed && known.has(m.id)).map((m) => m.id);
-  return { messages: fresh.slice(-200), removedIds, seenMessageId: result.thread.seenMessageId, replyBlocked: result.thread.replyBlocked };
+  const removedIds = messages.filter((m) => m.removedAt && known.has(m.id)).map((m) => m.id);
+  return {
+    messages: fresh.slice(-200).map((m) => messageView(m, access === "moderator")),
+    removedIds,
+    seenMessageId: access === "participant" ? lastSeenOwnMessageId(messages, viewer.id, conversation.participantIds) : null,
+    replyBlocked: replyBlockedFor(db, conversation, viewer, access),
+  };
 }
 
 /** Mark every message of a conversation read for a participant, plus the matching notifications. Returns the number of messages marked. */

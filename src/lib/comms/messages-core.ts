@@ -99,7 +99,26 @@ const STAFF_ROLES: readonly Role[] = ["admin", "moderator", "course_creator", "b
 
 /** Instructors, evaluators and moderators can message any member. */
 export function isMessagingStaff(member: Pick<MessagingMember, "id" | "roles">, directory: MessagingDirectory): boolean {
-  return member.roles.some((r) => STAFF_ROLES.includes(r)) || (directory.teaching.get(member.id)?.size ?? 0) > 0;
+  return hasStaffRole(member.roles) || (directory.teaching.get(member.id)?.size ?? 0) > 0;
+}
+
+/** A staff role on its own (without looking at what the member teaches). */
+export function hasStaffRole(roles: readonly Role[]): boolean {
+  return roles.some((r) => STAFF_ROLES.includes(r));
+}
+
+/**
+ * Everyone who teaches something (course instructors and evaluators, batch
+ * instructors). Cheaper than a full directory: it never reads enrollments.
+ */
+export function teacherIds(source: Pick<DirectorySource, "courses" | "batches">): Set<string> {
+  const out = new Set<string>();
+  for (const c of source.courses) {
+    for (const id of c.instructorIds) out.add(id);
+    if (c.evaluatorId) out.add(c.evaluatorId);
+  }
+  for (const b of source.batches) for (const id of b.instructorIds) out.add(id);
+  return out;
 }
 
 /** Moderators (and admins) review reported conversations. */
@@ -168,23 +187,46 @@ export function decideMessaging(
   return { ok: false, reason: "not_allowed" };
 }
 
+/** What `canReply` needs to know about the other participants (looked up lazily by the caller). */
+export interface ReplyContext {
+  /** The account exists and is enabled. */
+  isEnabled: (userId: string) => boolean;
+  /** Messaging staff (`isMessagingStaff`): staff role, or teaching a course or batch. */
+  isStaff: (userId: string) => boolean;
+  /** The two members still share a course or batch as learners. */
+  areClassmates: (a: string, b: string) => boolean;
+}
+
 /**
- * May a participant post in an existing conversation? Anyone in it may reply
- * (a learner can always answer an instructor who wrote first) while messaging
- * is on and at least one other participant still has an enabled account.
+ * May a participant post in an existing conversation?
+ *  - messaging must be on, the sender an enabled participant, and at least
+ *    one other participant must still have an enabled account;
+ *  - a conversation with staff on either side stays open (a learner can
+ *    always answer an instructor or moderator who wrote first);
+ *  - a learner-to-learner conversation follows the same rule as starting one:
+ *    `studentToStudent` must still be on and the two must still be
+ *    classmates. Switching the setting off, or leaving the shared course,
+ *    stops existing conversations too.
  */
-export function canReply(
-  policy: Pick<MessagingPolicy, "enabled">,
-  conversation: Pick<Conversation, "participantIds">,
-  sender: MessagingMember,
-  isEnabled: (userId: string) => boolean,
-): MessagingDecision {
+export function canReply(policy: MessagingPolicy, conversation: Pick<Conversation, "participantIds">, sender: MessagingMember, ctx: ReplyContext): MessagingDecision {
   if (!policy.enabled) return { ok: false, reason: "disabled" };
   if (!sender.enabled || !conversation.participantIds.includes(sender.id)) return { ok: false, reason: "not_allowed" };
-  const others = conversation.participantIds.filter((id) => id !== sender.id);
-  if (!others.some(isEnabled)) return { ok: false, reason: "unavailable" };
-  return { ok: true, via: "staff" };
+  const others = conversation.participantIds.filter((id) => id !== sender.id && ctx.isEnabled(id));
+  if (!others.length) return { ok: false, reason: "unavailable" };
+  if (ctx.isStaff(sender.id) || others.some((id) => ctx.isStaff(id))) return { ok: true, via: "staff" };
+  if (!policy.studentToStudent) return { ok: false, reason: "students_off" };
+  if (!others.some((id) => ctx.areClassmates(sender.id, id))) return { ok: false, reason: "not_allowed" };
+  return { ok: true, via: "classmate" };
 }
+
+/** Why the composer of an open thread is replaced by a notice (replies use different words from new conversations). */
+export const REPLY_BLOCKED_MESSAGES: Record<MessagingDenyReason, string> = {
+  disabled: DENY_MESSAGES.disabled,
+  self: DENY_MESSAGES.self,
+  unavailable: "The other member's account is no longer active, so you can't reply.",
+  students_off: "Messages between learners are turned off on this site, so you can't reply here.",
+  not_allowed: "You no longer share a course with this member, so you can't reply here.",
+};
 
 export type ThreadAccess = "participant" | "moderator" | null;
 

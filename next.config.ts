@@ -209,7 +209,8 @@ const nextConfig: NextConfig = {
   // Pin the workspace root to this project so a stray lockfile in a parent
   // directory is not picked up as the Turbopack root.
   turbopack: {
-    root: path.resolve(__dirname),
+    // (`__dirname` exists when Next loads this file; the unit tests import it as an ES module.)
+    root: path.resolve(typeof __dirname === "string" ? __dirname : process.cwd()),
   },
   poweredByHeader: false,
   // Never copy local data, secrets or tests into `.next/standalone` (and so into the

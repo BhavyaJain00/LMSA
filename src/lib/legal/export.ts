@@ -139,9 +139,16 @@ export function exportableConversation(c: Conversation, userId: string): Row {
   return row;
 }
 
-/** A direct message without the id of a moderator who removed it (the member's own removals keep it). */
+/**
+ * A direct message without the id of a moderator who removed it (the member's
+ * own removals keep it), and without the moderator-only copy of a removed
+ * message someone else sent.
+ */
 export function exportableDirectMessage(m: DirectMessage, userId: string): Row {
-  return m.removedBy !== undefined && m.removedBy !== userId ? omit(m, ["removedBy"]) : { ...m };
+  const hidden: string[] = [];
+  if (m.removedBy !== undefined && m.removedBy !== userId) hidden.push("removedBy");
+  if (m.removedBody !== undefined && m.senderId !== userId) hidden.push("removedBody");
+  return hidden.length ? omit(m, hidden) : { ...m };
 }
 
 /**

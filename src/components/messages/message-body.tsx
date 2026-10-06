@@ -16,7 +16,7 @@ function inline(nodes: InlineNode[], mine: boolean): ReactNode[] {
         return <br key={i} />;
       case "code":
         return (
-          <code key={i} className={cn("rounded px-1 py-0.5 font-mono text-[0.85em]", mine ? "bg-black/15" : "bg-surface-3")}>
+          <code key={i} className={cn("rounded px-1 py-0.5 font-mono text-[0.85em]", mine ? "bg-accent-fg/15" : "bg-surface-3")}>
             {n.v}
           </code>
         );
@@ -46,13 +46,13 @@ export function MessageBody({ body, mine = false, className }: { body: string; m
             return <p key={i}>{inline(b.c, mine)}</p>;
           case "quote":
             return (
-              <blockquote key={i} className={cn("border-l-2 pl-3", mine ? "border-white/50 opacity-90" : "border-border-strong text-ink-muted")}>
+              <blockquote key={i} className={cn("border-s-2 ps-3", mine ? "border-accent-fg/50 opacity-90" : "border-border-strong text-ink-muted")}>
                 {inline(b.c, mine)}
               </blockquote>
             );
           case "ul":
             return (
-              <ul key={i} className="list-disc space-y-0.5 pl-5">
+              <ul key={i} className="list-disc space-y-0.5 ps-5">
                 {b.items.map((item, j) => (
                   <li key={j}>{inline(item, mine)}</li>
                 ))}
@@ -60,7 +60,7 @@ export function MessageBody({ body, mine = false, className }: { body: string; m
             );
           case "pre":
             return (
-              <pre key={i} className={cn("max-w-full overflow-x-auto rounded-lg px-3 py-2 font-mono text-xs", mine ? "bg-black/20" : "bg-surface-3")}>
+              <pre key={i} className={cn("max-w-full overflow-x-auto rounded-lg px-3 py-2 font-mono text-xs", mine ? "bg-accent-fg/20" : "bg-surface-3")}>
                 <code>{b.v}</code>
               </pre>
             );
