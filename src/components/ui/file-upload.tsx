@@ -16,8 +16,26 @@ import { Icon } from "./icons";
 import { useT } from "@/i18n/client";
 import type { Translator } from "@/i18n/translate";
 import type { MessageKey } from "@/i18n/catalog";
+import type { UploadErrorCode } from "@/lib/media/resumable-shared";
 
 type CommonT = Translator<MessageKey<"common">>;
+
+/** Catalog message for each machine-readable upload error (the English text from the server is the fallback). */
+const ERROR_KEYS: Record<UploadErrorCode, MessageKey<"common">> = {
+  "session-gone": "upload.error.sessionGone",
+  network: "upload.error.network",
+  "rate-limited": "upload.error.rateLimited",
+  "too-many-uploads": "upload.error.tooManyUploads",
+  quota: "upload.error.quota",
+  "disk-full": "upload.error.diskFull",
+  "sign-in": "upload.error.signIn",
+  "not-video": "upload.error.notVideo",
+};
+
+/** The error of an upload in the viewer's language when it has a code, else as the server sent it. */
+function errorText(s: UploadSnapshot, t: CommonT): string | null {
+  return s.errorCode ? t(ERROR_KEYS[s.errorCode]) : s.error;
+}
 
 export interface FileUploadProps {
   /** Hidden input name that carries the uploaded file URL in a form. */
@@ -300,7 +318,7 @@ function statusLine(s: UploadSnapshot, t: CommonT): string {
     case "finishing":
       return t("upload.finishing");
     case "error":
-      return s.error ?? t("upload.failed");
+      return errorText(s, t) ?? t("upload.failed");
     default:
       return "";
   }
@@ -329,7 +347,7 @@ function UploadProgress({
   // Phase changes are announced; the moving numbers are not (they would flood screen readers).
   const announcement =
     s.phase === "error"
-      ? t("upload.failedWith", { error: s.error ?? "" })
+      ? t("upload.failedWith", { error: errorText(s, t) ?? "" })
       : s.phase === "paused"
         ? t("upload.announcePaused")
         : s.phase === "finishing"

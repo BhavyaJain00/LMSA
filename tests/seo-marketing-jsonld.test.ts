@@ -210,7 +210,10 @@ describe("Course", () => {
 
   it("converts minor units by currency", () => {
     assert.equal(minorUnitsToDecimal(4900, "USD"), "49.00");
-    assert.equal(minorUnitsToDecimal(1500, "JPY"), "1500");
+    // The app stores price × 100 for every currency (formatPrice divides by 100).
+    assert.equal(minorUnitsToDecimal(500000, "JPY"), "5000");
+    assert.equal(minorUnitsToDecimal(500000, "jpy"), "5000");
+    assert.equal(minorUnitsToDecimal(500000, "KWD"), "5000.000");
     assert.equal(minorUnitsToDecimal(1234, "NOT-A-CODE"), "12.34");
   });
 

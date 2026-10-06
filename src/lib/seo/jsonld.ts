@@ -1,4 +1,5 @@
 import type { FaqItem, JobOpening, Settings } from "@/lib/types";
+import { currencyExponent } from "@/lib/payments/amounts";
 import { absoluteUrl, siteOrigin } from "./site";
 import { clampText, isoDuration, plainText } from "./text";
 
@@ -91,15 +92,16 @@ export function serializeJsonLd(data: JsonLdObject | JsonLdObject[]): string {
 /* Shared pieces                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Amount in the smallest currency unit → decimal string ("4900" USD → "49.00", JPY stays whole). */
+/**
+ * App amount → decimal string for schema.org `Offer.price`. The app stores
+ * every amount as the price × 100 whatever the currency (see `formatPrice`
+ * and payments/amounts.ts), so the value is always `amount / 100`; only the
+ * number of decimals follows the currency ("4900" USD → "49.00",
+ * 500000 JPY → "5000", 500000 KWD → "5000.000").
+ */
 export function minorUnitsToDecimal(amount: number, currency: string): string {
-  let digits = 2;
-  try {
-    digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
-  } catch {
-    digits = 2;
-  }
-  return (amount / 10 ** digits).toFixed(digits);
+  const value = Number.isFinite(amount) ? amount / 100 : 0;
+  return value.toFixed(currencyExponent(currency));
 }
 
 export interface PersonRef {
@@ -549,6 +551,16 @@ export interface JobPostingInput {
   /** ISO date-time the posting closes (auto-close date). */
   validThrough: string;
   currency: string;
+}
+
+/**
+ * When an open job stops being valid: `days` after its last update, the same
+ * base `closeExpiredJobs` (data/jobs.ts) uses, so editing or reopening a job
+ * moves `validThrough` forward exactly as it extends the job's life.
+ */
+export function jobValidThrough(job: Pick<JobOpening, "createdAt" | "updatedAt">, days: number): string {
+  const base = [job.updatedAt, job.createdAt].map((d) => (d ? Date.parse(d) : NaN)).find((t) => Number.isFinite(t)) ?? Date.now();
+  return new Date(base + days * 86_400_000).toISOString();
 }
 
 /** Google Jobs posting: title, description, dates, employment type, hiring organization, location, salary. */

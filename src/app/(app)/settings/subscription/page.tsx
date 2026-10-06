@@ -42,7 +42,7 @@ function Notice({ tone, icon, children, actions }: { tone: "warning" | "info" | 
         </span>
         <span>{children}</span>
       </p>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 pl-6 sm:pl-0">{actions}</div>}
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 ps-6 sm:ps-0">{actions}</div>}
     </div>
   );
 }
@@ -113,6 +113,21 @@ function MembershipNotice({ view }: { view: MemberMembershipView }) {
         }
       >
         <strong>This membership was cancelled.</strong> Your access runs until {formatDate(sub.currentPeriodEnd)}.
+      </Notice>
+    );
+  }
+  if (view.pendingPlan) {
+    const next = view.pendingPlan;
+    return (
+      <Notice tone="info" icon={<Icon.Refresh className="text-info" />} actions={payRenewal ?? undefined}>
+        <strong>
+          You&apos;re moving to {next.name} ({formatPrice(next.price, next.currency)}
+          {intervalSuffix(next.interval)}).
+        </strong>{" "}
+        {sub.status === "trialing" && !view.gatewayManaged
+          ? "The new plan starts with the first renewal after your trial."
+          : `The new plan starts when your membership renews on ${formatDate(sub.currentPeriodEnd)}.`}{" "}
+        Until then you keep {view.plan?.name ?? "your current plan"} and its courses.
       </Notice>
     );
   }
@@ -278,11 +293,20 @@ export default async function SubscriptionSettingsPage(props: PageProps<"/settin
 
             {view.changeTargets.length > 0 && view.plan && (
               <Card id="change-plan" className="scroll-mt-24">
-                <CardHeader title="Change plan" description="Switch between the plans on sale. The new plan's courses unlock right away." />
+                <CardHeader
+                  title="Change plan"
+                  description={
+                    view.changeBilling === "stripe"
+                      ? "Switch between the plans on sale. The new plan's courses unlock right away."
+                      : "Switch between the plans on sale. The new plan starts when your membership renews."
+                  }
+                />
                 <ChangePlanList
                   options={view.changeTargets}
+                  currentId={view.plan.id}
                   currentName={view.plan.name}
-                  billing={view.gatewayManaged ? (view.subscription.gateway === "stripe" ? "stripe" : "razorpay") : "manual"}
+                  billing={view.changeBilling}
+                  renewalLabel={view.subscription.status === "trialing" && !view.gatewayManaged ? "after your trial" : `on ${formatDate(view.subscription.currentPeriodEnd)}`}
                 />
               </Card>
             )}
@@ -312,7 +336,7 @@ export default async function SubscriptionSettingsPage(props: PageProps<"/settin
                   <TR>
                     <TH>Date</TH>
                     <TH>Description</TH>
-                    <TH className="text-right">Amount</TH>
+                    <TH className="text-end">Amount</TH>
                     <TH>Status</TH>
                     <TH>
                       <span className="sr-only">Documents</span>
@@ -327,11 +351,11 @@ export default async function SubscriptionSettingsPage(props: PageProps<"/settin
                         <p className="text-ink">{row.title}</p>
                         <p className="font-mono text-xs text-ink-muted">{row.invoiceNumber ?? row.orderId}</p>
                       </TD>
-                      <TD className="whitespace-nowrap text-right tabular-nums">{money(row.amount, row.currency)}</TD>
+                      <TD className="whitespace-nowrap text-end tabular-nums">{money(row.amount, row.currency)}</TD>
                       <TD>
                         <PaymentStatusBadge status={row.status} amount={row.amount} audience="learner" />
                       </TD>
-                      <TD className="whitespace-nowrap text-right">
+                      <TD className="whitespace-nowrap text-end">
                         {row.invoiceHref ? (
                           <Link href={row.invoiceHref} className="text-sm font-medium text-accent hover:underline">
                             Invoice

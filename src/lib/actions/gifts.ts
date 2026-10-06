@@ -19,6 +19,7 @@ import { deliverGift, giftSummary, insertGiftOrder, redeemGift, resolveGiftItem,
 import { parseGiftItemType, validateGiftInput } from "@/lib/commerce/gifts";
 import { normalizeCurrency } from "@/lib/commerce/currency";
 import { countryCode } from "@/lib/commerce/tax";
+import { reverseChargeCheck } from "@/lib/commerce/vies";
 import { fd } from "@/lib/utils";
 import { referralAffiliateIdForCheckout } from "@/lib/growth/attribution";
 
@@ -83,8 +84,12 @@ export async function placeGiftOrderAction(_prev: ActionResult<CheckoutNext> | n
     return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
   }
 
+  // A reverse-charged sale needs a VAT number the EU registry (VIES) knows.
+  const vat = await reverseChargeCheck(summary, input.vatId);
+  if (!vat.ok) return { ok: false, error: vat.error, fieldErrors: { vatId: vat.error } };
+
   const affiliateId = await referralAffiliateIdForCheckout(user.id);
-  const inserted = await insertGiftOrder({ buyer: user, item, summary, draft: gift.value, billing: billingFields(input, settings.commerce.applyTax), gateway, affiliateId });
+  const inserted = await insertGiftOrder({ buyer: user, item, summary, draft: gift.value, billing: billingFields(input, settings.commerce.applyTax), gateway, affiliateId, vatCheck: vat.vatCheck });
   if (!inserted.ok) return { ok: false, error: inserted.error };
   const { payment, existing } = inserted;
   await audit(user, "gift.order", { type: "gift", id: inserted.gift.id }, { orderId: payment.orderId, itemType: type, itemId: item.id, scheduled: !!gift.value.sendAt });

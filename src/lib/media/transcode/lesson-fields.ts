@@ -26,11 +26,20 @@ export function hlsKeyPrefix(lessonId: string, blockId: string): string {
   return `videos/${lessonId}/${blockId}/${HLS_SEGMENT}/`;
 }
 
-/** Storage key of a block's uploaded source video, or null when it is not a convertible upload. */
+/** Folder of uploaded videos (`videos/`): only files stored there passed the video container check. */
+const VIDEO_UPLOAD_DIR = "videos/";
+
+/**
+ * Storage key of a block's uploaded source video, or null when it is not a
+ * convertible upload. Only uploads stored as videos (under `videos/`, where
+ * every file's first bytes were checked for a video container) are handed
+ * to ffmpeg — never documents or other files that merely end in `.mp4`.
+ */
 export function transcodeSourceKey(src: string | undefined, siteOrigins: readonly string[] = []): string | null {
   const key = storageKeyFromUrl(src, siteOrigins);
   if (!key) return null;
   const lower = key.toLowerCase();
+  if (!lower.startsWith(VIDEO_UPLOAD_DIR)) return null;
   if (!TRANSCODABLE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return null;
   // Never feed the pipeline its own output.
   if (lower.split("/").includes(HLS_SEGMENT)) return null;
@@ -62,6 +71,20 @@ export function hlsMatchesSource(block: Pick<VideoBlock, "src" | "hlsUrl" | "sto
   return !!block.hlsUrl && !!key && block.storageKey === key;
 }
 
+/**
+ * Storage keys of the poster frames the pipeline captures:
+ * `posters/<lessonId>/<blockId>-<version>.jpg` (lesson video blocks) and
+ * `posters/course/<courseId>/preview-<version>.jpg` (course previews).
+ * Nothing else is stored under `posters/`.
+ */
+export const GENERATED_POSTER_KEY = /^posters\/(?:course\/[A-Za-z0-9_-]{1,64}\/preview|[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64})-[A-Za-z0-9_-]{1,64}\.jpg$/;
+
+/** Storage key of a poster the pipeline generated, or null for any other poster (one an editor set). */
+export function generatedPosterKey(posterUrl: string | undefined, siteOrigins: readonly string[] = []): string | null {
+  const key = storageKeyFromUrl(posterUrl, siteOrigins);
+  return key && GENERATED_POSTER_KEY.test(key) ? key : null;
+}
+
 function sameSource(a: string | undefined, b: string | undefined, siteOrigins: readonly string[]): boolean {
   if (!a || !b) return false;
   const ka = storageKeyFromUrl(a, siteOrigins);
@@ -75,9 +98,12 @@ function sameSource(a: string | undefined, b: string | undefined, siteOrigins: r
  *  - same block id and same source file → keep `hlsUrl`, `transcode`,
  *    `storageKey`, `transcriptId`; keep the stored duration and poster when
  *    the submitted block leaves them empty;
- *  - a new source file → the old HLS output and transcript no longer apply
- *    and are dropped (the new file is queued for conversion).
- * Values sent by the client for managed fields are never trusted.
+ *  - a new source file → the old HLS output, transcript and generated
+ *    poster no longer apply and are dropped (the new file is queued for
+ *    conversion and gets its own poster).
+ * Values sent by the client for managed fields are never trusted: a poster
+ * the pipeline generated is kept only when it is the one stored on the
+ * block; posters an editor set are the editor's to change.
  */
 export function preserveManagedVideoFields(previous: readonly LessonBlock[], next: LessonBlock[], siteOrigins: readonly string[] = []): LessonBlock[] {
   const before = new Map(previous.filter((b): b is VideoBlock => b.type === "video").map((b) => [b.id, b]));
@@ -89,7 +115,10 @@ export function preserveManagedVideoFields(previous: readonly LessonBlock[], nex
     delete out.storageKey;
     delete out.transcriptId;
     const old = before.get(block.id);
-    if (!old || !sameSource(old.src, block.src, siteOrigins)) return out;
+    const same = !!old && sameSource(old.src, block.src, siteOrigins);
+    // A generated poster shows a frame of the file it was made from: never carry one over to another file or block.
+    if (out.posterUrl && generatedPosterKey(out.posterUrl, siteOrigins) && (!same || out.posterUrl !== old?.posterUrl)) delete out.posterUrl;
+    if (!old || !same) return out;
     if (old.hlsUrl) out.hlsUrl = old.hlsUrl;
     if (old.transcode) out.transcode = old.transcode;
     if (old.storageKey) out.storageKey = old.storageKey;

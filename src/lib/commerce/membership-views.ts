@@ -10,7 +10,6 @@ import { currentSubscription } from "./access";
 import { changeTargets } from "./membership-service";
 import { monthlyEquivalent, planSavingsPercent } from "./plans";
 import {
-  GRACE_DAYS,
   SUBSCRIPTION_STATUS_LABELS,
   isGatewayManaged,
   isOngoing,
@@ -144,6 +143,10 @@ export interface MemberMembershipView {
   /** Why resuming is not offered (Razorpay cannot undo a scheduled cancellation). */
   resumeNote?: string;
   changeTargets: { id: string; name: string; price: number; currency: string; interval: MembershipPlan["interval"] }[];
+  /** Plan the membership moves to at its next renewal (a scheduled change), when there is one. */
+  pendingPlan: { id: string; name: string; price: number; currency: string; interval: MembershipPlan["interval"] } | null;
+  /** How a plan change is settled: right away with proration (Stripe), or at the next renewal. */
+  changeBilling: "stripe" | "razorpay" | "manual";
   /** Unpaid renewal order of a membership managed here. */
   renewalOrder: { orderId: string; amount: number; currency: string } | null;
   /** Offer "Renew now" (a past-due or ending manual membership without an open renewal order). */
@@ -194,11 +197,16 @@ export async function getMemberMembership(userId: string): Promise<MemberMembers
       gatewayLabel: membershipGatewayLabel(current.gateway),
       gatewayManaged: managed,
       nextChargeAt: nextChargeDate(current, plan),
-      accessUntil: lifetime ? null : current.status === "past_due" ? new Date(Date.parse(current.currentPeriodEnd) + GRACE_DAYS * 86_400_000).toISOString() : until !== null ? current.currentPeriodEnd : null,
+      accessUntil: lifetime ? null : current.status === "past_due" && until !== null ? new Date(until).toISOString() : until !== null ? current.currentPeriodEnd : null,
       canCancel: ongoing && !current.cancelAtPeriodEnd && !lifetime,
       canResume: ongoing && current.cancelAtPeriodEnd && !(managed && current.gateway === "razorpay"),
       resumeNote: ongoing && current.cancelAtPeriodEnd && managed && current.gateway === "razorpay" ? "Razorpay can't undo a scheduled cancellation. You can join again after it ends." : undefined,
-      changeTargets: ongoing ? changeTargets(db.plans, plan).map((p) => ({ id: p.id, name: p.name, price: p.price, currency: p.currency, interval: p.interval })) : [],
+      changeTargets: ongoing ? changeTargets(db.plans, plan, current.pendingPlanId).map((p) => ({ id: p.id, name: p.name, price: p.price, currency: p.currency, interval: p.interval })) : [],
+      pendingPlan: (() => {
+        const next = ongoing && current.pendingPlanId ? plans.get(current.pendingPlanId) : undefined;
+        return next ? { id: next.id, name: next.name, price: next.price, currency: next.currency, interval: next.interval } : null;
+      })(),
+      changeBilling: managed ? (current.gateway === "stripe" ? "stripe" : "razorpay") : "manual",
       renewalOrder: open && !managed ? { orderId: open.orderId, amount: open.amount, currency: open.currency } : null,
       canRenew: !managed && !lifetime && !open && !current.cancelAtPeriodEnd && (current.status === "past_due" || current.status === "active"),
       paymentUpdateUrl: await stripePaymentUpdateUrl(current),

@@ -335,7 +335,8 @@ describe("worker", () => {
   it("records a failure with the error, settles the block and tells the instructors", async () => {
     await seed([video("blk_tq")], [job({ id: "tcj_run" })]);
     mkdirSync(path.join(uploadRoot(), "videos"), { recursive: true });
-    writeFileSync(path.join(uploadRoot(), KEY), "not really a video");
+    // An MP4 signature ("ftyp" box) so the file reaches ffprobe, which cannot read it.
+    writeFileSync(path.join(uploadRoot(), KEY), Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from("ftypisom"), Buffer.alloc(32)]));
     await runWorker();
     const db = await getDb();
     const row = db.transcodeJobs[0]!;

@@ -9,6 +9,11 @@ import { addDaysIso, addInterval, isRecurringInterval, monthlyEquivalent } from 
  *  - active     paid up until `currentPeriodEnd` (renews unless `cancelAtPeriodEnd`).
  *  - past_due   the renewal was not paid; access continues for a grace period
  *               while the gateway retries or the member pays the renewal order.
+ *               The grace runs from the start of the unpaid period: the end of
+ *               the paid period for memberships managed here (their period
+ *               only moves when a payment arrives), and the moment the charge
+ *               failed for gateway subscriptions (Stripe moves the period to
+ *               the unpaid one as soon as the renewal invoice is created).
  *  - cancelled  ended by the member or an administrator; access runs until
  *               `currentPeriodEnd` (set to the end moment on an immediate cancel).
  *  - expired    ended because payment never arrived; no access.
@@ -53,15 +58,33 @@ function ms(iso: string): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+type AccessFields = Pick<Subscription, "status" | "currentPeriodEnd" | "gateway" | "gatewaySubscriptionId"> & Partial<Pick<Subscription, "currentPeriodStart" | "pastDueSince">>;
+
+/**
+ * When the grace period of a past-due membership ends (ms). Memberships
+ * managed here keep their paid period until a payment extends it, so the
+ * grace follows its end. A gateway may already report the unpaid period
+ * (Stripe advances it when the renewal invoice is created, paid or not), so
+ * there the grace starts when the charge failed (`pastDueSince`, else the
+ * start of the reported period), and never later than the period end.
+ */
+export function pastDueGraceEnd(sub: AccessFields): number {
+  const end = ms(sub.currentPeriodEnd);
+  const grace = GRACE_DAYS * 86_400_000;
+  if (!isGatewayManaged(sub)) return end + grace;
+  const since = [sub.pastDueSince, sub.currentPeriodStart].map((v) => (v ? ms(v) : 0)).find((t) => t > 0);
+  return Math.min(end, since ?? end) + grace;
+}
+
 /** Last instant (ms) the subscription unlocks courses, or null when it grants nothing. */
-export function subscriptionAccessUntil(sub: Pick<Subscription, "status" | "currentPeriodEnd" | "gateway" | "gatewaySubscriptionId">): number | null {
+export function subscriptionAccessUntil(sub: AccessFields): number | null {
   const end = ms(sub.currentPeriodEnd);
   switch (sub.status) {
     case "trialing":
     case "active":
       return end + (isGatewayManaged(sub) ? GATEWAY_LEEWAY_HOURS * 3_600_000 : 0);
     case "past_due":
-      return end + GRACE_DAYS * 86_400_000;
+      return pastDueGraceEnd(sub);
     case "cancelled":
       return end;
     default:
@@ -70,7 +93,7 @@ export function subscriptionAccessUntil(sub: Pick<Subscription, "status" | "curr
 }
 
 /** Whether the subscription unlocks its plan's courses at `now`. */
-export function subscriptionGrantsAccess(sub: Pick<Subscription, "status" | "currentPeriodEnd" | "gateway" | "gatewaySubscriptionId">, now: number = Date.now()): boolean {
+export function subscriptionGrantsAccess(sub: AccessFields, now: number = Date.now()): boolean {
   const until = subscriptionAccessUntil(sub);
   return until !== null && now < until;
 }
@@ -83,14 +106,21 @@ export function trialEligible(userSubscriptions: readonly Pick<Subscription, "id
 /**
  * The status a manual (not gateway managed) subscription should move to at
  * `now`, or null when it stays as it is.
+ *
+ * The grace period is for renewals that were not paid on time. A trial that
+ * ends without a payment is over (expired), unless its order is still
+ * awaiting confirmation (`awaitingPayment`: the member placed a manual
+ * payment the administrators have not confirmed yet).
  */
 export function advanceSubscription(
   sub: Pick<Subscription, "status" | "currentPeriodEnd" | "cancelAtPeriodEnd" | "gateway" | "gatewaySubscriptionId">,
   now: number = Date.now(),
+  opts: { awaitingPayment?: boolean } = {},
 ): SubscriptionStatus | null {
   if (isGatewayManaged(sub)) return null;
   const end = ms(sub.currentPeriodEnd);
   const graceEnd = end + GRACE_DAYS * 86_400_000;
+  if (sub.status === "trialing" && now >= end && !sub.cancelAtPeriodEnd && !opts.awaitingPayment) return "expired";
   if (sub.status === "trialing" || sub.status === "active") {
     if (now < end) return null;
     if (sub.cancelAtPeriodEnd) return "cancelled";
@@ -215,19 +245,41 @@ export function mapRazorpayStatus(status: string, opts: { chargeInFuture: boolea
  * anything changed, `undefined` when nothing did.
  */
 export function applySnapshot(sub: Subscription, snap: SubscriptionSnapshot, nowIso: string): { previousStatus: SubscriptionStatus } | undefined {
-  const before = { status: sub.status, start: sub.currentPeriodStart, end: sub.currentPeriodEnd, cancel: sub.cancelAtPeriodEnd };
+  const before = { status: sub.status, start: sub.currentPeriodStart, end: sub.currentPeriodEnd, cancel: sub.cancelAtPeriodEnd, pastDue: sub.pastDueSince, plan: sub.planId, pending: sub.pendingPlanId };
   const ending = snap.status === "cancelled" || snap.status === "expired";
+  let advanced = false;
   if (snap.currentPeriodEnd) {
     const newer = ms(snap.currentPeriodEnd) >= ms(sub.currentPeriodEnd);
     if (ending || newer) {
+      advanced = ms(snap.currentPeriodEnd) > ms(sub.currentPeriodEnd);
       sub.currentPeriodEnd = snap.currentPeriodEnd;
       if (snap.currentPeriodStart) sub.currentPeriodStart = snap.currentPeriodStart;
     }
   }
+  // The grace of a failed renewal runs from the first report of it (redeliveries keep the first moment).
+  if (snap.status === "past_due") {
+    if (sub.status !== "past_due" || !sub.pastDueSince) sub.pastDueSince = nowIso;
+  } else if (sub.pastDueSince) {
+    delete sub.pastDueSince;
+  }
+  // A plan change scheduled for the next cycle (Razorpay) takes effect once that cycle is paid.
+  if (sub.pendingPlanId && advanced && snap.status === "active") {
+    sub.planId = sub.pendingPlanId;
+    delete sub.pendingPlanId;
+  } else if (sub.pendingPlanId && ending) {
+    delete sub.pendingPlanId;
+  }
   sub.status = snap.status;
   if (snap.cancelAtPeriodEnd !== undefined) sub.cancelAtPeriodEnd = ending ? false : snap.cancelAtPeriodEnd;
   else if (ending) sub.cancelAtPeriodEnd = false;
-  const changed = before.status !== sub.status || before.start !== sub.currentPeriodStart || before.end !== sub.currentPeriodEnd || before.cancel !== sub.cancelAtPeriodEnd;
+  const changed =
+    before.status !== sub.status ||
+    before.start !== sub.currentPeriodStart ||
+    before.end !== sub.currentPeriodEnd ||
+    before.cancel !== sub.cancelAtPeriodEnd ||
+    before.pastDue !== sub.pastDueSince ||
+    before.plan !== sub.planId ||
+    before.pending !== sub.pendingPlanId;
   if (!changed) return undefined;
   sub.updatedAt = nowIso;
   return { previousStatus: before.status };

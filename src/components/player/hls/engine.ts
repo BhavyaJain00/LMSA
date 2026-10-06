@@ -67,6 +67,15 @@ export interface HlsStats {
 export type HlsFatalReason = "unsupported" | "network" | "auth" | "media" | "parse";
 
 export class HlsFatalError extends Error {
+  /**
+   * Playback position (seconds) when the engine gave up, captured before it
+   * detached from the element (detaching resets `currentTime` to 0). Set by
+   * the engine when it reports the error through `onFatal`.
+   */
+  position?: number;
+  /** Whether the video was playing when the engine gave up. */
+  wasPlaying?: boolean;
+
   constructor(
     readonly reason: HlsFatalReason,
     message: string,
@@ -189,9 +198,10 @@ export class HlsEngine {
   private pendingStart: number;
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
-  private eosSignalled = false;
   private durationSet = false;
   private authPromise: Promise<boolean> | null = null;
+  /** Master reload in flight (re-signed URL): a second request for the same URL joins it. */
+  private masterReload: { url: string; promise: Promise<void> } | null = null;
   private readonly lifetime = new AbortController();
 
   constructor(opts: HlsEngineOptions) {
@@ -263,7 +273,8 @@ export class HlsEngine {
   updateMasterUrl(url: string): void {
     if (this.destroyed || !url) return;
     const next = absoluteUrl(url);
-    if (next === this.masterUrl) return;
+    // Already in use, or being loaded (a 403 recovery re-signs through the same hook that calls this).
+    if (next === this.masterUrl || next === this.masterReload?.url) return;
     void this.reloadMaster(next).catch(() => undefined);
   }
 
@@ -559,7 +570,16 @@ export class HlsEngine {
    * matched by their position in the master, loaded media playlists are
    * reloaded so segment URLs carry fresh tokens.
    */
-  private async reloadMaster(url: string): Promise<void> {
+  private reloadMaster(url: string): Promise<void> {
+    if (this.masterReload?.url === url) return this.masterReload.promise;
+    const promise = this.doReloadMaster(url).finally(() => {
+      if (this.masterReload?.promise === promise) this.masterReload = null;
+    });
+    this.masterReload = { url, promise };
+    return promise;
+  }
+
+  private async doReloadMaster(url: string): Promise<void> {
     const { text } = await loadText(url, { timeoutMs: PLAYLIST_TIMEOUT_MS, signal: this.lifetime.signal });
     this.checkAlive();
     this.masterUrl = url;
@@ -664,7 +684,11 @@ export class HlsEngine {
     };
     try {
       const t = this.playhead();
-      await this.evictBuffer(track, t);
+      // Once the end of the stream is signalled, a removal would reopen the MediaSource
+      // (MSE: remove() on an "ended" source sets it back to "open") and the element would
+      // wait for more data instead of firing `ended`. The back buffer is bounded anyway:
+      // everything left is the last forward window.
+      if (this.ms.readyState === "open") await this.evictBuffer(track, t);
       current();
       const info = bufferInfo(toRanges(track.sb.buffered), t, MAX_HOLE);
       if (info.ahead >= this.forwardTarget) return;
@@ -728,7 +752,6 @@ export class HlsEngine {
       this.estimator.sample(result.ms, result.bytes);
       current();
       await this.append(track, result.data, info.ahead);
-      this.eosSignalled = false;
       if (isMain) this.recordFragment({ start: segment.start, end: segment.start + segment.duration, level });
       this.segmentsLoaded++;
       this.bytesLoaded += result.bytes;
@@ -903,15 +926,20 @@ export class HlsEngine {
     }
   }
 
+  /**
+   * Signal the end of the stream once every track has appended its last
+   * segment. Keyed on the MediaSource state rather than a flag: an append or
+   * a removal after the signal (a seek, a quality change) reopens the source,
+   * and the end must then be signalled again.
+   */
   private async maybeEndOfStream(): Promise<void> {
     const ms = this.ms;
-    if (!ms || this.eosSignalled || ms.readyState !== "open") return;
+    if (!ms || ms.readyState !== "open") return;
     if (!this.tracks.every((t) => t.ended)) return;
     await Promise.all(this.tracks.map((t) => t.chain));
     if (this.destroyed || ms.readyState !== "open" || this.tracks.some((t) => t.sb.updating || t.loading)) return;
     try {
       ms.endOfStream();
-      this.eosSignalled = true;
     } catch {
       /* a SourceBuffer started updating; retried on the next tick */
     }
@@ -948,7 +976,6 @@ export class HlsEngine {
       track.last = null;
       track.ended = false;
     }
-    this.eosSignalled = false;
     this.schedule(0);
   };
 
@@ -1004,6 +1031,10 @@ export class HlsEngine {
         : err instanceof PlaylistParseError
           ? new HlsFatalError("parse", err.message)
           : new HlsFatalError("media", err instanceof Error ? err.message : "The video stream failed.");
+    // Detaching resets the element's position to 0: remember where playback was for the fallback.
+    const v = this.video;
+    fatal.position = this.playhead();
+    fatal.wasPlaying = !v.paused && !v.ended;
     const cb = this.opts.onFatal;
     this.destroy();
     cb?.(fatal);

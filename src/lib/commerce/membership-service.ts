@@ -14,12 +14,14 @@ import {
   retrieveStripeSubscription,
   setStripeCancelAtPeriodEnd,
 } from "@/lib/payments/stripe";
-import { cancelRazorpaySubscription, changeRazorpaySubscriptionPlan } from "@/lib/payments/razorpay";
+import { cancelRazorpayScheduledChanges, cancelRazorpaySubscription, changeRazorpaySubscriptionPlan, fetchRazorpaySubscription } from "@/lib/payments/razorpay";
+import { notifyMany, type NotifyInput } from "@/lib/services/notifications";
 import { computeOrderSummary, insertPendingOrder, itemFromPlan, orderTaxFields } from "@/lib/data/commerce";
 import { membershipOrderFor, resolveCourseAccess } from "./access";
 import { sendMembershipMessage } from "./emails";
-import { patchSubscription } from "./membership-store";
+import { paidCurrentPeriod, patchSubscription } from "./membership-store";
 import {
+  applyRazorpaySubscription,
   applyStripeSubscription,
   ensureRazorpayPlan,
   ensureStripePrice,
@@ -114,22 +116,41 @@ export async function resumeMembership(sub: Subscription): Promise<ServiceResult
   return { ok: true, message: "Your membership will continue. Welcome back!" };
 }
 
-/** Plans a member can switch to from `current`. */
-export function changeTargets(plans: readonly MembershipPlan[], current: MembershipPlan | null): MembershipPlan[] {
+/**
+ * Plans a member can switch to from `current`. With a change already
+ * scheduled (`pendingPlanId`), the scheduled plan is left out and the current
+ * plan is offered again, to keep it.
+ */
+export function changeTargets(plans: readonly MembershipPlan[], current: MembershipPlan | null, pendingPlanId?: string): MembershipPlan[] {
   if (!current || !isRecurringInterval(current.interval)) return [];
-  return plans.filter((p) => p.active && p.id !== current.id && isRecurringInterval(p.interval));
+  return plans.filter((p) => {
+    if (!p.active || !isRecurringInterval(p.interval)) return false;
+    if (pendingPlanId) return p.id !== pendingPlanId;
+    return p.id !== current.id;
+  });
+}
+
+/** Stripe prorates a plan change, so only its memberships switch right away. */
+export function switchesImmediately(sub: Pick<Subscription, "gateway" | "gatewaySubscriptionId">): boolean {
+  return isGatewayManaged(sub) && sub.gateway === "stripe";
 }
 
 /**
  * Move a membership to another monthly/yearly plan. Stripe prorates the
- * difference on the next invoice; Razorpay bills the new plan from the next
- * cycle; memberships managed here switch now and renew at the new price.
- * The new plan's courses are unlocked right away in every case.
+ * difference on the next invoice, so a Stripe membership switches (and the
+ * new plan's courses unlock) right away. Nothing is charged for the
+ * difference on Razorpay (it bills the new plan from the next cycle) or on
+ * memberships managed here (renewal orders), so there the change is
+ * scheduled: the membership keeps its current plan and courses until it
+ * renews on the new one. Choosing the current plan again cancels a
+ * scheduled change.
  */
 export async function changeMembershipPlan(sub: Subscription, target: MembershipPlan): Promise<ServiceResult> {
   if (!isOngoing(sub)) return { ok: false, error: "This membership has ended. Choose a plan to join again." };
   const current = await planOf(sub);
-  if (!changeTargets([target], current).length) return { ok: false, error: "You can't switch to this plan." };
+  if (!changeTargets([target], current, sub.pendingPlanId).length) return { ok: false, error: "You can't switch to this plan." };
+  const immediate = switchesImmediately(sub);
+  const keep = target.id === sub.planId;
   const db = await getDb();
   // Taxed for the member's billing country (their latest membership order), like their renewals.
   const lastOrder = db.payments
@@ -151,21 +172,34 @@ export async function changeMembershipPlan(sub: Subscription, target: Membership
       });
       await applyStripeSubscription(updated);
     } else if (isGatewayManaged(sub) && sub.gateway === "razorpay") {
-      const razorpayPlanId = await ensureRazorpayPlan(target, amount, summary.currency);
-      await changeRazorpaySubscriptionPlan(sub.gatewaySubscriptionId!, razorpayPlanId);
+      // Razorpay switches at the end of the cycle; choosing the current plan again drops the scheduled switch.
+      if (keep) {
+        await cancelRazorpayScheduledChanges(sub.gatewaySubscriptionId!);
+      } else {
+        const razorpayPlanId = await ensureRazorpayPlan(target, amount, summary.currency);
+        await changeRazorpaySubscriptionPlan(sub.gatewaySubscriptionId!, razorpayPlanId);
+      }
     }
   } catch (error) {
     return fail(error);
   }
   await patchSubscription(sub.id, (row) => {
-    row.planId = target.id;
+    if (immediate) row.planId = target.id;
+    else if (keep) delete row.pendingPlanId;
+    else row.pendingPlanId = target.id;
     row.cancelAtPeriodEnd = false;
     return true;
   });
+  // An open renewal order was priced for the old plan: the next one is created for the new plan.
   if (!isGatewayManaged(sub)) await closeRenewalOrders(sub.id, "The membership moved to another plan.");
-  await sendMembershipMessage(sub.id, "plan_changed", { previousPlanName: current?.name });
-  const when = isGatewayManaged(sub) && sub.gateway === "stripe" ? "Any price difference is prorated on your next invoice." : "The new price applies from your next renewal.";
-  return { ok: true, message: `You're now on ${target.name}. ${when}` };
+  if (immediate) {
+    await sendMembershipMessage(sub.id, "plan_changed", { previousPlanName: current?.name });
+    return { ok: true, message: `You're now on ${target.name}. Any price difference is prorated on your next invoice.` };
+  }
+  if (keep) return { ok: true, message: `The plan change was cancelled. You stay on ${target.name}.` };
+  await sendMembershipMessage(sub.id, "plan_change_scheduled");
+  const when = sub.status === "trialing" ? "at the first renewal after your trial" : `when your membership renews on ${formatDate(sub.currentPeriodEnd)}`;
+  return { ok: true, message: `You'll move to ${target.name} ${when}. Until then you keep ${current?.name ?? "your current plan"} and its courses.` };
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,7 +215,9 @@ export async function changeMembershipPlan(sub: Subscription, target: Membership
  */
 export async function openRenewalOrder(sub: Subscription, opts: { notifyMember?: boolean } = {}): Promise<Payment | null> {
   const db = await getDb();
-  const plan = db.plans.find((p) => p.id === sub.planId);
+  // A scheduled plan change takes effect with this renewal (when that plan is still sold).
+  const pending = sub.pendingPlanId ? db.plans.find((p) => p.id === sub.pendingPlanId && p.active && isRecurringInterval(p.interval)) : undefined;
+  const plan = pending ?? db.plans.find((p) => p.id === sub.planId);
   const user = db.users.find((u) => u.id === sub.userId);
   if (!plan || !user || !isRecurringInterval(plan.interval) || isGatewayManaged(sub)) return null;
   const open = db.payments.find((p) => p.subscriptionId === sub.id && p.itemType === "plan" && p.status === "pending");
@@ -282,10 +318,13 @@ export async function runMembershipMaintenance(opts: { now?: Date; force?: boole
   const db = await getDb();
   const subs = db.subscriptions.filter((s) => !opts.userId || s.userId === opts.userId).map((s) => ({ ...s }));
 
+  // A trial whose order still awaits confirmation gets the grace period; an unpaid one ends with it.
+  const awaitingPayment = (payments: readonly Payment[], subscriptionId: string) =>
+    payments.some((p) => p.subscriptionId === subscriptionId && p.itemType === "plan" && p.status === "pending");
   for (const sub of subs) {
-    if (!advanceSubscription(sub, nowMs)) continue;
-    const res = await patchSubscription(sub.id, (row) => {
-      const next = advanceSubscription(row, nowMs);
+    if (!advanceSubscription(sub, nowMs, { awaitingPayment: awaitingPayment(db.payments, sub.id) })) continue;
+    const res = await patchSubscription(sub.id, (row, d) => {
+      const next = advanceSubscription(row, nowMs, { awaitingPayment: awaitingPayment(d.payments, row.id) });
       if (!next) return false;
       row.status = next;
       if (next === "cancelled" || next === "expired") row.cancelAtPeriodEnd = false;
@@ -323,6 +362,68 @@ export async function runMembershipMaintenance(opts: { now?: Date; force?: boole
     }
   }
   return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* Refunds                                                             */
+/* ------------------------------------------------------------------ */
+
+async function alertAdmins(input: NotifyInput): Promise<void> {
+  try {
+    const db = await getDb();
+    await notifyMany(
+      db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id),
+      input,
+    );
+  } catch (error) {
+    console.error("[memberships] could not notify administrators:", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Cancel a Stripe/Razorpay subscription now; true when it no longer bills the member. */
+async function stopGatewaySubscription(sub: Subscription): Promise<boolean> {
+  if (!isConfigured(sub.gateway)) return false;
+  try {
+    if (sub.gateway === "stripe") {
+      await applyStripeSubscription(await cancelStripeSubscriptionNow(sub.gatewaySubscriptionId!));
+      return true;
+    }
+    const live = await fetchRazorpaySubscription(sub.gatewaySubscriptionId!, { timeoutMs: 15_000 });
+    if (["cancelled", "completed", "expired"].includes(live.status)) {
+      await applyRazorpaySubscription(live);
+      return true;
+    }
+    await applyRazorpaySubscription(await cancelRazorpaySubscription(sub.gatewaySubscriptionId!, false));
+    return true;
+  } catch (error) {
+    console.warn(`[memberships] could not cancel ${sub.gateway} subscription ${sub.gatewaySubscriptionId}: ${gatewayErrorMessage(error)}`);
+    return false;
+  }
+}
+
+/**
+ * Bookkeeping after a membership order was fully refunded (from the
+ * `payment.refunded` event). The refund already ended the membership's
+ * access when the order paid for its current period; a Stripe/Razorpay
+ * subscription must also stop billing, or the member would be charged again
+ * at the next renewal. When the gateway can't be reached the
+ * administrators are asked to cancel it in the gateway dashboard.
+ */
+export async function afterMembershipRefunded(paymentId: string): Promise<void> {
+  const db = await getDb();
+  const order = db.payments.find((p) => p.id === paymentId);
+  if (!order || order.itemType !== "plan" || order.status !== "refunded" || !order.subscriptionId) return;
+  const sub = db.subscriptions.find((s) => s.id === order.subscriptionId);
+  if (!sub || !isGatewayManaged(sub) || !paidCurrentPeriod(db, order, sub)) return;
+  if (await stopGatewaySubscription({ ...sub })) return;
+  const name = sub.gateway === "stripe" ? "Stripe" : "Razorpay";
+  await alertAdmins({
+    type: "system",
+    subject: `Cancel the ${name} subscription of order ${order.orderId}`,
+    message: `Order ${order.orderId} was refunded and the membership was ended here, but its ${name} subscription (${sub.gatewaySubscriptionId}) could not be cancelled. Cancel it in the ${name} dashboard so the member is not charged again.`,
+    link: `/admin/settings/transactions?search=${encodeURIComponent(order.orderId)}`,
+    dedupeKey: `membership-stop:${sub.gatewaySubscriptionId}`,
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,7 +516,7 @@ export async function grantMembershipByAdmin(input: { userId: string; planId: st
     createdAt: nowIso,
   });
   if (!inserted.ok) return { ok: false, error: inserted.error };
-  if (inserted.existing) return { ok: false, error: `${user.name} has an unpaid order for this plan (${inserted.payment.orderId}). Confirm or cancel it first.` };
+  if (inserted.existing) return { ok: false, error: `${user.name} has an unpaid membership order (${inserted.payment.orderId}). Confirm or cancel it first.` };
   const res = await fulfillPayment(inserted.payment.id, undefined, { source: "admin" });
   if (!res.ok) return { ok: false, error: res.error };
   const subscriptionId = (await getDb()).payments.find((p) => p.id === inserted.payment.id)?.subscriptionId;

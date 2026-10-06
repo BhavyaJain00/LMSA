@@ -1,8 +1,9 @@
-import { OG_CONTENT_TYPE, renderOgCard, renderSiteOgCard } from "@/components/seo/og-card";
+import { OG_CONTENT_TYPE, renderFallbackOgCard, renderOgCard } from "@/components/seo/og-card";
+import { getSettings } from "@/lib/db/store";
 import { getBatchBySlug } from "@/lib/data/batches";
 import { getPublicUsers } from "@/lib/data/users";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
-import { isBatchPublic } from "@/lib/seo/visibility";
+import { isBatchPublic, sectionIsPublic } from "@/lib/seo/visibility";
 import { plainText } from "@/lib/seo/text";
 import { formatDate, formatPrice } from "@/lib/utils";
 
@@ -12,8 +13,9 @@ export const contentType = OG_CONTENT_TYPE;
 
 export default async function BatchOpengraphImage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  if (!sectionIsPublic(await getSettings(), "batches")) return renderFallbackOgCard();
   const batch = await getBatchBySlug(slug);
-  if (!batch || !isBatchPublic(batch)) return renderSiteOgCard();
+  if (!batch || !isBatchPublic(batch)) return renderFallbackOgCard();
   const instructors = (await getPublicUsers(batch.instructorIds)).map((u) => u.name);
   const facts = [`${formatDate(batch.startDate)} – ${formatDate(batch.endDate)}`];
   if (instructors.length) facts.push(`With ${instructors.slice(0, 2).join(" & ")}`);

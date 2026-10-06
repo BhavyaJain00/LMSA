@@ -1,4 +1,4 @@
-import { OG_CONTENT_TYPE, renderOgCard, renderSiteOgCard } from "@/components/seo/og-card";
+import { OG_CONTENT_TYPE, renderFallbackOgCard, renderOgCard } from "@/components/seo/og-card";
 import { getSettings } from "@/lib/db/store";
 import { getProfileView } from "@/lib/data/profile";
 import { loadAvatarDataUri } from "@/lib/seo/avatar-image";
@@ -20,7 +20,7 @@ export default async function ProfileOpengraphImage({ params }: { params: Promis
   const { username } = await params;
   const name = decodeSegment(username);
   const [settings, view] = await Promise.all([getSettings(), name ? getProfileView(name) : Promise.resolve(null)]);
-  if (!view || !isIndexableProfileFor(view, settings)) return renderSiteOgCard();
+  if (!view || !isIndexableProfileFor(view, settings)) return renderFallbackOgCard();
 
   const { user, stats } = view;
   const content = profileCardContent({ user, stats }, { certifications: settings.features.certifications, badges: settings.features.badges });

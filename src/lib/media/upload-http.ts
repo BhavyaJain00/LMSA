@@ -4,7 +4,7 @@ import type { User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/auth/session";
 import { SlidingWindowRateLimiter, type RateLimitRule } from "@/lib/auth/rate-limit";
-import { UPLOAD_LENGTH_HEADER, UPLOAD_OFFSET_HEADER } from "./resumable-shared";
+import { UPLOAD_LENGTH_HEADER, UPLOAD_OFFSET_HEADER, type UploadErrorCode } from "./resumable-shared";
 import { UploadError } from "./resumable";
 
 /**
@@ -20,21 +20,23 @@ const limiter: SlidingWindowRateLimiter = (g.__llUploadLimiter ??= new SlidingWi
 export const UPLOAD_RATE_LIMITS = {
   /** New uploads started per account. */
   create: { limit: 30, windowMs: 10 * 60_000 },
+  /** Single-request uploads (`POST /api/upload`: images, documents, avatars) per account. */
+  single: { limit: 60, windowMs: 10 * 60_000 },
   /** Chunks, offset checks and completions per account (8 MB chunks: plenty for gigabit links). */
   transfer: { limit: 1200, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;
 
 export const NO_STORE = { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } as const;
 
-export function jsonError(status: number, error: string, offset?: number | null, extra: Record<string, string> = {}): NextResponse {
+export function jsonError(status: number, error: string, offset?: number | null, extra: Record<string, string> = {}, code?: UploadErrorCode | null): NextResponse {
   const headers: Record<string, string> = { ...NO_STORE, ...extra };
   if (offset !== null && offset !== undefined) headers[UPLOAD_OFFSET_HEADER] = String(offset);
-  return NextResponse.json({ ok: false, error, ...(offset !== null && offset !== undefined ? { offset } : {}) }, { status, headers });
+  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(offset !== null && offset !== undefined ? { offset } : {}) }, { status, headers });
 }
 
 /** Map an exception to a response (unexpected errors are logged and answered with 500). */
 export function errorResponse(err: unknown): NextResponse {
-  if (err instanceof UploadError) return jsonError(err.status, err.message, err.offset);
+  if (err instanceof UploadError) return jsonError(err.status, err.message, err.offset, {}, err.code);
   console.error("[uploads] request failed:", err instanceof Error ? err.message : err);
   return jsonError(500, "The upload could not be stored. Please try again.");
 }
@@ -74,10 +76,10 @@ export function isCrossSite(req: Request): boolean {
 export async function authorizeUploadRequest(req: Request, rule: keyof typeof UPLOAD_RATE_LIMITS): Promise<{ user: User } | { response: NextResponse }> {
   if (isCrossSite(req)) return { response: jsonError(403, "Uploads must come from this site.") };
   const user = await getCurrentUser();
-  if (!user) return { response: jsonError(401, "Sign in to upload files.") };
+  if (!user) return { response: jsonError(401, "Sign in to upload files.", null, {}, "sign-in") };
   const limited = limiter.hit(`upload:${rule}:${user.id}`, UPLOAD_RATE_LIMITS[rule]);
   if (!limited.ok) {
-    return { response: jsonError(429, "Too many upload requests. Please wait a moment.", null, { "Retry-After": String(Math.max(1, Math.ceil(limited.retryAfterMs / 1000))) }) };
+    return { response: jsonError(429, "Too many upload requests. Please wait a moment.", null, { "Retry-After": String(Math.max(1, Math.ceil(limited.retryAfterMs / 1000))) }, "rate-limited") };
   }
   return { user };
 }

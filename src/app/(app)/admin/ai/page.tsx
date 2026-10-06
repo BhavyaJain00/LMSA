@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { isAdmin, requireRole } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { aiSiteStatus } from "@/lib/ai/access";
-import { filterReviewRows, parseReviewFilters, reportReasons, reviewableCourses, reviewRows, reviewTabCounts, type ReviewTab } from "@/lib/ai/service";
+import { detachedClarifications, filterReviewRows, parseReviewFilters, reportReasons, reviewableCourses, reviewRows, reviewTabCounts, type ReviewTab } from "@/lib/ai/service";
 import { isReportReason, REPORT_REASONS } from "@/lib/ai/reports";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/skeleton";
@@ -12,6 +12,7 @@ import { FilterBar, ListFooter } from "@/components/assessments/list-controls";
 import { param, parsePaging } from "@/components/assessments/shared";
 import { AiAdminHeader } from "@/components/ai/admin-header";
 import { ReviewQueue, type ReviewQueueItem } from "@/components/ai/review-queue";
+import { DetachedClarifications } from "@/components/ai/detached-clarifications";
 import { stripMarkdown } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "AI tutor review" };
@@ -78,6 +79,12 @@ export default async function AiReviewPage(props: PageProps<"/admin/ai">) {
   if (filters.q) exportQuery.set("q", filters.q);
   if (filters.days) exportQuery.set("days", String(filters.days));
   const filtered = !!(filters.courseId || filters.feedback || filters.q || filters.days);
+  const detached =
+    filters.tab === "reviewed"
+      ? detachedClarifications(db, user)
+          .filter((c) => !filters.courseId || c.courseId === filters.courseId)
+          .map(({ id, courseTitle, lessonTitle, text, authorName, updatedAt }) => ({ id, courseTitle, lessonTitle, text, authorName, updatedAt }))
+      : [];
   const empty = EMPTY_COPY[filters.tab];
 
   return (
@@ -142,6 +149,8 @@ export default async function AiReviewPage(props: PageProps<"/admin/ai">) {
           description={filtered ? "Try another course, period or search term." : empty.description}
         />
       )}
+
+      <DetachedClarifications items={detached} />
     </div>
   );
 }

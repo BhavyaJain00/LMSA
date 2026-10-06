@@ -1457,6 +1457,7 @@ const adminMessages: Translation<typeof en> = {
   "pages.settings.taxes.report.amount": "Importe del impuesto",
   "pages.settings.taxes.report.total": "Total",
   "pages.settings.taxes.report.refunded": "reembolsado",
+  "pages.settings.taxes.report.vatUnverified": "VAT number not verified in VIES",
   "pages.settings.taxes.report.showing": "Se muestran los {shown, number} pedidos más recientes de {total, number}. Exporta el CSV para verlos todos.",
   "pages.settings.storage.metaTitle": "Configuración de almacenamiento y vídeo",
   "pages.settings.storage.title": "Almacenamiento y vídeo",

@@ -12,6 +12,19 @@ export function guestsCanBrowse(settings: Pick<Settings, "learning">): boolean {
   return settings.learning.allowGuestAccess;
 }
 
+/** Content sections that have public detail pages (and share images). */
+export type PublicSection = "courses" | "batches" | "programs" | "jobs";
+
+/**
+ * Whether anonymous visitors may open a section's detail pages: guests may
+ * browse and the feature is switched on. The same gate as the sitemap and
+ * the content index, used by the share images so a members-only site (or a
+ * switched-off feature) never shows titles, prices or people to strangers.
+ */
+export function sectionIsPublic(settings: Pick<Settings, "features" | "learning">, section: PublicSection): boolean {
+  return guestsCanBrowse(settings) && !!settings.features[section];
+}
+
 /** A published course whose scheduled publish time (if any) has passed. */
 export function isCoursePublic(course: Pick<Course, "published" | "publishAt">, now: number = Date.now()): boolean {
   if (!course.published) return false;

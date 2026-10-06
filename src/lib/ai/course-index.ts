@@ -19,7 +19,7 @@ import { estimateTokens, truncateToTokens } from "./text";
  */
 
 /** Bump when chunking or source selection changes so cached indexes are rebuilt. */
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 const MAX_CACHED_COURSES = 100;
 
 export interface CachedIndex {

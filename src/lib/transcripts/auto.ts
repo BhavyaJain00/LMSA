@@ -21,6 +21,7 @@ import {
   continuityPrompt,
   isMissingEncoderError,
   isPublicMediaUrl,
+  isRefusedInputError,
   languageHint,
   parseTranscriptionResponse,
   retryAfterMs,
@@ -28,6 +29,7 @@ import {
   transcriptionEndpoint,
   type AudioCodec,
 } from "./stt";
+import { SourceDownloadError, downloadPublicMedia } from "./source-download";
 
 /**
  * Automatic transcripts for lesson videos.
@@ -285,8 +287,15 @@ function setStage(stage: TranscriptionStage, extra: Partial<TranscriptionJobStat
   if (worker.current) worker.current.state = { ...worker.current.state, stage, ...extra };
 }
 
-/** Where ffmpeg reads the block's video: the stored upload, or a public URL. */
-async function sourceInput(src: string): Promise<string> {
+/**
+ * Where ffmpeg reads the block's video: the stored upload (a local path, or
+ * a presigned URL to the app's own object storage), or, for a pasted
+ * address, a copy downloaded into `workDir` first. An untrusted URL is never
+ * handed to ffmpeg: ffmpeg follows redirects and the URIs inside playlists,
+ * so it could be steered at the server's own network. The download checks
+ * every resolved address and every redirect instead (`source-download.ts`).
+ */
+async function sourceInput(src: string, workDir: string, signal: AbortSignal): Promise<string> {
   const clean = stripMediaToken(src);
   const storageKey = storageKeyFromUrl(clean, siteOrigins());
   if (storageKey) {
@@ -294,8 +303,16 @@ async function sourceInput(src: string): Promise<string> {
     if (!(await driver.head(storageKey))) throw new TranscriptionError("The video file could not be found in storage.");
     return (await driver.processingInput(storageKey, SOURCE_URL_TTL_SECONDS)).input;
   }
-  if (isPublicMediaUrl(clean)) return clean;
-  throw new TranscriptionError("This video's address cannot be read by the server. Upload the file, or use a public http(s) link.");
+  if (!isPublicMediaUrl(clean)) throw new TranscriptionError("This video's address cannot be read by the server. Upload the file, or use a public http(s) link.");
+  const file = path.join(workDir, "source.media");
+  try {
+    await downloadPublicMedia(clean, file, { signal });
+  } catch (err) {
+    if (signal.aborted) throw new TranscriptionCancelled();
+    if (err instanceof SourceDownloadError) throw new TranscriptionError(err.message);
+    throw new TranscriptionError("The video could not be downloaded for transcription.");
+  }
+  return file;
 }
 
 async function extractAudio(input: string, workDir: string, signal: AbortSignal): Promise<{ files: string[]; codec: AudioCodec }> {
@@ -307,6 +324,9 @@ async function extractAudio(input: string, workDir: string, signal: AbortSignal)
       if (codec === "mp3" && err instanceof FfmpegError && isMissingEncoderError(err.stderr)) continue;
       if (err instanceof FfmpegError && /matches no streams|does not contain any stream|Output file .* does not contain/i.test(err.stderr)) {
         throw new TranscriptionError("This video has no audio track to transcribe.");
+      }
+      if (err instanceof FfmpegError && isRefusedInputError(err.stderr)) {
+        throw new TranscriptionError("This file is not a video format that can be transcribed (MP4, WebM, MOV, MKV, Ogg or an audio file). Streaming playlists are not supported.");
       }
       throw err;
     }
@@ -397,7 +417,7 @@ async function processJob(job: Job, signal: AbortSignal): Promise<void> {
   await fs.mkdir(workDir, { recursive: true });
   try {
     setStage("extracting");
-    const input = await sourceInput(block.src);
+    const input = await sourceInput(block.src, workDir, signal);
     const { files, codec } = await extractAudio(input, workDir, signal);
 
     const parts: { offset: number; duration: number; segments: TimedSegment[] }[] = [];
@@ -444,13 +464,24 @@ async function processJob(job: Job, signal: AbortSignal): Promise<void> {
   }
 }
 
+/** Last lines of ffmpeg's output for the error message, without addresses or server paths (presigned URLs carry signatures). */
+function ffmpegDetail(stderr: string): string {
+  return stderr
+    .split("\n")
+    .slice(-2)
+    .join(" ")
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[address]")
+    .replace(/(?:[A-Za-z]:)?(?:[\\/][\w.-]+){2,}/g, "[file]")
+    .slice(0, 300);
+}
+
 async function recordFailure(job: Job, err: unknown): Promise<void> {
   const cancelled = err instanceof TranscriptionCancelled;
   const message =
     err instanceof TranscriptionError || err instanceof TranscriptionCancelled
       ? err.message
       : err instanceof FfmpegError
-        ? `${err.message}${err.stderr ? ` ${err.stderr.split("\n").slice(-2).join(" ").slice(0, 300)}` : ""}`
+        ? `${err.message}${err.stderr ? ` ${ffmpegDetail(err.stderr)}` : ""}`
         : "Something went wrong while generating the transcript.";
   if (!(err instanceof TranscriptionError) && !cancelled) console.error("[transcripts] automatic transcription failed:", err instanceof Error ? err.message : err);
   await mutate((d) => {

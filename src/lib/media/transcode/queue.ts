@@ -5,16 +5,18 @@ import type { Database, TranscodeJob, TranscodeTarget } from "@/lib/types";
 import { findById, getDb, getSettings, mutate } from "@/lib/db/store";
 import { notifyMany } from "@/lib/services/notifications";
 import { uid } from "@/lib/utils";
-import { getStorage, localStorage, s3Client, storageFor, storageKeyFromUrl, uploadRoot, uploadUrlForKey } from "@/lib/storage";
+import { getStorage, localStorage, s3Client, storageFor, uploadRoot, uploadUrlForKey } from "@/lib/storage";
 import { siteOrigins } from "../access";
 import { HLS_CONTENT_TYPES, buildMasterPlaylist, measureBandwidth, parseMasterRenditions, parseMediaSegments, type HlsVariant } from "../hls";
+import { looksLikeVideo } from "../upload";
 import { FfmpegError, detectFfmpeg, probeMedia, runFfmpeg } from "./ffmpeg";
-import { hlsVersionFolderOfKey, hlsVersionPrefix, pendingState, renditionLabel, transcodeSourceKey } from "./lesson-fields";
+import { GENERATED_POSTER_KEY, hlsVersionFolderOfKey, hlsVersionPrefix, pendingState, renditionLabel, transcodeSourceKey } from "./lesson-fields";
 import { MASTER_PLAYLIST, POSTER_FILE, buildHlsPlan, buildPosterArgs, progressPercent, renditionLadder, tailText } from "./plan";
 import {
   COURSE_PREVIEW_DIR,
   COURSE_PREVIEW_ROOT,
   coursePreviewTarget,
+  hasGeneratedPoster,
   hlsPrefixFor,
   jobIdentity,
   jobTarget,
@@ -22,12 +24,14 @@ import {
   latestJobForTarget,
   lessonBlockTarget,
   needsConversion,
+  ownGeneratedPosterKey,
   patchTargetMedia,
   planEnqueue,
   planStaleOutputRelease,
   posterKeyFor,
   readTargetMedia,
   referencedHlsVersions,
+  referencedPosterKeys,
   settledState,
 } from "./targets";
 
@@ -48,6 +52,8 @@ import {
  * deleted afterwards (unless something else still plays it).
  */
 
+/** Folder of generated poster frames in the upload storage. */
+const POSTERS_ROOT = "posters";
 /** Kill ffmpeg when it reports nothing for this long. */
 const STALL_MS = 15 * 60_000;
 /** Minimum time between progress writes to the database. */
@@ -101,6 +107,7 @@ export async function enqueueTargetTranscode(target: TranscodeTarget, opts: { fo
   // A target saved by an editor that dropped the server-managed fields: re-link the finished output instead of converting again.
   if (!opts.force && (await recoverTargetHlsOutput(target))) return { ok: false, reason: "ready", message: "This video is already converted." };
 
+  let abortJobId: string | null = null;
   const result = await mutate((db): EnqueueResult => {
     const plan = planEnqueue({ target, media: readTargetMedia(db, target), jobs: db.transcodeJobs, ffmpegAvailable: ffmpeg.available, force: opts.force, siteOrigins: origins });
     const now = nowIso();
@@ -121,6 +128,7 @@ export async function enqueueTargetTranscode(target: TranscodeTarget, opts: { fo
         // Jobs for an older file of this target are obsolete.
         const obsolete = new Set(plan.obsoleteJobIds);
         for (const j of db.transcodeJobs) if (obsolete.has(j.id)) Object.assign(j, { status: "failed", error: "Replaced by a newer video.", finishedAt: now });
+        abortJobId = plan.abortJobId;
         const job: TranscodeJob = { id: uid("tcj"), ...jobIdentity(target), sourceKey: plan.sourceKey, status: "queued", progress: 0, attempts: 0, createdAt: now };
         db.transcodeJobs.push(job);
         patchTargetMedia(db, target, (m) =>
@@ -131,8 +139,15 @@ export async function enqueueTargetTranscode(target: TranscodeTarget, opts: { fo
       }
     }
   });
+  // A conversion of the target's previous file is stopped now rather than finished and thrown away.
+  abortRunningJob(abortJobId);
   if (result.ok) kickTranscodeWorker();
   return result;
+}
+
+/** Abort the worker's current job when it is `jobId` (it notices, finds its file replaced and fails quietly). */
+function abortRunningJob(jobId: string | null): void {
+  if (jobId && worker.current?.jobId === jobId) worker.current.abort.abort();
 }
 
 /** Queue a conversion of a lesson video block (see `enqueueTargetTranscode`). */
@@ -209,11 +224,20 @@ export function recoverHlsOutput(lessonId: string, blockId: string): Promise<boo
 }
 
 /**
- * Queue conversions a lesson still needs (call after saving a lesson): new
- * uploads, replaced files and videos that waited for ffmpeg. Returns the
- * number of new jobs.
+ * Bring a lesson's video blocks in line with its saved content (call after
+ * saving a lesson): output, generated posters and jobs for replaced or
+ * removed videos are released — a conversion still running for an old file
+ * is stopped so it does not hold up the queue — and new uploads, replaced
+ * files and videos that waited for ffmpeg are queued. Returns the number of
+ * new jobs.
  */
 export async function syncLessonTranscodes(lessonId: string): Promise<number> {
+  await releaseRemovedLessonBlocks(lessonId);
+  const stored = await findById("lessons", lessonId);
+  if (!stored) return 0;
+  for (const block of stored.blocks) {
+    if (block.type === "video") await releaseStaleTargetOutput(lessonBlockTarget(lessonId, block.id));
+  }
   const settings = await getSettings();
   if (!settings.storage.transcodeToHls) return 0;
   const lesson = await findById("lessons", lessonId);
@@ -227,6 +251,37 @@ export async function syncLessonTranscodes(lessonId: string): Promise<number> {
     if (res.ok && res.created) created++;
   }
   return created;
+}
+
+/**
+ * Fail queued jobs and stop a running one for video blocks of a lesson that
+ * no longer exist (the block was deleted or is no longer a video, or the
+ * lesson is gone). Their output is left to the orphan sweep.
+ */
+export async function releaseRemovedLessonBlocks(lessonId: string): Promise<number> {
+  const isGone = (db: Database, job: TranscodeJob) => {
+    const target = jobTarget(job);
+    return isActive(job) && target.kind === "lesson-block" && target.lessonId === lessonId && !readTargetMedia(db, target);
+  };
+  // Most saves remove nothing: look before taking the write lock.
+  const current = await getDb();
+  if (!current.transcodeJobs.some((j) => isGone(current, j))) return 0;
+  const { failed, abortJobId } = await mutate((db) => {
+    const now = nowIso();
+    let failed = 0;
+    let abortJobId: string | null = null;
+    for (const job of db.transcodeJobs) {
+      if (!isGone(db, job)) continue;
+      if (job.status === "running") abortJobId = job.id;
+      else {
+        Object.assign(job, { status: "failed", error: "The video block was removed.", finishedAt: now });
+        failed++;
+      }
+    }
+    return { failed, abortJobId };
+  });
+  abortRunningJob(abortJobId);
+  return failed + (abortJobId ? 1 : 0);
 }
 
 /**
@@ -260,7 +315,7 @@ export async function releaseStaleTargetOutput(target: TranscodeTarget): Promise
     };
   });
   // The running job notices the abort, finds the target playing another file and fails quietly.
-  if (outcome.abortJobId && worker.current?.jobId === outcome.abortJobId) worker.current.abort.abort();
+  abortRunningJob(outcome.abortJobId);
   if (outcome.releasedVersion) await deleteHlsVersion(outcome.releasedVersion);
   if (outcome.releasedPoster) await deleteGeneratedPoster(target, outcome.releasedPoster);
   return outcome.changed;
@@ -537,6 +592,8 @@ async function processJob(job: TranscodeJob): Promise<void> {
     await mutate((d) => patchTargetMedia(d, target, (m) => ({ transcode: { status: "processing", progress: 0, renditions: m.transcode?.renditions, updatedAt: nowIso() } })));
 
     const settings = await getSettings();
+    // Uploads are checked when they arrive; check again so ffmpeg only ever parses real video containers.
+    if (!looksLikeVideo(await readSourceHead(job.sourceKey))) throw new FfmpegError("This file is not a video (MP4, WebM, OGG, MOV or MKV), so it was not converted.");
     const source = await (await storageFor(job.sourceKey)).processingInput(job.sourceKey, SOURCE_URL_TTL_SECONDS);
     const probe = await probeMedia(source.input);
     if (!probe.hasVideo) throw new FfmpegError("This file has no video track.");
@@ -569,13 +626,15 @@ async function processJob(job: TranscodeJob): Promise<void> {
       },
     });
 
-    // Poster frame: nice to have, never fails the job.
+    // Poster frame: nice to have, never fails the job. A lesson block showing a poster its editor chose keeps it, so none is made.
     let posterMade = false;
-    try {
-      await runFfmpeg(buildPosterArgs(source.input, probe), { cwd: workDir, signal: abort.signal, stallMs: 120_000, timeoutMs: 180_000 });
-      posterMade = true;
-    } catch (err) {
-      if (abort.signal.aborted) throw err;
+    if (!media.posterUrl || hasGeneratedPoster(target, media, siteOrigins())) {
+      try {
+        await runFfmpeg(buildPosterArgs(source.input, probe), { cwd: workDir, signal: abort.signal, stallMs: 120_000, timeoutMs: 180_000 });
+        posterMade = true;
+      } catch (err) {
+        if (abort.signal.aborted) throw err;
+      }
     }
 
     // Measure each rendition and write the master playlist.
@@ -614,6 +673,7 @@ async function processJob(job: TranscodeJob): Promise<void> {
     const outcome = await mutate((d) => {
       let previous: string | null = null;
       let previousPoster: string | null = null;
+      let posterUsed = false;
       const now = nowIso();
       const ok = patchTargetMedia(d, target, (m) => {
         if (transcodeSourceKey(m.src, origins) !== job.sourceKey) return null;
@@ -626,16 +686,23 @@ async function processJob(job: TranscodeJob): Promise<void> {
         if (target.kind === "course-preview") {
           // The preview poster is generated only: a new conversion replaces it.
           if (posterUrl && m.posterUrl && m.posterUrl !== posterUrl) previousPoster = m.posterUrl;
+          posterUsed = !!posterUrl;
           return { ...common, posterUrl: posterUrl ?? m.posterUrl };
         }
-        // Lesson blocks keep a poster and duration the editor set.
-        return { ...common, duration: m.duration ?? (probe.duration > 0 ? Math.round(probe.duration) : undefined), posterUrl: m.posterUrl || posterUrl || undefined };
+        // Lesson blocks keep a poster and duration the editor set; a poster generated by an earlier conversion is replaced.
+        let poster = m.posterUrl || undefined;
+        if (posterUrl && (!m.posterUrl || hasGeneratedPoster(target, m, origins))) {
+          if (m.posterUrl && m.posterUrl !== posterUrl) previousPoster = m.posterUrl;
+          poster = posterUrl;
+          posterUsed = true;
+        }
+        return { ...common, duration: m.duration ?? (probe.duration > 0 ? Math.round(probe.duration) : undefined), posterUrl: poster };
       });
       const row = d.transcodeJobs.find((j) => j.id === job.id);
       if (row) Object.assign(row, ok ? { status: "done", progress: 100, finishedAt: now, error: undefined } : { status: "failed", error: "The video was replaced while it was being converted.", finishedAt: now });
       // An older version is deleted only when nothing else (e.g. a duplicated course or lesson) still plays it.
       const stillUsed = previous ? referencedHlsVersions(d, origins).has(previous) : false;
-      return { ok, previous: stillUsed ? null : (previous as string | null), previousPoster: previousPoster as string | null };
+      return { ok, previous: stillUsed ? null : (previous as string | null), previousPoster: previousPoster as string | null, posterUsed: ok && posterUsed };
     });
     if (!outcome.ok) {
       await storage.deletePrefix(prefix).catch(() => undefined);
@@ -645,6 +712,8 @@ async function processJob(job: TranscodeJob): Promise<void> {
     published = null;
     if (outcome.previous && outcome.previous !== prefix) await deleteHlsVersion(outcome.previous);
     if (outcome.previousPoster) await deleteGeneratedPoster(target, outcome.previousPoster);
+    // The editor chose a poster while the video was converting: the captured one is not needed.
+    if (posterUrl && !outcome.posterUsed) await deleteGeneratedPoster(target, posterUrl);
 
     await notifyInstructors(job, "ready", `Converted to ${renditionLabel(variants.map((v) => v.height))}.`);
     if (target.kind === "lesson-block") await onVideoReady(target.lessonId, target.blockId);
@@ -668,17 +737,46 @@ async function processJob(job: TranscodeJob): Promise<void> {
   }
 }
 
+/** First bytes of a stored source file (empty when it cannot be read). */
+async function readSourceHead(key: string, bytes = 16): Promise<Uint8Array> {
+  const result = await (await storageFor(key)).read(key, `bytes=0-${bytes - 1}`).catch(() => null);
+  if (!result || result === "unsatisfiable") return new Uint8Array(0);
+  const reader = result.body.getReader();
+  const out: number[] = [];
+  try {
+    while (out.length < bytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (let i = 0; i < value.byteLength && out.length < bytes; i++) out.push(value[i]!);
+    }
+  } catch {
+    /* treated as unreadable below */
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Uint8Array.from(out);
+}
+
 async function deleteHlsVersion(prefix: string): Promise<void> {
   // An old version may sit on local disk (before switching to S3) or in the bucket.
   await Promise.all([localStorage().deletePrefix(prefix).catch(() => 0), getStorage().kind === "s3" ? getStorage().deletePrefix(prefix).catch(() => 0) : Promise.resolve(0)]);
 }
 
-/** Delete a poster this pipeline generated for a course preview (never any other upload). */
+/**
+ * Delete a poster this pipeline generated for `target` once nothing shows it
+ * (a duplicated lesson or course may still do). Never touches any other upload.
+ */
 async function deleteGeneratedPoster(target: TranscodeTarget, url: string): Promise<void> {
-  if (target.kind !== "course-preview") return;
-  const key = storageKeyFromUrl(url, siteOrigins());
-  if (!key || !key.startsWith(`posters/${COURSE_PREVIEW_ROOT}/${target.courseId}/${COURSE_PREVIEW_DIR}-`)) return;
-  await (await storageFor(key)).delete(key).catch(() => undefined);
+  const origins = siteOrigins();
+  const key = ownGeneratedPosterKey(target, url, origins);
+  if (!key || referencedPosterKeys(await getDb(), origins).has(key)) return;
+  await deletePosterKey(key);
+}
+
+async function deletePosterKey(key: string): Promise<void> {
+  // A poster may sit on local disk (made before switching to S3) or in the bucket.
+  await localStorage().delete(key).catch(() => undefined);
+  if (getStorage().kind === "s3") await getStorage().delete(key).catch(() => undefined);
 }
 
 async function notifyInstructors(job: TranscodeJob, outcome: "ready" | "failed", detail: string): Promise<void> {
@@ -810,6 +908,50 @@ export async function cleanupOrphanedHls(now = Date.now()): Promise<number> {
       const master = await client.headObject(`${prefix}${MASTER_PLAYLIST}`).catch(() => null);
       if (!master?.lastModified || now - master.lastModified.getTime() < minAge) continue;
       removed += await storage.deletePrefix(prefix).catch(() => 0);
+    }
+  }
+  return removed + (await cleanupOrphanedPosters(now));
+}
+
+/**
+ * Delete generated posters (`posters/…`) no lesson block or course preview
+ * shows any more — replaced videos, re-conversions, deleted lessons — once
+ * they are a day old (a job being published is never touched).
+ */
+export async function cleanupOrphanedPosters(now = Date.now()): Promise<number> {
+  const referenced = referencedPosterKeys(await getDb(), siteOrigins());
+  const minAge = 86_400_000;
+  let removed = 0;
+
+  const postersDir = path.join(/* turbopackIgnore: true */ uploadRoot(), POSTERS_ROOT);
+  const entries = await fs.readdir(postersDir, { recursive: true, withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const full = path.join(/* turbopackIgnore: true */ entry.parentPath, entry.name);
+    const key = `${POSTERS_ROOT}/${path.relative(postersDir, full).split(path.sep).join("/")}`;
+    if (!GENERATED_POSTER_KEY.test(key) || referenced.has(key)) continue;
+    const stat = await fs.stat(full).catch(() => null);
+    if (!stat || now - stat.mtimeMs < minAge) continue;
+    await localStorage()
+      .delete(key)
+      .then(
+        () => removed++,
+        () => undefined,
+      );
+  }
+
+  const storage = getStorage();
+  const client = s3Client();
+  if (storage.kind === "s3" && client) {
+    const keys = await client.listKeys(`${POSTERS_ROOT}/`).catch(() => [] as string[]);
+    for (const key of keys) {
+      if (!GENERATED_POSTER_KEY.test(key) || referenced.has(key)) continue;
+      const info = await client.headObject(key).catch(() => null);
+      if (!info?.lastModified || now - info.lastModified.getTime() < minAge) continue;
+      await storage.delete(key).then(
+        () => removed++,
+        () => undefined,
+      );
     }
   }
   return removed;

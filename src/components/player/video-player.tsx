@@ -322,11 +322,16 @@ export function VideoPlayer({
     playbackRef.current = playback;
   });
 
-  /** Give up on HLS for this stream and continue with the progressive MP4 at the same position. */
-  const fallBackToProgressive = useCallback(() => {
+  /**
+   * Give up on HLS for this stream and continue with the progressive MP4 at the same position.
+   * `at` is where the HLS engine was when it failed: it has already detached from the element,
+   * which reset `currentTime` to 0.
+   */
+  const fallBackToProgressive = useCallback((at?: { time?: number; play?: boolean }) => {
     if (!hlsUrl) return;
     const video = videoRef.current;
-    actionsRef.current?.beginSourceSwap({ time: video?.currentTime ?? 0, play: playingRef.current });
+    const time = at?.time !== undefined && Number.isFinite(at.time) ? at.time : (video?.currentTime ?? 0);
+    actionsRef.current?.beginSourceSwap({ time, play: at?.play ?? playingRef.current });
     appliedUrl.current = null;
     setHlsFailedFor(hlsUrl);
   }, [hlsUrl]);
@@ -453,7 +458,7 @@ export function VideoPlayer({
       if (!el || !el.clientHeight) return undefined;
       return el.clientHeight * (window.devicePixelRatio || 1);
     },
-    onFatal: () => fallBackRef.current(),
+    onFatal: (error) => fallBackRef.current({ time: error.position, play: error.wasPlaying }),
   });
   const { levels: hlsLevels, manualLevel: hlsManual, playingLevel: hlsPlaying, setLevel: setHlsLevel, getStats: getHlsStats } = hls;
 

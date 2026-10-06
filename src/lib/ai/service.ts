@@ -360,3 +360,37 @@ export function loadReviewConversation(db: Database, viewer: Pick<User, "id" | "
     }),
   };
 }
+
+export interface DetachedClarification {
+  id: string;
+  courseId: string;
+  courseTitle: string;
+  lessonTitle?: string;
+  text: string;
+  authorName?: string;
+  updatedAt: string;
+}
+
+/**
+ * Instructor clarifications whose corrected answer is gone (the learner
+ * deleted the conversation or their account). They keep teaching the tutor,
+ * so the review queue lists them for staff to keep or remove. Newest first.
+ */
+export function detachedClarifications(db: Database, viewer: Pick<User, "id" | "roles">): DetachedClarification[] {
+  const courses = new Map(reviewableCourses(db, viewer).map((c) => [c.id, c]));
+  const messageIds = new Set(db.aiMessages.map((m) => m.id));
+  const users = new Map(db.users.map((u) => [u.id, u.name]));
+  const lessonTitles = new Map(db.lessons.map((l) => [l.id, l.title]));
+  return db.aiClarifications
+    .filter((c) => courses.has(c.courseId) && (!c.messageId || !messageIds.has(c.messageId)))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map((c) => ({
+      id: c.id,
+      courseId: c.courseId,
+      courseTitle: courses.get(c.courseId)!.title,
+      lessonTitle: c.lessonId ? lessonTitles.get(c.lessonId) : undefined,
+      text: c.text,
+      authorName: users.get(c.authorId),
+      updatedAt: c.updatedAt,
+    }));
+}

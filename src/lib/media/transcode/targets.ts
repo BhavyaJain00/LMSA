@@ -1,5 +1,5 @@
 import type { Course, Database, TranscodeJob, TranscodeTarget, VideoTranscodeState } from "@/lib/types";
-import { SAFE_ID, hlsKeyPrefix, hlsMatchesSource, hlsVersionPrefix, transcodeSourceKey, type VideoBlock } from "./lesson-fields";
+import { SAFE_ID, generatedPosterKey, hlsKeyPrefix, hlsMatchesSource, hlsVersionPrefix, transcodeSourceKey, type VideoBlock } from "./lesson-fields";
 
 /**
  * Transcode targets (pure; unit tested).
@@ -50,6 +50,28 @@ export function posterKeyFor(target: TranscodeTarget, version: string): string {
   }
   if (!SAFE_ID.test(target.lessonId) || !SAFE_ID.test(target.blockId)) throw new Error("Invalid lesson or block id for a storage path.");
   return `posters/${target.lessonId}/${target.blockId}-${version}.jpg`;
+}
+
+/** Key prefix of every poster generated for a target (`posters/<lessonId>/<blockId>-`, `posters/course/<courseId>/preview-`). */
+export function generatedPosterPrefix(target: TranscodeTarget): string {
+  return posterKeyFor(target, "v").slice(0, -"v.jpg".length);
+}
+
+/** Storage key of a poster the pipeline generated for this very target, or null (an editor's poster, or another target's). */
+export function ownGeneratedPosterKey(target: TranscodeTarget, posterUrl: string | undefined, siteOrigins: readonly string[] = []): string | null {
+  const key = generatedPosterKey(posterUrl, siteOrigins);
+  if (!key) return null;
+  try {
+    return key.startsWith(generatedPosterPrefix(target)) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a target's poster is one the pipeline generated for it (course previews only ever have generated posters). */
+export function hasGeneratedPoster(target: TranscodeTarget, media: Pick<TargetMedia, "posterUrl">, siteOrigins: readonly string[] = []): boolean {
+  if (!media.posterUrl) return false;
+  return target.kind === "course-preview" || ownGeneratedPosterKey(target, media.posterUrl, siteOrigins) !== null;
 }
 
 /** What a job converts (jobs without a target are lesson block jobs). */
@@ -224,6 +246,23 @@ export function referencedHlsVersions(db: TargetDb, siteOrigins: readonly string
   return out;
 }
 
+/** Storage keys of every generated poster some lesson block or course preview shows. */
+export function referencedPosterKeys(db: TargetDb, siteOrigins: readonly string[] = []): Set<string> {
+  const out = new Set<string>();
+  for (const lesson of db.lessons) {
+    for (const block of lesson.blocks) {
+      if (block.type !== "video") continue;
+      const key = generatedPosterKey(block.posterUrl, siteOrigins);
+      if (key) out.add(key);
+    }
+  }
+  for (const course of db.courses ?? []) {
+    const key = generatedPosterKey(course.previewPosterUrl, siteOrigins);
+    if (key) out.add(key);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* Planning a new job                                                   */
 /* ------------------------------------------------------------------ */
@@ -233,7 +272,7 @@ export type EnqueuePlan =
   | { action: "unavailable"; sourceKey: string; stale: boolean; message: string }
   | { action: "reuse"; job: TranscodeJob }
   | { action: "skip"; reason: "ready" | "failed"; message: string }
-  | { action: "create"; sourceKey: string; stale: boolean; obsoleteJobIds: string[] };
+  | { action: "create"; sourceKey: string; stale: boolean; obsoleteJobIds: string[]; abortJobId: string | null };
 
 export const UNAVAILABLE_MESSAGE = "ffmpeg is not installed on the server, so the original file is played.";
 
@@ -244,8 +283,10 @@ export const UNAVAILABLE_MESSAGE = "ffmpeg is not installed on the server, so th
  *  - a queued/running job for the same file → reuse it;
  *  - without `force`: a stream made from this file is ready, or the last
  *    conversion of this file failed → skip (retries are explicit);
- *  - otherwise create a job; queued jobs for an older file are obsolete, and
- *    `stale` says the stored stream belongs to a replaced file.
+ *  - otherwise create a job; queued jobs for an older file are obsolete, a
+ *    running one is aborted (it would only be thrown away when it finishes,
+ *    while holding up the one-at-a-time queue), and `stale` says the stored
+ *    stream belongs to a replaced file.
  */
 export function planEnqueue(args: {
   target: TranscodeTarget;
@@ -278,7 +319,8 @@ export function planEnqueue(args: {
     if (last?.status === "failed") return { action: "skip", reason: "failed", message: last.error?.split("\n")[0] ?? "The last conversion failed." };
   }
   const obsoleteJobIds = own.filter((j) => j.status === "queued" && j.sourceKey !== key).map((j) => j.id);
-  return { action: "create", sourceKey: key, stale, obsoleteJobIds };
+  const abortJobId = own.find((j) => j.status === "running" && j.sourceKey !== key)?.id ?? null;
+  return { action: "create", sourceKey: key, stale, obsoleteJobIds, abortJobId };
 }
 
 /** Whether a target still needs a conversion of its current upload (sync after saves and by the cron). */
@@ -297,7 +339,7 @@ export interface StaleOutputPlan {
   patch: TargetMediaPatch | null;
   /** HLS version folder that stops being played (delete it unless something else plays it). */
   releasedVersion: string | null;
-  /** Generated poster that stops being shown (course previews only). */
+  /** Generated poster that stops being shown (a poster an editor set is left alone). */
   releasedPoster: string | null;
   /** Queued jobs converting a file the target no longer plays. */
   obsoleteJobIds: string[];
@@ -310,8 +352,8 @@ export interface StaleOutputPlan {
  * was made from (a new upload, a link, or no video at all):
  *  - the HLS URL, its source key and the conversion state are cleared, and
  *    the HLS version folder is released;
- *  - a course preview's generated poster is released as well (a lesson
- *    block's poster may have been set by the editor and is left alone);
+ *  - a generated poster is released as well (a lesson block's poster set
+ *    by the editor is left alone);
  *  - a conversion state left behind by a job for an older file (pending,
  *    processing or failed) is cleared even without stored output;
  *  - queued jobs for older files become obsolete and a running one is aborted.
@@ -339,7 +381,7 @@ export function planStaleOutputRelease(args: {
   if (outputStale) {
     patch = { hlsUrl: undefined, storageKey: undefined, transcode: undefined };
     releasedVersion = hlsVersionPrefix(media.hlsUrl, origins);
-    if (target.kind === "course-preview" && media.posterUrl) {
+    if (hasGeneratedPoster(target, media, origins)) {
       patch.posterUrl = undefined;
       releasedPoster = media.posterUrl;
     }

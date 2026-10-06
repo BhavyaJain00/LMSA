@@ -26,8 +26,10 @@ import type { AiErrorCode, ChatStreamEvent } from "@/lib/ai/types";
  * user and a site-wide cap on answers being written. Then it streams the
  * answer as Server-Sent Events (`start`, `citations`, `delta`, then `done` or
  * `error`, with comment lines as keep-alives while the model is thinking) and
- * stores the exchange with its token usage. A question that gets no answer is
- * removed again, so it doesn't count against the daily limit.
+ * stores the exchange with its token usage. A question that gets no answer
+ * because of a provider failure is removed again and doesn't count against
+ * the daily limit. A question the learner stops before any text arrived is
+ * removed too, but still counts once the API accepted it (it is billed).
  *
  * Only this learner's own conversation and course material are sent to the
  * model; locked lessons (drip, order, scheduled) are excluded for learners.
@@ -76,6 +78,8 @@ function describeProviderError(err: AiProviderError, manager: boolean): { code: 
 }
 
 const REFUSAL_TEXT = "I can't help with that request. Try asking about the course material in a different way.";
+const CUT_SHORT_NOTE = "*(This answer was cut short. Ask a narrower question for the rest.)*";
+const STALLED_NOTE = "*(This answer was cut short because the AI service stopped responding. Ask again for the rest.)*";
 
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
@@ -209,8 +213,13 @@ export async function POST(req: NextRequest) {
         let tokensIn = 0;
         let tokensOut = 0;
         let stopReason: string | null = null;
+        /** The API accepted the request: from here on it is billed, answered or not. */
+        let accepted = false;
+        const onAccepted = () => {
+          accepted = true;
+        };
         try {
-          for await (const event of streamClaude({ apiKey: aiEnv.anthropicApiKey, model, system, messages, maxTokens: MAX_OUTPUT_TOKENS }, abort.signal)) {
+          for await (const event of streamClaude({ apiKey: aiEnv.anthropicApiKey, model, system, messages, maxTokens: MAX_OUTPUT_TOKENS }, abort.signal, { onAccepted })) {
             if (event.type === "text") {
               text += event.text;
               send({ type: "delta", text: event.text });
@@ -224,16 +233,30 @@ export async function POST(req: NextRequest) {
 
           let content = text.trim();
           if (stopReason === "refusal") content = REFUSAL_TEXT;
-          else if (stopReason === "max_tokens" && content) content = `${content}\n\n*(This answer was cut short. Ask a narrower question for the rest.)*`;
+          else if (stopReason === "max_tokens" && content) content = `${content}\n\n${CUT_SHORT_NOTE}`;
           if (!content) throw new AiProviderError("server", "The AI service returned an empty answer.", undefined, 5);
 
           const saved = await saveAssistantTurn(turn, { content, citations, tokensIn, tokensOut });
           send({ type: "done", message: toMessageView(saved, links), quota: toQuotaView(learnerQuota(await getDb(), user.id, access.manager)) });
         } catch (err) {
           const clientGone = abort.signal.aborted;
-          if (clientGone && text.trim()) {
+          const partial = text.trim();
+          const stalled = !clientGone && err instanceof AiProviderError && err.kind === "timeout";
+          if (clientGone && partial) {
             // The learner pressed Stop or left: keep what they already read.
-            await saveAssistantTurn(turn, { content: text.trim(), citations, tokensIn, tokensOut }).catch(() => undefined);
+            await saveAssistantTurn(turn, { content: partial, citations, tokensIn, tokensOut }).catch(() => undefined);
+          } else if (clientGone) {
+            // Stopped before any text arrived: the question is taken back, but once the API accepted
+            // the request it is billed, so it keeps counting against the daily limit.
+            await rollbackUserTurn(turn, { keepCharge: accepted }).catch(() => undefined);
+          } else if (stalled && partial) {
+            // The stream stalled after part of the answer was shown: keep that part instead of discarding it.
+            const saved = await saveAssistantTurn(turn, { content: `${partial}\n\n${STALLED_NOTE}`, citations, tokensIn, tokensOut }).catch(() => null);
+            if (saved) send({ type: "done", message: toMessageView(saved, links), quota: toQuotaView(learnerQuota(await getDb(), user.id, access.manager)) });
+            else {
+              await rollbackUserTurn(turn).catch(() => undefined);
+              send({ type: "error", code: "provider_error", message: "The AI tutor couldn't answer this time. Please try again.", retryAfter: 5 });
+            }
           } else {
             await rollbackUserTurn(turn).catch(() => undefined);
             if (err instanceof AiProviderError) {

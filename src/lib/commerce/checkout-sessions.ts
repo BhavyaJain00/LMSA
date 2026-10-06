@@ -102,10 +102,23 @@ function noLongerBuyable(db: Database, s: CheckoutSession): boolean {
   return false;
 }
 
-function couponFor(item: BillingItem, percent: number): Coupon | null {
-  if (percent <= 0) return null;
+/** What a recovery coupon for `item` is limited to (null: the item can't take one). */
+function recoveryCouponTarget(item: BillingItem): Coupon["applicableItems"][number] | null {
+  if (item.type === "course" || item.type === "certificate") return { type: "course", id: item.id };
+  if (item.type === "batch" || item.type === "bundle") return { type: item.type, id: item.id };
   // Memberships that renew don't take coupons.
-  if (item.plan && isRecurringInterval(item.plan.interval)) return null;
+  if (item.type === "plan" && item.plan && !isRecurringInterval(item.plan.interval)) return { type: "plan", id: item.id };
+  return null;
+}
+
+/**
+ * The personal coupon of a final reminder: one use, by the buyer who left
+ * the checkout, for the item they left (never a site-wide code).
+ */
+function couponFor(item: BillingItem, percent: number, userId: string): Coupon | null {
+  if (percent <= 0) return null;
+  const target = recoveryCouponTarget(item);
+  if (!target) return null;
   const now = new Date();
   return {
     id: uid("cpn"),
@@ -116,8 +129,8 @@ function couponFor(item: BillingItem, percent: number): Coupon | null {
     usageLimit: 1,
     redemptionCount: 0,
     enabled: true,
-    // Course and batch coupons are limited to the item; bundles and plans can't be targeted, so the single use is the limit.
-    applicableItems: item.type === "course" || item.type === "certificate" ? [{ type: "course", id: item.id }] : item.type === "batch" ? [{ type: "batch", id: item.id }] : [],
+    applicableItems: [target],
+    ownerUserId: userId,
     createdAt: now.toISOString(),
   };
 }
@@ -193,7 +206,7 @@ async function runRecovery(): Promise<RecoveryRunResult> {
     const item = await getBillingItem(s.itemType as BillingItem["type"], s.itemId);
     // Claim the reminder first (serialized), so concurrent runs never send it twice.
     const final = isFinalReminder(index, delays);
-    const coupon = item && final ? couponFor(item, fresh.settings.growth.abandonedCheckoutCouponPercent) : null;
+    const coupon = item && final && s.userId ? couponFor(item, fresh.settings.growth.abandonedCheckoutCouponPercent, s.userId) : null;
     const claimed = await mutate((d) => {
       const row = d.checkoutSessions.find((x) => x.id === s.id);
       if (!row || row.completedPaymentId || row.reminderCount > index) return false;

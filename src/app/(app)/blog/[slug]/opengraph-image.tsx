@@ -1,4 +1,4 @@
-import { OG_CONTENT_TYPE, renderOgCard, renderSiteOgCard } from "@/components/seo/og-card";
+import { OG_CONTENT_TYPE, renderFallbackOgCard, renderOgCard } from "@/components/seo/og-card";
 import { getSettings } from "@/lib/db/store";
 import { getPostBySlug } from "@/lib/data/blog";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
@@ -14,7 +14,7 @@ export default async function PostOpengraphImage({ params }: { params: Promise<{
   const settings = await getSettings();
   const detail = settings.seo.blogEnabled ? await getPostBySlug(decodeSegment(slug) ?? "") : null;
   // Drafts and scheduled posts never leak through their share image.
-  if (!detail?.isPublic) return renderSiteOgCard();
+  if (!detail?.isPublic) return renderFallbackOgCard();
   const { post, author, categories } = detail;
   return renderOgCard({
     eyebrow: categories[0] ? `Blog · ${categories[0].name}` : "Blog",

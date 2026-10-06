@@ -12,7 +12,8 @@ import { truncateToTokens } from "./text";
  * Persistence and validation for one AI tutor exchange (used by
  * `POST /api/ai/chat`). The learner's question is stored before the model is
  * called and removed again if no answer could be produced, so failed
- * attempts neither clutter the conversation nor count against the quota.
+ * attempts neither clutter the conversation nor count against the quota
+ * (except requests the learner stopped after the API accepted them).
  */
 
 export interface ChatRequest {
@@ -112,8 +113,13 @@ export async function saveUserTurn(input: { userId: string; courseId: string; co
   return turn;
 }
 
-/** Undo a question that got no answer (and its conversation if it was new and is now empty). */
-export async function rollbackUserTurn(turn: UserTurn): Promise<void> {
+/**
+ * Undo a question that got no answer (and its conversation if it was new and
+ * is now empty). With `keepCharge` the question still counts against today's
+ * limit: used when the learner stopped a request the API had already accepted
+ * (and billed), so stopping early can't be used to get around the limit.
+ */
+export async function rollbackUserTurn(turn: UserTurn, options: { keepCharge?: boolean } = {}): Promise<void> {
   const removed = await mutate((db) => {
     const index = db.aiMessages.findIndex((m) => m.id === turn.userMessage.id);
     if (index !== -1) db.aiMessages.splice(index, 1);
@@ -124,7 +130,7 @@ export async function rollbackUserTurn(turn: UserTurn): Promise<void> {
     return index !== -1;
   });
   // A question the learner deleted in the meantime stays counted, like any other deleted question.
-  if (removed) ledger.remove(turn.conversation.userId);
+  if (removed && !options.keepCharge) ledger.remove(turn.conversation.userId);
 }
 
 /** Store the tutor's answer. */

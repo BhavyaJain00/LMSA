@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type MouseEvent } from "react";
 import type { ChatMessageView, CitationView } from "@/lib/ai/types";
-import { linkCitations } from "@/lib/ai/citations";
+import { linkCitations, neutralizeAnswerMarkdown } from "@/lib/ai/citations";
 import { citedNumbers } from "@/lib/ai/prompt";
 import { REPORT_REASONS } from "@/lib/ai/reports";
 import { Markdown } from "@/lib/markdown";
@@ -197,11 +197,15 @@ export function ChatMessage({ message, compact, onChange }: ChatMessageProps) {
   );
 }
 
-/** Markdown answer with [n] markers linked to their lessons. */
+/**
+ * Markdown answer with [n] markers linked to their lessons. Model output is
+ * untrusted: images are never loaded and links leaving the site are shown as
+ * plain text (see `neutralizeAnswerMarkdown`).
+ */
 export function AnswerBody({ content, citations, streaming }: { content: string; citations: CitationView[]; streaming?: boolean }) {
   const router = useRouter();
   const linked = linkCitations(
-    content,
+    neutralizeAnswerMarkdown(content),
     citations.map((c) => ({ n: c.n, href: c.href, title: c.detail ? `${c.title} · ${c.detail}` : c.title })),
   );
   /** Source links inside the answer open without a full page load, so the chat keeps its place. */

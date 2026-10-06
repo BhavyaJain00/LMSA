@@ -123,6 +123,40 @@ function finish(response: Response, headers: Record<string, string>): Response {
 /* Input                                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Read a request body as UTF-8 text, at most `maxBytes`. The limit is
+ * enforced while streaming, so a chunked upload without Content-Length is
+ * cut off (413) as soon as it passes the limit instead of being buffered.
+ */
+export async function readBodyText(body: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<string> {
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new ApiError(413, "payload_too_large", `The request body is larger than ${maxBytes / 1024} KB.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 async function readJsonBody(request: NextRequest): Promise<unknown> {
   const type = request.headers.get("content-type") ?? "";
   if (!/^application\/(?:[\w.+-]+\+)?json\b/i.test(type.trim())) {
@@ -132,10 +166,7 @@ async function readJsonBody(request: NextRequest): Promise<unknown> {
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
     throw new ApiError(413, "payload_too_large", `The request body is larger than ${MAX_BODY_BYTES / 1024} KB.`);
   }
-  const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) {
-    throw new ApiError(413, "payload_too_large", `The request body is larger than ${MAX_BODY_BYTES / 1024} KB.`);
-  }
+  const text = await readBodyText(request.body, MAX_BODY_BYTES);
   if (!text.trim()) throw new ApiError(400, "invalid_json", "The request body is empty. Send a JSON object.");
   try {
     return JSON.parse(text) as unknown;

@@ -1457,6 +1457,7 @@ const adminMessages: Translation<typeof en> = {
   "pages.settings.taxes.report.amount": "टैक्स राशि",
   "pages.settings.taxes.report.total": "कुल",
   "pages.settings.taxes.report.refunded": "रिफ़ंड हुआ",
+  "pages.settings.taxes.report.vatUnverified": "VAT number not verified in VIES",
   "pages.settings.taxes.report.showing": "{total, number} में से नवीनतम {shown, number} ऑर्डर दिख रहे हैं। सभी के लिए CSV एक्सपोर्ट करें।",
   "pages.settings.storage.metaTitle": "स्टोरेज और वीडियो सेटिंग्स",
   "pages.settings.storage.title": "स्टोरेज और वीडियो",

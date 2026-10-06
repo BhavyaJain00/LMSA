@@ -22,8 +22,23 @@ import { supportsDefaultFallback, supportsEffort } from "./models";
 export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION = "2023-06-01";
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
-/** Whole-request ceiling, including the streamed answer. */
+/** Whole-request ceiling of the non-streaming connection test. */
 const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Streaming limits. A long answer with adaptive thinking can take several
+ * minutes, so a stream is not cut off by a wall clock while it is making
+ * progress: it fails only when the API doesn't respond in time, when no data
+ * (text, thinking or the API's ping events) arrives for a while, or at a
+ * generous absolute ceiling.
+ */
+export const streamLimits = {
+  /** Until the API answers the request (response headers). */
+  connectTimeoutMs: 60_000,
+  /** Longest gap between two pieces of the stream. */
+  idleTimeoutMs: 90_000,
+  /** Absolute ceiling for one answer. */
+  maxDurationMs: 10 * 60_000,
+};
 /** Pause before the single automatic retry of a transient failure. */
 const RETRY_PAUSE_MS = 800;
 /** Longest Retry-After (seconds) that is waited out inside the request instead of being reported. */
@@ -239,11 +254,58 @@ export function interpretStreamPayload(payload: StreamPayload): ClaudeStreamEven
   }
 }
 
+export interface StreamOptions {
+  /**
+   * Called once the API has accepted the request (2xx response), i.e. from
+   * the moment the request is billed even if no text ever arrives.
+   */
+  onAccepted?: () => void;
+  /** Overrides of `streamLimits` for this request. */
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  maxDurationMs?: number;
+}
+
+/** An abort signal that fires a `TimeoutError` when `arm`ed time runs out; re-arming restarts the clock. */
+function idleTimer(): { signal: AbortSignal; arm: (ms: number) => void; clear: () => void } {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  return {
+    signal: controller.signal,
+    arm(ms) {
+      clear();
+      timer = setTimeout(() => controller.abort(new DOMException("The AI service stopped responding.", "TimeoutError")), ms);
+      timer.unref?.();
+    },
+    clear,
+  };
+}
+
 /** Stream a reply. Throws `AiProviderError` on failure (before or during the stream). */
-export async function* streamClaude(req: Omit<ClaudeRequest, "stream">, signal?: AbortSignal): AsyncGenerator<ClaudeStreamEvent> {
-  const combined = withTimeout(signal);
-  const res = await send({ ...req, stream: true }, combined);
-  if (!res.body) throw new AiProviderError("server", "The AI service returned an empty response.", res.status, 10);
+export async function* streamClaude(req: Omit<ClaudeRequest, "stream">, signal?: AbortSignal, options: StreamOptions = {}): AsyncGenerator<ClaudeStreamEvent> {
+  const idle = idleTimer();
+  const signals = [idle.signal, AbortSignal.timeout(options.maxDurationMs ?? streamLimits.maxDurationMs)];
+  if (signal) signals.push(signal);
+  const combined = AbortSignal.any(signals);
+  idle.arm(options.connectTimeoutMs ?? streamLimits.connectTimeoutMs);
+  let res: Response;
+  try {
+    res = await send({ ...req, stream: true }, combined);
+  } catch (err) {
+    idle.clear();
+    throw err;
+  }
+  options.onAccepted?.();
+  const idleMs = options.idleTimeoutMs ?? streamLimits.idleTimeoutMs;
+  idle.arm(idleMs);
+  if (!res.body) {
+    idle.clear();
+    throw new AiProviderError("server", "The AI service returned an empty response.", res.status, 10);
+  }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const pending: ClaudeStreamEvent[] = [];
@@ -265,6 +327,8 @@ export async function* streamClaude(req: Omit<ClaudeRequest, "stream">, signal?:
         if (combined.aborted) throw abortError(combined, err);
         throw new AiProviderError("network", "The connection to the AI service was interrupted.", undefined, 5);
       }
+      // Any data (including the API's ping events while the model thinks) shows the stream is alive.
+      if (!chunk.done) idle.arm(idleMs);
       if (chunk.done) {
         parser.push(decoder.decode());
         parser.end();
@@ -277,6 +341,7 @@ export async function* streamClaude(req: Omit<ClaudeRequest, "stream">, signal?:
       if (chunk.done) return;
     }
   } finally {
+    idle.clear();
     reader.releaseLock();
     if (!combined.aborted) void res.body.cancel().catch(() => undefined);
   }

@@ -3,7 +3,7 @@ import type { Database, Payment, Subscription, SubscriptionStatus } from "@/lib/
 import { getDb, mutate } from "@/lib/db/store";
 import { emit } from "@/lib/events";
 import { uid } from "@/lib/utils";
-import { addInterval } from "./plans";
+import { addInterval, isRecurringInterval } from "./plans";
 import { applySnapshot, extendedPeriod, isGatewayManaged, type SubscriptionSnapshot } from "./subscriptions";
 
 /**
@@ -96,6 +96,7 @@ export async function upsertGatewaySubscription(input: GatewayUpsertInput): Prom
       cancelAtPeriodEnd: input.snapshot.cancelAtPeriodEnd ?? false,
       gateway: input.gateway,
       gatewaySubscriptionId: input.gatewaySubscriptionId,
+      ...(input.snapshot.status === "past_due" ? { pastDueSince: nowIso } : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -131,6 +132,8 @@ export async function grantMembership(payment: Pick<Payment, "id" | "userId" | "
       const period = extendedPeriod(existing, plan.interval, now);
       const ended = previousStatus === "cancelled" || previousStatus === "expired";
       existing.planId = plan.id;
+      // The renewal on the plan a change was scheduled for completes the change.
+      if (existing.pendingPlanId === plan.id) delete existing.pendingPlanId;
       existing.status = "active";
       existing.currentPeriodStart = period.start;
       existing.currentPeriodEnd = period.end;
@@ -194,23 +197,54 @@ export async function startManualTrial(paymentId: string, trialDays: number): Pr
 }
 
 /**
- * A refunded membership order (pure; call inside `mutate`): a membership
- * managed here ends now when the refunded order paid for its current period
- * (a newer paid order keeps it running). Gateway subscriptions keep billing
- * until they are cancelled through the gateway, so they are left as they are.
+ * Whether a refunded membership order paid for the membership's current
+ * period: it is the latest paid order of the membership. A refund of an older
+ * period leaves the running membership alone.
  */
-export function revokeMembershipIn(d: Database, payment: Pick<Payment, "id" | "subscriptionId" | "paidAt">): void {
+export function paidCurrentPeriod(d: Pick<Database, "payments">, payment: Pick<Payment, "id" | "paidAt">, sub: Pick<Subscription, "id">): boolean {
+  const paidAt = payment.paidAt ?? "";
+  return !d.payments.some((p) => p.id !== payment.id && p.subscriptionId === sub.id && p.status === "paid" && (p.paidAt ?? "") > paidAt);
+}
+
+/**
+ * A refunded membership order (pure; call inside `mutate`), when it paid for
+ * the membership's current period (a refund of an older period changes
+ * nothing):
+ *  - a membership managed here loses the billing interval that order bought:
+ *    its end moves back by one interval, so time paid by other orders (a
+ *    period paid before an early renewal or a gifted month) is kept. It ends
+ *    now when nothing paid is left;
+ *  - a Stripe/Razorpay subscription ends now. The `payment.refunded` handler
+ *    then cancels it on the gateway (`afterMembershipRefunded`), so it is
+ *    not charged again.
+ */
+export function revokeMembershipIn(d: Database, payment: Pick<Payment, "id" | "subscriptionId" | "paidAt" | "planId" | "itemId">): void {
   if (!payment.subscriptionId) return;
   const sub = d.subscriptions.find((s) => s.id === payment.subscriptionId);
-  if (!sub || isGatewayManaged(sub) || sub.status === "expired" || sub.status === "cancelled") return;
-  const paidAt = payment.paidAt ?? "";
-  const newer = d.payments.some((p) => p.id !== payment.id && p.subscriptionId === sub.id && p.status === "paid" && (p.paidAt ?? "") > paidAt);
-  if (newer) return;
-  const nowIso = new Date().toISOString();
+  if (!sub || sub.status === "expired" || sub.status === "cancelled") return;
+  if (!paidCurrentPeriod(d, payment, sub)) return;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   const previousStatus = sub.status;
+  if (!isGatewayManaged(sub)) {
+    const plan = d.plans.find((p) => p.id === (payment.planId ?? payment.itemId));
+    const end = Date.parse(sub.currentPeriodEnd);
+    if (plan && isRecurringInterval(plan.interval) && Number.isFinite(end)) {
+      const kept = addInterval(sub.currentPeriodEnd, plan.interval, -1);
+      if (Date.parse(kept) > now) {
+        sub.currentPeriodEnd = kept;
+        if (Date.parse(sub.currentPeriodStart) >= Date.parse(kept)) sub.currentPeriodStart = addInterval(kept, plan.interval, -1);
+        sub.updatedAt = nowIso;
+        announce({ subscription: { ...sub }, previousStatus });
+        return;
+      }
+    }
+  }
   sub.status = "cancelled";
   sub.currentPeriodEnd = nowIso;
   sub.cancelAtPeriodEnd = false;
+  if (sub.pendingPlanId) delete sub.pendingPlanId;
+  if (sub.pastDueSince) delete sub.pastDueSince;
   sub.updatedAt = nowIso;
   announce({ subscription: { ...sub }, previousStatus });
 }

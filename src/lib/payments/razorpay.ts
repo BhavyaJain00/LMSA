@@ -399,6 +399,12 @@ export async function changeRazorpaySubscriptionPlan(subscriptionId: string, pla
   );
 }
 
+/** Drop a plan change scheduled for the end of the cycle (the subscription stays on its plan). */
+export async function cancelRazorpayScheduledChanges(subscriptionId: string): Promise<RazorpaySubscription> {
+  if (!isRazorpaySubscriptionId(subscriptionId)) throw new GatewayError("Razorpay", "Invalid Razorpay subscription id.", 400);
+  return parseRazorpaySubscription(await razorpayRequest("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}/cancel_scheduled_changes`, {}));
+}
+
 /* ------------------------------------------------------------------ */
 /* Webhook payloads                                                    */
 /* ------------------------------------------------------------------ */

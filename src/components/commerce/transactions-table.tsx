@@ -50,6 +50,8 @@ export interface TransactionView {
   buyerVatId?: string;
   /** EU reverse charge: no VAT was charged. */
   reverseCharge?: boolean;
+  /** VIES check of the VAT number of a reverse-charged order. */
+  vatCheck?: "valid" | "unverified";
   source?: string;
   gateway: string;
   gatewayLabel: string;
@@ -398,6 +400,9 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
                     {tx.buyerVatId ?? "—"}
                   </span>
                   {tx.reverseCharge && <span className="ms-2 text-xs text-ink-muted">Reverse charge (0% VAT)</span>}
+                  {tx.reverseCharge && tx.vatCheck === "unverified" && (
+                    <span className="ms-2 text-xs font-medium text-warning">Not verified in VIES: check the number before filing</span>
+                  )}
                 </DetailItem>
               )}
               <DetailItem label="Invoice">
@@ -537,6 +542,12 @@ function RefundDialog({ tx, gatewayName, onClose }: { tx: TransactionView; gatew
               : "This order was not paid through a payment gateway. Return the money to the learner yourself; this records the refund."}{" "}
           {tx.userName} loses the access this order granted{tx.itemType === "certificate" ? " (the paid certificate is revoked)" : ""}.
         </p>
+        {tx.itemType === "plan" && (
+          <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-ink">
+            If this payment covers the current membership period, the membership loses that period: a membership with no paid time left ends now, and an
+            automatic Stripe or Razorpay subscription is cancelled so the member isn&apos;t charged again.
+          </p>
+        )}
         {paid && (
           <Field
             label={`Refund amount (${tx.currency.toUpperCase()})`}

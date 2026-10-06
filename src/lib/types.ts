@@ -1214,6 +1214,12 @@ export interface Payment {
   /** EU reverse charge: no VAT was charged because the buyer is a business registered in another EU country. */
   reverseCharge?: boolean;
   /**
+   * VIES check of `buyerVatId` for a reverse-charged order: "valid" when the
+   * EU registry confirmed it, "unverified" when the registry could not be
+   * reached at checkout (the order is flagged for review).
+   */
+  vatCheck?: "valid" | "unverified";
+  /**
    * Seller details printed on the invoice, frozen when its number is assigned
    * (an issued invoice never changes). Older invoices without it print the
    * current Settings → Taxes seller details.
@@ -1238,7 +1244,9 @@ export interface Coupon {
   redemptionCount: number;
   enabled: boolean;
   /** Empty = applies to everything. */
-  applicableItems: { type: "course" | "batch"; id: string }[];
+  applicableItems: { type: "course" | "batch" | "bundle" | "plan"; id: string }[];
+  /** Only this member can use the code (personal codes, e.g. checkout recovery coupons). */
+  ownerUserId?: string;
   createdAt: string;
 }
 
@@ -1865,6 +1873,25 @@ export interface AiMessage {
   createdAt: string;
 }
 
+/**
+ * An instructor clarification written in the AI tutor review queue. Stored on
+ * its own (not only as the corrected answer's `instructorNote`) so it stays
+ * course knowledge when the learner deletes the conversation or their account.
+ */
+export interface AiClarification {
+  id: string;
+  courseId: string;
+  /** Lesson the clarification belongs to (absent: the whole course). */
+  lessonId?: string;
+  /** The instructor's words (markdown). */
+  text: string;
+  /** The tutor answer it corrects; that message may since have been deleted. */
+  messageId?: string;
+  authorId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /* ------------------------------------------------------------------ */
 /* Round 3 wave B: memberships, bundles, gifts, upsells, tax            */
 /* ------------------------------------------------------------------ */
@@ -1910,6 +1937,17 @@ export interface Subscription {
   cancelAtPeriodEnd: boolean;
   gateway: string;
   gatewaySubscriptionId?: string;
+  /**
+   * When a Stripe/Razorpay subscription was first reported past due (its
+   * renewal charge failed). The grace period runs from here, because the
+   * gateway may already have moved the period to the unpaid one.
+   */
+  pastDueSince?: string;
+  /**
+   * Plan the membership moves to at its next renewal (a change made on a
+   * membership whose price is not prorated: manual, free or Razorpay).
+   */
+  pendingPlanId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -2505,6 +2543,7 @@ export interface Database {
   dataRequests: DataRequest[];
   aiConversations: AiConversation[];
   aiMessages: AiMessage[];
+  aiClarifications: AiClarification[];
   /* round 3 wave B */
   plans: MembershipPlan[];
   subscriptions: Subscription[];

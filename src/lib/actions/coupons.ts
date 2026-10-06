@@ -94,6 +94,11 @@ export async function saveCouponAction(_prev: ActionResult<{ id: string }> | nul
   if (otherCurrency.length && !errors.items) {
     errors.items = `Fixed-amount coupons only work for items priced in ${defaultCurrency}. Remove ${otherCurrency.join(", ")} or use a percentage discount.`;
   }
+  // Bundle and membership targets (checkout recovery coupons) can't be picked in this form: keep them,
+  // so saving the coupon never widens it to every item.
+  for (const kept of existing?.applicableItems ?? []) {
+    if (kept.type === "bundle" || kept.type === "plan") applicableItems.push({ ...kept });
+  }
 
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
 

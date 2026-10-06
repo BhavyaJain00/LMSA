@@ -18,6 +18,10 @@ import { siteOrigin } from "./site";
  *    Local and internal hosts (localhost, IP addresses, single-label and
  *    `.internal`/`.local` names) are never redirected, so health checks and
  *    container networking keep working;
+ *    The visitor's host is read from `X-Forwarded-Host` only when the
+ *    deployment declares trusted reverse proxies (`TRUST_PROXY_HOPS`, the
+ *    same switch as the client IP): otherwise any client could send the
+ *    header and make a canonical URL answer with a redirect to itself;
  *  - no trailing slash;
  *  - the page's current slug (see `proxy-redirects.ts`).
  *
@@ -49,15 +53,42 @@ export function isInternalHost(host: string): boolean {
 
 const withoutWww = (host: string) => host.replace(/^www\./, "");
 
+/** `TRUST_PROXY_HOPS` as a whole number (0 when unset or invalid); mirrors `trustedProxyHops` in auth/request-info.ts. */
+export function proxyHopsFromEnv(raw: string | undefined = process.env.TRUST_PROXY_HOPS): number {
+  const value = (raw ?? "").trim();
+  return /^\d{1,3}$/.test(value) ? Math.min(Number(value), 20) : 0;
+}
+
+/**
+ * The visitor's host as the trusted proxies forwarded it, or "" when no proxy
+ * is trusted (the header is then whatever the client sent). With N proxies
+ * that each append to the header, the outermost one wrote the Nth entry from
+ * the right; proxies that overwrite it leave a single entry.
+ */
+export function trustedForwardedHost(raw: string | null | undefined, hops: number): string {
+  if (!raw || hops <= 0) return "";
+  const entries = raw.split(",").map((e) => e.trim()).filter(Boolean);
+  if (!entries.length) return "";
+  return normalizeHost(entries[Math.max(0, entries.length - hops)]);
+}
+
+export interface CanonicalHostRequest {
+  host: string | null | undefined;
+  forwardedHost?: string | null;
+  /** Trusted reverse proxies in front of the app (default: `TRUST_PROXY_HOPS`). */
+  proxyHops?: number;
+}
+
+/** The host the visitor used: the trusted forwarded host, else the Host header. */
+export function requestHost(request: CanonicalHostRequest): string {
+  return trustedForwardedHost(request.forwardedHost, request.proxyHops ?? proxyHopsFromEnv()) || normalizeHost(request.host);
+}
+
 /**
  * The origin a request should be redirected to, or null when its host is
  * already canonical (or must be left alone).
  */
-export function canonicalOriginFor(
-  request: { host: string | null | undefined; forwardedHost?: string | null },
-  origin: string = siteOrigin(),
-  mode: CanonicalHostMode = canonicalHostMode(),
-): string | null {
+export function canonicalOriginFor(request: CanonicalHostRequest, origin: string = siteOrigin(), mode: CanonicalHostMode = canonicalHostMode()): string | null {
   if (mode === "off" || !isPingableOrigin(origin)) return null;
   let canonicalHost: string;
   try {
@@ -65,7 +96,7 @@ export function canonicalOriginFor(
   } catch {
     return null;
   }
-  const host = normalizeHost(request.forwardedHost) || normalizeHost(request.host);
+  const host = requestHost(request);
   if (!host || host === canonicalHost || isInternalHost(host)) return null;
   if (mode === "www" && withoutWww(host) !== withoutWww(canonicalHost)) return null;
   return origin;
@@ -76,12 +107,10 @@ export function stripTrailingSlash(pathname: string): string {
   return pathname.length > 1 ? pathname.replace(/\/+$/, "") || "/" : pathname;
 }
 
-export interface SeoRedirectRequest {
+export interface SeoRedirectRequest extends CanonicalHostRequest {
   pathname: string;
   /** Query string including the leading "?", or "". */
   search: string;
-  host: string | null | undefined;
-  forwardedHost?: string | null;
 }
 
 /**

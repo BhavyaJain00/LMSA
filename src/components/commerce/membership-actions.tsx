@@ -97,17 +97,36 @@ export interface ChangePlanOption {
 /**
  * Plans the member can switch to. Switching is confirmed first because it
  * changes what they are billed; how the difference is settled depends on who
- * bills the membership.
+ * bills the membership. Stripe prorates, so the switch happens now; otherwise
+ * it is scheduled for the next renewal (`renewalLabel`), and the current plan
+ * (`currentId`, listed while a change is scheduled) keeps the membership as it is.
  */
-export function ChangePlanList({ options, currentName, billing }: { options: ChangePlanOption[]; currentName: string; billing: "stripe" | "razorpay" | "manual" }) {
+export function ChangePlanList({
+  options,
+  currentId,
+  currentName,
+  billing,
+  renewalLabel,
+}: {
+  options: ChangePlanOption[];
+  currentId: string;
+  currentName: string;
+  billing: "stripe" | "razorpay" | "manual";
+  /** "on 12 May 2026", or "after your trial" for a trial paid by hand. */
+  renewalLabel: string;
+}) {
   const [target, setTarget] = useState<ChangePlanOption | null>(null);
   const { pending, run } = useMembershipAction("The plan could not be changed");
-  const settlement =
-    billing === "stripe"
-      ? "Stripe prorates the difference: you are credited for the unused time on your current plan and charged the new price on your next invoice."
-      : billing === "razorpay"
-        ? "Razorpay bills the new price from your next billing cycle."
-        : "The new price applies from your next renewal.";
+  const immediate = billing === "stripe";
+  const keeping = !!target && target.id === currentId;
+  const describe = (t: ChangePlanOption): string => {
+    if (t.id === currentId) return `Your scheduled plan change is cancelled and your membership stays on ${currentName}.`;
+    const price = `${formatPrice(t.price, t.currency)}${intervalSuffix(t.interval)}`;
+    if (immediate) {
+      return `You move from ${currentName} to ${t.name} (${price}) right away, and its courses unlock immediately. Stripe prorates the difference: you are credited for the unused time on your current plan and charged the new price on your next invoice.`;
+    }
+    return `You move from ${currentName} to ${t.name} (${price}) when your membership renews ${renewalLabel}${billing === "razorpay" ? ", and Razorpay bills the new price from then" : ""}. Until then you keep ${currentName} and its courses.`;
+  };
   return (
     <>
       <ul className="divide-y divide-border">
@@ -126,7 +145,7 @@ export function ChangePlanList({ options, currentName, billing }: { options: Cha
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => setTarget(option)} disabled={pending}>
-              Switch to this plan
+              {option.id === currentId ? "Keep this plan" : "Switch to this plan"}
             </Button>
           </li>
         ))}
@@ -143,14 +162,10 @@ export function ChangePlanList({ options, currentName, billing }: { options: Cha
           );
         }}
         loading={pending}
-        title={target ? `Switch to ${target.name}?` : "Switch plan?"}
-        description={
-          target
-            ? `You move from ${currentName} to ${target.name} (${formatPrice(target.price, target.currency)}${intervalSuffix(target.interval)}) right away, and its courses unlock immediately. ${settlement}`
-            : undefined
-        }
-        confirmLabel="Switch plan"
-        cancelLabel="Keep current plan"
+        title={target ? (keeping ? `Stay on ${target.name}?` : `Switch to ${target.name}?`) : "Switch plan?"}
+        description={target ? describe(target) : undefined}
+        confirmLabel={keeping ? "Keep my plan" : "Switch plan"}
+        cancelLabel="Go back"
       />
     </>
   );

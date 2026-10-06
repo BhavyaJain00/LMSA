@@ -1740,6 +1740,7 @@ export async function buildSeedDatabase(): Promise<Database> {
     dataRequests: [],
     aiConversations: [],
     aiMessages: [],
+    aiClarifications: [],
     // round 3 wave B
     plans: buildSeedPlans(NOW),
     subscriptions: [],

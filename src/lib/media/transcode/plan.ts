@@ -193,6 +193,23 @@ export interface HlsPlan {
 export const MASTER_PLAYLIST = "master.m3u8";
 export const POSTER_FILE = "poster.jpg";
 
+/** Demuxers of the containers uploads may hold (MP4/MOV, Matroska/WebM, Ogg); listed so ffmpeg never picks another one from the content. */
+export const SOURCE_FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,ogg";
+
+/**
+ * Options placed before `-i` (ffmpeg and ffprobe) limiting what the source
+ * may make them open: only the container demuxers above, and only the file
+ * itself — a local path, or the presigned URL's own scheme for remote
+ * storage. A crafted upload (say an HLS or concat playlist named `.mp4`)
+ * can then neither be parsed by another demuxer nor make the server fetch
+ * other URLs.
+ */
+export function inputSafetyArgs(input: string): string[] {
+  const scheme = /^(https?):\/\//i.exec(input)?.[1]?.toLowerCase();
+  const protocols = scheme === "https" ? "https,tls,tcp" : scheme === "http" ? "http,tcp" : "file";
+  return ["-protocol_whitelist", protocols, "-format_whitelist", SOURCE_FORMATS];
+}
+
 /**
  * ffmpeg arguments producing one fMP4 HLS playlist per height. Paths are
  * relative to the work folder (ffmpeg runs with it as cwd), with forward
@@ -211,7 +228,7 @@ export function buildHlsPlan(input: string, probe: ProbeInfo, heights: number[],
   const split = variants.length > 1 ? `[0:v]split=${variants.length}${variants.map((_, i) => `[s${i}]`).join("")};` : "";
   const scales = variants.map((v, i) => `${variants.length > 1 ? `[s${i}]` : "[0:v]"}scale=${v.width}:${v.height}:flags=bicubic,setsar=1,format=yuv420p[v${i}]`).join(";");
 
-  const args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", "-i", input, "-filter_complex", `${split}${scales}`];
+  const args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", ...inputSafetyArgs(input), "-i", input, "-filter_complex", `${split}${scales}`];
   variants.forEach((v, i) => {
     args.push("-map", `[v${i}]`);
     if (probe.hasAudio) args.push("-map", "0:a:0");
@@ -262,7 +279,7 @@ export function buildHlsPlan(input: string, probe: ProbeInfo, heights: number[],
 export function buildPosterArgs(input: string, probe: ProbeInfo): string[] {
   const at = probe.duration > 0 ? Math.min(30, Math.max(0, probe.duration * 0.1)) : 1;
   const height = Math.min(720, even(probe.height) || 720);
-  return ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-ss", at.toFixed(2), "-i", input, "-frames:v", "1", "-vf", `scale=-2:${height}`, "-q:v", "3", POSTER_FILE];
+  return ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-ss", at.toFixed(2), ...inputSafetyArgs(input), "-i", input, "-frames:v", "1", "-vf", `scale=-2:${height}`, "-q:v", "3", POSTER_FILE];
 }
 
 /* ------------------------------------------------------------------ */

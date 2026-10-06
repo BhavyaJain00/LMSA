@@ -69,4 +69,4 @@ export type ChatStreamEvent =
   | { type: "error"; code: AiErrorCode; message: string; retryAfter?: number };
 
 /** Why the tutor can't be used by the current viewer. */
-export type AiUnavailableReason = "signin" | "site_disabled" | "no_key" | "course_disabled" | "not_enrolled" | "not_found";
+export type AiUnavailableReason = "signin" | "site_disabled" | "no_key" | "course_disabled" | "not_enrolled" | "access_ended" | "not_found";

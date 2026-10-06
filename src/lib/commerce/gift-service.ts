@@ -9,7 +9,8 @@ import { renderEmail, type EmailBlock } from "@/lib/email/templates";
 import { notify } from "@/lib/services/notifications";
 import { SlidingWindowRateLimiter, perIpLimit, type RateLimitRule } from "@/lib/auth/rate-limit";
 import { fulfillPayment } from "@/lib/payments/fulfillment";
-import { computeOrderSummary, getBillingItem, orderTaxFields, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import { computeOrderSummary, coursesPrerequisiteGate, getBillingItem, orderTaxFields, type BillingItem, type OrderSummary } from "@/lib/data/commerce";
+import { assertPrerequisitesMet } from "@/lib/services/drip";
 import type { TaxContext } from "./tax";
 import { formatDate, formatPrice, shortCode, uid } from "@/lib/utils";
 import { currentSubscription, ownedCourseIds, resolveCourseAccess } from "./access";
@@ -115,6 +116,8 @@ export async function insertGiftOrder(input: {
   gateway: string;
   /** Affiliate credited for the sale (referral cookie or linked click at checkout). */
   affiliateId?: string;
+  /** VIES check of the buyer's VAT number (reverse-charged orders). */
+  vatCheck?: Payment["vatCheck"];
 }): Promise<GiftOrderResult> {
   const { buyer, item, summary, draft } = input;
   const type = item.type as GiftItemType;
@@ -169,6 +172,7 @@ export async function insertGiftOrder(input: {
       currency: summary.currency,
       ...orderTaxFields(summary),
       ...input.billing,
+      ...(input.vatCheck && summary.reverseCharge ? { vatCheck: input.vatCheck } : {}),
       ...(input.affiliateId ? { affiliateId: input.affiliateId } : {}),
       gateway: summary.total <= 0 ? "free" : input.gateway,
       status: "pending",
@@ -449,6 +453,34 @@ function alreadyHas(db: Database, user: Pick<User, "id">, gift: Gift): string | 
   return null;
 }
 
+/** The code keeps working when the recipient can't take the gift yet. */
+const CODE_KEPT = "Your gift code stays valid, so you can redeem it later.";
+
+/**
+ * Why `user` can't take a course or bundle gift right now: the course isn't
+ * open for enrollment, or a prerequisite course (outside the gift) is not
+ * completed yet. The same rules as buying it apply. Null when they can.
+ */
+async function giftEnrollmentProblem(db: Database, user: Pick<User, "id">, gift: Gift): Promise<string | null> {
+  if (gift.itemType === "course") {
+    const course = db.courses.find((c) => c.id === gift.itemId);
+    if (!course) return "The course of this gift is no longer available. Please contact us.";
+    const access = resolveCourseAccess(db, user.id, course.id);
+    if (access.granted && access.via !== "membership" && access.via !== "installments") return null;
+    if (!course.published || course.upcoming) return `“${course.title}” isn't open for enrollment yet. ${CODE_KEPT}`;
+    if (course.disableSelfLearning) return `“${course.title}” is only available through a batch at the moment. Please contact us to use your gift.`;
+    const gate = await assertPrerequisitesMet(user.id, course.id);
+    return gate.ok ? null : `${gate.error} ${CODE_KEPT}`;
+  }
+  if (gift.itemType === "bundle") {
+    const bundle = db.bundles.find((b) => b.id === gift.itemId);
+    if (!bundle) return null;
+    const gate = await coursesPrerequisiteGate(user.id, bundleCourses(bundle, db.courses).map((c) => c.id));
+    return gate.ok ? null : `${gate.error} ${CODE_KEPT}`;
+  }
+  return null;
+}
+
 /**
  * Redeem a gift code for `user`: checked and claimed in one write (single
  * use), then the recipient's zero-amount order is fulfilled. Wrong codes are
@@ -463,6 +495,15 @@ export async function redeemGift(user: Pick<User, "id" | "name">, rawCode: strin
     return { ok: false, error: "That doesn't look like a gift code. It has the form GIFT-XXXX-XXXX-XXXX.", field: "code" };
   }
 
+  // Course rules (open for enrollment, prerequisites) are checked before the code is claimed.
+  const snapshot = await getDb();
+  const known = findGiftByCode(snapshot.gifts, code);
+  const knownOrder = known ? snapshot.payments.find((p) => p.id === known.paymentId) : undefined;
+  if (known && !known.redeemedAt && knownOrder?.status === "paid") {
+    const problem = await giftEnrollmentProblem(snapshot, user, known);
+    if (problem) return { ok: false, error: problem };
+  }
+
   const claim = await mutate((d): { error: string; field?: "code" } | { payment: Payment; gift: Gift; title: string } => {
     const gift = findGiftByCode(d.gifts, code);
     const order = gift ? d.payments.find((p) => p.id === gift.paymentId) : undefined;
@@ -472,7 +513,8 @@ export async function redeemGift(user: Pick<User, "id" | "name">, rawCode: strin
     const problem = alreadyHas(d, user, gift);
     if (problem) return { error: problem };
     const title = giftItemTitle(d, gift);
-    const price = gift.itemType === "course" ? (d.courses.find((c) => c.id === gift.itemId)?.price ?? 0) : gift.itemType === "bundle" ? (d.bundles.find((b) => b.id === gift.itemId)?.price ?? 0) : (d.plans.find((p) => p.id === gift.itemId)?.price ?? 0);
+    // What the buyer paid for the item (before tax), in the gift order's currency: the recipient's discount.
+    const price = Math.max(0, order.originalAmount - order.discountAmount);
     const current = gift.itemType === "plan" ? currentSubscription(d, user.id) : null;
     const orders = new Set(d.payments.map((p) => p.orderId));
     let orderId = `ORD-${shortCode(2, 4)}`;

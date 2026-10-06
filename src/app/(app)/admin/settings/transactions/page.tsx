@@ -84,6 +84,7 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
     pan: r.pan,
     buyerVatId: r.buyerVatId,
     reverseCharge: r.reverseCharge,
+    vatCheck: r.vatCheck,
     source: r.source,
     gateway: r.gateway,
     gatewayLabel: gatewayLabel(r.gateway),

@@ -398,9 +398,11 @@ describe("canonical host and trailing slash", () => {
     assert.equal(canonicalOriginFor({ host: "old-domain.example.org" }, ORIGIN, "all"), ORIGIN);
   });
 
-  it("prefers the forwarded host and never touches internal hosts", () => {
-    assert.equal(canonicalOriginFor({ host: "lms:3000", forwardedHost: "www.example.com" }, ORIGIN, "www"), ORIGIN);
-    assert.equal(canonicalOriginFor({ host: "www.example.com", forwardedHost: "example.com" }, ORIGIN, "www"), null);
+  it("prefers the forwarded host of a trusted proxy and never touches internal hosts", () => {
+    assert.equal(canonicalOriginFor({ host: "lms:3000", forwardedHost: "www.example.com", proxyHops: 1 }, ORIGIN, "www"), ORIGIN);
+    assert.equal(canonicalOriginFor({ host: "www.example.com", forwardedHost: "example.com", proxyHops: 1 }, ORIGIN, "www"), null);
+    // Without a trusted proxy the header is the client's word: the Host header decides.
+    assert.equal(canonicalOriginFor({ host: "lms:3000", forwardedHost: "www.example.com", proxyHops: 0 }, ORIGIN, "www"), null);
     for (const host of ["localhost:3000", "10.0.0.5", "lms", "lms.internal"]) assert.equal(canonicalOriginFor({ host }, ORIGIN, "all"), null, host);
     assert.equal(canonicalOriginFor({ host: null }, ORIGIN, "all"), null);
   });

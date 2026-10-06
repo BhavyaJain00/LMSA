@@ -112,6 +112,8 @@ export interface TaxReportLine {
   buyerTaxId: string;
   /** EU reverse charge: no VAT charged, the buyer accounts for it. */
   reverseCharge: boolean;
+  /** Reverse-charged although VIES could not confirm the VAT number at checkout: to be checked. */
+  vatUnverified: boolean;
 }
 
 export interface TaxReportTotals {
@@ -154,6 +156,7 @@ export function taxReport(db: Pick<Database, "payments" | "taxRules" | "settings
       refunded: p.status === "refunded" || (p.refundedAmount ?? 0) > 0,
       buyerTaxId: p.buyerVatId ?? "",
       reverseCharge: !!p.reverseCharge && p.taxAmount <= 0,
+      vatUnverified: !!p.reverseCharge && p.vatCheck === "unverified",
     });
     const t = totals.get(p.currency) ?? { currency: p.currency, net: 0, tax: 0, total: 0, orders: 0 };
     t.net += net;
@@ -170,7 +173,7 @@ const decimal = (amount: number) => (amount / 100).toFixed(2);
 const csvRow = (cells: readonly (string | number)[]) => cells.map(csvCell).join(",");
 
 export function taxReportToCsv(lines: readonly TaxReportLine[]): string {
-  const header = ["Paid at", "Invoice", "Order", "Billing name", "Country", "Tax", "Rate %", "Included in price", "Net", "Tax amount", "Total", "Currency", "Refunded", "Buyer VAT No.", "Reverse charge"];
+  const header = ["Paid at", "Invoice", "Order", "Billing name", "Country", "Tax", "Rate %", "Included in price", "Net", "Tax amount", "Total", "Currency", "Refunded", "Buyer VAT No.", "Reverse charge", "VAT No. verified (VIES)"];
   return [
     csvRow(header),
     ...lines.map((l) =>
@@ -190,6 +193,7 @@ export function taxReportToCsv(lines: readonly TaxReportLine[]): string {
         l.refunded ? "yes" : "no",
         l.buyerTaxId,
         l.reverseCharge ? "yes" : "no",
+        l.reverseCharge ? (l.vatUnverified ? "no" : "yes") : "",
       ]),
     ),
   ].join("\n");

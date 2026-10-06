@@ -26,6 +26,7 @@ const COLLECTION_LABELS: Record<string, string> = {
   dataRequests: "Privacy requests",
   aiConversations: "AI tutor conversations",
   aiMessages: "AI tutor messages",
+  aiClarifications: "AI tutor clarifications",
   plans: "Membership plans",
   subscriptions: "Memberships",
   orgSeats: "Team seats",

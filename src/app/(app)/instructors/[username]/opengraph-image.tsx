@@ -1,4 +1,4 @@
-import { OG_CONTENT_TYPE, renderOgCard, renderSiteOgCard } from "@/components/seo/og-card";
+import { OG_CONTENT_TYPE, renderFallbackOgCard, renderOgCard } from "@/components/seo/og-card";
 import { getSettings } from "@/lib/db/store";
 import { catalogIsPublic, getInstructorProfile } from "@/lib/data/seo";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
@@ -13,7 +13,7 @@ export default async function InstructorOpengraphImage({ params }: { params: Pro
   const { username } = await params;
   const settings = await getSettings();
   const profile = catalogIsPublic(settings) ? await getInstructorProfile(decodeSegment(username) ?? "") : null;
-  if (!profile) return renderSiteOgCard();
+  if (!profile) return renderFallbackOgCard();
   const { instructor } = profile;
   return renderOgCard({
     eyebrow: "Instructor",

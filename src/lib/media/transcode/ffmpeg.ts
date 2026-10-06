@@ -1,7 +1,7 @@
 import "server-only";
 import { execFile, spawn } from "node:child_process";
 import { mediaEnv } from "@/lib/server-env";
-import { FfmpegProgressParser, parseProbe, tailText, type FfmpegProgress, type ProbeInfo } from "./plan";
+import { FfmpegProgressParser, inputSafetyArgs, parseProbe, tailText, type FfmpegProgress, type ProbeInfo } from "./plan";
 
 /**
  * ffmpeg/ffprobe detection and process runner.
@@ -94,7 +94,7 @@ export function probeMedia(input: string): Promise<ProbeInfo> {
   return new Promise((resolve, reject) => {
     execFile(
       mediaEnv.ffprobePath,
-      ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", input],
+      ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", ...inputSafetyArgs(input), input],
       { timeout: PROBE_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {

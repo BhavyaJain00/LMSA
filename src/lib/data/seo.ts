@@ -16,6 +16,7 @@ import {
   inferEducationalLevel,
   itemListJsonLd,
   jobPostingJsonLd,
+  jobValidThrough,
   personJsonLd,
   seoContext,
   videoObjectJsonLd,
@@ -116,8 +117,59 @@ export interface FooterData {
   cookieBanner: boolean;
 }
 
+/**
+ * What the footer depends on, computed cheaply: the settings it reads, the
+ * year, and the size and latest edit of each collection it lists. Any change
+ * an admin or learner makes there gives a new fingerprint.
+ */
+export function footerFingerprint(db: Pick<Database, "courses" | "enrollments" | "categories" | "blogPosts" | "legalPages">, settings: Settings, year: number): string {
+  const latest = (rows: readonly { updatedAt?: string }[]) => rows.reduce((max, r) => (r.updatedAt && r.updatedAt > max ? r.updatedAt : max), "");
+  return JSON.stringify([
+    year,
+    settings.brand,
+    settings.contact,
+    settings.legal.cookieBanner,
+    settings.legal.contactEmail,
+    settings.seo.sameAs,
+    settings.seo.blogEnabled,
+    settings.features,
+    settings.learning.allowGuestAccess,
+    db.courses.length,
+    latest(db.courses),
+    db.enrollments.length,
+    db.categories.map((c) => `${c.id}:${c.slug}:${c.name}`).join("|"),
+    db.blogPosts.length,
+    latest(db.blogPosts),
+    db.legalPages.length,
+    latest(db.legalPages),
+  ]);
+}
+
+/** Longest a cached footer is reused, so time-based changes (scheduled publishing) show up too. */
+const FOOTER_TTL_MS = 60_000;
+const footerCache = globalThis as unknown as { __llFooterCache?: { key: string; at: number; data: Promise<FooterData> } };
+
+/**
+ * Footer data, shared by every page of the app shell. It is built from the
+ * whole public catalog, so it is cached in memory and rebuilt only when what
+ * it shows may have changed (see `footerFingerprint`) or after a minute;
+ * working pages that show the one-line footer don't pay for a catalog pass.
+ */
 export async function getFooterData(): Promise<FooterData> {
   const [settings, db] = await Promise.all([getSettings(), getDb()]);
+  const now = Date.now();
+  const key = footerFingerprint(db, settings, new Date(now).getFullYear());
+  const cached = footerCache.__llFooterCache;
+  if (cached && cached.key === key && now - cached.at < FOOTER_TTL_MS) return cached.data;
+  const entry = { key, at: now, data: buildFooterData(settings, db) };
+  footerCache.__llFooterCache = entry;
+  entry.data.catch(() => {
+    if (footerCache.__llFooterCache === entry) footerCache.__llFooterCache = undefined;
+  });
+  return entry.data;
+}
+
+async function buildFooterData(settings: Settings, db: Database): Promise<FooterData> {
   const guests = guestsCanBrowse(settings) && settings.features.courses;
   const courses = guests ? await getPublicCourseSummaries({ sort: "popular" }) : [];
   const counts = countByCategory(courses);
@@ -702,7 +754,7 @@ export async function getProgramJsonLd(program: Program): Promise<JsonLdObject[]
 export async function getJobJsonLd(job: JobOpening): Promise<JsonLdObject[]> {
   if (!isJobPublic(job)) return [];
   const [settings, ctx] = await Promise.all([getSettings(), getSeoContext()]);
-  const validThrough = new Date(Date.parse(job.createdAt) + JOB_AUTO_CLOSE_DAYS * 86_400_000).toISOString();
+  const validThrough = jobValidThrough(job, JOB_AUTO_CLOSE_DAYS);
   return [jobPostingJsonLd({ job, path: jobPath(job.slug), validThrough, currency: settings.commerce.defaultCurrency }, ctx)];
 }
 

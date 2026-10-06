@@ -16,8 +16,9 @@ import { isValidModelId } from "@/lib/ai/models";
 import { MAX_CORRECTION_CHARS, MAX_PROMPT_ADDITION_CHARS } from "@/lib/ai/prompt";
 import { isReportReason, REPORT_REASONS } from "@/lib/ai/reports";
 import { loadOwnConversation, reviewRecipients } from "@/lib/ai/service";
+import { clarificationLessonId } from "@/lib/ai/sources";
 import type { ChatMessageView, ConversationSummary } from "@/lib/ai/types";
-import { fd, fdBool, truncate } from "@/lib/utils";
+import { fd, fdBool, truncate, uid } from "@/lib/utils";
 
 /**
  * Server actions of the AI tutor: site settings, the per-course switch,
@@ -265,7 +266,10 @@ export async function reportAnswerAction(messageId: string, reason: string): Pro
     const m = d.aiMessages.find((x) => x.id === messageId);
     if (!m) return;
     m.flagged = true;
-    if (queue) m.reviewStatus = "pending";
+    // An answer staff already approved or corrected keeps its review (and the correction stays shown and indexed);
+    // the report still reaches the reviewers and shows on the conversation.
+    const reviewed = m.reviewStatus === "approved" || m.reviewStatus === "corrected";
+    if (queue && !reviewed) m.reviewStatus = "pending";
   });
   await audit(user, "ai.message.report", { type: "ai_message", id: messageId }, { reason, courseId: found.course.id });
   await notifyReviewers(db, found.course, found.message, user, `Reported by a learner: ${REPORT_REASONS[reason]}.`);
@@ -305,6 +309,8 @@ export async function approveAnswersAction(messageIds: string[]): Promise<Action
       m.reviewStatus = "approved";
       delete m.instructorNote;
     }
+    // Approving replaces an earlier correction, so its clarification leaves the course index too.
+    d.aiClarifications = d.aiClarifications.filter((c) => !c.messageId || !allowedIds.has(c.messageId));
   });
   await audit(user, "ai.review.approve", { type: "ai_message", id: allowed.length === 1 ? allowed[0]!.message.id : `${allowed.length} answers` }, { count: allowed.length });
   revalidateAi();
@@ -321,11 +327,26 @@ export async function correctAnswerAction(messageId: string, note: string): Prom
   const [target] = reviewableAnswers(db, user, [messageId]);
   if (!target) return { ok: false, error: "You can't review this answer." };
   const hadNote = !!target.message.instructorNote;
+  const conversation = db.aiConversations.find((c) => c.id === target.message.conversationId);
+  const courseLessonIds = new Set(db.lessons.filter((l) => l.courseId === target.course.id).map((l) => l.id));
+  const lessonId = clarificationLessonId(courseLessonIds, conversation?.lessonId, target.message.citations);
   await mutate((d) => {
     const m = d.aiMessages.find((x) => x.id === messageId);
     if (!m) return;
     m.reviewStatus = "corrected";
     m.instructorNote = text;
+    // The clarification is course knowledge: kept on its own so it survives the learner deleting the conversation.
+    const now = new Date().toISOString();
+    const existing = d.aiClarifications.find((c) => c.messageId === messageId);
+    if (existing) {
+      existing.text = text;
+      existing.authorId = user.id;
+      existing.updatedAt = now;
+      if (lessonId) existing.lessonId = lessonId;
+      else delete existing.lessonId;
+    } else {
+      d.aiClarifications.push({ id: uid("aicl"), courseId: target.course.id, ...(lessonId ? { lessonId } : {}), text, messageId, authorId: user.id, createdAt: now, updatedAt: now });
+    }
   });
   await audit(user, "ai.review.correct", { type: "ai_message", id: messageId }, { courseId: target.course.id, updated: hadNote });
   if (target.learnerId !== user.id) {
@@ -354,8 +375,41 @@ export async function reopenAnswerAction(messageId: string): Promise<ActionResul
     delete m.instructorNote;
     if (m.flagged) m.reviewStatus = "pending";
     else delete m.reviewStatus;
+    d.aiClarifications = d.aiClarifications.filter((c) => c.messageId !== messageId);
   });
   await audit(user, "ai.review.reopen", { type: "ai_message", id: messageId }, { courseId: target.course.id });
   revalidateAi(target.course);
   return { ok: true, data: undefined, message: "Review cleared" };
+}
+
+/**
+ * Remove an instructor clarification from the tutor's course knowledge (course
+ * managers). Used for clarifications whose conversation the learner deleted;
+ * when the corrected answer still exists its correction is cleared as well.
+ */
+export async function deleteClarificationAction(clarificationId: string): Promise<ActionResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Sign in again to continue." };
+  if (typeof clarificationId !== "string" || !ID_RE.test(clarificationId)) return { ok: false, error: "Clarification not found." };
+  const db = await getDb();
+  const clarification = db.aiClarifications.find((c) => c.id === clarificationId);
+  const course = clarification ? db.courses.find((c) => c.id === clarification.courseId) : undefined;
+  if (!clarification || !course) return { ok: false, error: "This clarification no longer exists." };
+  if (!canManageCourse(user, course)) return { ok: false, error: "You can't change this course." };
+  const removed = await mutate((d) => {
+    const index = d.aiClarifications.findIndex((c) => c.id === clarificationId);
+    if (index === -1) return false;
+    const [gone] = d.aiClarifications.splice(index, 1);
+    const m = gone?.messageId ? d.aiMessages.find((x) => x.id === gone.messageId) : undefined;
+    if (m && m.reviewStatus === "corrected") {
+      delete m.instructorNote;
+      if (m.flagged) m.reviewStatus = "pending";
+      else delete m.reviewStatus;
+    }
+    return true;
+  });
+  if (!removed) return { ok: false, error: "This clarification no longer exists." };
+  await audit(user, "ai.clarification.delete", { type: "ai_clarification", id: clarificationId }, { courseId: course.id });
+  revalidateAi(course);
+  return { ok: true, data: undefined, message: "Clarification removed" };
 }

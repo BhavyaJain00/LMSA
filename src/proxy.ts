@@ -30,7 +30,14 @@ function seoRedirect(request: NextRequest): NextResponse | null {
     { pathname, search, host: request.headers.get("host"), forwardedHost: request.headers.get("x-forwarded-host") },
     (path) => (isRedirectCandidate(path) ? slugRedirectFor(path) : null),
   );
-  return target ? NextResponse.redirect(new URL(target, request.url), 301) : null;
+  if (!target) return null;
+  const location = new URL(target, request.url);
+  // Never answer a URL with a permanent redirect to itself.
+  if (location.href === request.url) return null;
+  const response = NextResponse.redirect(location, 301);
+  // The answer depends on the host the visitor used: caches must not reuse it for another host.
+  response.headers.set("Vary", "Host, X-Forwarded-Host");
+  return response;
 }
 
 export function proxy(request: NextRequest) {

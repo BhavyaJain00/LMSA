@@ -82,7 +82,6 @@ export function LeadForm({
   const compact = variant === "compact";
 
   if (done) {
-    const already = state.data.status === "already_confirmed";
     return (
       <div
         ref={doneRef}
@@ -99,14 +98,9 @@ export function LeadForm({
           <Icon.Mail className="size-4.5" aria-hidden="true" />
         </span>
         <div className="min-w-0 text-sm">
-          <p className="font-semibold text-ink">{already ? t("global.leadForm.alreadyTitle") : t("global.leadForm.checkInboxTitle")}</p>
-          <p className="mt-0.5 text-ink-muted">
-            {already
-              ? courseId
-                ? t("global.leadForm.syllabusResent")
-                : t("global.leadForm.alreadyBody")
-              : t("global.leadForm.checkInboxBody")}
-          </p>
+          {/* One answer for every address (new, pending or already subscribed), so the form reveals nothing about who is on the list. */}
+          <p className="font-semibold text-ink">{t("global.leadForm.checkInboxTitle")}</p>
+          <p className="mt-0.5 text-ink-muted">{t("global.leadForm.checkInboxBody")}</p>
         </div>
       </div>
     );

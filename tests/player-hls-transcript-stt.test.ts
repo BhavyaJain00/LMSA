@@ -186,7 +186,7 @@ describe("isPublicMediaUrl", () => {
   it("allows public http(s) hosts", () => {
     assert.ok(isPublicMediaUrl("https://cdn.example.com/v/a.mp4?sig=1"));
     assert.ok(isPublicMediaUrl("http://8.8.8.8/a.mp4"));
-    assert.ok(isPublicMediaUrl("https://[2001:db8::1]/a.mp4"));
+    assert.ok(isPublicMediaUrl("https://[2606:4700:4700::1111]/a.mp4"));
   });
 
   it("blocks private, loopback, internal and odd forms", () => {

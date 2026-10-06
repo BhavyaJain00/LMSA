@@ -2,6 +2,7 @@ import { ImageResponse } from "next/og";
 import { getSettings } from "@/lib/db/store";
 import { clampText } from "@/lib/seo/text";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
+import { OG_CACHE_CONTROL, OG_FALLBACK_CACHE_CONTROL, singleEntryMemo } from "@/lib/seo/og-cache";
 import { initials } from "@/lib/utils";
 
 /**
@@ -10,6 +11,10 @@ import { initials } from "@/lib/utils";
  * category), the title, a short summary and a row of facts (instructor,
  * rating, lessons, price, dates). Rendered by `next/og` (Satori), so every
  * element with several children uses flexbox and icons are inline SVG.
+ *
+ * Cards are sent with shared-cache headers, and the site card (also the
+ * fallback for missing or private items) is rendered once per brand
+ * configuration and served from memory (see lib/seo/og-cache.ts).
  */
 
 export const OG_CONTENT_TYPE = "image/png";
@@ -104,7 +109,7 @@ function Fact({ children }: { children: React.ReactNode }) {
 }
 
 /** Render a share card with the site's brand name and accent color. */
-export async function renderOgCard(input: OgCardInput): Promise<ImageResponse> {
+export async function renderOgCard(input: OgCardInput, cacheControl: string = OG_CACHE_CONTROL): Promise<ImageResponse> {
   const settings = await getSettings();
   const accent = accentOf(settings.brand.accentColor);
   const brand = clampText(settings.brand.name || "LearnLoop", 40);
@@ -169,12 +174,30 @@ export async function renderOgCard(input: OgCardInput): Promise<ImageResponse> {
         </div>
       </div>
     ),
-    { ...OG_IMAGE_SIZE },
+    { ...OG_IMAGE_SIZE, headers: { "Cache-Control": cacheControl } },
   );
 }
 
-/** Card for the site itself, and for items that do not exist or are not public (never leaks private titles). */
-export async function renderSiteOgCard(): Promise<ImageResponse> {
+const siteCard = singleEntryMemo<ArrayBuffer>();
+
+async function siteCardResponse(cacheControl: string): Promise<Response> {
   const settings = await getSettings();
-  return renderOgCard({ title: settings.brand.tagline || settings.brand.name, summary: settings.seo.defaultDescription || settings.brand.metaDescription });
+  const input: OgCardInput = { title: settings.brand.tagline || settings.brand.name, summary: settings.seo.defaultDescription || settings.brand.metaDescription };
+  const key = JSON.stringify([settings.brand.name, settings.brand.accentColor, input.title, input.summary]);
+  const png = await siteCard.get(key, async () => (await renderOgCard(input)).arrayBuffer());
+  return new Response(png.slice(0), { headers: { "Content-Type": OG_CONTENT_TYPE, "Cache-Control": cacheControl } });
+}
+
+/** Card for the site itself (brand, tagline and description), rendered once per brand configuration. */
+export function renderSiteOgCard(): Promise<Response> {
+  return siteCardResponse(OG_CACHE_CONTROL);
+}
+
+/**
+ * Card for items that do not exist, are not public or whose section guests
+ * can't browse: the site card (never leaks private titles), served from
+ * memory with a short cache so a newly published item soon gets its own.
+ */
+export function renderFallbackOgCard(): Promise<Response> {
+  return siteCardResponse(OG_FALLBACK_CACHE_CONTROL);
 }

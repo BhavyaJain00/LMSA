@@ -1,13 +1,16 @@
-import type { Database, Lesson, Question, Transcript, TranscriptCue } from "@/lib/types";
+import type { Database, Lesson, Question, Quiz, Transcript, TranscriptCue } from "@/lib/types";
 import { chunkText, chunkTranscript, cleanLessonMarkdown, DEFAULT_CODE_LIMITS, isShortCode, splitMarkdownSections, type ChunkOptions } from "./chunk";
+import { isLessonLive } from "@/lib/teaching/schedule-shared";
 import { formatTimestamp } from "./text";
 
 /**
  * What the AI tutor may read about a course, turned into retrievable chunks.
  *
- * Included: the course overview, lesson markdown (split at headings),
- * callouts, short code blocks, quiz explanations and video transcripts, plus
- * instructor clarifications written in the review queue.
+ * Included: the course overview (its lesson list names only lessons that are
+ * published by now), lesson markdown (split at headings), callouts, short
+ * code blocks, explanations of wrong options of multiple-answer questions in
+ * quizzes that reveal answers anyway (see `quizNotes`), video transcripts,
+ * and instructor clarifications written in the review queue.
  *
  * Never included: quiz options, which option is correct, accepted answers of
  * typed questions, the quiz questions themselves, instructor-only lesson
@@ -58,7 +61,17 @@ export interface CourseSource {
   trusted?: boolean;
 }
 
-type SourceDb = Pick<Database, "courses" | "chapters" | "lessons" | "quizzes" | "questions" | "transcripts" | "aiConversations" | "aiMessages">;
+type SourceDb = Pick<Database, "courses" | "chapters" | "lessons" | "quizzes" | "questions" | "transcripts" | "aiConversations" | "aiMessages"> &
+  Partial<Pick<Database, "aiClarifications">>;
+
+/**
+ * The lesson an instructor clarification belongs to: the lesson the
+ * conversation was started from, else the first cited lesson that still
+ * exists in the course; "" for the whole course.
+ */
+export function clarificationLessonId(courseLessonIds: ReadonlySet<string>, conversationLessonId: string | undefined, citations: readonly { lessonId: string }[] | undefined): string {
+  return [conversationLessonId, ...(citations ?? []).map((c) => c.lessonId)].find((id): id is string => !!id && courseLessonIds.has(id)) ?? "";
+}
 
 const CALLOUT_LABEL: Record<string, string> = { info: "Note", success: "Tip", warning: "Warning", danger: "Important" };
 
@@ -102,12 +115,30 @@ export function conceptNote(explanation: string | undefined): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** Explanations of a quiz's questions without revealing which option is right. */
+/**
+ * Whether a quiz's explanations may be read by the tutor at all: only for
+ * quizzes that show answers after submission anyway, and never for exams
+ * (proctored or scheduled quizzes).
+ */
+export function quizExplanationsAllowed(quiz: Pick<Quiz, "showAnswers" | "enableProctoring" | "enableScheduling">): boolean {
+  return quiz.showAnswers === true && !quiz.enableProctoring && !quiz.enableScheduling;
+}
+
+/**
+ * Explanations of a quiz's questions without revealing which option is right.
+ * The explanation of a correct option is never used (it describes the answer),
+ * and single-answer questions are skipped entirely: explaining why each wrong
+ * option is wrong ("not quite, the loop prints 3 three times") gives the right
+ * one away. What remains are the explanations of wrong options of
+ * multiple-answer questions, as neutral concept notes.
+ */
 function quizNotes(questions: Question[]): string[] {
   const notes: string[] = [];
   const seen = new Set<string>();
   for (const q of questions) {
+    if (q.type !== "choices" || !q.multiple) continue;
     for (const option of q.options) {
+      if (option.isCorrect) continue;
       const text = conceptNote(option.explanation);
       if (!text || seen.has(text)) continue;
       seen.add(text);
@@ -137,12 +168,18 @@ function blockTranscript(transcripts: Transcript[], byId: Map<string, Transcript
   return transcripts.find((t) => t.lessonId === lessonId && t.blockId === blockId && t.status === "ready" && t.cues.length > 0);
 }
 
-/** Everything the tutor may read about a course, in outline order (empty for an unknown course). */
-export function collectCourseSources(db: SourceDb, courseId: string): CourseSource[] {
+/**
+ * Everything the tutor may read about a course, in outline order (empty for
+ * an unknown course). `now` decides which scheduled lessons the overview
+ * may name; the result (and so the cached index) changes when one goes live.
+ */
+export function collectCourseSources(db: SourceDb, courseId: string, now: number = Date.now()): CourseSource[] {
   const course = db.courses.find((c) => c.id === courseId);
   if (!course) return [];
   const sources: CourseSource[] = [];
   const lessons = orderedLessons(db, courseId);
+  // Scheduled lessons stay out of the overview until they are published (learners' outlines hide them too).
+  const listed = lessons.filter((l) => isLessonLive(l.lesson, now));
 
   // Course overview: what the course covers, who it is for and its outline.
   const overview = [
@@ -150,7 +187,7 @@ export function collectCourseSources(db: SourceDb, courseId: string): CourseSour
     course.description ? cleanLessonMarkdown(course.description) : "",
     course.outcomes.length ? `What you will learn:\n${course.outcomes.map((o) => `- ${o}`).join("\n")}` : "",
     course.requirements.length ? `Requirements:\n${course.requirements.map((r) => `- ${r}`).join("\n")}` : "",
-    lessons.length ? `Lessons in this course:\n${lessons.map((l) => `- ${l.chapterNumber}.${l.lessonNumber} ${l.lesson.title} (${l.chapterTitle})`).join("\n")}` : "",
+    listed.length ? `Lessons in this course:\n${listed.map((l) => `- ${l.chapterNumber}.${l.lessonNumber} ${l.lesson.title} (${l.chapterTitle})`).join("\n")}` : "",
   ]
     .filter((s) => s && s.trim())
     .join("\n\n");
@@ -203,25 +240,37 @@ export function collectCourseSources(db: SourceDb, courseId: string): CourseSour
     // Quiz explanations as concept notes: never the questions, the options, the correct choice or accepted answers.
     for (const quizId of quizIds) {
       const quiz = quizzes.get(quizId);
-      if (!quiz) continue;
+      if (!quiz || !quizExplanationsAllowed(quiz)) continue;
       const notes = quizNotes(quiz.questions.map((ref) => questions.get(ref.questionId)).filter((q): q is Question => !!q));
       if (!notes.length) continue;
       sources.push({ ...base, title: `${lesson.title} › Quiz concept notes`, kind: "quiz", text: `Concept notes from the lesson quiz "${quiz.title}":\n${notes.join("\n")}` });
     }
   }
 
-  // Instructor clarifications from the review queue (trusted; the instructor's words only).
+  // Instructor clarifications from the review queue (trusted; the instructor's words only). They are
+  // stored on their own, so deleting the learner's conversation doesn't take them out of the course.
   const lessonTitles = new Map(lessons.map((l) => [l.lesson.id, l.lesson.title]));
+  const lessonIds = new Set(lessonTitles.keys());
+  const stored = (db.aiClarifications ?? []).filter((c) => c.courseId === courseId && !!c.text.trim());
+  const clarifications: { lessonId: string; text: string; createdAt: string; id: string }[] = stored.map((c) => ({
+    lessonId: c.lessonId && lessonIds.has(c.lessonId) ? c.lessonId : "",
+    text: c.text.trim(),
+    createdAt: c.createdAt,
+    id: c.id,
+  }));
+  // Corrections written before clarifications were stored separately live only on the answer.
+  const storedFor = new Set(stored.map((c) => c.messageId).filter((id): id is string => !!id));
   const conversations = new Map(db.aiConversations.filter((c) => c.courseId === courseId).map((c) => [c.id, c]));
-  const clarifications = db.aiMessages
-    .filter((m) => m.role === "assistant" && m.reviewStatus === "corrected" && !!m.instructorNote?.trim() && conversations.has(m.conversationId))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  for (const message of clarifications) {
-    const conversation = conversations.get(message.conversationId)!;
-    const lessonId =
-      [conversation.lessonId, ...(message.citations ?? []).map((c) => c.lessonId)].find((id): id is string => !!id && lessonTitles.has(id)) ?? "";
-    const lessonTitle = lessonId ? lessonTitles.get(lessonId)! : course.title;
-    sources.push({ lessonId, lessonTitle, title: `${lessonTitle} › Instructor clarification`, kind: "clarification", text: message.instructorNote!.trim(), trusted: true });
+  for (const m of db.aiMessages) {
+    if (m.role !== "assistant" || m.reviewStatus !== "corrected" || !m.instructorNote?.trim() || storedFor.has(m.id)) continue;
+    const conversation = conversations.get(m.conversationId);
+    if (!conversation) continue;
+    clarifications.push({ lessonId: clarificationLessonId(lessonIds, conversation.lessonId, m.citations), text: m.instructorNote.trim(), createdAt: m.createdAt, id: m.id });
+  }
+  clarifications.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  for (const note of clarifications) {
+    const lessonTitle = note.lessonId ? lessonTitles.get(note.lessonId)! : course.title;
+    sources.push({ lessonId: note.lessonId, lessonTitle, title: `${lessonTitle} › Instructor clarification`, kind: "clarification", text: note.text, trusted: true });
   }
 
   return sources;

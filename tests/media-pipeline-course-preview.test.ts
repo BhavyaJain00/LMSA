@@ -208,7 +208,7 @@ describe("course preview target: planning a job", () => {
   it("creates a job and makes queued jobs for an older file obsolete", () => {
     const jobs = [job({ id: "old", sourceKey: "videos/old.mp4" }), job({ id: "other", target: { kind: "course-preview", courseId: "crs_x" }, sourceKey: "videos/old.mp4" })];
     const plan = targets.planEnqueue({ target, media: media({ hlsUrl: HLS, storageKey: "videos/old.mp4" }), jobs, ffmpegAvailable: true });
-    assert.deepEqual(plan, { action: "create", sourceKey: KEY, stale: true, obsoleteJobIds: ["old"] });
+    assert.deepEqual(plan, { action: "create", sourceKey: KEY, stale: true, obsoleteJobIds: ["old"], abortJobId: null });
   });
 
   it("reuses an active job and skips ready or failed files unless forced", () => {

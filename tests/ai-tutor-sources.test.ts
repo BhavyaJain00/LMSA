@@ -25,6 +25,7 @@ function fixture(): { db: SourceDb; ids: { course: string; l1: string; l2: strin
   const [l1, l2, l3] = lessons as [(typeof lessons)[0], (typeof lessons)[0], (typeof lessons)[0]];
   const question = makeQuestion({
     text: QUESTION_TEXT,
+    multiple: true,
     options: [
       { id: "o1", text: CORRECT_OPTION, isCorrect: true, explanation: "Correct! Constants cannot be reassigned after they are declared." },
       { id: "o2", text: WRONG_OPTION, isCorrect: false, explanation: "Not quite — var declarations are function scoped. The correct answer is the other one." },
@@ -136,7 +137,7 @@ describe("ai tutor course sources", () => {
       assert.ok(!all.includes(secret), `index leaked: ${secret}`);
     }
     const quizNote = buildCourseChunks(db, ids.course).find((c) => c.kind === "quiz")!;
-    assert.ok(quizNote.text.includes("Constants cannot be reassigned after they are declared."));
+    assert.ok(!quizNote.text.includes("Constants cannot be reassigned"), "a correct option's explanation describes the answer");
     assert.ok(quizNote.text.includes("Var declarations are function scoped."));
     assert.equal(quizNote.lessonId, ids.l1);
   });

@@ -220,7 +220,8 @@ describe("ai tutor grounded prompt end to end", () => {
     for (const secret of [SECRET_OPTION, ACCEPTED, "Correct!", "Incorrect:", "right answer", "first option"]) {
       assert.ok(!payload.includes(secret), `prompt leaked: ${secret}`);
     }
-    assert.ok(payload.includes("cannot be reassigned after it is declared"), "concept notes are still useful context");
+    assert.ok(!payload.includes("cannot be reassigned after it is declared"), "the correct option's explanation describes the answer and is never sent");
+    assert.ok(!payload.includes("bindings can be reassigned"), "nor are explanations of single-answer questions");
     assert.ok(payload.includes('Lesson \\"Recursion\\" · video at 1:35'), "transcript excerpts carry their timestamp");
 
     const citations = excerptCitations(excerpts, tree.course);

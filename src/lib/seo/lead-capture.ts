@@ -117,21 +117,38 @@ async function send(lead: Lead, email: RenderedEmail): Promise<void> {
   await enqueueEmail({ to: lead.email, toName: lead.name, subject: email.subject, html: email.html, text: email.text, category: "other" });
 }
 
+/** A lead that confirmed, consented and did not unsubscribe (sequences and broadcasts reach it). */
+function isActiveLead(lead: Pick<Lead, "consent" | "confirmedAt" | "unsubscribedAt">): boolean {
+  return !!lead.consent && !!lead.confirmedAt && !lead.unsubscribedAt;
+}
+
 /**
- * Store a sign-up and send the confirmation email. An address that already
- * confirmed (and did not unsubscribe) is not asked again: it receives the
- * syllabus it asked for straight away.
+ * Store a sign-up and send the confirmation email.
+ *
+ * The form is public and unauthenticated, so it never changes the consent of
+ * an address that is already known: an address that unsubscribed (or never
+ * confirmed) stays exactly as it is and only receives a fresh confirmation
+ * email; it is subscribed again when its owner clicks the signed link
+ * (`confirmLead`). An address that is already subscribed is not asked again:
+ * it receives the syllabus it asked for, or the welcome email, straight away.
+ *
+ * `status` is for the server only: the public action always answers
+ * "confirmation_sent" so the form never reveals whether an address is on the
+ * list.
  */
 export async function captureLead(input: CaptureInput): Promise<CaptureResult> {
   if (!input.consent) return { ok: false, error: "Please tick the box to agree to receive emails from us." };
   const course = await publicCourse(input.courseId);
   const kind = normalizeLeadSource(input.source);
   const source = course ? `${kind}:${course.id}`.toLowerCase().slice(0, 80) : kind;
-  const recorded = await recordLead({ email: input.email, name: input.name, source, courseId: course?.id, consent: true });
+  const email = input.email.trim().toLowerCase();
+  const known = (await getDb()).leads.some((l) => l.email === email);
+  // Consent from this form only counts for a brand-new address (which still has to confirm).
+  const recorded = await recordLead({ email, name: input.name, source, courseId: course?.id, consent: !known });
   if (!recorded.ok) return recorded;
   const { lead } = recorded;
-  if (lead.confirmedAt && !lead.unsubscribedAt) {
-    if (course) await send(lead, await renderSyllabusEmail(lead, course));
+  if (isActiveLead(lead)) {
+    await send(lead, course ? await renderSyllabusEmail(lead, course) : await renderWelcomeLeadEmail(lead));
     return { ok: true, status: "already_confirmed", lead };
   }
   await send(lead, await renderConfirmationEmail(lead, course));
@@ -154,7 +171,7 @@ export async function confirmLead(leadId: string): Promise<ConfirmResult | null>
   const result = await mutate((db) => {
     const lead = db.leads.find((l) => l.id === leadId);
     if (!lead) return null;
-    const firstTime = !lead.confirmedAt || !!lead.unsubscribedAt;
+    const firstTime = !isActiveLead(lead);
     if (firstTime) {
       lead.confirmedAt = now;
       lead.unsubscribedAt = undefined;

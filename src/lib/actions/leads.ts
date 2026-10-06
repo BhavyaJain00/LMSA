@@ -31,7 +31,12 @@ const PER_EMAIL = { limit: 3, windowMs: 60 * 60 * 1000 };
 const ADMIN_ONLY = "Only administrators can manage leads.";
 const MAX_BULK = 500;
 
-export type LeadSubmitStatus = "confirmation_sent" | "already_confirmed";
+/**
+ * The only public answer: whether the address was new, pending, unsubscribed
+ * or already subscribed stays on the server (see `captureLead`), so the form
+ * can't be used to find out who is on the list.
+ */
+export type LeadSubmitStatus = "confirmation_sent";
 
 /** Public lead form: `email`, `name`, `consent`, `source`, `courseId`, honeypot `website`, `renderedAt` (ms). */
 export async function submitLeadAction(_prev: ActionResult<{ status: LeadSubmitStatus }> | null, formData: FormData): Promise<ActionResult<{ status: LeadSubmitStatus }>> {
@@ -56,7 +61,7 @@ export async function submitLeadAction(_prev: ActionResult<{ status: LeadSubmitS
   const result = await captureLead({ email, name: name || undefined, source: fd(formData, "source"), courseId: fd(formData, "courseId") || undefined, consent });
   if (!result.ok) return { ok: false, error: result.error, fieldErrors: { email: result.error } };
   revalidatePath("/admin/leads");
-  return { ok: true, data: { status: result.status } };
+  return { ok: true, data: { status: "confirmation_sent" } };
 }
 
 /** Confirmation button of /free/confirm (`l` lead id, `e` expiry, `t` token from the emailed link). */

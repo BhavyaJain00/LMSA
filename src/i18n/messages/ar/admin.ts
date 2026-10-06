@@ -1457,6 +1457,7 @@ const adminMessages: Translation<typeof en> = {
   "pages.settings.taxes.report.amount": "مبلغ الضريبة",
   "pages.settings.taxes.report.total": "الإجمالي",
   "pages.settings.taxes.report.refunded": "مستردّ",
+  "pages.settings.taxes.report.vatUnverified": "VAT number not verified in VIES",
   "pages.settings.taxes.report.showing": "يُعرض أحدث {shown, number} من أصل {total, number} طلب. صدّر ملف CSV للحصول عليها كلها.",
   "pages.settings.storage.metaTitle": "إعدادات التخزين والفيديو",
   "pages.settings.storage.title": "التخزين والفيديو",

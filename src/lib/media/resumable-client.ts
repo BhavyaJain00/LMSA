@@ -8,12 +8,14 @@ import {
   isFatalUploadStatus,
   nextChunkRange,
   parseOffsetHeader,
+  parseUploadErrorCode,
   parseResumeRecord,
   resumeKeyFor,
   retryDelayMs,
   shouldUseResumable,
   smoothSpeed,
   type ResumeRecord,
+  type UploadErrorCode,
 } from "./resumable-shared";
 
 /**
@@ -63,7 +65,10 @@ export interface UploadSnapshot {
   secondsLeft: number | null;
   /** Failed attempts in a row (while retrying). */
   attempt: number;
+  /** What went wrong, in English (the server's message, or the client's own). */
   error: string | null;
+  /** Machine-readable reason for `error` when there is one, so the field can show it in the viewer's language. */
+  errorCode: UploadErrorCode | null;
   /** Whether `resume()` can continue after a pause or an error. */
   canResume: boolean;
   /** True when this upload continued one started earlier (e.g. before a reload). */
@@ -347,21 +352,31 @@ export async function discardPendingUpload(pending: PendingUpload, env: Pick<Upl
 /** A failure retrying cannot fix (bad file, not allowed, session gone …). */
 class FatalUploadError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code: UploadErrorCode | null;
+  constructor(message: string, status: number, code: UploadErrorCode | null = null) {
     super(message);
     this.name = "FatalUploadError";
     this.status = status;
+    this.code = code;
   }
 }
 
 /** A failure worth retrying (network, 5xx, busy, rate limited). */
 class TransientUploadError extends Error {
   readonly retryAfterMs: number | null;
-  constructor(message: string, retryAfterMs: number | null = null) {
+  readonly code: UploadErrorCode | null;
+  constructor(message: string, retryAfterMs: number | null = null, code: UploadErrorCode | null = null) {
     super(message);
     this.name = "TransientUploadError";
     this.retryAfterMs = retryAfterMs;
+    this.code = code;
   }
+}
+
+/** Code of a failure: the server's, or "network" for a request that got no answer at all. */
+function codeOf(err: unknown): UploadErrorCode | null {
+  if (err instanceof FatalUploadError || err instanceof TransientUploadError) return err.code;
+  return "network";
 }
 
 function messageOf(res: HttpResult, fallback: string): string {
@@ -378,13 +393,14 @@ function retryAfterOf(res: HttpResult): number | null {
 /** Turn a non-success response into the error to throw. */
 function failureOf(res: HttpResult, fallback: string): Error {
   const message = messageOf(res, fallback);
+  const code = parseUploadErrorCode(res.body?.code);
   if (res.status === 429) {
     const retryAfter = retryAfterOf(res);
-    // Without Retry-After it is the unfinished-uploads limit: waiting will not help.
-    return retryAfter === null ? new FatalUploadError(message, 429) : new TransientUploadError(message, retryAfter);
+    // Without Retry-After it is the unfinished-uploads limit or the daily budget: waiting will not help.
+    return retryAfter === null ? new FatalUploadError(message, 429, code) : new TransientUploadError(message, retryAfter, code);
   }
-  if (isFatalUploadStatus(res.status)) return new FatalUploadError(message, res.status);
-  return new TransientUploadError(message);
+  if (isFatalUploadStatus(res.status)) return new FatalUploadError(message, res.status, code);
+  return new TransientUploadError(message, null, code);
 }
 
 const SESSION_GONE = "This upload expired or was cancelled on the server. Start it again.";
@@ -443,6 +459,7 @@ export class UploadTask {
       secondsLeft: null,
       attempt: 0,
       error: null,
+      errorCode: null,
       canResume: false,
       resumed: false,
       offline: false,
@@ -536,7 +553,7 @@ export class UploadTask {
     this.controller = controller;
     const signal = controller.signal;
     this.speedMark = null;
-    this.update({ phase: this.chunked && this.sessionId ? "uploading" : "starting", error: null, attempt: 0, canResume: false, offline: false }, true);
+    this.update({ phase: this.chunked && this.sessionId ? "uploading" : "starting", error: null, errorCode: null, attempt: 0, canResume: false, offline: false }, true);
     // Failed attempts in a row; reset only once bytes move again, so a
     // server that keeps refusing chunks cannot keep the loop going forever.
     let attempt = 0;
@@ -548,13 +565,13 @@ export class UploadTask {
           const result = this.chunked ? await this.step(signal) : await this.sendWhole(signal);
           if (result) {
             removeRecord(this.env.storage, this.resumeKey);
-            this.update({ phase: "done", loaded: this.file.size, secondsLeft: 0, canResume: false, error: null, attempt: 0 }, true);
+            this.update({ phase: "done", loaded: this.file.size, secondsLeft: 0, canResume: false, error: null, errorCode: null, attempt: 0 }, true);
             this.onComplete?.(result);
             return;
           }
           if (recovering) {
             recovering = false;
-            this.update({ phase: this.snap.phase === "finishing" ? "finishing" : "uploading", error: null, offline: false }, true);
+            this.update({ phase: this.snap.phase === "finishing" ? "finishing" : "uploading", error: null, errorCode: null, offline: false }, true);
           }
           if (attempt && this.offset > failedAt) {
             attempt = 0;
@@ -567,17 +584,17 @@ export class UploadTask {
           failedAt = this.offset;
           if (!this.env.isOnline()) {
             // Offline: wait for the network without using up retries.
-            this.update({ phase: "retrying", offline: true, bytesPerSecond: 0, secondsLeft: null, error: "You are offline. The upload continues when the connection is back." }, true);
+            this.update({ phase: "retrying", offline: true, bytesPerSecond: 0, secondsLeft: null, error: "You are offline. The upload continues when the connection is back.", errorCode: "network" }, true);
             await this.env.waitForOnline(signal);
             this.needsSync = this.sessionId !== null;
             continue;
           }
           attempt++;
           if (attempt > MAX_CHUNK_RETRIES) {
-            throw new FatalUploadError(err instanceof Error ? err.message : "The upload failed.", 0);
+            throw new FatalUploadError(err instanceof Error ? err.message : "The upload failed.", 0, codeOf(err));
           }
           const delay = err instanceof TransientUploadError && err.retryAfterMs !== null ? err.retryAfterMs : retryDelayMs(attempt);
-          this.update({ phase: "retrying", attempt, offline: false, bytesPerSecond: 0, secondsLeft: null, error: err instanceof Error ? err.message : "The upload failed." }, true);
+          this.update({ phase: "retrying", attempt, offline: false, bytesPerSecond: 0, secondsLeft: null, error: err instanceof Error ? err.message : "The upload failed.", errorCode: codeOf(err) }, true);
           await this.env.sleep(delay, signal);
           this.needsSync = this.sessionId !== null;
           this.speedMark = null;
@@ -585,10 +602,10 @@ export class UploadTask {
       }
     } catch (err) {
       if (isAbortError(err) || signal.aborted) return;
-      const fatal = err instanceof FatalUploadError ? err : new FatalUploadError(err instanceof Error ? err.message : "The upload failed.", 0);
+      const fatal = err instanceof FatalUploadError ? err : new FatalUploadError(err instanceof Error ? err.message : "The upload failed.", 0, codeOf(err));
       // Retries used up: the session is intact and continues. An expired session starts over. A refused file cannot be retried.
       const canResume = fatal.status === 0 || fatal.status === 404 || fatal.status === 410;
-      this.update({ phase: "error", error: fatal.message, canResume, bytesPerSecond: 0, secondsLeft: null, offline: false }, true);
+      this.update({ phase: "error", error: fatal.message, errorCode: fatal.code, canResume, bytesPerSecond: 0, secondsLeft: null, offline: false }, true);
     } finally {
       if (this.controller === controller) this.controller = null;
       this.running = false;
@@ -660,7 +677,7 @@ export class UploadTask {
       removeRecord(this.env.storage, this.resumeKey);
       this.sessionId = null;
       this.offset = 0;
-      throw new FatalUploadError(SESSION_GONE, res.status);
+      throw new FatalUploadError(SESSION_GONE, res.status, "session-gone");
     }
     if (res.status !== 200) throw failureOf(res, "Could not check how much of the file arrived.");
     const offset = parseOffsetHeader(res.header(UPLOAD_OFFSET_HEADER));
@@ -702,7 +719,7 @@ export class UploadTask {
       removeRecord(this.env.storage, this.resumeKey);
       this.sessionId = null;
       this.offset = 0;
-      throw new FatalUploadError(messageOf(res, SESSION_GONE), res.status);
+      throw new FatalUploadError(messageOf(res, SESSION_GONE), res.status, "session-gone");
     }
     throw failureOf(res, "A chunk could not be stored.");
   }

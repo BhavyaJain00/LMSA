@@ -789,7 +789,7 @@ function revokeBundleIn(d: Database, payment: Pick<Payment, "id" | "userId" | "i
  */
 export function revokeAccessIn(
   d: Database,
-  payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "paidAt" | "orderId" | "installmentNumber" | "installmentsTotal">,
+  payment: Pick<Payment, "id" | "userId" | "itemType" | "itemId" | "subscriptionId" | "planId" | "paidAt" | "orderId" | "installmentNumber" | "installmentsTotal">,
   at: string = new Date().toISOString(),
 ): void {
   const userId = payment.userId;

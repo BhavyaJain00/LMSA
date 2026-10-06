@@ -8,7 +8,7 @@ import { renderEmail, type EmailBlock, type EmailBrand, type RenderedEmail } fro
 import { notify } from "@/lib/services/notifications";
 import { formatDate, formatPrice } from "@/lib/utils";
 import { intervalSuffix, planAccessLabel } from "./plans";
-import { GRACE_DAYS } from "./subscriptions";
+import { pastDueGraceEnd } from "./subscriptions";
 
 /**
  * Membership emails and in-app notices. Lifecycle messages (started, payment
@@ -19,7 +19,7 @@ import { GRACE_DAYS } from "./subscriptions";
  * members get exactly one email per message.
  */
 
-export type MembershipMessage = "started" | "trial_started" | "payment_due" | "ended" | "expired" | "cancel_scheduled" | "resumed" | "plan_changed" | "renewal_due" | "trial_ending";
+export type MembershipMessage = "started" | "trial_started" | "payment_due" | "ended" | "expired" | "cancel_scheduled" | "resumed" | "plan_changed" | "plan_change_scheduled" | "renewal_due" | "trial_ending";
 
 const SUBSCRIPTION_PAGE = "/settings/subscription";
 
@@ -27,6 +27,8 @@ interface Context {
   user: User;
   subscription: Subscription;
   plan: MembershipPlan | null;
+  /** The plan the membership moves to at its next renewal, when a change is scheduled. */
+  pendingPlan: MembershipPlan | null;
   brand: EmailBrand;
   emailEnabled: boolean;
   /** A notice with this dedupe key was already sent. */
@@ -43,6 +45,7 @@ async function context(subscriptionId: string, dedupeKey: string | undefined): P
     user,
     subscription: { ...subscription },
     plan: db.plans.find((p) => p.id === subscription.planId) ?? null,
+    pendingPlan: subscription.pendingPlanId ? (db.plans.find((p) => p.id === subscription.pendingPlanId) ?? null) : null,
     brand: brandFromSettings(db.settings),
     emailEnabled: db.settings.email.enabled,
     alreadySent: !!dedupeKey && db.notifications.some((n) => n.userId === user.id && n.dedupeKey === dedupeKey),
@@ -55,7 +58,7 @@ function price(plan: MembershipPlan | null): string {
 }
 
 function graceEnd(sub: Subscription): string {
-  return new Date(new Date(sub.currentPeriodEnd).getTime() + GRACE_DAYS * 86_400_000).toISOString();
+  return new Date(pastDueGraceEnd(sub)).toISOString();
 }
 
 interface Copy {
@@ -169,6 +172,22 @@ function copyFor(kind: MembershipMessage, ctx: Context, extra: { order?: Payment
           manage,
         ],
       };
+    case "plan_change_scheduled": {
+      const next = ctx.pendingPlan;
+      const nextName = next?.name ?? "your new plan";
+      return {
+        subject: `Your plan changes to ${nextName} at your next renewal`,
+        notice: `${nextName} starts when your membership renews. Until then you keep ${name}.`,
+        heading: "Your plan change is scheduled",
+        blocks: [
+          {
+            type: "paragraph",
+            text: `Your membership moves from ${name} to ${nextName}${next ? ` (${price(next)})` : ""} when it renews${sub.status === "trialing" ? " after your first paid period" : ` on ${until}`}. Until then you keep ${name} and its courses.`,
+          },
+          manage,
+        ],
+      };
+    }
     case "renewal_due": {
       const order = extra.order;
       return {

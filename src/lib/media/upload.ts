@@ -4,7 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { uid } from "@/lib/utils";
 import { PROTECTED_VIDEO_DIR } from "./paths";
-import { DOC_TYPES, IMAGE_TYPES, VIDEO_TYPES, resolveFileType, storedFileName, validateUploadStart } from "./resumable-shared";
+import { DOC_TYPES, IMAGE_TYPES, VIDEO_TYPES, resolveFileType, storedFileName, validateUploadStart, type UploadErrorCode } from "./resumable-shared";
 import { MultipartError, multipartBoundary, parseMultipart, type MultipartPart, type MultipartSink } from "./multipart";
 
 /**
@@ -57,20 +57,22 @@ export interface UploadConfig {
 
 export type UploadResult =
   | { status: 200; body: { ok: true; url: string; name: string; size: number; type: string } }
-  | { status: number; body: { ok: false; error: string } };
+  | { status: number; body: { ok: false; error: string; code?: UploadErrorCode } };
 
 class UploadRejection extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code: UploadErrorCode | null;
+  constructor(status: number, message: string, code: UploadErrorCode | null = null) {
     super(message);
     this.name = "UploadRejection";
     this.status = status;
+    this.code = code;
   }
 }
 
 const megabytes = (bytes: number) => Math.round(bytes / 1024 / 1024);
 const tooLarge = (limit: number) => new UploadRejection(413, `File is too large (max ${megabytes(limit)} MB).`);
-const fail = (status: number, error: string): UploadResult => ({ status, body: { ok: false, error } });
+const fail = (status: number, error: string, code?: UploadErrorCode | null): UploadResult => ({ status, body: { ok: false, error, ...(code ? { code } : {}) } });
 
 interface StoredFile {
   originalName: string;
@@ -186,7 +188,7 @@ export async function receiveUpload(request: Request, config: UploadConfig): Pro
     let sniffed = !isVideo;
     const sniff = () => {
       sniffed = true;
-      if (!looksLikeVideo(Uint8Array.from(head))) throw new UploadRejection(415, "This file doesn't look like a video. Upload an MP4, WebM or OGG file.");
+      if (!looksLikeVideo(Uint8Array.from(head))) throw new UploadRejection(415, "This file doesn't look like a video. Upload an MP4, WebM or OGG file.", "not-video");
     };
     return {
       async write(chunk) {
@@ -221,7 +223,7 @@ export async function receiveUpload(request: Request, config: UploadConfig): Pro
     await cleanup();
     if (err instanceof UploadRejection) {
       await drain(reader);
-      return fail(err.status, err.message);
+      return fail(err.status, err.message, err.code);
     }
     if (err instanceof MultipartError) {
       await drain(reader);

@@ -5,11 +5,12 @@ import path from "node:path";
 import type { UploadSession, User } from "@/lib/types";
 import { siteConfig } from "@/lib/config";
 import { isStaff } from "@/lib/auth/session";
-import { findById, getDb, insert, mutate } from "@/lib/db/store";
+import { findById, getDb, mutate } from "@/lib/db/store";
 import { uid } from "@/lib/utils";
 import { localStorage, offloadLocalFile, uploadRoot, uploadUrlForKey } from "@/lib/storage";
 import { PROTECTED_VIDEO_DIR } from "./paths";
 import { looksLikeVideo } from "./upload";
+import { checkUploadAdmission, freeDiskBytes, type UploadQuotaPolicy } from "./upload-quota";
 import {
   DEFAULT_CHUNK_SIZE,
   SESSION_RECORD_RETENTION_MS,
@@ -20,6 +21,7 @@ import {
   isStaleSession,
   storedFileName,
   validateUploadStart,
+  type UploadErrorCode,
   type UploadStartInput,
 } from "./resumable-shared";
 
@@ -55,13 +57,18 @@ const OPPORTUNISTIC_CLEANUP_MS = 60 * 60 * 1000;
 export class UploadError extends Error {
   readonly status: number;
   readonly offset: number | null;
-  constructor(status: number, message: string, offset: number | null = null) {
+  /** Reason the upload field can show in the viewer's language (see `UPLOAD_ERROR_CODES`). */
+  readonly code: UploadErrorCode | null;
+  constructor(status: number, message: string, offset: number | null = null, code: UploadErrorCode | null = null) {
     super(message);
     this.name = "UploadError";
     this.status = status;
     this.offset = offset;
+    this.code = code;
   }
 }
+
+const NOT_VIDEO = "This file doesn't look like a video. Upload an MP4, WebM, OGG or MOV file.";
 
 function tempDir(): string {
   return path.join(/* turbopackIgnore: true */ uploadRoot(), TEMP_DIR);
@@ -114,24 +121,25 @@ export function sessionView(session: UploadSession, offset = session.received): 
   };
 }
 
-/** Start an upload for `user`. */
-export async function createUploadSession(user: User, input: UploadStartInput): Promise<UploadSession> {
+/**
+ * Start an upload for `user`. Refused when the account already has
+ * `MAX_ACTIVE_SESSIONS_PER_USER` unfinished uploads, when the disk lacks room
+ * (507) or when a learner's daily byte budget is used up (see `upload-quota.ts`).
+ * `options` override the clock, the measured free space and the quota policy (tests).
+ */
+export async function createUploadSession(
+  user: User,
+  input: UploadStartInput,
+  options: { now?: number; free?: number | null; policy?: UploadQuotaPolicy } = {},
+): Promise<UploadSession> {
   const decision = validateUploadStart(input, uploadPolicyFor(user));
   if (!decision.ok) throw new UploadError(decision.status, decision.error);
 
-  const db = await getDb();
-  const now = Date.now();
-  if (countActiveSessions(db.uploadSessions, user.id, now) >= MAX_ACTIVE_SESSIONS_PER_USER) {
-    throw new UploadError(429, `You have ${MAX_ACTIVE_SESSIONS_PER_USER} unfinished uploads. Finish or cancel one before starting another.`);
-  }
-
+  const now = options.now ?? Date.now();
+  const free = options.free !== undefined ? options.free : await freeDiskBytes();
   const id = uid("ups");
   const name = storedFileName(decision.fileName, decision.ext, uid());
   const storageKey = decision.category === "video" ? `${PROTECTED_VIDEO_DIR}/${name}` : name;
-  await fs.mkdir(tempDir(), { recursive: true });
-  const handle = await fs.open(partialPathOf(id), "wx");
-  await handle.close();
-
   const iso = new Date(now).toISOString();
   const session: UploadSession = {
     id,
@@ -146,7 +154,27 @@ export async function createUploadSession(user: User, input: UploadStartInput): 
     createdAt: iso,
     updatedAt: iso,
   };
-  await insert("uploadSessions", session);
+
+  // The limits and the insert run in one mutation, so parallel requests cannot all pass the same count.
+  await mutate((db) => {
+    if (countActiveSessions(db.uploadSessions, user.id, now) >= MAX_ACTIVE_SESSIONS_PER_USER) {
+      throw new UploadError(429, `You have ${MAX_ACTIVE_SESSIONS_PER_USER} unfinished uploads. Finish or cancel one before starting another.`, null, "too-many-uploads");
+    }
+    const admission = checkUploadAdmission({ user, bytes: decision.size, sessions: db.uploadSessions, free, now, policy: options.policy });
+    if (!admission.ok) throw new UploadError(admission.status, admission.error, null, admission.code);
+    db.uploadSessions.push(session);
+  });
+
+  try {
+    await fs.mkdir(tempDir(), { recursive: true });
+    const handle = await fs.open(partialPathOf(id), "wx");
+    await handle.close();
+  } catch (err) {
+    await mutate((db) => {
+      db.uploadSessions = db.uploadSessions.filter((s) => s.id !== id);
+    });
+    throw err;
+  }
   return session;
 }
 
@@ -167,8 +195,8 @@ export async function currentOffset(session: UploadSession): Promise<number> {
 
 function assertUploading(session: UploadSession): void {
   if (session.status === "complete") throw new UploadError(409, "This upload is already complete.", session.size);
-  if (session.status === "aborted") throw new UploadError(410, "This upload was cancelled. Start it again.");
-  if (isStaleSession(session, Date.now())) throw new UploadError(410, "This upload expired after a day without activity. Start it again.");
+  if (session.status === "aborted") throw new UploadError(410, "This upload was cancelled. Start it again.", null, "session-gone");
+  if (isStaleSession(session, Date.now())) throw new UploadError(410, "This upload expired after a day without activity. Start it again.", null, "session-gone");
 }
 
 async function saveProgress(sessionId: string, received: number): Promise<void> {
@@ -201,7 +229,7 @@ export async function appendChunk(session: UploadSession, request: Request): Pro
   let handle: FileHandle | null = null;
   try {
     const stored = await fileSize(file);
-    if (stored === null) throw new UploadError(410, "The partial file of this upload is gone. Start it again.");
+    if (stored === null) throw new UploadError(410, "The partial file of this upload is gone. Start it again.", null, "session-gone");
     if (stored !== session.received) await saveProgress(session.id, stored);
 
     const check = checkChunk(stored, session.size, request.headers.get("upload-offset"), request.headers.get("content-length"));
@@ -241,7 +269,7 @@ export async function appendChunk(session: UploadSession, request: Request): Pro
             if (!looksLikeVideo(Uint8Array.from(head))) {
               await reader.cancel().catch(() => undefined);
               await handle.truncate(stored);
-              throw new UploadError(415, "This file doesn't look like a video. Upload an MP4, WebM, OGG or MOV file.", stored);
+              throw new UploadError(415, NOT_VIDEO, stored, "not-video");
             }
           }
         }
@@ -294,11 +322,11 @@ export async function completeUploadSession(session: UploadSession): Promise<Com
   if (state.writing.has(session.id)) throw new UploadError(409, "A chunk of this upload is still being written.");
   const file = partialPathOf(session.id);
   const size = await fileSize(file);
-  if (size === null) throw new UploadError(410, "The partial file of this upload is gone. Start it again.");
+  if (size === null) throw new UploadError(410, "The partial file of this upload is gone. Start it again.", null, "session-gone");
   if (size !== session.size) throw new UploadError(409, `Only ${size} of ${session.size} bytes have arrived. Resume the upload first.`, size);
   if (categoryOf(session.mimeType) === "video" && !looksLikeVideo(await readHead(file, SNIFF_BYTES))) {
     await abortUploadSession(session);
-    throw new UploadError(415, "This file doesn't look like a video. Upload an MP4, WebM, OGG or MOV file.");
+    throw new UploadError(415, NOT_VIDEO, null, "not-video");
   }
 
   // Received on local disk; with S3 storage the caller offloads it to the bucket afterwards.

@@ -1,7 +1,8 @@
-import { OG_CONTENT_TYPE, renderOgCard, renderSiteOgCard } from "@/components/seo/og-card";
+import { OG_CONTENT_TYPE, renderFallbackOgCard, renderOgCard } from "@/components/seo/og-card";
+import { getSettings } from "@/lib/db/store";
 import { getCourseBySlug, getCourseSummary } from "@/lib/data/courses";
 import { OG_IMAGE_SIZE } from "@/lib/seo/metadata";
-import { isCoursePublic } from "@/lib/seo/visibility";
+import { isCoursePublic, sectionIsPublic } from "@/lib/seo/visibility";
 import { plainText } from "@/lib/seo/text";
 import { formatPrice } from "@/lib/utils";
 
@@ -11,8 +12,10 @@ export const contentType = OG_CONTENT_TYPE;
 
 export default async function CourseOpengraphImage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  // Members-only catalogs (or a switched-off course catalog) show strangers nothing but the site card.
+  if (!sectionIsPublic(await getSettings(), "courses")) return renderFallbackOgCard();
   const course = await getCourseBySlug(slug);
-  if (!course || !isCoursePublic(course)) return renderSiteOgCard();
+  if (!course || !isCoursePublic(course)) return renderFallbackOgCard();
   const summary = await getCourseSummary(course.id, null);
   const instructors = summary?.instructors.map((i) => i.name) ?? [];
   const facts: string[] = [];

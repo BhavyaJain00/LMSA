@@ -110,6 +110,7 @@ export const COLLECTIONS: CollectionName[] = [
   "dataRequests",
   "aiConversations",
   "aiMessages",
+  "aiClarifications",
   // round 3 wave B
   "plans",
   "subscriptions",

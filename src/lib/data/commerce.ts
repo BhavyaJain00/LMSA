@@ -291,6 +291,39 @@ export type BillingAccess =
  * item exists and is published, the viewer is not already enrolled, batch
  * seats and start date, certificate not already purchased.
  */
+export type CoursesPrerequisiteGate = { ok: true } | { ok: false; error: string; first: { slug: string; title: string } | null };
+
+/**
+ * The course prerequisite rule (drip area) for a purchase of several courses
+ * at once (a bundle, or a gift of one): each course the buyer doesn't have
+ * yet needs its prerequisites completed, except prerequisites that come with
+ * the same purchase.
+ */
+export async function coursesPrerequisiteGate(userId: string, courseIds: readonly string[]): Promise<CoursesPrerequisiteGate> {
+  const together = new Set(courseIds);
+  const db = await getDb();
+  for (const courseId of courseIds) {
+    const gate = await assertPrerequisitesMet(userId, courseId);
+    if (gate.ok) continue;
+    const missing = gate.missing.filter((m) => !together.has(m.courseId));
+    if (!missing.length) continue;
+    const title = db.courses.find((c) => c.id === courseId)?.title ?? "A course";
+    const names = missing.map((m) => `“${m.title}”`);
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    return {
+      ok: false,
+      error: `“${title}” requires ${list} to be completed first. Complete ${missing.length === 1 ? "it" : "them"}, then come back.`,
+      first: { slug: missing[0]!.slug, title: missing[0]!.title },
+    };
+  }
+  return { ok: true };
+}
+
+/** Another membership checkout of the buyer still awaiting payment (one membership, and one trial, at a time). */
+export function openMembershipOrder(payments: readonly Payment[], userId: string): Payment | undefined {
+  return payments.find((p) => p.userId === userId && p.itemType === "plan" && p.status === "pending" && !p.subscriptionId);
+}
+
 export async function checkBillingAccess(user: User, item: BillingItem): Promise<BillingAccess> {
   const db = await getDb();
   const pending = db.payments.find((p) => p.userId === user.id && p.itemType === item.type && p.itemId === item.id && p.status === "pending");
@@ -368,6 +401,16 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     const included = bundleCourses(bundle, db.courses).map((c) => c.id);
     if (ownedCourseIds(db, user.id, included).length === included.length) return { status: "owned", redirectTo: `/bundles/${bundle.slug}` };
     if (pending) return { status: "pending", payment: pending };
+    // Buying a bundle enrolls in every course: the prerequisite rule applies as for one course.
+    const gate = await coursesPrerequisiteGate(user.id, included);
+    if (!gate.ok) {
+      return {
+        status: "denied",
+        message: gate.error,
+        backHref: gate.first ? `/courses/${gate.first.slug}` : `/bundles/${bundle.slug}`,
+        backLabel: gate.first ? "Go to the prerequisite" : "Back to the bundle",
+      };
+    }
     return { status: "ok" };
   }
 
@@ -388,7 +431,9 @@ export async function checkBillingAccess(user: User, item: BillingItem): Promise
     if (!plan.active) return { status: "denied", message: "This membership plan is no longer offered.", ...back };
     const current = currentSubscription(db, user.id);
     if (current && isOngoing(current)) return { status: "owned", redirectTo: "/settings/subscription" };
-    if (pending) return { status: "pending", payment: pending };
+    // An unpaid checkout of any plan comes first: two would start two memberships (and two free trials).
+    const open = pending ?? openMembershipOrder(db.payments, user.id);
+    if (open) return { status: "pending", payment: open };
     return { status: "ok" };
   }
 
@@ -465,12 +510,12 @@ export type CouponCheck = { ok: true; coupon: Coupon } | { ok: false; error: str
  * friendly early check; the authoritative one runs inside the serialized
  * write that creates the order (`insertPendingOrder`).
  */
-export async function validateCoupon(rawCode: string, item: Pick<BillingItem, "type" | "id" | "currency">): Promise<CouponCheck> {
+export async function validateCoupon(rawCode: string, item: Pick<BillingItem, "type" | "id" | "currency">, userId?: string): Promise<CouponCheck> {
   const code = normalizeCouponCode(rawCode);
   if (!code) return { ok: false, error: "Please enter a coupon code" };
   const db = await getDb();
   const coupon = db.coupons.find((c) => c.code.toUpperCase() === code);
-  const problem = couponProblem(coupon, item, { payments: db.payments, defaultCurrency: db.settings.commerce.defaultCurrency, today: toDateKey() }, code);
+  const problem = couponProblem(coupon, item, { payments: db.payments, userId, defaultCurrency: db.settings.commerce.defaultCurrency, today: toDateKey() }, code);
   if (problem || !coupon) return { ok: false, error: problem ?? `The coupon code '${code}' is invalid.` };
   return { ok: true, coupon };
 }
@@ -486,7 +531,7 @@ export async function validateCouponForBuyer(rawCode: string, item: Pick<Billing
   const keys = { userId: buyer.userId, ip };
   const blocked = couponAttemptsBlocked(keys);
   if (blocked) return { ok: false, error: blocked };
-  const check = await validateCoupon(rawCode, item);
+  const check = await validateCoupon(rawCode, item, buyer.userId);
   if (!check.ok) recordRejectedCoupon(keys);
   return check;
 }
@@ -625,14 +670,17 @@ export type InsertOrderResult = { ok: true; payment: Payment; existing: boolean;
 export async function insertPendingOrder(draft: Omit<Payment, "orderId">, bump?: Omit<Payment, "orderId" | "upsellOfPaymentId">): Promise<InsertOrderResult> {
   const today = toDateKey();
   return mutate((d): InsertOrderResult => {
-    const open = d.payments.find((p) => p.userId === draft.userId && p.itemType === draft.itemType && p.itemId === draft.itemId && p.status === "pending");
+    const open =
+      d.payments.find((p) => p.userId === draft.userId && p.itemType === draft.itemType && p.itemId === draft.itemId && p.status === "pending") ??
+      // A new membership checkout while another plan's checkout awaits payment: that one is returned (one membership at a time).
+      (draft.itemType === "plan" && !draft.subscriptionId ? openMembershipOrder(d.payments, draft.userId) : undefined);
     if (open) return { ok: true, payment: { ...open }, existing: true };
     if (draft.couponId) {
       const coupon = d.coupons.find((c) => c.id === draft.couponId);
       const problem = couponProblem(
         coupon,
         { type: draft.itemType, id: draft.itemId, currency: draft.currency },
-        { payments: d.payments, defaultCurrency: d.settings.commerce.defaultCurrency, today },
+        { payments: d.payments, userId: draft.userId, defaultCurrency: d.settings.commerce.defaultCurrency, today },
         draft.couponCode,
       );
       if (problem) return { ok: false, error: problem };
@@ -1167,7 +1215,7 @@ export async function getPurchasableItems(): Promise<PurchasableItem[]> {
 }
 
 export interface CouponRow extends Coupon {
-  items: { type: "course" | "batch"; id: string; title: string }[];
+  items: { type: Coupon["applicableItems"][number]["type"]; id: string; title: string }[];
   expired: boolean;
   exhausted: boolean;
 }
@@ -1177,6 +1225,8 @@ export async function getCoupons(search?: string): Promise<CouponRow[]> {
   const titles = new Map<string, string>();
   for (const c of db.courses) titles.set(`course:${c.id}`, c.title);
   for (const b of db.batches) titles.set(`batch:${b.id}`, b.title);
+  for (const b of db.bundles) titles.set(`bundle:${b.id}`, b.title);
+  for (const p of db.plans) titles.set(`plan:${p.id}`, p.name);
   const today = toDateKey();
   const q = search?.trim().toUpperCase();
   return db.coupons

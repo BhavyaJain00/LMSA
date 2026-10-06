@@ -84,6 +84,7 @@ import { normalizeCurrency } from "@/lib/commerce/currency";
 import { validateRecoverySettings } from "@/lib/commerce/checkout-recovery";
 import { processAbandonedCheckouts } from "@/lib/commerce/checkout-sessions";
 import { countryCode, type TaxContext } from "@/lib/commerce/tax";
+import { reverseChargeCheck } from "@/lib/commerce/vies";
 import { referralAffiliateIdForCheckout } from "@/lib/growth/attribution";
 
 /* ------------------------------------------------------------------ */
@@ -180,6 +181,11 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     return { ok: false, error: "The price changed while you were checking out. Please review the updated order summary and try again." };
   }
 
+  // A reverse-charged sale needs a VAT number the EU registry (VIES) knows.
+  const vat = await reverseChargeCheck(summary, input.vatId);
+  if (!vat.ok) return { ok: false, error: vat.error, fieldErrors: { vatId: vat.error } };
+  const vatCheckFor = (s: { reverseCharge?: boolean }) => (vat.vatCheck && s.reverseCharge ? { vatCheck: vat.vatCheck } : {});
+
   if (type === "course") {
     // Course prerequisites (drip area) must be completed before a course checkout is created.
     const gate = await assertPrerequisitesMet(user.id, item.id);
@@ -227,6 +233,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     amount: charge.amount,
     currency: summary.currency,
     ...orderTaxFields(summary),
+    ...vatCheckFor(summary),
     couponId: coupon?.id,
     couponCode: coupon?.code,
     ...billing,
@@ -248,6 +255,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
         amount: bump.summary.total,
         currency: bump.summary.currency,
         ...orderTaxFields(bump.summary),
+        ...vatCheckFor(bump.summary),
         ...billing,
         ...referral,
         gateway: orderGateway,
@@ -294,9 +302,11 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     revalidateOrder(payment.orderId);
     return { ok: true, data: next, message: next.kind === "redirect" ? `Redirecting to ${GATEWAY_NAMES[gateway as keyof typeof GATEWAY_NAMES] ?? "payment"}…` : undefined };
   } catch (error) {
-    // Nothing reached the gateway: drop the order so the learner can simply try again.
+    // Nothing reached the gateway: drop the order (and the add-on ticked with it) so the learner can simply try again.
     await mutate((d) => {
-      d.payments = d.payments.filter((p) => !(p.id === payment.id && p.status === "pending" && !p.gatewayOrderId));
+      const main = d.payments.find((p) => p.id === payment.id);
+      if (!main || main.status !== "pending" || main.gatewayOrderId) return;
+      d.payments = d.payments.filter((p) => p.id !== main.id && !(p.upsellOfPaymentId === main.id && isOrderBump(p) && p.status === "pending"));
     });
     return { ok: false, error: gatewayErrorMessage(error) };
   }
@@ -330,7 +340,7 @@ export async function resumeCheckoutAction(orderId: string): Promise<ActionResul
   // An order bump is paid in the checkout of its main order.
   if (isOrderBump(payment)) {
     const main = (await getDb()).payments.find((p) => p.id === payment.upsellOfPaymentId);
-    if (!main) return { ok: false, error: "Order not found." };
+    if (!main) return { ok: false, error: "The order this add-on belonged to no longer exists. Cancel the add-on and start a new checkout." };
     payment = { ...main };
   }
   if (payment.status === "failed") return { ok: false, error: "This order was cancelled. Start a new checkout to buy it again." };
@@ -431,7 +441,14 @@ export async function cancelOrderAction(_prev: ActionResult | null, formData: Fo
   if (isInstallmentOrder(payment) && payment.installmentNumber! > 1) {
     return { ok: false, error: "This payment belongs to your payment plan and can't be cancelled on its own. Contact us if you'd like to stop the plan." };
   }
-  if (isOrderBump(payment)) return { ok: false, error: "This add-on is paid together with its main order. Cancel that order instead." };
+  if (isOrderBump(payment)) {
+    const main = (await getDb()).payments.find((p) => p.id === payment.upsellOfPaymentId);
+    if (main) return { ok: false, error: "This add-on is paid together with its main order. Cancel that order instead." };
+    // Its main order is gone (that checkout never reached the gateway): the add-on is closed on its own.
+    await markPaymentFailed(payment.id);
+    revalidateOrder(payment.orderId);
+    return { ok: true, data: undefined, message: "Your order has been cancelled." };
+  }
 
   if (isRealGateway(payment.gateway)) {
     const closed = await closeGatewayCheckout(payment);

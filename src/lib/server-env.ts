@@ -109,7 +109,18 @@ export function isS3Configured(): boolean {
 export const mediaEnv = {
   ffmpegPath: read("FFMPEG_PATH") || "ffmpeg",
   ffprobePath: read("FFPROBE_PATH") || "ffprobe",
+  /** New uploads are refused (507) when the upload disk would have less than this free (UPLOAD_MIN_FREE_MB, default 1024). */
+  uploadMinFreeBytes: readMegabytes("UPLOAD_MIN_FREE_MB", 1024),
+  /** Bytes a learner (non-staff account) may upload per rolling 24 hours (UPLOAD_LEARNER_DAILY_MB, default 500). */
+  learnerDailyUploadBytes: readMegabytes("UPLOAD_LEARNER_DAILY_MB", 500),
 };
+
+/** A whole number of megabytes from the environment (0 allowed), in bytes. */
+function readMegabytes(name: string, fallbackMb: number): number {
+  const raw = read(name);
+  const mb = raw && /^\d{1,9}$/.test(raw) ? Number(raw) : fallbackMb;
+  return mb * 1024 * 1024;
+}
 
 /** OpenAI-compatible speech-to-text endpoint used for automatic captions. */
 export const transcribeEnv = {

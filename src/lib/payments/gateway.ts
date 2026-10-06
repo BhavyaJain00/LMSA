@@ -406,7 +406,7 @@ export async function reopenFailedOrder(paymentId: string): Promise<{ ok: true }
       const problem = couponProblem(
         d.coupons.find((c) => c.id === row.couponId),
         { type: row.itemType, id: row.itemId, currency: row.currency },
-        { payments: d.payments, defaultCurrency: d.settings.commerce.defaultCurrency, today: toDateKey() },
+        { payments: d.payments, userId: row.userId, defaultCurrency: d.settings.commerce.defaultCurrency, today: toDateKey() },
         row.couponCode,
       );
       if (problem) return { ok: false, error: closedMessage(problem) };

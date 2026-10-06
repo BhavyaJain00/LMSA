@@ -246,6 +246,7 @@ export default async function TaxesSettingsPage(props: PageProps<"/admin/setting
                             {l.buyerTaxId}
                           </p>
                         )}
+                        {l.vatUnverified && <p className="text-xs font-medium text-warning">{t("pages.settings.taxes.report.vatUnverified")}</p>}
                       </TD>
                       <TD className="whitespace-nowrap text-end tabular-nums">{money(l.tax, l.currency)}</TD>
                       <TD className="hidden whitespace-nowrap text-end tabular-nums sm:table-cell">{money(l.total, l.currency)}</TD>

@@ -414,9 +414,23 @@ export function describeTimeLeft(seconds: number | null): string | null {
   return rest ? `about ${hours} h ${rest} min left` : `about ${hours} h left`;
 }
 
-/** Statuses after which retrying the same request cannot succeed. */
+/**
+ * Machine-readable reasons the upload routes send next to their English
+ * `error` text (`{ ok: false, error, code }`), so the upload field can show
+ * them in the viewer's language. Messages that carry numbers (size limits)
+ * have no code and are shown as sent.
+ */
+export const UPLOAD_ERROR_CODES = ["session-gone", "network", "rate-limited", "too-many-uploads", "quota", "disk-full", "sign-in", "not-video"] as const;
+export type UploadErrorCode = (typeof UPLOAD_ERROR_CODES)[number];
+
+/** A known error code, or null. */
+export function parseUploadErrorCode(value: unknown): UploadErrorCode | null {
+  return typeof value === "string" && (UPLOAD_ERROR_CODES as readonly string[]).includes(value) ? (value as UploadErrorCode) : null;
+}
+
+/** Statuses after which retrying the same request cannot succeed (507: the server's disk is nearly full). */
 export function isFatalUploadStatus(status: number): boolean {
-  return status === 400 || status === 401 || status === 403 || status === 404 || status === 410 || status === 413 || status === 415;
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 410 || status === 413 || status === 415 || status === 507;
 }
 
 /** Seconds left at the current speed (null while the speed is unknown). */

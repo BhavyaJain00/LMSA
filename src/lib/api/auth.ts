@@ -13,8 +13,13 @@ import { API_AUTH_FAILURE_LIMIT, API_AUTH_FAILURE_SHARED_LIMIT, apiAuthFailures 
  * unknown or malformed key → 401 invalid_api_key, revoked key → 401
  * revoked_api_key; a key whose creator is no longer an enabled admin → 401
  * invalid_api_key. Failed attempts are rate limited per client IP (so keys
- * can't be guessed at speed); once over the limit even correct keys from
- * that IP wait for `Retry-After`.
+ * can't be guessed at speed): once over the limit, further failures get 429
+ * with `Retry-After`.
+ *
+ * A valid key with an active owner is never held back by that limiter.
+ * Otherwise anyone could lock every integration out by spraying junk keys:
+ * without a trusted proxy all clients share the `unknown` bucket. A 238-bit
+ * secret can't be guessed, and valid keys have their own per-key limit.
  */
 
 const CHALLENGE = { "WWW-Authenticate": 'Bearer realm="api"' };
@@ -22,21 +27,23 @@ const CHALLENGE = { "WWW-Authenticate": 'Bearer realm="api"' };
 const LAST_USED_RESOLUTION_MS = 60_000;
 
 export function authenticateApiKey(db: Database, authorization: string | null, clientIp: string, now: number = Date.now()): ApiKey {
+  const token = readBearerToken(authorization);
+  const match = token ? matchApiKey(db.apiKeys, token) : null;
+  if (match?.status === "valid" && isKeyOwnerActive(db, match.key)) return match.key;
+
+  // Every path below is a failed attempt: throttle it per client IP.
   const limit = perIpLimit("api-auth", clientIp, API_AUTH_FAILURE_LIMIT, API_AUTH_FAILURE_SHARED_LIMIT);
   const blocked = apiAuthFailures.check(limit.key, limit.rule, now);
   if (!blocked.ok) {
     const retryAfter = Math.max(1, Math.ceil(blocked.retryAfterMs / 1000));
-    throw new ApiError(429, "rate_limited", "Too many requests with an invalid API key. Try again later.", { retryAfterSeconds: retryAfter }, { "Retry-After": String(retryAfter) });
+    throw new ApiError(429, "rate_limited", "Too many requests with a missing or invalid API key. Try again later.", { retryAfterSeconds: retryAfter }, { "Retry-After": String(retryAfter) });
   }
+  apiAuthFailures.hit(limit.key, limit.rule, now);
 
-  const token = readBearerToken(authorization);
-  if (!token) {
+  if (!token || !match) {
     throw new ApiError(401, "unauthorized", "Send your API key in the Authorization header: `Authorization: Bearer ll_live_…`.", null, CHALLENGE);
   }
-  const match = matchApiKey(db.apiKeys, token);
   if (match.status === "valid") {
-    if (isKeyOwnerActive(db, match.key)) return match.key;
-    apiAuthFailures.hit(limit.key, limit.rule, now);
     throw new ApiError(
       401,
       "invalid_api_key",
@@ -45,8 +52,6 @@ export function authenticateApiKey(db: Database, authorization: string | null, c
       { "WWW-Authenticate": 'Bearer realm="api", error="invalid_token"' },
     );
   }
-
-  apiAuthFailures.hit(limit.key, limit.rule, now);
   if (match.status === "revoked") {
     throw new ApiError(401, "revoked_api_key", "This API key was revoked. Create a new key in Admin → Settings → API & webhooks.", null, {
       "WWW-Authenticate": 'Bearer realm="api", error="invalid_token"',

@@ -4,6 +4,7 @@ import { on } from "@/lib/events";
 import { sendMembershipMessage, type MembershipMessage } from "./emails";
 import { afterInstallmentPaid, afterInstallmentRefunded } from "./installment-gateway";
 import { deliverGift } from "./gift-service";
+import { afterMembershipRefunded } from "./membership-service";
 import { completeCheckoutSessions } from "./checkout-sessions";
 
 /**
@@ -13,6 +14,10 @@ import { completeCheckoutSessions } from "./checkout-sessions";
  * first payment ties a Stripe subscription to the plan and sends the
  * schedule, the last one stops the subscription; a refund (which closed the
  * plan's remaining parts) stops it too.
+ *
+ * `payment.refunded` of a membership order: the refund ended the membership
+ * when the order paid for its current period, so its Stripe/Razorpay
+ * subscription is cancelled too (administrators are alerted when it can't be).
  *
  * `payment.paid` of a gift order: email the recipient now, unless the buyer
  * chose a later send time (then the delivery run sends it).
@@ -69,6 +74,14 @@ on(
     if (event.data.itemType === "course" && event.data.full) await afterInstallmentRefunded(event.data.paymentId);
   },
   { key: "commerce:installments-refunded" },
+);
+
+on(
+  "payment.refunded",
+  async (event) => {
+    if (event.data.itemType === "plan" && event.data.full) await afterMembershipRefunded(event.data.paymentId);
+  },
+  { key: "commerce:membership-refunded" },
 );
 
 on(

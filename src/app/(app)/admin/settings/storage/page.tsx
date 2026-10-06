@@ -6,7 +6,7 @@ import { siteConfig } from "@/lib/config";
 import { cronKey } from "@/lib/email";
 import { getStorageStatus, isRemoteStorage, localUsage, publicBaseUrl } from "@/lib/storage";
 import { getUploadSessionStats } from "@/lib/media/resumable";
-import { detectFfmpeg, FFMPEG_INSTALL_HINT } from "@/lib/media/transcode/ffmpeg";
+import { detectFfmpeg } from "@/lib/media/transcode/ffmpeg";
 import { isWorkerRunning } from "@/lib/media/transcode/queue";
 import { QUEUE_FILTERS, errorSummary, parsePage, parseQueueFilter, queuePage, type QueueFilter } from "@/lib/media/transcode/overview";
 import { transcriptionAvailability } from "@/lib/transcripts/auto";
@@ -210,7 +210,7 @@ export default async function StorageSettingsPage({ searchParams }: PageProps<"/
                     <p className="font-medium text-ink">{t("pages.settings.storage.ffmpeg.notFound")}</p>
                     <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">
                       {ffmpeg.error ? `${ffmpeg.error}. ` : ""}
-                      {FFMPEG_INSTALL_HINT} {t("pages.settings.storage.ffmpeg.until")}
+                      {t.rich("pages.settings.storage.ffmpeg.installHint", { code: (chunks) => <Code>{chunks}</Code> })} {t("pages.settings.storage.ffmpeg.until")}
                     </p>
                   </>
                 )}
@@ -260,7 +260,7 @@ export default async function StorageSettingsPage({ searchParams }: PageProps<"/
                   aria-current={option === filter ? "page" : undefined}
                   className={cn(
                     "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-accent",
-                    option === filter ? "bg-accent text-white" : "bg-surface-2 text-ink-muted hover:text-ink",
+                    option === filter ? "bg-accent text-accent-fg" : "bg-surface-2 text-ink-muted hover:text-ink",
                   )}
                 >
                   {statusLabel(option)}

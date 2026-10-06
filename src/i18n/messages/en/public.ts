@@ -517,7 +517,7 @@ const publicMessages = {
   "global.leadForm.syllabusResent": "We've sent the syllabus to your inbox again.",
   "global.leadForm.alreadyBody": "This address is already on our list. Thanks for staying with us!",
   "global.leadForm.checkInboxTitle": "Check your inbox",
-  "global.leadForm.checkInboxBody": "We've sent you a confirmation link. Click it to finish signing up. If it hasn't arrived in a minute, look in your spam folder.",
+  "global.leadForm.checkInboxBody": "We've sent you an email. If you're new here, click the confirmation link in it to finish signing up. If it hasn't arrived in a minute, look in your spam folder.",
   "global.leadForm.honeypot": "Leave this field empty",
   "global.leadForm.consent": "I agree to receive emails with free lessons and offers. I can unsubscribe at any time.",
   "global.leadForm.consentSyllabus": "I agree to receive emails with the syllabus, free lessons and offers. I can unsubscribe at any time.",

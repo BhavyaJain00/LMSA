@@ -26,9 +26,9 @@ export function normalizeCouponCode(code: string): string {
 
 export function couponAppliesTo(coupon: Coupon, item: { type: PaymentItemType; id: string }): boolean {
   if (!coupon.applicableItems.length) return true;
-  if (item.type === "batch") return coupon.applicableItems.some((a) => a.type === "batch" && a.id === item.id);
   // Course and certificate purchases match coupons listed for the course.
-  return coupon.applicableItems.some((a) => a.type === "course" && a.id === item.id);
+  const type = item.type === "certificate" ? "course" : item.type;
+  return coupon.applicableItems.some((a) => a.type === type && a.id === item.id);
 }
 
 /**
@@ -49,6 +49,8 @@ export interface CouponTarget {
 
 export interface CouponContext {
   payments: readonly Pick<Payment, "status" | "couponId">[];
+  /** The buyer; a personal coupon (`ownerUserId`) works for its owner only. */
+  userId?: string;
   /** Fixed-amount coupons are stored in this currency. */
   defaultCurrency: string;
   /** Today as YYYY-MM-DD (`toDateKey()`). */
@@ -62,6 +64,8 @@ export interface CouponContext {
  */
 export function couponProblem(coupon: Coupon | null | undefined, item: CouponTarget, ctx: CouponContext, code?: string): string | null {
   if (!coupon || !coupon.enabled) return `The coupon code '${code ?? coupon?.code ?? ""}' is invalid.`;
+  // Someone else's personal code is answered like an unknown one.
+  if (coupon.ownerUserId && coupon.ownerUserId !== ctx.userId) return `The coupon code '${code ?? coupon.code}' is invalid.`;
   if (coupon.expiresOn && coupon.expiresOn < ctx.today) return "This coupon has expired.";
   if (coupon.usageLimit > 0 && couponUsesTaken(coupon, ctx.payments) >= coupon.usageLimit) return COUPON_LIMIT_REACHED;
   if (!couponAppliesTo(coupon, item)) return `This coupon is not applicable to this ${ITEM_LABELS[item.type]}.`;

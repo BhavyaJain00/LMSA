@@ -1,3 +1,4 @@
+import { isPublicAddress, parseIpv4, parseIpv6, urlHost } from "@/lib/webhooks/ssrf";
 import type { TimedSegment, TimedWord } from "./cues";
 
 /**
@@ -36,10 +37,51 @@ export function transcriptionEndpoint(configured: string): string | null {
 }
 
 /**
+ * Container formats (ffmpeg demuxer names) ffmpeg may open as the video to
+ * transcribe. Playlist-like formats (hls, concat, …) are left out on
+ * purpose: their content names other files or URLs, and a crafted "video"
+ * must not make the server read them.
+ */
+export const TRANSCRIBE_INPUT_FORMATS = [
+  "mov",
+  "mp4",
+  "m4a",
+  "3gp",
+  "matroska",
+  "webm",
+  "ogg",
+  "avi",
+  "flv",
+  "asf",
+  "mpegts",
+  "mpeg",
+  "mxf",
+  "dv",
+  "wav",
+  "mp3",
+  "aac",
+  "flac",
+] as const;
+
+/**
+ * Protocols ffmpeg may use to read `input`: a local file is read through
+ * `file` only; an http(s) input (a presigned URL to the app's own object
+ * storage) through http/https and the transports under them. Nothing else
+ * (no `concat`, `subfile`, `data`, `ftp`, `rtmp`, …).
+ */
+export function inputProtocols(input: string): string {
+  return /^https?:\/\//i.test(input) ? "http,https,tls,tcp" : "file";
+}
+
+/**
  * ffmpeg arguments that write the first audio track as 16 kHz mono parts of
  * `partSeconds` each into the working directory: 32 kbit/s MP3 (2.4 MB per
  * 10 minutes) or, when the build lacks an MP3 encoder, 16-bit WAV
  * (19.2 MB per 10 minutes) — both below the 25 MB request limit.
+ *
+ * The input is restricted to the protocols of `inputProtocols` and the
+ * container formats of `TRANSCRIBE_INPUT_FORMATS`, so a file that is really
+ * a playlist cannot send ffmpeg to other hosts or files.
  */
 export function audioExtractArgs(input: string, codec: AudioCodec, partSeconds = AUDIO_PART_SECONDS): string[] {
   const encode = codec === "mp3" ? ["-c:a", "libmp3lame", "-b:a", "32k"] : ["-c:a", "pcm_s16le"];
@@ -50,6 +92,10 @@ export function audioExtractArgs(input: string, codec: AudioCodec, partSeconds =
     "-progress",
     "pipe:1",
     "-nostats",
+    "-protocol_whitelist",
+    inputProtocols(input),
+    "-format_whitelist",
+    TRANSCRIBE_INPUT_FORMATS.join(","),
     "-i",
     input,
     "-map",
@@ -70,6 +116,11 @@ export function audioExtractArgs(input: string, codec: AudioCodec, partSeconds =
     "1",
     `part_%03d.${codec}`,
   ];
+}
+
+/** Whether ffmpeg refused the input because its format or protocol is not allowed. */
+export function isRefusedInputError(stderr: string): boolean {
+  return /Format not on whitelist|Protocol '[^']*' not on whitelist|not on whitelist/i.test(stderr);
 }
 
 /** Whether ffmpeg failed because the MP3 encoder is missing from the build. */
@@ -280,9 +331,12 @@ export function apiErrorMessage(status: number, body: string): string {
 }
 
 /**
- * Whether a video URL outside the upload store may be handed to ffmpeg:
- * http(s) only, and never a loopback, private, link-local or internal host
- * (the server must not be used to reach its own network).
+ * Whether a video URL outside the upload store may be downloaded by the
+ * server: http(s) only, no credentials, and never a loopback, private,
+ * link-local, reserved or internal host (the server must not be used to
+ * reach its own network). This checks the URL text only: the download
+ * (`source-download.ts`) checks every address the name resolves to, and
+ * every redirect, again.
  */
 export function isPublicMediaUrl(value: string): boolean {
   let url: URL;
@@ -293,22 +347,14 @@ export function isPublicMediaUrl(value: string): boolean {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return false;
   if (url.username || url.password) return false;
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!host || host === "localhost" || /\.(localhost|local|internal|lan|home|corp)$/.test(host) || (!host.includes(".") && !host.includes(":"))) return false;
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false;
-    return true;
-  }
-  if (host.includes(":")) {
-    if (host === "::" || host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || host.startsWith("::ffff:")) return false;
-  }
-  // Numeric forms browsers accept but people rarely mean ("2130706433", "0x7f.1").
+  const host = urlHost(url);
+  if (!host) return false;
+  // IP literals (the URL parser already turned "0x7f.1" or "2130706433" into dotted form).
+  if (host.includes(":")) return parseIpv6(host) !== null && isPublicAddress(host);
+  if (parseIpv4(host) !== null) return isPublicAddress(host);
+  // Any other all-numeric or hex spelling is not a host name people mean.
   if (/^[0-9.]+$/.test(host) || /^0x/i.test(host)) return false;
-  return true;
+  if (host === "localhost" || /\.(localhost|local|localdomain|internal|intranet|lan|home|corp|home\.arpa)$/.test(host)) return false;
+  // Single-label names only resolve inside a private network.
+  return host.includes(".");
 }

@@ -2,6 +2,7 @@ import "server-only";
 import type { Course, Database, Settings, User } from "@/lib/types";
 import { aiEnv } from "@/lib/server-env";
 import { canManageCourse } from "@/lib/data/courses";
+import { enrollmentGrantsAccess } from "@/lib/commerce/access";
 import type { AiUnavailableReason } from "./types";
 
 /**
@@ -10,7 +11,9 @@ import type { AiUnavailableReason } from "./types";
  * The tutor runs only when the site switch (Settings → AI tutor), the
  * ANTHROPIC_API_KEY and the course's own "AI tutor" switch are all on. It is
  * available to learners enrolled in the course and to its managers
- * (instructors, moderators, admins), who can try it before learners do.
+ * (instructors, moderators, admins), who can try it before learners do. An
+ * enrollment only counts while it still grants access to the course (a lapsed
+ * membership or overdue installments block the tutor as they block lessons).
  */
 
 export function aiKeyConfigured(): boolean {
@@ -44,8 +47,10 @@ export function aiSiteStatus(settings: Pick<Settings, "ai">): AiSiteStatus {
 
 export type CourseTutorAccess = { ok: true; manager: boolean; enrolled: boolean } | { ok: false; reason: AiUnavailableReason; manager: boolean };
 
+type AccessDb = Pick<Database, "settings" | "enrollments" | "courses" | "payments" | "subscriptions" | "plans" | "batches" | "batchEnrollments" | "bundles">;
+
 /** Resolve access for one viewer and course from a database snapshot. */
-export function courseTutorAccess(db: Pick<Database, "settings" | "enrollments">, course: Course, user: Pick<User, "id" | "roles"> | null): CourseTutorAccess {
+export function courseTutorAccess(db: AccessDb, course: Course, user: Pick<User, "id" | "roles"> | null, now: number = Date.now()): CourseTutorAccess {
   const manager = canManageCourse(user, course);
   const site = aiSiteStatus(db.settings);
   if (!site.enabled) return { ok: false, reason: "site_disabled", manager };
@@ -53,8 +58,9 @@ export function courseTutorAccess(db: Pick<Database, "settings" | "enrollments">
   if (!course.aiTutorEnabled) return { ok: false, reason: "course_disabled", manager };
   if (!user) return { ok: false, reason: "signin", manager };
   if (!course.published && !manager) return { ok: false, reason: "not_found", manager };
-  const enrolled = db.enrollments.some((e) => e.userId === user.id && e.courseId === course.id);
-  if (!enrolled && !manager) return { ok: false, reason: "not_enrolled", manager };
+  const enrollment = db.enrollments.find((e) => e.userId === user.id && e.courseId === course.id);
+  const enrolled = !!enrollment && enrollmentGrantsAccess(db, enrollment, now);
+  if (!enrolled && !manager) return { ok: false, reason: enrollment ? "access_ended" : "not_enrolled", manager };
   return { ok: true, manager, enrolled };
 }
 
@@ -65,6 +71,8 @@ export function unavailableMessage(reason: AiUnavailableReason): string {
       return "Sign in to ask the AI tutor.";
     case "not_enrolled":
       return "Enroll in this course to ask the AI tutor about it.";
+    case "access_ended":
+      return "Your access to this course has ended. Renew it to ask the AI tutor again.";
     case "course_disabled":
       return "The AI tutor is not turned on for this course.";
     case "not_found":
