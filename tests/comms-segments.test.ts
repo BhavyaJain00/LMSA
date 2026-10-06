@@ -10,6 +10,8 @@ import {
   lastActivityByUser,
   normalizeSegmentFilter,
   segmentCsvRows,
+  segmentInputProblem,
+  staleSegmentCourses,
   totalExcluded,
   type SegmentSource,
 } from "@/lib/comms/segments";
@@ -198,5 +200,33 @@ describe("segment descriptions and CSV", () => {
       ["ada@example.com", "Ada Lovelace", "Member"],
       ["cyd@example.com", "Cyd Rivers", "Member"],
     ]);
+  });
+});
+
+describe("audience input fails closed", () => {
+  const known = new Set(["crs_a", "crs_b"]);
+
+  it("accepts filters whose courses all exist, including the empty filter", () => {
+    assert.equal(segmentInputProblem({}, known), null);
+    assert.equal(segmentInputProblem({ courseIds: ["crs_a"], notEnrolledCourseIds: ["crs_b"], roles: ["student"] }, known), null);
+  });
+
+  it("rejects input that isn't a filter object", () => {
+    for (const raw of [null, undefined, "", "{}", 0, [], [{ courseIds: [] }], { courseIds: "crs_a" }, { notEnrolledCourseIds: { a: 1 } }]) {
+      assert.match(segmentInputProblem(raw, known) ?? "", /couldn't be read/, JSON.stringify(raw));
+    }
+  });
+
+  it("rejects courses that no longer exist instead of dropping them", () => {
+    assert.match(segmentInputProblem({ courseIds: ["crs_gone"] }, known) ?? "", /no longer exists/);
+    assert.match(segmentInputProblem({ courseIds: ["crs_a", "crs_gone"] }, known) ?? "", /no longer exists/);
+    assert.match(segmentInputProblem({ notEnrolledCourseIds: ["crs_gone"] }, known) ?? "", /no longer exists/);
+    assert.match(segmentInputProblem({ courseIds: [42] }, known) ?? "", /no longer exists/);
+  });
+
+  it("counts stale course conditions of a stored filter", () => {
+    assert.equal(staleSegmentCourses({ courseIds: ["crs_a"], notEnrolledCourseIds: ["crs_b"] }, known), 0);
+    assert.equal(staleSegmentCourses({ courseIds: ["crs_a", "crs_gone"], notEnrolledCourseIds: ["crs_old"] }, known), 2);
+    assert.equal(staleSegmentCourses({}, known), 0);
   });
 });

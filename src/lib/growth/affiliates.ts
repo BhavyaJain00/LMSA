@@ -27,6 +27,7 @@ import {
   type ShareTargetGroup,
   methodLabel,
 } from "./affiliates-shared";
+import { isInstallmentOrder, planKeyOf } from "@/lib/commerce/installments";
 
 /**
  * Affiliate programme on the server (growth area): referral clicks, member
@@ -141,6 +142,33 @@ export function attributedAffiliateId(db: Pick<Database, "analyticsEvents" | "se
 /* Commissions                                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The order a follow-on charge belongs to: the first part of an installment
+ * plan (for parts 2..n), the subscription's original checkout (for renewals)
+ * or the order whose checkout offered a one-click upsell / order bump.
+ * `undefined` when `payment` is an order of its own; `null` when it is a
+ * follow-on whose original order is gone.
+ */
+export function anchorOrderOf(db: Pick<Database, "payments">, payment: Payment): Payment | null | undefined {
+  if (isInstallmentOrder(payment) && (payment.installmentNumber ?? 1) > 1) {
+    const key = planKeyOf(payment);
+    return db.payments.find((p) => p.orderId === key && p.userId === payment.userId && p.itemId === payment.itemId && p.installmentNumber === 1) ?? null;
+  }
+  if (payment.subscriptionId && payment.source === "Renewal") {
+    const first = db.payments
+      .filter((p) => p.id !== payment.id && p.subscriptionId === payment.subscriptionId && p.source !== "Renewal")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    return first ?? null;
+  }
+  if (payment.upsellOfPaymentId) return db.payments.find((p) => p.id === payment.upsellOfPaymentId) ?? null;
+  return undefined;
+}
+
+/** The affiliate that referred an order, as recorded on it or on its commission. */
+function orderAffiliateId(db: Pick<Database, "commissions">, order: Payment): string | undefined {
+  return order.affiliateId ?? db.commissions.find((c) => c.paymentId === order.id && c.amount > 0)?.affiliateId;
+}
+
 export type CreditResult =
   | { credited: true; commission: Commission; affiliate: Affiliate; payment: Payment }
   | { credited: false; reason: CommissionIneligibility | "missing" | "not_paid" };
@@ -148,7 +176,9 @@ export type CreditResult =
 /**
  * Credit the affiliate of a paid order: the order's own `affiliateId`
  * (set at checkout from the referral cookie), otherwise the buyer's last
- * referral click inside the window. Idempotent per order.
+ * referral click inside the window. Follow-on charges (installment parts
+ * 2..n, subscription renewals, upsells) belong to the affiliate who referred
+ * the original order and never to a later click. Idempotent per order.
  */
 export async function creditCommission(paymentId: string, hintAffiliateId?: string): Promise<CreditResult> {
   const result = await mutate((d): CreditResult => {
@@ -156,7 +186,10 @@ export async function creditCommission(paymentId: string, hintAffiliateId?: stri
     if (!payment) return { credited: false, reason: "missing" };
     if (payment.status !== "paid") return { credited: false, reason: "not_paid" };
     const paidAt = Date.parse(payment.paidAt ?? payment.createdAt);
-    const affiliateId = hintAffiliateId || payment.affiliateId || attributedAffiliateId(d, payment.userId, paidAt);
+    const anchor = anchorOrderOf(d, payment);
+    const followOn = anchor !== undefined;
+    const affiliateId =
+      hintAffiliateId || payment.affiliateId || (followOn ? (anchor ? orderAffiliateId(d, anchor) : undefined) : attributedAffiliateId(d, payment.userId, paidAt));
     const affiliate = affiliateId ? d.affiliates.find((a) => a.id === affiliateId) : undefined;
     const base = commissionBase(payment);
     const why = commissionIneligibility({
@@ -181,7 +214,7 @@ export async function creditCommission(paymentId: string, hintAffiliateId?: stri
     d.commissions.push(commission);
     if (!payment.affiliateId) payment.affiliateId = affiliate.id;
     // Mark the click that led to the sale (the member's latest click on this affiliate before paying).
-    const click = memberClicks(d, payment.userId).find((c) => c.affiliateId === affiliate.id && c.at <= paidAt + 5 * 60 * 1000);
+    const click = followOn ? undefined : memberClicks(d, payment.userId).find((c) => c.affiliateId === affiliate.id && c.at <= paidAt + 5 * 60 * 1000);
     if (click) {
       const iso = new Date(click.at).toISOString();
       const referral = d.affiliateReferrals.find((r) => r.affiliateId === affiliate.id && r.createdAt === iso && !r.convertedPaymentId);

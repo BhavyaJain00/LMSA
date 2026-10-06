@@ -35,6 +35,7 @@ import {
   computeCohorts,
   computeMrr,
   countVisitors,
+  countCheckoutPurchases,
   countWhere,
   couponPerformance,
   dailySeries,
@@ -42,11 +43,10 @@ import {
   isPageView,
   isRollup,
   isVisit,
-  netOfTax,
+  netRevenueOf,
   paidAt,
   rankBy,
   referrerTable,
-  refundedOf,
   revenueByItem,
   revenueIn,
   revenueSeries,
@@ -100,6 +100,9 @@ export function pageViewEvents(payload: BeaconPayload, ctx: PageViewContext, now
   const view: AnalyticsEvent = { id: uid("evt_"), name: PAGE_VIEW, path: payload.path, createdAt };
   if (ctx.anonId) view.anonId = ctx.anonId;
   if (ctx.userId) view.userId = ctx.userId;
+  // Without an id the funnel cannot tell visitors apart: keep the beacon's "first page at this stage in this tab" mark.
+  const firstReach = !ctx.anonId && !ctx.userId && payload.firstReach === true;
+  if (firstReach) view.firstReach = true;
   if (payload.entry) {
     view.itemType = ENTRY_MARK;
     const host = referrerHost(payload.referrer, ctx.host);
@@ -112,6 +115,7 @@ export function pageViewEvents(payload: BeaconPayload, ctx: PageViewContext, now
     const start: AnalyticsEvent = { id: uid("evt_"), name: CHECKOUT_STARTED, path: payload.path, itemType: checkout.itemType, itemId: checkout.itemId, createdAt };
     if (ctx.anonId) start.anonId = ctx.anonId;
     if (ctx.userId) start.userId = ctx.userId;
+    if (firstReach) start.firstReach = true;
     events.push(start);
   }
   return events;
@@ -153,11 +157,40 @@ export async function recordCheckoutStarted(input: { userId?: string; itemType: 
   });
 }
 
+/** Prefixes of the ids of server-side events (derived from the domain record they describe). */
+const SERVER_EVENT_PREFIXES = ["evt_purchase_", "evt_signup_", "evt_enroll_", "evt_lead_"] as const;
+const isServerEventId = (id: string) => SERVER_EVENT_PREFIXES.some((prefix) => id.startsWith(prefix));
+
+/**
+ * Ids of the server-side events already stored, per events array (a reset,
+ * restore or compaction replaces the array, which starts a new index). Built
+ * outside the write lock; `recordOnce` keeps it current, so checking for a
+ * duplicate no longer scans every page view while all writes wait.
+ */
+const serverIdIndex = new WeakMap<object, Set<string>>();
+
+async function serverEventIds(): Promise<{ array: object; ids: Set<string> }> {
+  const db = await getDb();
+  const array = db.analyticsEvents;
+  let ids = serverIdIndex.get(array);
+  if (!ids) {
+    ids = new Set();
+    for (const e of array) if (isServerEventId(e.id)) ids.add(e.id);
+    serverIdIndex.set(array, ids);
+  }
+  return { array, ids };
+}
+
 /** Insert a server-side event once (its id is derived from the domain record it describes). */
 async function recordOnce(event: AnalyticsEvent): Promise<boolean> {
+  const index = await serverEventIds();
   return mutate((db) => {
-    if (db.analyticsEvents.some((e) => e.id === event.id)) return false;
-    db.analyticsEvents.push(event);
+    const events = db.analyticsEvents;
+    // The index belongs to the array it was built from; if the array was replaced meanwhile, check directly.
+    const ids = events === index.array ? index.ids : serverIdIndex.get(events);
+    if (ids ? ids.has(event.id) : events.some((e) => e.id === event.id)) return false;
+    events.push(event);
+    ids?.add(event.id);
     return true;
   });
 }
@@ -208,19 +241,60 @@ export function retentionCutoffMs(nowMs: number): number {
  * rollups and delete them. Sign-ups and purchases are credited to their
  * campaign first, so the rollups keep that attribution. Affiliate referral
  * links stay raw: commissions rely on them.
+ *
+ * The work is planned outside the write lock (stored events never change,
+ * and only this job writes rollups); the lock is held just long enough to
+ * check the plan still applies and swap the rows in with one `filter`
+ * assignment, which the store records as the removals and additions it is.
  */
 export async function compactAnalytics(nowMs: number = Date.now()): Promise<{ compacted: number; rollups: number }> {
   const cutoff = retentionCutoffMs(nowMs);
-  return mutate((db) => {
-    const expired = (e: AnalyticsEvent) => !isRollup(e) && e.name !== REFERRAL_EVENT && Date.parse(e.createdAt) < cutoff;
-    if (!db.analyticsEvents.some(expired)) return { compacted: 0, rollups: 0 };
-    const attributed = withAttribution(db.analyticsEvents.filter((e) => !isRollup(e) && e.name !== REFERRAL_EVENT));
-    const old = attributed.filter(expired);
-    const existing = db.analyticsEvents.filter(isRollup);
-    const rollups = buildRollups(old, existing, () => uid("evr_"));
-    const oldIds = new Set(old.map((e) => e.id));
-    db.analyticsEvents = [...db.analyticsEvents.filter((e) => !isRollup(e) && !oldIds.has(e.id)), ...rollups];
-    return { compacted: old.length, rollups: rollups.length - existing.length };
+  const db = await getDb();
+  const old: AnalyticsEvent[] = [];
+  const linking: AnalyticsEvent[] = [];
+  const existing: AnalyticsEvent[] = [];
+  for (const e of db.analyticsEvents) {
+    if (isRollup(e)) existing.push(e);
+    else if (e.name === REFERRAL_EVENT) continue;
+    else if (Date.parse(e.createdAt) < cutoff) old.push(e);
+    // Later events can still tie a visitor id to a member, which attribution of old conversions needs.
+    else if (e.userId && e.anonId) linking.push(e);
+  }
+  if (!old.length) return { compacted: 0, rollups: 0 };
+
+  // Attribution only looks back in time, so the expired events plus the visitor↔member links are enough.
+  const attributed = withAttribution([...old, ...linking]).slice(0, old.length);
+  const before = new Map(existing.map((r) => [r.id, r.value ?? 0]));
+  const built = buildRollups(attributed, existing, () => uid("evr_"));
+  // A rollup that grew is replaced by a copy with a new id, so the swap below is removals plus additions only.
+  const replaced = new Set<string>();
+  const additions: AnalyticsEvent[] = [];
+  for (const row of built) {
+    const previous = before.get(row.id);
+    if (previous === undefined) additions.push(row);
+    else if ((row.value ?? 0) !== previous) {
+      replaced.add(row.id);
+      additions.push({ ...row, id: uid("evr_") });
+    }
+  }
+  const oldIds = new Set(old.map((e) => e.id));
+
+  return mutate((d) => {
+    // Stop if another run or an erasure changed what was planned; the next run starts over.
+    let foundOld = 0;
+    let foundReplaced = 0;
+    const stale = d.analyticsEvents.some((e) => {
+      if (oldIds.has(e.id)) foundOld++;
+      else if (replaced.has(e.id)) {
+        foundReplaced++;
+        return (e.value ?? 0) !== before.get(e.id);
+      }
+      return false;
+    });
+    if (stale || foundOld !== oldIds.size || foundReplaced !== replaced.size) return { compacted: 0, rollups: 0 };
+    d.analyticsEvents = d.analyticsEvents.filter((e) => !oldIds.has(e.id) && !replaced.has(e.id));
+    d.analyticsEvents.push(...additions);
+    return { compacted: old.length, rollups: built.length - existing.length };
   });
 }
 
@@ -358,7 +432,7 @@ function affiliatePerformance(db: Database, bounds: { startMs: number; endMs: nu
     const r = row(p.affiliateId);
     if (!r) continue;
     r.sales++;
-    addTo(r.revenue, p.currency, netOfTax(p) - refundedOf(p));
+    addTo(r.revenue, p.currency, netRevenueOf(p));
   }
   return [...rows.values()].filter((r) => r.clicks || r.sales).sort((a, b) => b.sales - a.sales || b.clicks - a.clicks || a.code.localeCompare(b.code));
 }
@@ -392,14 +466,15 @@ export async function getAnalyticsReport(range: DateRange, nowMs: number = Date.
   const main = revenueIn(revenue, currency);
   const prevMain = revenueIn(prevRevenue, currency);
   const ordersAll = revenue.reduce((n, r) => n + r.orders, 0);
-  const prevOrdersAll = prevRevenue.reduce((n, r) => n + r.orders, 0);
 
   const visitors = countVisitors(counts);
   const prevVisitors = countVisitors(prevCounts);
   const signups = db.users.filter((u) => inRange(u.createdAt, bounds)).length;
   const prevSignups = db.users.filter((u) => inRange(u.createdAt, prevBounds)).length;
-  const conversionRate = ratio(ordersAll, visitors);
-  const prevConversion = ratio(prevOrdersAll, prevVisitors);
+  // Conversion and the funnel's last stage count checkouts that ended in an order, not renewals or installment parts.
+  const purchases = countCheckoutPurchases(db.payments, bounds);
+  const conversionRate = ratio(purchases, visitors);
+  const prevConversion = ratio(countCheckoutPurchases(db.payments, prevBounds), prevVisitors);
   const activity = activityByUser(db);
   const active = activeLearners(activity, bounds);
   const prevActive = activeLearners(activity, prevBounds);
@@ -448,7 +523,7 @@ export async function getAnalyticsReport(range: DateRange, nowMs: number = Date.
       orders: ordersByDay.get(date) ?? 0,
       revenue: revSeries[i]!.value,
     })),
-    funnel: funnelStages(counts, ordersAll),
+    funnel: funnelStages(counts, purchases),
     revenueByItem: items.map((i) => ({ ...i, href: itemHref(db, i.itemType, i.itemId) })),
     revenueByType: [...byType].map(([itemType, net]) => ({ itemType, net })).sort((a, b) => b.net - a.net),
     subscriptions: { mrr: computeMrr(db.subscriptions, db.plans), ...subscriptionMovement(db.subscriptions, bounds) },

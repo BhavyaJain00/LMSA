@@ -96,6 +96,12 @@ function teamOrders(db: Pick<Database, "payments">, orgId: string): Payment[] {
   return db.payments.filter((p) => p.itemType === "seats" && seatsOrderOf(p)?.orgId === orgId);
 }
 
+/** An unpaid checkout draft old enough to be cleared. */
+function isStaleDraft(org: Pick<Organization, "createdAt">, nowMs: number): boolean {
+  const created = Date.parse(org.createdAt);
+  return Number.isFinite(created) && nowMs - created > DRAFT_TTL_MS;
+}
+
 function isDraft(db: Pick<Database, "payments" | "orgSeats">, org: Organization): boolean {
   if (org.seatCount > 0) return false;
   const seatRows = db.orgSeats.filter((s) => s.orgId === org.id).length;
@@ -233,11 +239,15 @@ export async function startTeamPurchase(user: Pick<User, "id">, input: { name: s
     const quoted = quoteSeats(courses as Course[], input.seats);
     if (!quoted.ok) return { ok: false, error: quoted.error, field: /seat/i.test(quoted.error) ? "seats" : "courseIds" };
 
-    // Forget drafts nobody paid for; keep the buyer's latest one to reuse.
+    // Forget checkout drafts nobody paid for; keep the buyer's latest one to reuse. Only teams
+    // started here qualify: teams created by administrators and drafts waiting for an invoice
+    // (`checkoutDraft` cleared) are never removed or reused.
     const now = Date.now();
-    const hasOrder = (org: Organization) => teamOrders(d, org.id).some((p) => p.status !== "failed");
-    d.organizations = d.organizations.filter((o) => !(isDraft(d, o) && !hasOrder(o) && now - Date.parse(o.createdAt) > DRAFT_TTL_MS));
-    let org = d.organizations.filter((o) => o.ownerId === user.id && isDraft(d, o) && !hasOrder(o)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const unpaidCheckoutDraft = (o: Organization) => o.checkoutDraft === true && isDraft(d, o) && !teamOrders(d, o.id).some((p) => p.status !== "failed");
+    if (d.organizations.some((o) => unpaidCheckoutDraft(o) && isStaleDraft(o, now))) {
+      d.organizations = d.organizations.filter((o) => !(unpaidCheckoutDraft(o) && isStaleDraft(o, now)));
+    }
+    let org = d.organizations.filter((o) => o.ownerId === user.id && unpaidCheckoutDraft(o)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (org) {
       org.name = input.name;
       org.courseIds = wanted;
@@ -251,6 +261,7 @@ export async function startTeamPurchase(user: Pick<User, "id">, input: { name: s
         seatCount: 0,
         courseIds: wanted,
         createdAt: new Date().toISOString(),
+        checkoutDraft: true,
       };
       d.organizations.push(org);
     }
@@ -263,6 +274,11 @@ export async function startTeamPurchase(user: Pick<User, "id">, input: { name: s
  * orders, bank transfers). They add the seats in Admin → Teams once paid.
  */
 export async function requestTeamInvoice(user: Pick<User, "id" | "name" | "email">, order: SeatsOrder): Promise<void> {
+  // The team now waits for an invoice (net-30/60 terms are common): it is no longer an abandoned checkout.
+  await mutate((d) => {
+    const org = d.organizations.find((o) => o.id === order.org.id);
+    if (org?.checkoutDraft) delete org.checkoutDraft;
+  });
   const db = await getDb();
   await notifyMany(adminIds(db), {
     type: "system",
@@ -295,6 +311,7 @@ export async function applySeatPurchase(paymentId: string): Promise<SeatPurchase
     if (!order || !org) return { applied: false as const, reason: "no_team" as const, orderId: payment.orderId, admins: adminIds(d) };
     const first = org.seatCount === 0;
     org.seatCount = Math.min(MAX_TEAM_SEATS, org.seatCount + order.seats);
+    if (org.checkoutDraft) delete org.checkoutDraft;
     payment.orgId = org.id;
     payment.seats = order.seats;
     if (!orgRole(org, payment.userId) && d.users.some((u) => u.id === payment.userId)) org.managerIds.push(payment.userId);
@@ -749,11 +766,24 @@ export async function renameTeam(orgId: string, name: string): Promise<TeamChang
   });
 }
 
-/** Let another member manage the team (by their account email). */
-export async function addManager(orgId: string, email: string, actor: Pick<User, "id" | "name">): Promise<TeamChange<{ user: TeamUserView }>> {
+/**
+ * Manager and ownership changes need a team with seats (paid, or set up by an
+ * administrator): an unpaid draft costs nothing to create, so it must not be
+ * a way to probe which addresses have accounts or to notify strangers.
+ */
+export const DRAFT_TEAM_PEOPLE_ERROR = "You can add managers or hand over the team once its first seats are paid for.";
+
+/** One notification per team, person and day, however often they are added and removed. */
+function teamRoleDedupeKey(kind: "manager" | "owner", orgId: string, userId: string): string {
+  return `team-${kind}:${orgId}:${userId}:${new Date().toISOString().slice(0, 10)}`;
+}
+
+/** Let another member manage the team (by their account email). `asAdmin` also allows it on a team without seats. */
+export async function addManager(orgId: string, email: string, actor: Pick<User, "id" | "name">, opts: { asAdmin?: boolean } = {}): Promise<TeamChange<{ user: TeamUserView }>> {
   const result = await mutate((d): TeamChange<{ user: TeamUserView }> => {
     const org = d.organizations.find((o) => o.id === orgId);
     if (!org) return { ok: false, error: "This team no longer exists." };
+    if (!opts.asAdmin && isDraft(d, org)) return { ok: false, error: DRAFT_TEAM_PEOPLE_ERROR };
     const user = d.users.find((u) => u.email.toLowerCase() === email && u.enabled);
     if (!user) return { ok: false, error: "No account uses this email address. Ask them to sign up first." };
     if (orgRole(org, user.id)) return { ok: false, error: `${user.name} already manages this team.` };
@@ -768,6 +798,7 @@ export async function addManager(orgId: string, email: string, actor: Pick<User,
       message: `${actor.name} made you a team manager: invite members, assign seats and follow their progress.`,
       link: teamHref(result.org),
       fromUserId: actor.id,
+      dedupeKey: teamRoleDedupeKey("manager", result.org.id, result.data.user.id),
     });
   }
   return result;
@@ -783,11 +814,17 @@ export async function removeManager(orgId: string, userId: string): Promise<Team
   });
 }
 
-/** Hand the team to another account (by email). The previous owner stays on as a manager. */
-export async function transferOwnership(orgId: string, email: string, actor: Pick<User, "id" | "name">): Promise<TeamChange<{ owner: TeamUserView; previousOwnerId: string }>> {
+/** Hand the team to another account (by email). The previous owner stays on as a manager. `asAdmin` also allows it on a team without seats. */
+export async function transferOwnership(
+  orgId: string,
+  email: string,
+  actor: Pick<User, "id" | "name">,
+  opts: { asAdmin?: boolean } = {},
+): Promise<TeamChange<{ owner: TeamUserView; previousOwnerId: string }>> {
   const result = await mutate((d): TeamChange<{ owner: TeamUserView; previousOwnerId: string }> => {
     const org = d.organizations.find((o) => o.id === orgId);
     if (!org) return { ok: false, error: "This team no longer exists." };
+    if (!opts.asAdmin && isDraft(d, org)) return { ok: false, error: DRAFT_TEAM_PEOPLE_ERROR };
     const user = d.users.find((u) => u.email.toLowerCase() === email && u.enabled);
     if (!user) return { ok: false, error: "No account uses this email address." };
     if (org.ownerId === user.id) return { ok: false, error: `${user.name} already owns this team.` };
@@ -804,6 +841,7 @@ export async function transferOwnership(orgId: string, email: string, actor: Pic
       message: "You can invite members, assign seats, add managers and buy more seats.",
       link: teamHref(result.org),
       fromUserId: actor.id,
+      dedupeKey: teamRoleDedupeKey("owner", result.org.id, result.data.owner.id),
     });
   }
   return result;
@@ -818,6 +856,8 @@ export async function adjustSeats(orgId: string, seatCount: number): Promise<Tea
     if (seatCount < used) return { ok: false, error: `${pluralize(used, "seat")} ${used === 1 ? "is" : "are"} in use. Revoke seats first, or keep at least ${used}.` };
     const previous = org.seatCount;
     org.seatCount = seatCount;
+    // An administrator looked after this team (e.g. its invoice was paid): never clear it as an abandoned checkout.
+    if (org.checkoutDraft) delete org.checkoutDraft;
     return { ok: true, org: { ...org }, data: { previous } };
   });
   if (result.ok && result.data.previous !== result.org.seatCount) {
@@ -847,6 +887,7 @@ export async function setTeamCourses(orgId: string, courseIds: readonly string[]
     const added = wanted.filter((id) => !org.courseIds.includes(id));
     const removed = org.courseIds.filter((id) => !wanted.includes(id));
     org.courseIds = wanted;
+    if (org.checkoutDraft) delete org.checkoutDraft;
     const members = d.orgSeats.filter((s) => s.orgId === org.id && s.status === "active" && s.userId).map((s) => s.userId as string);
     return { ok: true as const, org: { ...org }, data: { added, removed }, members };
   });

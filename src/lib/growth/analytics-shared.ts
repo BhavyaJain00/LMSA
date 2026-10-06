@@ -68,6 +68,8 @@ export interface BeaconPayload {
   entry: boolean;
   /** The browser's analytics-consent decision; ids are stored only when this and the consent cookie agree. */
   consent: boolean;
+  /** First page of this browser tab at its funnel stage (see `funnelStageOf`); counts anonymous visits once per stage. */
+  firstReach?: boolean;
 }
 
 const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{20,}$/;
@@ -156,6 +158,7 @@ export function parseBeaconPayload(body: unknown): BeaconPayload | null {
   if (typeof b.referrer === "string" && b.referrer.length <= 2048) payload.referrer = b.referrer;
   const utm = normalizeUtm(b.utm);
   if (utm) payload.utm = utm;
+  if (b.firstReach === true && funnelStageOf(path)) payload.firstReach = true;
   return payload;
 }
 
@@ -187,6 +190,12 @@ export function checkoutTarget(path: string): { itemType: string; itemId: string
   const m = /^\/billing\/([a-z]+)\/([^/]+)$/.exec(path);
   if (!m || BILLING_PAGES.has(m[1]!)) return null;
   return { itemType: m[1]!, itemId: m[2]! };
+}
+
+/** The funnel stage a page belongs to past the visit itself: a checkout or a product page. */
+export function funnelStageOf(path: string): "checkout" | "product" | null {
+  if (checkoutTarget(path)) return "checkout";
+  return isProductPage(path) ? "product" : null;
 }
 
 /* ------------------------------------------------------------------ */

@@ -284,7 +284,10 @@ export async function addManagerAction(_prev: ActionResult | null, formData: For
   if ("error" in access) return { ok: false, error: access.error };
   const email = fd(formData, "email").toLowerCase();
   if (email.length > 200 || !isValidEmail(email)) return { ok: false, error: "Enter a valid email address.", fieldErrors: { email: "Enter a valid email address." } };
-  const result = await addManager(access.org.id, email, access.user);
+  if (access.role !== "admin" && !limiter.hit(`managers:${access.user.id}`, { limit: 20, windowMs: HOUR_MS }).ok) {
+    return { ok: false, error: "You changed managers many times this hour. Please try again later." };
+  }
+  const result = await addManager(access.org.id, email, access.user, { asAdmin: access.role === "admin" });
   if (!result.ok) return { ok: false, error: result.error, fieldErrors: { email: result.error } };
   await audit(access.user, "team.manager_add", { type: "team", id: access.org.id }, { userId: result.data.user.id });
   revalidateTeam(access.org.id);
@@ -311,7 +314,10 @@ export async function transferOwnershipAction(_prev: ActionResult | null, formDa
   if ("error" in access) return { ok: false, error: access.error };
   const email = fd(formData, "email").toLowerCase();
   if (email.length > 200 || !isValidEmail(email)) return { ok: false, error: "Enter a valid email address.", fieldErrors: { email: "Enter a valid email address." } };
-  const result = await transferOwnership(access.org.id, email, access.user);
+  if (access.role !== "admin" && !limiter.hit(`transfer:${access.user.id}`, { limit: 5, windowMs: HOUR_MS }).ok) {
+    return { ok: false, error: "Too many attempts. Please try again in a little while." };
+  }
+  const result = await transferOwnership(access.org.id, email, access.user, { asAdmin: access.role === "admin" });
   if (!result.ok) return { ok: false, error: result.error, fieldErrors: { email: result.error } };
   await audit(access.user, "team.owner_transfer", { type: "team", id: access.org.id }, { ownerId: result.data.owner.id, previousOwnerId: result.data.previousOwnerId });
   revalidateTeam(access.org.id);

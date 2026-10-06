@@ -44,7 +44,7 @@ export default async function MessageModerationPage(props: PageProps<"/messages/
   const q = first(search.q).slice(0, 100);
   const page = Number.parseInt(first(search.page), 10) || 1;
   const db = await getDb();
-  const reports = listReports(db, { status, q, page });
+  const reports = listReports(db, user.id, { status, q, page });
   const messaging = db.settings.messaging;
 
   return (

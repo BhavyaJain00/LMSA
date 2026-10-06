@@ -20,6 +20,43 @@ export function announceInboxChange(): void {
   window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
 }
 
+/**
+ * One poll for both panes: while a thread is open it asks `/messages/feed`
+ * for the inbox too (`inbox=1&c=...`) and hands the result to the list, which
+ * then skips its own timer. Module state, shared by the two client components.
+ */
+const inboxFeed: {
+  /** Open threads polling on the list's behalf. */
+  carriers: number;
+  /** The list's current query (null while no list is mounted). */
+  query: (() => { q: string; filter: InboxFilter; limit: number }) | null;
+  deliver: ((page: InboxPage, sent: { q: string; filter: InboxFilter }) => void) | null;
+} = { carriers: 0, query: null, deliver: null };
+
+/** Called by an open thread: start carrying the inbox refresh in its polls. Returns the cleanup. */
+export function carryInboxFeed(): () => void {
+  inboxFeed.carriers++;
+  return () => {
+    inboxFeed.carriers = Math.max(0, inboxFeed.carriers - 1);
+  };
+}
+
+/** Adds the list's query to a thread poll (no-op without a list). Returns what was asked, for `deliverInboxFeed`. */
+export function addInboxFeedParams(params: URLSearchParams): { q: string; filter: InboxFilter } | null {
+  const current = inboxFeed.query?.();
+  if (!current) return null;
+  params.set("inbox", "1");
+  params.set("q", current.q);
+  params.set("filter", current.filter);
+  params.set("limit", String(current.limit));
+  return { q: current.q, filter: current.filter };
+}
+
+/** Hands an inbox page fetched by a thread poll to the list. */
+export function deliverInboxFeed(page: InboxPage, sent: { q: string; filter: InboxFilter }): void {
+  inboxFeed.deliver?.(page, sent);
+}
+
 function activeConversationId(pathname: string): string | null {
   const match = /^\/messages\/([A-Za-z0-9_-]+)$/.exec(pathname);
   return match && match[1] !== "new" ? match[1] : null;
@@ -128,16 +165,33 @@ export function ConversationList({ initial }: { initial: InboxPage }) {
     }
   }, []);
 
+  // Let an open thread fetch this list along with its own poll.
+  useEffect(() => {
+    inboxFeed.query = () => ({ ...query.current, limit: Math.max(shown.current, MESSAGE_LIMITS.inboxPage) });
+    inboxFeed.deliver = (next, sent) => {
+      // Ignore answers to an older query.
+      if (query.current.q === sent.q && query.current.filter === sent.filter) setPage(next);
+    };
+    return () => {
+      inboxFeed.query = null;
+      inboxFeed.deliver = null;
+    };
+  }, []);
+
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const id = window.setInterval(tick, MESSAGE_LIMITS.pollMs);
-    document.addEventListener("visibilitychange", tick);
+    // The timer only polls when no open thread carries the refresh; explicit changes always refresh.
+    const timed = () => {
+      if (!inboxFeed.carriers) tick();
+    };
+    const id = window.setInterval(timed, MESSAGE_LIMITS.pollMs);
+    document.addEventListener("visibilitychange", timed);
     window.addEventListener(INBOX_CHANGED_EVENT, tick);
     return () => {
       window.clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
+      document.removeEventListener("visibilitychange", timed);
       window.removeEventListener(INBOX_CHANGED_EVENT, tick);
       if (timer.current) clearTimeout(timer.current);
     };

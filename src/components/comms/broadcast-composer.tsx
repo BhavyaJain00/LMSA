@@ -35,7 +35,18 @@ type FieldName = "subject" | "preheader" | "body";
  * and the audience builder. Saving opens the review page, where the
  * broadcast is tested, scheduled or sent.
  */
-export function BroadcastComposer({ courses, broadcast, initialSegment }: { courses: CourseChoice[]; broadcast?: ComposerBroadcast; initialSegment?: SegmentFilter }) {
+export function BroadcastComposer({
+  courses,
+  broadcast,
+  initialSegment,
+  segmentNotice,
+}: {
+  courses: CourseChoice[];
+  broadcast?: ComposerBroadcast;
+  initialSegment?: SegmentFilter;
+  /** Shown above the audience builder, e.g. when deleted courses dropped out of a saved audience. */
+  segmentNotice?: string;
+}) {
   const uid = useId();
   const formId = `${uid}-form`;
   const ids: Record<FieldName, string> = { subject: `${uid}-subject`, preheader: `${uid}-preheader`, body: `${uid}-body` };
@@ -165,6 +176,13 @@ export function BroadcastComposer({ courses, broadcast, initialSegment }: { cour
           </div>
         )}
       </Card>
+
+      {segmentNotice && (
+        <p role="status" className="flex gap-2 rounded-card border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
+          <Icon.AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>{segmentNotice}</span>
+        </p>
+      )}
 
       <SegmentBuilder
         courses={courses}

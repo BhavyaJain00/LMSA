@@ -18,7 +18,7 @@ export default async function MessagesLayout({ children }: LayoutProps<"/message
   const db = await getDb();
   const moderator = isMessageModerator(user);
   const admin = user.roles.includes("admin");
-  const reports = moderator ? countOpenReports(db) : 0;
+  const reports = moderator ? countOpenReports(db, user.id) : 0;
 
   const actions = (
     <>

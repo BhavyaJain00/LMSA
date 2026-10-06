@@ -50,6 +50,8 @@ export interface EventCount {
   sum: number;
   /** Visitor or member key of a raw event recorded with consent (or server-side). */
   actor?: string;
+  /** Raw anonymous event marked as its tab's first at a funnel stage. */
+  firstReach?: boolean;
   userId?: string;
   raw: boolean;
 }
@@ -65,7 +67,9 @@ export function toEventCount(e: AnalyticsEvent): EventCount {
   const base = { at: e.createdAt, path: e.path, referrer: e.referrer, utm: e.utm, itemType: e.itemType, itemId: e.itemId, currency: e.currency };
   if (e.name.startsWith(ROLLUP_SUM_PREFIX)) return { ...base, name: e.name.slice(ROLLUP_SUM_PREFIX.length), count: 0, sum: e.value ?? 0, raw: false };
   if (e.name.startsWith(ROLLUP_COUNT_PREFIX)) return { ...base, name: e.name.slice(ROLLUP_COUNT_PREFIX.length), count: e.value ?? 0, sum: 0, raw: false };
-  return { ...base, name: e.name, count: 1, sum: e.value ?? 0, actor: actorKey(e), userId: e.userId, raw: true };
+  const count: EventCount = { ...base, name: e.name, count: 1, sum: e.value ?? 0, actor: actorKey(e), userId: e.userId, raw: true };
+  if (e.firstReach) count.firstReach = true;
+  return count;
 }
 
 function sameUtm(a: Utm | undefined, b: Utm | undefined): boolean {
@@ -187,7 +191,7 @@ export function buildRollups(raw: readonly AnalyticsEvent[], existing: readonly 
       let r = reached.get(key);
       if (!r) reached.set(key, (r = { actors: new Set(), anonymous: 0 }));
       if (count.actor) r.actors.add(count.actor);
-      else r.anonymous++;
+      else if (anonymousReaches(count, stage)) r.anonymous++;
     }
   }
   for (const [day, v] of visitors) {
@@ -244,9 +248,19 @@ const REACH_STAGES = Object.keys(STAGE_TESTS) as ReachStage[];
 const reachName = (stage: ReachStage) => `reach:${stage}`;
 
 /**
+ * Whether an anonymous raw event (no visitor id: recorded without consent)
+ * counts as one more person at `stage`. A visit counts once by nature; past
+ * it, only the tab's first page at the stage counts (the beacon marks it),
+ * so browsing three course pages is still one person at "product".
+ */
+function anonymousReaches(c: Pick<EventCount, "firstReach">, stage: ReachStage): boolean {
+  return stage === "visit" || c.firstReach === true;
+}
+
+/**
  * People who reached a funnel stage: unique actors among raw events
- * recorded with an id, plus every raw event recorded anonymously, plus the
- * daily reach of compacted days.
+ * recorded with an id, plus anonymous visits counted once per stage (see
+ * `anonymousReaches`), plus the daily reach of compacted days.
  */
 export function reach(counts: readonly EventCount[], stage: ReachStage): number {
   const test = STAGE_TESTS[stage];
@@ -257,7 +271,7 @@ export function reach(counts: readonly EventCount[], stage: ReachStage): number 
       if (c.name === reachName(stage)) other += c.count;
     } else if (test(c)) {
       if (c.actor) actors.add(c.actor);
-      else other += 1;
+      else if (anonymousReaches(c, stage)) other += 1;
     }
   }
   return actors.size + other;
@@ -413,6 +427,26 @@ type PaymentLike = Pick<
   "id" | "userId" | "itemType" | "itemId" | "itemTitle" | "amount" | "taxAmount" | "discountAmount" | "currency" | "status" | "createdAt" | "paidAt" | "refundedAmount" | "refundedAt" | "couponCode" | "affiliateId"
 >;
 
+/**
+ * An order that ends a checkout: paid, with money, and not a follow-on charge
+ * (subscription renewal, installment part 2..n, one-click upsell or order
+ * bump, which are charged without anyone going through the funnel again).
+ */
+export function isCheckoutPurchase(
+  p: Pick<Payment, "status" | "amount"> & Partial<Pick<Payment, "source" | "installmentNumber" | "upsellOfPaymentId">>,
+): boolean {
+  if (!wasPaid(p) || p.amount <= 0) return false;
+  if (p.source === "Renewal" || (p.installmentNumber ?? 1) > 1 || p.upsellOfPaymentId) return false;
+  return true;
+}
+
+/** Orders that ended a checkout in the period (the funnel's purchase stage and the conversion rate). */
+export function countCheckoutPurchases(payments: readonly (PaymentLike & Partial<Pick<Payment, "source" | "installmentNumber" | "upsellOfPaymentId">>)[], bounds: Bounds): number {
+  let n = 0;
+  for (const p of payments) if (isCheckoutPurchase(p) && inRange(paidAt(p), bounds)) n++;
+  return n;
+}
+
 /** An order that was paid at some point (refunded orders were paid first). */
 export function wasPaid(p: Pick<Payment, "status">): boolean {
   return p.status === "paid" || p.status === "refunded";
@@ -433,6 +467,21 @@ export function refundedOf(p: Pick<Payment, "status" | "amount" | "refundedAmoun
   return p.status === "refunded" ? p.amount : 0;
 }
 
+/**
+ * The tax-exclusive part of the money refunded on an order (the refund
+ * returns tax pro rata), so it can be subtracted from tax-exclusive sales.
+ */
+export function refundedNetOf(p: Pick<Payment, "status" | "amount" | "taxAmount" | "refundedAmount">): number {
+  const refunded = refundedOf(p);
+  if (refunded <= 0 || p.amount <= 0) return 0;
+  return Math.round((refunded * netOfTax(p)) / p.amount);
+}
+
+/** What an order earned after tax and refunds (never below zero). */
+export function netRevenueOf(p: Pick<Payment, "status" | "amount" | "taxAmount" | "refundedAmount">): number {
+  return Math.max(0, netOfTax(p) - refundedNetOf(p));
+}
+
 export interface RevenueSummary {
   currency: string;
   /** Paid orders in the period. */
@@ -441,7 +490,7 @@ export interface RevenueSummary {
   gross: number;
   tax: number;
   discounts: number;
-  /** Money returned in the period (by refund date). */
+  /** Money returned in the period (by refund date), without the tax it gave back. */
   refunds: number;
   net: number;
   /** Average order value (gross / orders). */
@@ -469,7 +518,7 @@ export function summarizeRevenue(payments: readonly PaymentLike[], bounds: Bound
       r.discounts += p.discountAmount ?? 0;
       if (refundedOf(p) > 0) r.refundedOrders++;
     }
-    const refunded = refundedOf(p);
+    const refunded = refundedNetOf(p);
     if (refunded > 0 && inRange(p.refundedAt ?? paidAt(p), bounds)) row(p.currency).refunds += refunded;
   }
   for (const r of map.values()) {
@@ -507,7 +556,7 @@ export function revenueByItem(payments: readonly PaymentLike[], bounds: Bounds):
     if (!row) map.set(key, (row = { key, itemType: p.itemType, itemId: p.itemId, title: p.itemTitle, currency: p.currency, orders: 0, gross: 0, refunds: 0, net: 0 }));
     row.orders++;
     row.gross += netOfTax(p);
-    row.refunds += refundedOf(p);
+    row.refunds += refundedNetOf(p);
     row.net = row.gross - row.refunds;
   }
   return [...map.values()].sort((a, b) => b.net - a.net || b.orders - a.orders || a.title.localeCompare(b.title));
@@ -520,7 +569,7 @@ export function revenueSeries(payments: readonly PaymentLike[], days: readonly s
     if (!wasPaid(p) || p.currency !== currency) continue;
     const day = paidAt(p).slice(0, 10);
     if (map.has(day)) map.set(day, map.get(day)! + netOfTax(p));
-    const refunded = refundedOf(p);
+    const refunded = refundedNetOf(p);
     const refundDay = (p.refundedAt ?? paidAt(p)).slice(0, 10);
     if (refunded > 0 && map.has(refundDay)) map.set(refundDay, map.get(refundDay)! - refunded);
   }
@@ -546,7 +595,7 @@ export function couponPerformance(payments: readonly PaymentLike[], bounds: Boun
     if (!row) map.set(key, (row = { code, currency: p.currency, orders: 0, discount: 0, revenue: 0 }));
     row.orders++;
     row.discount += p.discountAmount ?? 0;
-    row.revenue += netOfTax(p) - refundedOf(p);
+    row.revenue += netRevenueOf(p);
   }
   return [...map.values()].sort((a, b) => b.orders - a.orders || b.revenue - a.revenue || a.code.localeCompare(b.code));
 }

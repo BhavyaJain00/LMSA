@@ -139,12 +139,10 @@ function member(user: User): MessagingMember {
   return { id: user.id, roles: user.roles, enabled: user.enabled };
 }
 
-/** Ids of everyone who teaches a course or batch (for role labels and reply checks; never reads enrollments). */
-function teachersOf(db: Database): Set<string> {
-  return teacherIds(db);
-}
+/** Who teaches something: `teacherIds(db)`, or the `teaching` map of a directory already built. */
+type TeacherLookup = { has(userId: string): boolean };
 
-function roleLabel(user: User, teachers: ReadonlySet<string>): string | undefined {
+function roleLabel(user: User, teachers: TeacherLookup): string | undefined {
   if (user.roles.includes("admin")) return "Admin";
   if (user.roles.includes("moderator")) return "Moderator";
   if (teachers.has(user.id) || user.roles.includes("course_creator")) return "Instructor";
@@ -152,7 +150,7 @@ function roleLabel(user: User, teachers: ReadonlySet<string>): string | undefine
   return undefined;
 }
 
-function participantView(user: User | undefined, id: string, teachers: ReadonlySet<string>): ParticipantView {
+function participantView(user: User | undefined, id: string, teachers: TeacherLookup): ParticipantView {
   if (!user) return { id, name: "Deleted member", username: "", active: false };
   return {
     id: user.id,
@@ -180,7 +178,7 @@ function messageView(m: DirectMessage, forModerator = false): MessageView {
  * staff status from roles and the course/batch instructor lists, and (only for
  * learner-to-learner conversations) the shared courses and batches.
  */
-function replyContext(db: Database, teachers: ReadonlySet<string> = teachersOf(db)): ReplyContext {
+function replyContext(db: Database, teachers: ReadonlySet<string> = teacherIds(db)): ReplyContext {
   const users = new Map(db.users.map((u) => [u.id, u]));
   const learning = new Map<string, Set<string>>();
   const keysOf = (userId: string): Set<string> => {
@@ -319,7 +317,7 @@ export interface InboxPage {
 }
 
 export function listInbox(db: Database, userId: string, query: InboxQuery = {}): InboxPage {
-  const teachers = teachersOf(db);
+  const teachers = teacherIds(db);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const courses = new Map(db.courses.map((c) => [c.id, c]));
   const mine = db.conversations.filter((c) => c.participantIds.includes(userId));
@@ -382,7 +380,7 @@ export function buildThread(db: Database, viewer: User, conversationId: string, 
   const access = threadAccess(conversation, viewer);
   if (!access) return { ok: false, status: 404 };
   const moderator = access === "moderator";
-  const teachers = teachersOf(db);
+  const teachers = teacherIds(db);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const all = conversationMessages(db, conversation.id);
   const limit = Math.min(200, Math.max(1, Math.floor(query.limit ?? MESSAGE_LIMITS.threadPage)));
@@ -597,8 +595,8 @@ export async function sendMessage(sender: User, conversationId: string, rawBody:
   const db = await getDb();
   const conversation = db.conversations.find((c) => c.id === conversationId);
   if (!conversation || !conversation.participantIds.includes(sender.id)) return { ok: false, error: "This conversation doesn't exist." };
-  const check = canReply(policy, conversation, member(sender), (id) => db.users.some((u) => u.id === id && u.enabled));
-  if (!check.ok) return { ok: false, error: check.reason === "unavailable" ? "The other member's account is no longer active." : DENY_MESSAGES[check.reason] };
+  const check = canReply(policy, conversation, member(sender), replyContext(db));
+  if (!check.ok) return { ok: false, error: check.reason === "unavailable" ? "The other member's account is no longer active." : REPLY_BLOCKED_MESSAGES[check.reason] };
   const rate = sendRateError(sender.id, null);
   if (rate) return { ok: false, error: rate };
   const now = new Date().toISOString();
@@ -667,7 +665,7 @@ export interface RecipientOption extends ParticipantView {
 function recipientOption(db: Database, directory: MessagingDirectory, sender: User, user: User, decision: Extract<MessagingDecision, { ok: true }>): RecipientOption {
   const existing = findDirectConversation(db.conversations, sender.id, user.id);
   return {
-    ...participantView(user, user.id, directory),
+    ...participantView(user, user.id, directory.teaching),
     courseId: decision.courseId,
     courseTitle: decision.courseId ? db.courses.find((c) => c.id === decision.courseId)?.title : undefined,
     conversationId: existing?.id,
@@ -710,9 +708,9 @@ export function lookupRecipient(db: Database, sender: User, to: string, courseId
   if (!user) return { ok: false, error: "We couldn't find this member." };
   const directory = directoryOf(db);
   const existing = findDirectConversation(db.conversations, sender.id, user.id);
-  if (existing && user.id !== sender.id) return { ok: true, recipient: { ...participantView(user, user.id, directory), conversationId: existing.id } };
+  if (existing && user.id !== sender.id) return { ok: true, recipient: { ...participantView(user, user.id, directory.teaching), conversationId: existing.id } };
   const decision = decideFor(db, sender, user, courseId);
-  if (!decision.ok) return { ok: false, error: DENY_MESSAGES[decision.reason], recipient: participantView(user, user.id, directory) };
+  if (!decision.ok) return { ok: false, error: DENY_MESSAGES[decision.reason], recipient: participantView(user, user.id, directory.teaching) };
   return { ok: true, recipient: recipientOption(db, directory, sender, user, decision) };
 }
 
@@ -722,7 +720,9 @@ export function messageLinkFor(db: Database, viewer: User | null, recipientId: s
   const recipient = db.users.find((u) => u.id === recipientId);
   if (!recipient) return null;
   const existing = findDirectConversation(db.conversations, viewer.id, recipient.id);
-  if (existing) return threadPath(existing.id);
+  // An existing conversation only counts while the viewer may still reply in it (learners who
+  // stopped sharing a course, or after learner-to-learner messages were switched off, may not).
+  if (existing && canReply(messagingPolicy(db.settings), existing, member(viewer), replyContext(db)).ok) return threadPath(existing.id);
   if (!decideFor(db, viewer, recipient, courseId).ok) return null;
   const params = new URLSearchParams({ to: recipient.username });
   if (courseId) params.set("course", courseId);
@@ -735,7 +735,12 @@ export function messageLinkFor(db: Database, viewer: User | null, recipientId: s
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
-/** Senders remove their own messages; moderators remove messages in reported conversations. */
+/**
+ * Senders remove their own messages; moderators remove messages in reported
+ * conversations. Participants see "Message removed"; the text is kept in
+ * `removedBody` for moderators only, so removing a message can't erase the
+ * evidence of a report (filed before or after the removal).
+ */
 export async function removeMessage(actor: User, messageId: string): Promise<SimpleResult & { conversationId?: string; byModerator?: boolean }> {
   if (!isMessageId(messageId)) return { ok: false, error: "This message doesn't exist." };
   const db = await getDb();
@@ -750,6 +755,7 @@ export async function removeMessage(actor: User, messageId: string): Promise<Sim
   await mutate((d) => {
     const m = d.directMessages.find((x) => x.id === messageId);
     if (!m || m.removedAt) return;
+    m.removedBody = m.body;
     m.body = "";
     m.removedAt = now;
     m.removedBy = actor.id;
@@ -767,6 +773,11 @@ export async function removeMessage(actor: User, messageId: string): Promise<Sim
 /* ------------------------------------------------------------------ */
 /* Reports and moderation                                              */
 /* ------------------------------------------------------------------ */
+
+/** Enabled moderators and admins who may review a report on `conversation` (never its participants). */
+function reviewersFor(db: Database, conversation: Pick<Conversation, "participantIds">): string[] {
+  return db.users.filter((u) => u.enabled && isMessageModerator(u) && !conversation.participantIds.includes(u.id)).map((u) => u.id);
+}
 
 /** A participant reports the conversation (optionally pointing at one message). Moderators are notified once per open report. */
 export async function reportConversation(reporter: User, conversationId: string, rawReason: unknown, messageId?: string): Promise<SimpleResult> {
@@ -795,13 +806,17 @@ export async function reportConversation(reporter: User, conversationId: string,
     return open;
   });
   if (!wasOpen) {
-    await notifyModerators({
-      type: "system",
-      subject: "A conversation was reported",
-      message: `${reporter.name}: ${reason}`,
-      link: threadPath(conversationId),
-      fromUserId: reporter.id,
-    });
+    // Moderators who take part in the conversation are left out: the report may be about them.
+    const reviewers = reviewersFor(await getDb(), conversation);
+    if (reviewers.length) {
+      await notifyMany(reviewers, {
+        type: "system",
+        subject: "A conversation was reported",
+        message: `${reporter.name}: ${reason}`,
+        link: threadPath(conversationId),
+        fromUserId: reporter.id,
+      });
+    }
   }
   return { ok: true };
 }
@@ -811,15 +826,18 @@ export async function resolveReport(moderator: User, conversationId: string): Pr
   if (!isMessageModerator(moderator)) return { ok: false, error: "Only moderators can review reports." };
   if (!isMessageId(conversationId)) return { ok: false, error: "This conversation doesn't exist." };
   const now = new Date().toISOString();
-  const found = await mutate((d) => {
+  const outcome = await mutate((d): "ok" | "missing" | "own" => {
     const c = d.conversations.find((x) => x.id === conversationId);
-    if (!c?.reportedAt) return false;
+    // A moderator who takes part in the conversation can't see its report, let alone close it.
+    if (c?.participantIds.includes(moderator.id)) return "own";
+    if (!c?.reportedAt) return "missing";
     c.reported = false;
     c.reportResolvedAt = now;
     c.reportResolvedBy = moderator.id;
-    return true;
+    return "ok";
   });
-  return found ? { ok: true } : { ok: false, error: "This report doesn't exist." };
+  if (outcome === "own") return { ok: false, error: "You're part of this conversation, so another moderator has to review its report." };
+  return outcome === "ok" ? { ok: true } : { ok: false, error: "This report doesn't exist." };
 }
 
 export interface ReportRow {
@@ -852,19 +870,20 @@ export interface ReportPage {
   counts: Record<ReportStatus, number>;
 }
 
-function reportRows(db: Database): ReportRow[] {
-  const directory = directoryOf(db);
+/** Reported conversations `viewerId` may review: never the ones they take part in. */
+function reportRows(db: Database, viewerId: string): ReportRow[] {
+  const teachers = teacherIds(db);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const courses = new Map(db.courses.map((c) => [c.id, c]));
-  const reported = db.conversations.filter((c) => c.reportedAt);
+  const reported = db.conversations.filter((c) => c.reportedAt && !c.participantIds.includes(viewerId));
   const counts = new Map<string, number>();
   const ids = new Set(reported.map((c) => c.id));
   for (const m of db.directMessages) if (ids.has(m.conversationId)) counts.set(m.conversationId, (counts.get(m.conversationId) ?? 0) + 1);
   return reported.map((c) => ({
     id: c.id,
-    participants: c.participantIds.map((id) => participantView(users.get(id), id, directory)),
+    participants: c.participantIds.map((id) => participantView(users.get(id), id, teachers)),
     courseTitle: c.courseId ? courses.get(c.courseId)?.title : undefined,
-    reportedBy: c.reportedBy ? participantView(users.get(c.reportedBy), c.reportedBy, directory) : undefined,
+    reportedBy: c.reportedBy ? participantView(users.get(c.reportedBy), c.reportedBy, teachers) : undefined,
     reportedAt: c.reportedAt as string,
     reason: c.reportReason,
     count: c.reportCount ?? 1,
@@ -876,8 +895,9 @@ function reportRows(db: Database): ReportRow[] {
   }));
 }
 
-export function listReports(db: Database, query: ReportQuery = {}): ReportPage {
-  const all = reportRows(db);
+/** Reports for the moderation page of `viewerId` (conversations they take part in are left out). */
+export function listReports(db: Database, viewerId: string, query: ReportQuery = {}): ReportPage {
+  const all = reportRows(db, viewerId);
   const counts: Record<ReportStatus, number> = { open: 0, resolved: 0 };
   for (const r of all) counts[r.status]++;
   const status = query.status ?? "open";
@@ -892,9 +912,9 @@ export function listReports(db: Database, query: ReportQuery = {}): ReportPage {
   return { rows: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length, page, pageCount, counts };
 }
 
-/** CSV rows (header first) of every report, newest first. */
-export function reportCsvRows(db: Database): string[][] {
-  const rows = reportRows(db).sort((a, b) => b.reportedAt.localeCompare(a.reportedAt));
+/** CSV rows (header first) of every report `viewerId` may review, newest first. */
+export function reportCsvRows(db: Database, viewerId: string): string[][] {
+  const rows = reportRows(db, viewerId).sort((a, b) => b.reportedAt.localeCompare(a.reportedAt));
   return [
     REPORT_CSV_HEADER,
     ...rows.map((r) => [
@@ -914,7 +934,7 @@ export function reportCsvRows(db: Database): string[][] {
   ];
 }
 
-/** Open reports (moderation badge and overview). */
-export function countOpenReports(db: Database): number {
-  return db.conversations.filter((c) => c.reported).length;
+/** Open reports `viewerId` may review (moderation badge and overview). */
+export function countOpenReports(db: Database, viewerId: string): number {
+  return db.conversations.filter((c) => c.reported && !c.participantIds.includes(viewerId)).length;
 }

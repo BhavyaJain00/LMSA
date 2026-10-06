@@ -121,6 +121,38 @@ export function normalizeSegmentFilter(raw: unknown, knownCourseIds?: ReadonlySe
   return out;
 }
 
+/** Course ids a filter refers to (both "enrolled in" and "not enrolled in"). */
+function segmentCourseRefs(input: Record<string, unknown>): unknown[] | null {
+  const refs: unknown[] = [];
+  for (const key of ["courseIds", "notEnrolledCourseIds"] as const) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (!Array.isArray(value)) return null;
+    refs.push(...value);
+  }
+  return refs;
+}
+
+/**
+ * Why a submitted audience can't be saved (null when it can). Normalizing
+ * drops anything it can't use, and an empty filter means every eligible
+ * member, so a field that doesn't parse, or a course that was deleted in the
+ * meantime, would otherwise quietly widen the audience. Fails closed instead.
+ */
+export function segmentInputProblem(raw: unknown, knownCourseIds: ReadonlySet<string>): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "The audience couldn't be read. Choose it again, then save.";
+  const refs = segmentCourseRefs(raw as Record<string, unknown>);
+  if (!refs) return "The audience couldn't be read. Choose it again, then save.";
+  if (refs.some((id) => typeof id !== "string" || !knownCourseIds.has(id))) return "A course in this audience no longer exists. Choose the courses again, then save.";
+  return null;
+}
+
+/** How many course conditions of a stored filter point at courses that no longer exist. */
+export function staleSegmentCourses(filter: SegmentFilter, knownCourseIds: ReadonlySet<string>): number {
+  const refs = segmentCourseRefs(filter as unknown as Record<string, unknown>) ?? [];
+  return refs.filter((id) => typeof id !== "string" || !knownCourseIds.has(id)).length;
+}
+
 /** Whether the filter selects every eligible member (no condition set). */
 export function isEmptySegment(filter: SegmentFilter): boolean {
   return !filter.leadsOnly && !filter.courseIds?.length && !filter.notEnrolledCourseIds?.length && !filter.roles?.length && !filter.inactiveDays && filter.purchased === undefined;

@@ -253,11 +253,28 @@ describe("broadcast drafts", () => {
     assert.equal(bad.ok, false);
     assert.deepEqual(Object.keys((bad as { fieldErrors?: Record<string, string> }).fieldErrors ?? {}).sort(), ["body", "subject"]);
 
-    const created = await draft({ segment: { roles: ["student", "wizard"], courseIds: ["crs_missing"], inactiveDays: "30" } });
+    const created = await draft({ segment: { roles: ["student", "wizard"], inactiveDays: "30" } });
     assert.equal(created.status, "draft");
     assert.match(created.id, /^bc_/);
-    assert.deepEqual(created.segment, { roles: ["student"], inactiveDays: 30 }, "the audience is validated against real courses and roles");
+    assert.deepEqual(created.segment, { roles: ["student"], inactiveDays: 30 }, "the audience is validated against real roles");
     assert.equal(created.createdById, admin.id);
+  });
+
+  it("refuses an audience that can't be read or names deleted courses instead of saving \"All members\"", async () => {
+    const before = (await getDb()).broadcasts.length;
+    for (const segment of [null, undefined, "{bad json", [], 42, { courseIds: "crs_x" }]) {
+      const result = await saveBroadcast(admin, { subject: "Hello", body: "Hi", segment });
+      assert.equal(result.ok, false, `segment ${JSON.stringify(segment)} is rejected`);
+      assert.match((result as { fieldErrors?: Record<string, string> }).fieldErrors?.segment ?? "", /couldn't be read/);
+    }
+    for (const segment of [{ courseIds: ["crs_missing"] }, { notEnrolledCourseIds: ["crs_missing"] }, { roles: ["student"], courseIds: ["crs_missing"] }]) {
+      const result = await saveBroadcast(admin, { subject: "Hello", body: "Hi", segment });
+      assert.equal(result.ok, false);
+      assert.match((result as { error: string }).error, /no longer exists/);
+    }
+    assert.equal((await getDb()).broadcasts.length, before, "nothing was saved");
+    const created = await draft({ segment: {} });
+    assert.deepEqual(created.segment, {}, "an empty filter chosen on purpose still saves");
   });
 
   it("edits drafts and scheduled broadcasts only", async () => {

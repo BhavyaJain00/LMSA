@@ -15,8 +15,8 @@ import { useToast } from "@/components/ui/toast";
 import { useViewerTimeZone } from "@/components/batches/hooks";
 import { loadOlderMessagesAction, removeMessageAction, reportConversationAction, resolveReportAction, sendMessageAction } from "@/lib/actions/messages";
 import { MESSAGE_LIMITS } from "@/lib/comms/messages-core";
-import type { MessageView, ParticipantView, ThreadUpdate, ThreadView as Thread } from "@/lib/comms/messages";
-import { announceInboxChange } from "./conversation-list";
+import type { InboxPage, MessageView, ParticipantView, ThreadUpdate, ThreadView as Thread } from "@/lib/comms/messages";
+import { addInboxFeedParams, announceInboxChange, carryInboxFeed, deliverInboxFeed } from "./conversation-list";
 import { MessageBody } from "./message-body";
 import { MessageComposer } from "./message-composer";
 
@@ -174,6 +174,8 @@ export function ThreadView({ initial, viewerId }: { initial: Thread; viewerId: s
     if (last) params.set("after", last.id);
     params.set("known", shown.slice(-200).map((m) => m.id).join(","));
     if (!moderator && document.visibilityState === "visible") params.set("read", "1");
+    // The conversation list rides along (one request for both panes); the route reads it after marking this thread read.
+    const inboxQuery = addInboxFeedParams(params);
     try {
       const res = await fetch(`/messages/feed?${params.toString()}`, { cache: "no-store" });
       if (res.status === 404) {
@@ -181,16 +183,17 @@ export function ThreadView({ initial, viewerId }: { initial: Thread; viewerId: s
         return;
       }
       if (!res.ok) return;
-      const data = (await res.json()) as { thread?: ThreadUpdate };
+      const data = (await res.json()) as { thread?: ThreadUpdate; inbox?: InboxPage };
+      if (data.inbox && inboxQuery) deliverInboxFeed(data.inbox, inboxQuery);
       const update = data.thread;
       if (!update) return;
       const removed = new Set(update.removedIds);
-      setMessages((prev) => mergeMessages(prev.map((m) => (removed.has(m.id) && !m.removed ? { ...m, body: "", removed: true } : m)), update.messages));
+      setMessages((prev) => mergeMessages(prev.map((m) => (removed.has(m.id) && !m.removed ? { ...m, body: "", removed: true, removedText: moderator ? m.body : undefined } : m)), update.messages));
       setSeenId(update.seenMessageId);
       setReplyBlocked(update.replyBlocked);
       if (update.messages.some((m) => m.senderId !== viewerId)) {
         if (!stick.current) setNewBelow(true);
-        announceInboxChange();
+        if (!data.inbox) announceInboxChange();
       }
     } catch {
       // Offline: try again on the next tick.
@@ -198,14 +201,16 @@ export function ThreadView({ initial, viewerId }: { initial: Thread; viewerId: s
   }, [initial.id, moderator, router, viewerId]);
 
   useEffect(() => {
-    // First poll right after mounting: it marks the conversation read and refreshes the inbox counts.
-    const firstPoll = window.setTimeout(() => void poll().then(announceInboxChange), 0);
+    const release = carryInboxFeed();
+    // First poll right after mounting: it marks the conversation read and, carrying the list, refreshes the inbox counts.
+    const firstPoll = window.setTimeout(() => void poll(), 0);
     const tick = () => {
       if (document.visibilityState === "visible") void poll();
     };
     const id = window.setInterval(tick, MESSAGE_LIMITS.pollMs);
     document.addEventListener("visibilitychange", tick);
     return () => {
+      release();
       window.clearTimeout(firstPoll);
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", tick);
@@ -285,7 +290,7 @@ export function ThreadView({ initial, viewerId }: { initial: Thread; viewerId: s
         toast.error(result.error);
         return;
       }
-      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, body: "", removed: true, removedByRole: moderator ? "moderator" : "sender" } : m)));
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, body: "", removed: true, removedByRole: moderator ? "moderator" : "sender", removedText: moderator ? m.body : undefined } : m)));
       setRemoveId(null);
       announceInboxChange();
     });
@@ -347,7 +352,15 @@ export function ThreadView({ initial, viewerId }: { initial: Thread; viewerId: s
               title={formatDateTime(m.createdAt)}
             >
               {m.removed ? (
-                <p className="text-sm italic">{m.removedByRole === "moderator" ? "Removed by a moderator" : "Message removed"}</p>
+                <>
+                  <p className="text-sm italic">{m.removedByRole === "moderator" ? "Removed by a moderator" : "Message removed"}</p>
+                  {moderator && m.removedText && (
+                    <div className="mt-1.5 border-t border-dashed border-border pt-1.5 text-ink-muted">
+                      <p className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-ink-faint">Original text (moderators only)</p>
+                      <MessageBody body={m.removedText} />
+                    </div>
+                  )}
+                </>
               ) : (
                 <MessageBody body={m.body} mine={mine} />
               )}

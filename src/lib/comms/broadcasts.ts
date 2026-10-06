@@ -17,7 +17,7 @@ import {
 } from "./broadcast-core";
 import { checkContent, parseRecipientRef, recipientRef } from "./campaign-core";
 import { prepareCampaign, renderCampaignEmail } from "./render";
-import { describeSegment, evaluateSegment, leadBlock, leadRecipient, memberBlock, memberRecipient, normalizeSegmentFilter, type SegmentRecipient } from "./segments";
+import { describeSegment, evaluateSegment, leadBlock, leadRecipient, memberBlock, memberRecipient, normalizeSegmentFilter, segmentInputProblem, type SegmentRecipient } from "./segments";
 import { getCampaignEventSummary } from "./tracking";
 import { broadcastTrackingId, type EventSummary } from "./tracking-core";
 
@@ -55,7 +55,11 @@ export async function saveBroadcast(author: Pick<User, "id">, input: BroadcastDr
   if (Object.keys(checked.errors).length) return { ok: false, error: "Check the highlighted fields.", fieldErrors: checked.errors };
   const now = new Date().toISOString();
   return mutate((db): BroadcastResult => {
-    const segment = normalizeSegmentFilter(input.segment, new Set(db.courses.map((c) => c.id)));
+    const knownCourseIds = new Set(db.courses.map((c) => c.id));
+    // Never save an audience that silently fell back to "All members".
+    const problem = segmentInputProblem(input.segment, knownCourseIds);
+    if (problem) return { ok: false, error: problem, fieldErrors: { segment: problem } };
+    const segment = normalizeSegmentFilter(input.segment, knownCourseIds);
     if (input.id) {
       const row = db.broadcasts.find((b) => b.id === input.id);
       if (!row) return { ok: false, error: NOT_FOUND };

@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionResult, Settings, SidebarItem } from "@/lib/types";
 import { createSession, getCurrentUser, isAdmin } from "@/lib/auth/session";
-import { getDb, mutate, resetDatabase } from "@/lib/db/store";
+import { buildDemoData, getDb, mutate } from "@/lib/db/store";
+import { getBackupManager } from "@/lib/db/backup";
+import { backupActorLabel } from "@/lib/db/backup-admin";
 import { Icon } from "@/components/ui/icons";
 import { setFlash } from "@/lib/flash";
 import { audit } from "@/lib/audit";
@@ -255,8 +257,11 @@ export async function resetDemoDataAction(_prev: ActionResult | null, formData: 
   if (fd(formData, "confirm") !== "RESET") {
     return { ok: false, error: "Type RESET to confirm.", fieldErrors: { confirm: "Type RESET (in capitals) to confirm." } };
   }
-  await resetDatabase();
-  await audit(actor, "data.reset", { type: "settings", id: "data" });
+  // The safety backup and the reset run as one exclusive step (as in reloadDemoDataAction), so the reset can be undone with Restore.
+  const demo = await buildDemoData();
+  const manager = await getBackupManager();
+  const safety = await manager.replaceWith(demo, { source: "demo-reset", reason: "Before reloading the demo data", createdBy: backupActorLabel(actor) });
+  await audit(actor, "data.reset", { type: "settings", id: "data" }, { safetyBackup: safety.name });
   revalidatePath("/", "layout");
   // Sessions are wiped by the reset. Keep the admin signed in when their account exists in the demo data.
   const db = await getDb();

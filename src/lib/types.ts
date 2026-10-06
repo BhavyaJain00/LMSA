@@ -2090,6 +2090,12 @@ export interface Organization {
   /** Courses every seat holder gets. */
   courseIds: string[];
   createdAt: string;
+  /**
+   * Set on a team started at `/team/buy` until its first order is paid or an
+   * invoice is requested: only such unpaid drafts are cleared after 30 days
+   * (teams created by administrators never are).
+   */
+  checkoutDraft?: boolean;
 }
 
 export interface OrgSeat {
@@ -2119,6 +2125,12 @@ export interface AnalyticsEvent {
   itemId?: string;
   value?: number;
   currency?: string;
+  /**
+   * On an anonymous page view or checkout start (no visitor id): the first
+   * time this browser tab reached that funnel stage, so the funnel counts an
+   * anonymous visit once per stage rather than once per page.
+   */
+  firstReach?: boolean;
   createdAt: string;
 }
 
