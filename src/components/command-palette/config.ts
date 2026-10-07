@@ -1,6 +1,6 @@
 import type { IconName } from "@/components/ui/icons";
 import type { PublicUser, Settings } from "@/lib/types";
-import { buildNavigation } from "@/lib/nav";
+import { buildNavigation, englishShellLabel, type NavSection, type ShellLabel } from "@/lib/nav";
 
 export type SearchScope = "courses" | "transcripts" | "batches" | "programs" | "jobs" | "quizzes" | "assignments" | "people";
 
@@ -48,17 +48,23 @@ function has(user: PublicUser | null, ...roles: string[]): boolean {
   return roles.some((r) => user.roles.includes(r as PublicUser["roles"][number]));
 }
 
+/** Palette group for a navigation section. Compares the stable section key: titles are translated. */
+export function paletteGroupFor(section: Pick<NavSection, "key">): string {
+  return section.key === "manage" ? "Manage" : section.key === "links" ? "Links" : "Jump to";
+}
+
 /**
  * Build the palette's navigation targets and search categories from the same
  * role/feature-aware navigation the sidebar uses, so the palette never offers
- * something the sidebar hides.
+ * something the sidebar hides. Pass the shell translator (`await getT("shell")`)
+ * so the navigation targets match the sidebar's labels in the viewer's language.
  */
-export function buildPaletteConfig(user: PublicUser | null, settings: Settings): PaletteConfig {
+export function buildPaletteConfig(user: PublicUser | null, settings: Settings, l: ShellLabel = englishShellLabel): PaletteConfig {
   const f = settings.features;
   const commands: PaletteCommand[] = [];
   const seen = new Set<string>();
-  for (const section of buildNavigation(user, settings)) {
-    const group = section.title === "Manage" ? "Manage" : section.title === "Links" ? "Links" : "Jump to";
+  for (const section of buildNavigation(user, settings, {}, l)) {
+    const group = paletteGroupFor(section);
     for (const item of section.items) {
       if (seen.has(item.href)) continue;
       seen.add(item.href);

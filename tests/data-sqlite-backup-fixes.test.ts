@@ -120,6 +120,22 @@ describe("backups settle the storage in slices", () => {
     assert.deepEqual(ids(readFile(exported.file).collections.courses), ["c1"]);
     fs.rmSync(exported.file, { force: true });
   });
+
+  it("restore() (exclusive) does not use the one-pass flush(), and its safety backup holds unreported edits", async () => {
+    const file = path.join(folder(), "lms.sqlite");
+    const engine = sqliteEngine(file);
+    const manager = new BackupManager(engine);
+    const db = (await engine.getDb()) as unknown as { courses: Row[] };
+    const backup = await manager.create({ kind: "manual" });
+    engine.flush = async () => {
+      throw new Error("flush() must not be used for restores");
+    };
+    db.courses[0]!.title = "Edited outside mutate() before the restore";
+    const result = await manager.restore(backup.name);
+    const safety = readFile(path.join(manager.dir, result.safety.name)).collections.courses as Row[];
+    assert.equal(safety[0]!.title, "Edited outside mutate() before the restore");
+    assert.equal(((await engine.getDb()) as unknown as { courses: Row[] }).courses[0]!.title, "Intro");
+  });
 });
 
 describe("replaceWith() (demo data reset)", () => {

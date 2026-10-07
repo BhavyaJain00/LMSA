@@ -248,8 +248,13 @@ export async function creditCommission(paymentId: string, hintAffiliateId?: stri
     const paidAt = Date.parse(payment.paidAt ?? payment.createdAt);
     const anchor = anchorOrderOf(d, payment);
     const followOn = anchor !== undefined;
-    const affiliateId =
-      hintAffiliateId || payment.affiliateId || (followOn ? (anchor ? orderAffiliateId(d, anchor) : undefined) : attributedAffiliateId(d, payment.userId, paidAt));
+    // A follow-on charge takes its affiliate from the original order only: neither a
+    // later referral click nor a referral stamped on the follow-on itself counts.
+    const affiliateId = followOn
+      ? anchor
+        ? orderAffiliateId(d, anchor)
+        : undefined
+      : hintAffiliateId || payment.affiliateId || attributedAffiliateId(d, payment.userId, paidAt);
     const affiliate = affiliateId ? d.affiliates.find((a) => a.id === affiliateId) : undefined;
     const base = commissionBase(payment);
     const why = commissionIneligibility({
@@ -272,7 +277,7 @@ export async function creditCommission(paymentId: string, hintAffiliateId?: stri
       createdAt: new Date().toISOString(),
     };
     d.commissions.push(commission);
-    if (!payment.affiliateId) payment.affiliateId = affiliate.id;
+    if (!payment.affiliateId || followOn) payment.affiliateId = affiliate.id;
     // Mark the click that led to the sale (the member's latest click on this affiliate before paying).
     const click = followOn ? undefined : memberClicks(d, payment.userId).find((c) => c.affiliateId === affiliate.id && c.at <= paidAt + 5 * 60 * 1000);
     if (click) {

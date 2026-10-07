@@ -396,7 +396,7 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 
 ## 12. Upgrading
 
-1. Make a backup (*Admin → Settings → Backup & restore*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`).
+1. Make a backup (*Admin → Settings → Backup & restore*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`; without Docker, `cd /opt/learnloop/app && npm run db:backup -- --note "before upgrade"`, which writes to the backups folder next to the absolute `SQLITE_PATH`).
 2. Get the new code: `git pull`.
 3. Rebuild and restart:
    - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).

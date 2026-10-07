@@ -18,9 +18,9 @@ import type { ChangeSet, CollectionChanges } from "./sqlite-core.mjs";
  *    that are new, sit at an id under a different object, or are candidates
  *    get serialized; ids no longer present are deleted.
  *  - `full`: every document is serialized and compared. Used by the
- *    background sweep, by `flush()`, before backups and on shutdown, and
- *    after code iterated a collection in a way that may have edited any
- *    document.
+ *    background sweep (one chunk at a time; backups and restores settle the
+ *    storage this way), by `flush()` and on shutdown, and after code
+ *    iterated a collection in a way that may have edited any document.
  *
  * Candidates are trusted to be members of the collection. When two different
  * candidate objects carry the same id (a stale copy next to its replacement)

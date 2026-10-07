@@ -36,9 +36,11 @@ async function alertAdmins(event: ErrorEvent, reopened: boolean): Promise<void> 
   const db = await getDb();
   const admins = db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id);
   const where = event.path ? ` on ${event.path}` : "";
+  // Browser reports are written by visitors, so the alert says where the text came from.
+  const kind = event.method === BROWSER_METHOD ? "browser error report" : "error";
   await notifyMany(admins, {
     type: "system",
-    subject: reopened ? `A resolved error happened again${where}` : `New error${where}`,
+    subject: reopened ? `A resolved ${kind} happened again${where}` : `New ${kind}${where}`,
     message: event.message.slice(0, 200),
     link: `/admin/errors/${event.id}`,
     email: false,

@@ -224,6 +224,17 @@ describe("error log: POST /api/errors cannot tamper with server groups", () => {
     assert.equal(stored.method, "GET");
     assert.equal(stored.count, 1);
   });
+
+  it("labels alerts for browser reports so administrators know visitors wrote the text", async () => {
+    const browser = await recordError({ message: "Chunk failed", path: "/learn", method: BROWSER_METHOD });
+    const server = await recordError({ message: "Query failed", path: "/learn", method: "GET" });
+    assert.ok(browser && server);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const db = await getDb();
+    const subjectFor = (id: string) => db.notifications.find((n) => n.link === `/admin/errors/${id}`)?.subject;
+    assert.equal(subjectFor(browser.id), "New browser error report on /learn");
+    assert.equal(subjectFor(server.id), "New error on /learn");
+  });
 });
 
 /* ------------------------------------------------------------------ */

@@ -20,8 +20,8 @@ const LEARN_PICK = { learning: ["learn.", "global.player.", "quiz.", "assignment
  * mounted here too, as in the (app) group.
  */
 export default async function LearnGroupLayout({ children }: LayoutProps<"/">) {
-  const [user, settings, t] = await Promise.all([getCurrentPublicUser(), getSettings(), getT("learning")]);
-  const palette = buildPaletteConfig(user, settings);
+  const [user, settings, t, shell] = await Promise.all([getCurrentPublicUser(), getSettings(), getT("learning"), getT("shell")]);
+  const palette = buildPaletteConfig(user, settings, shell);
   return (
     <I18nProvider namespaces={["learning"]} pick={LEARN_PICK}>
       <div className="flex min-h-screen flex-col bg-surface">

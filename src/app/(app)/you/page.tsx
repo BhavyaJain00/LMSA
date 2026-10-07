@@ -2,7 +2,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { getCurrentPublicUser } from "@/lib/auth/session";
 import { getDb, getSettings } from "@/lib/db/store";
-import { buildNavigation, navContextFor } from "@/lib/nav";
+import { buildNavigation, navContextFor, type NavSection } from "@/lib/nav";
+import { getT } from "@/i18n/server";
 import { countUnreadMessages } from "@/lib/comms/messages";
 import { getUnreadCount } from "@/lib/services/notifications";
 import { logoutAction } from "@/lib/actions/auth";
@@ -57,6 +58,11 @@ function Row({ href, icon, label, value, external }: { href: string; icon: React
   );
 }
 
+/** Hub group for a navigation section. Compares the stable section key: section titles are translated. */
+function groupTitle(key: NavSection["key"]): string {
+  return key === "manage" ? "Manage" : key === "links" ? "More" : "Pages";
+}
+
 /**
  * Phone-first account hub: profile summary, every destination from the
  * sidebar, and account actions (notifications, search, colour mode, log out).
@@ -80,13 +86,14 @@ export default async function YouPage() {
   }
 
   const unread = settings.features.notifications ? await getUnreadCount(user.id) : 0;
-  const db = await getDb();
-  const sections = buildNavigation(user, settings, { ...navContextFor(db, user.id), messages: countUnreadMessages(db, user.id) });
+  const [db, shell] = await Promise.all([getDb(), getT("shell")]);
+  // Same labels as the sidebar, in the viewer's interface language.
+  const sections = buildNavigation(user, settings, { ...navContextFor(db, user.id), messages: countUnreadMessages(db, user.id) }, shell);
   // Destinations already on the phone tab bar are not repeated under "Pages".
   const skip = new Set(["/notifications", `/user/${user.username}`, ...buildMobileTabs(user, settings).map((t) => t.href)]);
   const pageGroups = sections
     .map((section) => ({
-      title: section.title === "Manage" ? "Manage" : section.title === "Links" ? "More" : "Pages",
+      title: groupTitle(section.key),
       items: section.items.filter((i) => !skip.has(i.href)),
     }))
     .filter((g) => g.items.length > 0);
@@ -121,7 +128,7 @@ export default async function YouPage() {
               <Row
                 key={item.href}
                 href={item.href}
-                label={item.label === "Programming Exercises" ? "Exercises" : item.label}
+                label={item.label}
                 icon={<IconCmp />}
                 external={external}
                 value={item.badge ? item.badge : undefined}
