@@ -9,7 +9,7 @@ import { ANON_COOKIE, isValidAnonId } from "@/lib/legal/consent-shared";
 import type { Affiliate, Database } from "@/lib/types";
 import { REF_CLICK_HEADER, REF_COOKIE, parseRefClicks, pickLastClick, withinWindow, type RefCookie } from "./affiliates-shared";
 import { isBot } from "./bots";
-import { REFERRAL_EVENT, findAffiliateByCode, linkMemberToReferral, memberClicks, recordReferralClick } from "./affiliates";
+import { findAffiliateByCode, hasMemberLink, linkMemberToReferral, memberClicks, recordReferralClick } from "./affiliates";
 
 /**
  * Request-side referral attribution (growth area).
@@ -74,9 +74,7 @@ export async function trackReferralVisit(): Promise<void> {
   // The click header marks the request that carried `?ref=`, which is the cookie's newest click.
   const landingPath = ref === clicks[0] ? h.get(REF_CLICK_HEADER) : null;
 
-  const alreadyLinked =
-    !user ||
-    db.analyticsEvents.some((e) => e.name === REFERRAL_EVENT && e.userId === user.id && e.itemId === affiliate.id && e.createdAt === new Date(ref.at).toISOString());
+  const alreadyLinked = !user || hasMemberLink(db, user.id, affiliate.id, ref.at);
   const recordClick = landingPath !== null && !isBot(h.get("user-agent"));
   if (!recordClick && alreadyLinked) return;
 

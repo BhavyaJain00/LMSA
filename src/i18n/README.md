@@ -212,6 +212,16 @@ export default async function LearnLayout({ children }: LayoutProps<"/">) {
   mounted by the root or `(app)` layout (PWA install prompt, command palette,
   account security banner, footer sign-up form) and client components reused
   on another group's pages (for example `global.courseCard.enroll`).
+  Exception: large areas listed in `ROUTE_PROVIDED_GLOBALS` (`provided.ts`)
+  are left out of the root slice and provided by the layouts that use them.
+  `global.player.*` (the video and audio player) comes from `PlayerI18n`
+  (`src/components/player/player-i18n.tsx`): wrap any new page that renders
+  `VideoPlayer` or `AudioPlayer` in it.
+- `/admin` is split by section: the admin layout sends only shared admin
+  slices, and the settings, members, data and badges layouts add theirs
+  (`src/components/admin/i18n-slices.ts`). A new client prefix in `admin` is
+  sent on the settings pages; claim it for another section there if it is
+  used elsewhere.
 - A simpler alternative for small client components: translate in the server
   parent with `getT` and pass the strings as props.
 - Without a provider, `useT` shows keys instead of text and logs a development

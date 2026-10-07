@@ -28,7 +28,7 @@ const accountMessages = {
   "dashboard.cards.upNext": "Up next:",
   "dashboard.cards.startWith": "Start with:",
   "dashboard.cards.progressLabel": "{title} progress",
-  "dashboard.cards.lessonsDone": "{done}/{total} lessons",
+  "dashboard.cards.lessonsDone": "{total, plural, one {{done}/# lesson} other {{done}/# lessons}}",
   "dashboard.cards.noLessons": "No lessons yet",
   "dashboard.cards.continue": "Continue",
   "dashboard.cards.start": "Start",

@@ -440,9 +440,49 @@ function affiliatePerformance(db: Database, bounds: { startMs: number; endMs: nu
   return [...rows.values()].filter((r) => r.clicks || r.sales).sort((a, b) => b.sales - a.sales || b.clicks - a.clicks || a.code.localeCompare(b.code));
 }
 
-/** Everything `/admin/analytics` shows for a period. */
+/** A report stays valid this long while the data it was built from has not grown or been replaced. */
+const REPORT_CACHE_MS = 60 * 1000;
+const REPORT_CACHE_SIZE = 8;
+
+interface CachedReport {
+  report: AnalyticsReport;
+  nowMs: number;
+  /** The collections the report was built from (identity and size). */
+  sources: readonly (readonly unknown[])[];
+  sizes: readonly number[];
+}
+
+const reportCache = new Map<string, CachedReport>();
+
+function reportSources(db: Database): (readonly unknown[])[] {
+  return [db.analyticsEvents, db.payments, db.users, db.subscriptions, db.commissions, db.activities, db.progress, db.loginEvents];
+}
+
+/**
+ * Everything `/admin/analytics` shows for a period. Building it reads every
+ * raw event, so a report is reused for a minute (the page and each CSV
+ * section of one visit share it) unless the data was replaced or grew.
+ */
 export async function getAnalyticsReport(range: DateRange, nowMs: number = Date.now()): Promise<AnalyticsReport> {
   const db = await getDb();
+  const key = `${range.from}|${range.to}|${range.preset ?? ""}`;
+  const sources = reportSources(db);
+  const cached = reportCache.get(key);
+  if (
+    cached &&
+    Math.abs(nowMs - cached.nowMs) < REPORT_CACHE_MS &&
+    cached.sources.every((source, i) => source === sources[i] && source.length === cached.sizes[i])
+  ) {
+    return cached.report;
+  }
+  const report = buildAnalyticsReport(db, range, nowMs);
+  reportCache.delete(key);
+  reportCache.set(key, { report, nowMs, sources, sizes: sources.map((s) => s.length) });
+  while (reportCache.size > REPORT_CACHE_SIZE) reportCache.delete(reportCache.keys().next().value!);
+  return report;
+}
+
+function buildAnalyticsReport(db: Database, range: DateRange, nowMs: number): AnalyticsReport {
   const currency = db.settings.commerce.defaultCurrency;
   const previous = previousRange(range);
   const bounds = rangeBounds(range);

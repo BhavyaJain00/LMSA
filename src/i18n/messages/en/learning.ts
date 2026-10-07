@@ -65,10 +65,10 @@ const learningMessages = {
 
   "learn.topBar.home": "{brand} home",
   "learn.topBar.course": "Course",
-  "learn.topBar.progressTitle": "{completed} of {total} lessons completed",
+  "learn.topBar.progressTitle": "{total, plural, one {{completed} of # lesson completed} other {{completed} of # lessons completed}}",
   "learn.topBar.progressLabel": "Course progress: {percent}% ({completed} of {total} lessons)",
   "learn.topBar.yourProgress": "Your progress",
-  "learn.topBar.lessonsCount": "{completed}/{total} lessons",
+  "learn.topBar.lessonsCount": "{total, plural, one {{completed}/# lesson} other {{completed}/# lessons}}",
   "learn.topBar.searchShortcut": "Search ({shortcut})",
 
   "learn.completion.instructor": "You are viewing this lesson as an instructor. Progress is only tracked for enrolled learners.",

@@ -110,23 +110,81 @@ export async function recordReferralClick(input: ClickInput): Promise<AffiliateR
  * (once per member and click). Their own code is ignored.
  */
 export async function linkMemberToReferral(input: { userId: string; code: string; at: number }): Promise<boolean> {
+  // Bring the link index up to date outside the write lock, so the check inside it is a lookup.
+  referralLinks((await getDb()).analyticsEvents);
   return mutate((d) => {
     if (!d.settings.growth.affiliatesEnabled) return false;
     const affiliate = findAffiliateByCode(d, input.code);
     if (!affiliate || affiliate.status !== "active" || affiliate.userId === input.userId) return false;
-    const createdAt = new Date(input.at).toISOString();
-    const exists = d.analyticsEvents.some((e) => e.name === REFERRAL_EVENT && e.userId === input.userId && e.itemId === affiliate.id && e.createdAt === createdAt);
-    if (exists) return false;
-    const event: AnalyticsEvent = { id: uid("evt"), name: REFERRAL_EVENT, userId: input.userId, itemType: "affiliate", itemId: affiliate.id, createdAt };
+    if (hasMemberLink(d, input.userId, affiliate.id, input.at)) return false;
+    const event: AnalyticsEvent = { id: uid("evt"), name: REFERRAL_EVENT, userId: input.userId, itemType: "affiliate", itemId: affiliate.id, createdAt: new Date(input.at).toISOString() };
     d.analyticsEvents.push(event);
     return true;
   });
 }
 
+/*
+ * Member links live among the analytics events, which also hold every page
+ * view of the last 90 days. They are indexed by member so attribution (on
+ * every checkout, paid order and referred member's page) and the affiliate
+ * dashboards never scan the page views. The index belongs to one events
+ * array (a restore, reset or the retention job replaces the array, which
+ * starts a new index) and catches up with events appended since it last
+ * looked; it is rebuilt when events were removed in place. Entries are
+ * re-checked on use, so an event changed in place (an erased member) is
+ * never trusted from the index alone.
+ */
+interface LinkIndex {
+  /** Events of the array already looked at. */
+  scanned: number;
+  /** The last event looked at, to notice removals before it. */
+  last: AnalyticsEvent | undefined;
+  byUser: Map<string, AnalyticsEvent[]>;
+}
+
+const linkIndexes = new WeakMap<object, LinkIndex>();
+
+function isMemberLink(e: AnalyticsEvent): boolean {
+  return e.name === REFERRAL_EVENT && !!e.userId && !!e.itemId;
+}
+
+/** Member links of `events`, grouped by member (kept current incrementally). */
+function referralLinks(events: readonly AnalyticsEvent[]): Map<string, AnalyticsEvent[]> {
+  const length = events.length;
+  let index = linkIndexes.get(events);
+  if (index && (length < index.scanned || (index.scanned > 0 && events[index.scanned - 1] !== index.last))) index = undefined;
+  if (!index) {
+    index = { scanned: 0, last: undefined, byUser: new Map() };
+    linkIndexes.set(events, index);
+  }
+  for (let i = index.scanned; i < length; i++) {
+    const e = events[i]!;
+    if (!isMemberLink(e)) continue;
+    const list = index.byUser.get(e.userId!);
+    if (list) list.push(e);
+    else index.byUser.set(e.userId!, [e]);
+  }
+  if (length > index.scanned) {
+    index.scanned = length;
+    index.last = events[length - 1];
+  }
+  return index.byUser;
+}
+
+/** The member's links (re-checked against the events themselves). */
+function linksOf(db: Pick<Database, "analyticsEvents">, userId: string): AnalyticsEvent[] {
+  return (referralLinks(db.analyticsEvents).get(userId) ?? []).filter((e) => isMemberLink(e) && e.userId === userId);
+}
+
+/** Whether the member is already linked to `affiliateId` for the click at `atMs`. */
+export function hasMemberLink(db: Pick<Database, "analyticsEvents">, userId: string, affiliateId: string, atMs: number): boolean {
+  const createdAt = new Date(atMs).toISOString();
+  return linksOf(db, userId).some((e) => e.itemId === affiliateId && e.createdAt === createdAt);
+}
+
 /** Referral clicks linked to a member, newest click first. */
 export function memberClicks(db: Pick<Database, "analyticsEvents">, userId: string): { affiliateId: string; at: number }[] {
-  return db.analyticsEvents
-    .filter((e) => e.name === REFERRAL_EVENT && e.userId === userId && e.itemId)
+  return linksOf(db, userId)
     .map((e) => ({ affiliateId: e.itemId as string, at: Date.parse(e.createdAt) }))
     .filter((c) => Number.isFinite(c.at))
     .sort((a, b) => b.at - a.at);
@@ -181,6 +239,8 @@ export type CreditResult =
  * the original order and never to a later click. Idempotent per order.
  */
 export async function creditCommission(paymentId: string, hintAffiliateId?: string): Promise<CreditResult> {
+  // Catch the member-link index up outside the write lock (attribution below only looks it up).
+  referralLinks((await getDb()).analyticsEvents);
   const result = await mutate((d): CreditResult => {
     const payment = d.payments.find((p) => p.id === paymentId);
     if (!payment) return { credited: false, reason: "missing" };
@@ -427,11 +487,13 @@ function indexStats(db: Pick<Database, "affiliateReferrals" | "analyticsEvents" 
   }
   const created = new Map(db.users.map((u) => [u.id, Date.parse(u.createdAt)]));
   const signupPairs = new Set<string>();
-  for (const e of db.analyticsEvents) {
-    if (e.name !== REFERRAL_EVENT || !e.userId || !e.itemId) continue;
-    const joined = created.get(e.userId);
-    if (joined === undefined || joined + SIGNUP_SKEW_MS < Date.parse(e.createdAt)) continue;
-    signupPairs.add(`${e.itemId}\u0000${e.userId}`);
+  for (const [userId, links] of referralLinks(db.analyticsEvents)) {
+    const joined = created.get(userId);
+    if (joined === undefined) continue;
+    for (const e of links) {
+      if (!isMemberLink(e) || e.userId !== userId || joined + SIGNUP_SKEW_MS < Date.parse(e.createdAt)) continue;
+      signupPairs.add(`${e.itemId}\u0000${userId}`);
+    }
   }
   const signups = new Map<string, number>();
   for (const pair of signupPairs) {
