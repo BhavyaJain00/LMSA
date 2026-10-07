@@ -46,8 +46,14 @@ const HEARTBEATS = 1_000;
 const BUDGET = {
   /** Opening the database and loading every document into memory. */
   coldLoadMs: 20_000,
-  /** One heartbeat: the mutation plus its own transaction. */
-  heartbeatP95Ms: 15,
+  /**
+   * One heartbeat: the mutation plus its own transaction. A laptop measures a
+   * p95 of 3-10 ms alone, and about 25 ms while the full suite runs the other
+   * test files in parallel. Whole-collection work per heartbeat is caught
+   * exactly by the one-document-compared / one-row-written checks; this bound
+   * catches heavy per-heartbeat work that those counters cannot see.
+   */
+  heartbeatP95Ms: 60,
   /** The longest the sweep may hold the event loop at once. */
   sweepSliceMs: 50,
 };

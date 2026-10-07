@@ -16,7 +16,8 @@ Contents:
 10. [ffmpeg](#10-ffmpeg)
 11. [Monitoring: health check and error log](#11-monitoring-health-check-and-error-log)
 12. [Upgrading](#12-upgrading)
-13. [Pre-launch checklist](#13-pre-launch-checklist)
+13. [Search engines: Search Console and the sitemap](#13-search-engines-search-console-and-the-sitemap)
+14. [Pre-launch checklist](#14-pre-launch-checklist)
 
 ---
 
@@ -36,7 +37,7 @@ The app keeps every record in memory and writes only the records a request chang
 | What | Measured | Test fails above |
 | --- | --- | --- |
 | Cold start: `PRAGMA quick_check`, migrations, load all 256,300 records | 2.0 s, about 330 MB of memory afterwards | 20 s |
-| 1,000 sequential heartbeat-style `mutate()` calls, each saved in its own transaction (one record compared, one row written) | p50 1.2 ms, **p95 2.2 ms**, p99 3.3 ms | p95 15 ms |
+| 1,000 sequential heartbeat-style `mutate()` calls, each saved in its own transaction (one record compared, one row written) | p50 1.2 ms, **p95 2.2 ms**, p99 3.3 ms (about 25 ms p95 while the rest of the suite runs in parallel) | p95 60 ms |
 | 1,000 concurrent heartbeats on 400 records | saved in 1 transaction of 400 rows, 1.2 s in total | more than 3 transactions |
 | Background sweep of all 256,300 records (looks for edits made outside `mutate()`) | 96 slices, 0.8 s of work, longest slice 9.3 ms; repeats every 16 s at this size | slice over 50 ms |
 
@@ -90,7 +91,7 @@ The repository contains a multi-stage `Dockerfile` (Node 24 slim, ffmpeg, non-ro
 
    Caddy requests a certificate the first time someone opens `https://learn.example.com` (usually within seconds). If the app refuses to start, the log lists the missing settings (see [section 4](#4-environment-variables)).
 
-5. **Sign in** with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, change the password, turn on two-factor authentication, then work through the [pre-launch checklist](#13-pre-launch-checklist).
+5. **Sign in** with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, change the password, turn on two-factor authentication, then work through the [pre-launch checklist](#14-pre-launch-checklist).
 
 6. **Turn on the scheduler**: copy the cron key from *Admin → Settings → Email*, add `CRON_KEY=<key>` to `.env`, then:
 
@@ -234,7 +235,9 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `DB_DRIVER` | no | `sqlite` (default). `json` is for development only. |
 | `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | without Docker | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source; its folder also holds `seo/`), `storage/uploads`. Docker: keep the defaults (`docker-compose.yml` sets them). Without Docker: **absolute** paths outside the project, see section 3; a production server started from `.next/standalone` refuses relative ones. |
 | `IMAGE_HOSTS` | no | Extra HTTPS hosts the image optimizer (`/_next/image`) may fetch from, comma-separated (`cdn.example.com,*.example.org`). `APP_URL`, `S3_PUBLIC_BASE_URL` and the S3 bucket are always allowed; every other host is refused so the optimizer cannot be used as an open proxy. Read at build time. |
+| `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP` | no | Daily automatic backup on/off (default `true`) and how many daily backups to keep (default 14, 1–3650). |
 | `MAX_VIDEO_UPLOAD_MB`, `MAX_FILE_UPLOAD_MB` | no | Upload limits in MB (defaults 10240, i.e. 10 GB, and 25). Video uploads are chunked and resumable, so files over 5 GB work; a reverse proxy only needs to accept one chunk per request. |
+| `UPLOAD_MIN_FREE_MB`, `UPLOAD_LEARNER_DAILY_MB` | no | Refuse uploads when the disk has less free space than this (default 1024), and the daily upload allowance of a learner account (default 500). |
 | `SESSION_DAYS`, `SESSION_COOKIE_NAME`, `COOKIE_SECURE` | no | Sign-in session length (30), cookie name, HTTPS-only cookie (on by default in production). |
 | `FFMPEG_PATH`, `FFPROBE_PATH` | no | When ffmpeg is not on the `PATH`. |
 | `TRANSCRIBE_API_URL`, `TRANSCRIBE_API_KEY`, `TRANSCRIBE_MODEL` | no | Automatic captions through a Whisper-compatible API. |
@@ -245,7 +248,7 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `APP_VERSION` | no | Shown by `/api/health` (the Docker build passes it through). |
 | `DOMAIN`, `ACME_EMAIL`, `CRON_KEY` | Docker only | Read by `docker-compose.yml` for Caddy and the cron service, not by the app. |
 
-`LL_DEV_LOGIN` is ignored in production; remove it.
+Development only, ignored in production: `LL_DEV_LOGIN` (test sign-in route; the server warns when it is set, so remove it), `WEBHOOKS_ALLOW_PRIVATE_NETWORK` (outgoing webhooks to localhost) and `DEBUG` (stack traces from the `npm run db:*` scripts). `.env.example` lists every variable with a one-line comment.
 
 ## 5. Scheduled jobs (cron)
 
@@ -270,7 +273,7 @@ KEY=<cron key>
 17 * * * *   curl -fsS -o /dev/null -H "Authorization: Bearer $KEY" https://learn.example.com/api/cron/commerce
 ```
 
-On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `APP_SECRET` changes the key.
+On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `APP_SECRET` changes the key, so update `CRON_KEY` and your crontab afterwards. A wrong or missing key returns `401 Unauthorized`; test a URL once by hand (`curl -i -H "Authorization: Bearer $KEY" https://learn.example.com/api/cron/emails`) and expect `200` with a JSON summary.
 
 ## 6. Backups and restores
 
@@ -402,16 +405,25 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
    - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).
    - systemd/pm2: `npm ci && npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`. The build replaces `.next/` completely, which is why the data must live outside it (section 3); if `.next/standalone/storage/` exists, move it out first as described there.
 4. Database changes are applied automatically when the server starts. Check `/api/health` and *Admin → Error log*.
-5. After upgrading to a release that changes gamification, open *Admin → Settings → Points & leaderboard* and click **Recalculate points** once so existing activity is scored with the new rules.
+5. Run **Recalculate points** once after upgrading: *Admin → Settings → Points & leaderboard* (`/admin/settings/gamification`) → **Recalculate points from history** → **Recalculate**. It rescores existing lessons, quizzes and certificates with the current rules, so points and leaderboards stay correct when a release changed gamification. It is safe to run again.
 
-For developers: whenever `public/sw.js` changes, bump its `VERSION` constant. Installed apps only pick up a new service worker (and drop old cached pages) when that value changes.
+**Service worker version.** Whenever `public/sw.js` changes, bump its `VERSION` constant (for example `1.0.1` → `1.0.2`) in the same release. Installed apps only pick up a new service worker, and drop old cached pages, when that value changes.
 
-## 13. Pre-launch checklist
+## 13. Search engines: Search Console and the sitemap
+
+Do this once the site is live on its final `https://` address (canonical URLs and the sitemap are built from `APP_URL`) and *Admin → Settings → SEO → Hide the entire site from search engines* is off.
+
+1. **Verify the site.** In [Google Search Console](https://search.google.com/search-console) choose *Add property → URL prefix*, enter `https://learn.example.com` and pick **HTML tag**. Paste the tag (or its `content` value) into *Admin → Settings → SEO → Google Search Console*, save, then click **Verify** in Search Console. Bing Webmaster Tools works the same way (`msvalidate.01` tag).
+2. **Submit the sitemap.** In Search Console open **Sitemaps**, enter `https://learn.example.com/sitemap.xml` and click **Submit** (do the same in Bing). Once is enough: the sitemap is rebuilt on every request and splits into `/sitemaps/…` files above 50,000 addresses. `robots.txt` points crawlers to it and keeps them out of admin, account, checkout and API pages.
+3. **Check a page** with Search Console's URL inspection tool (home page and one course).
+4. **IndexNow** (Bing, Yandex and others) needs no setup: the key is generated on first publish and served at `/indexnow.txt`. After launch you can click **Send all pages** in *Admin → Settings → SEO → Indexing*.
+
+## 14. Pre-launch checklist
 
 - [ ] Legal pages (privacy policy, terms, refund policy, cookie policy) reviewed with a lawyer, edited and published (*Admin → Settings → Legal pages*; the "Template" banner disappears once edited). Cookie banner enabled if you use analytics or marketing pixels.
 - [ ] `APP_SECRET` set to a long random value and stored somewhere safe (a password manager), together with the rest of `.env`.
 - [ ] `APP_URL` is the final `https://` address; `TRUST_PROXY_HOPS` matches the number of proxies.
-- [ ] `SEED_DEMO_DATA=false`, and any demo accounts and demo courses removed (*Admin → Members*: search for `example.com` addresses).
+- [ ] `SEED_DEMO_DATA=false`, and the demo accounts and demo content removed: start from a fresh database, or in *Admin → Members* search for `learnloop.test` and delete or disable every demo account (`admin`, `maya`, `daniel`, `priya`, `alex`, `sofia`, `liam`, `emma`), whose password `password123` is public.
 - [ ] Administrator password changed and two-factor authentication turned on for every administrator.
 - [ ] Test purchase made with live keys (and refunded); the order, receipt email and enrolment all appeared; Stripe/Razorpay webhooks show successful deliveries.
 - [ ] Test email sent from *Admin → Settings → Email* and received (check the spam folder and SPF/DKIM results); password reset tried end to end.
@@ -419,4 +431,5 @@ For developers: whenever `public/sw.js` changes, bump its `VERSION` constant. In
 - [ ] HTTPS works on the domain (and `www` redirects); `http://` redirects to `https://`.
 - [ ] Scheduled jobs running: queued messages in *Admin → Outbox* are delivered within a minute or two.
 - [ ] `/api/health` returns `ok` and an uptime monitor watches it; *Admin → Error log* shows no open errors and no configuration warnings.
-- [ ] Google Search Console property verified, `https://learn.example.com/sitemap.xml` submitted, and the site checked in the URL inspection tool.
+- [ ] Google Search Console property verified, `https://learn.example.com/sitemap.xml` submitted, and the site checked in the URL inspection tool (section 13).
+- [ ] Ran **Recalculate points** once if you upgraded an existing database (section 12).
