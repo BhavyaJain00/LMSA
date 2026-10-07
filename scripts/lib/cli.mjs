@@ -71,8 +71,14 @@ export function parseArgs(argv, spec, aliases = {}) {
  * Read `.env.local` and `.env` from the project root the way the app does
  * (variables already set in the environment win), then resolve where the
  * data lives.
+ *
+ * With DB_DRIVER=postgres the data is not in these files, so the SQLite
+ * scripts stop (unless `allowPostgres`, for the copy script that reads the
+ * SQLite file on purpose).
+ *
+ * @param {{ allowPostgres?: boolean }} [options]
  */
-export function loadStorageConfig() {
+export function loadStorageConfig(options = {}) {
   for (const name of [".env.local", ".env"]) {
     const file = path.join(PROJECT_ROOT, name);
     if (!fs.existsSync(file)) continue;
@@ -82,7 +88,23 @@ export function loadStorageConfig() {
       throw new Error(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  if (!options.allowPostgres) assertNotPostgres(process.env);
   return resolveStorageConfig(process.env, PROJECT_ROOT);
+}
+
+/**
+ * Stop the SQLite/JSON scripts when the site runs on PostgreSQL: they would
+ * back up or restore a file the app no longer reads.
+ * @param {Record<string, string | undefined>} env
+ */
+export function assertNotPostgres(env) {
+  const driver = (env.DB_DRIVER ?? "").trim().toLowerCase();
+  if (driver === "postgres" || driver === "postgresql") {
+    throw new Error(
+      "DB_DRIVER=postgres: the data is in PostgreSQL, not in the SQLite file this command works on. " +
+        "Back up, download and restore from Admin → Settings → Backup & restore (JSON exports); your PostgreSQL host keeps its own backups too.",
+    );
+  }
 }
 
 /** A path given on the command line, relative to where the command was run. */

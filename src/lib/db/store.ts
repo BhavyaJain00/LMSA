@@ -9,7 +9,9 @@ import { buildSeedDatabase } from "./seed";
 import { StoreEngine, type EngineStats } from "./engine";
 import { JsonDriver } from "./json-driver";
 import { SqliteDriver } from "./sqlite";
-import { rawDataToJson, type RawData } from "./sqlite-core.mjs";
+import { PostgresDriver } from "./postgres";
+import { describeDatabaseUrl } from "./postgres-core.mjs";
+import { backupsDirFor, rawDataToJson, type RawData } from "./sqlite-core.mjs";
 import { automaticBackupState, automaticBackupsEnabled, nextLocalMidnight } from "./backup-core.mjs";
 import type { DriverKind, StoreDriver } from "./driver";
 
@@ -26,6 +28,9 @@ import type { DriverKind, StoreDriver } from "./driver";
  *    transaction. On first start an existing `storage/db.json` is imported
  *    and kept as `db.json.migrated-<timestamp>`.
  *  - `json`: the original single JSON file (DATA_FILE), rewritten on change.
+ *  - `postgres`: PostgreSQL (Supabase) through Prisma (DATABASE_URL), one
+ *    transaction per flush. An empty database is filled from the SQLite
+ *    file, else db.json, else the seed. Backups are JSON exports.
  *
  * `mutate()` runs callbacks one at a time, so read-check-write sequences in
  * one callback are safe against concurrent requests. See `engine.ts`.
@@ -170,8 +175,9 @@ const g = globalThis as unknown as {
 
 const resolvePath = (file: string) => path.resolve(/* turbopackIgnore: true */ process.cwd(), file);
 
-/** Absolute path of the database file for the configured driver. */
+/** Absolute path of the database file for the configured driver (PostgreSQL: the connection target without credentials). */
 export function databaseFile(driver: DriverKind = databaseEnv.driver): string {
+  if (driver === "postgres") return describeDatabaseUrl(databaseEnv.databaseUrl);
   return resolvePath(driver === "sqlite" ? databaseEnv.sqlitePath : siteConfig.dataFile);
 }
 
@@ -216,6 +222,16 @@ function legacySnapshot(previous: EngineHolder | undefined): (() => RawData | nu
 
 function createDriver(kind: DriverKind, snapshot: (() => RawData | null) | undefined): StoreDriver {
   if (kind === "json") return new JsonDriver(databaseFile("json"));
+  if (kind === "postgres") {
+    const sqliteFile = resolvePath(databaseEnv.sqlitePath);
+    return new PostgresDriver({
+      url: databaseEnv.databaseUrl,
+      collections: COLLECTIONS,
+      backupsDir: backupsDirFor(sqliteFile),
+      sqliteFile,
+      legacyJsonFile: resolvePath(siteConfig.dataFile),
+    });
+  }
   return new SqliteDriver({
     file: databaseFile("sqlite"),
     collections: COLLECTIONS,
@@ -236,7 +252,7 @@ function engine(): StoreEngine {
   const snapshot = kind === "sqlite" ? legacySnapshot(current) : undefined;
   if (current) {
     try {
-      current.engine.close();
+      void current.engine.close();
     } catch (err) {
       console.error("[store] could not close the previous store engine:", err);
     }
@@ -247,8 +263,10 @@ function engine(): StoreEngine {
     normalize,
     initialData: async () => toRawData(await buildInitialDatabase()),
     onOpen: (origin) => {
-      if (origin === "imported-json") console.info("[store] the JSON database was imported into SQLite.");
-      if (origin === "seeded") console.info(`[store] created a new ${kind === "sqlite" ? "SQLite" : "JSON"} database at ${file}.`);
+      const label = kind === "sqlite" ? "SQLite" : kind === "postgres" ? "PostgreSQL" : "JSON";
+      if (origin === "imported-json") console.info(`[store] the JSON database was imported into ${label}.`);
+      if (origin === "imported-sqlite") console.info("[store] the SQLite database was imported into PostgreSQL.");
+      if (origin === "seeded") console.info(`[store] created a new ${label} database at ${file}.`);
     },
   });
   g.__llStoreEngine = { engine: created, version: ENGINE_VERSION, driver: kind, file };

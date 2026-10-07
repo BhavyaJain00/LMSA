@@ -1,6 +1,6 @@
 # Deploying LearnLoop
 
-LearnLoop is a single Next.js server with an embedded SQLite database. Everything it stores (database, uploads, video renditions, backups) lives in one data folder: the `/app/storage` volume with Docker, or a folder outside the project such as `/opt/learnloop/storage` without Docker (see section 3 for why it must be outside). A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
+LearnLoop is a single Next.js server with an embedded SQLite database (or, optionally, PostgreSQL such as Supabase: see [section 15](#15-using-supabase--postgresql)). Everything it stores (database, uploads, video renditions, backups) lives in one data folder: the `/app/storage` volume with Docker, or a folder outside the project such as `/opt/learnloop/storage` without Docker (see section 3 for why it must be outside). A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
 
 Contents:
 
@@ -18,6 +18,7 @@ Contents:
 12. [Upgrading](#12-upgrading)
 13. [Search engines: Search Console and the sitemap](#13-search-engines-search-console-and-the-sitemap)
 14. [Pre-launch checklist](#14-pre-launch-checklist)
+15. [Using Supabase / PostgreSQL](#15-using-supabase--postgresql)
 
 ---
 
@@ -232,7 +233,9 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | with Stripe | See [section 7](#7-payments-stripe-and-razorpay-webhooks). |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | with Razorpay | See section 7. |
 | `STORAGE_DRIVER`, `S3_*` | no | Object storage, see [section 9](#9-object-storage-s3--r2-and-a-cdn). |
-| `DB_DRIVER` | no | `sqlite` (default). `json` is for development only. |
+| `DB_DRIVER` | no | `sqlite` (default), `postgres` (PostgreSQL / Supabase, see [section 15](#15-using-supabase--postgresql)). `json` is for development only. |
+| `DATABASE_URL`, `DIRECT_URL` | with `postgres` | The app's connection (Supabase: transaction pooler, port 6543, `?pgbouncer=true&connection_limit=5`) and the one `npm run prisma:migrate` uses (session pooler or direct, port 5432). The server refuses to start with `DB_DRIVER=postgres` and no `DATABASE_URL`. |
+| `TEST_DATABASE_URL` | tests only | A throwaway PostgreSQL for `npm run test:pg`; never a real site's database. |
 | `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | without Docker | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source; its folder also holds `seo/`), `storage/uploads`. Docker: keep the defaults (`docker-compose.yml` sets them). Without Docker: **absolute** paths outside the project, see section 3; a production server started from `.next/standalone` refuses relative ones. |
 | `IMAGE_HOSTS` | no | Extra HTTPS hosts the image optimizer (`/_next/image`) may fetch from, comma-separated (`cdn.example.com,*.example.org`). `APP_URL`, `S3_PUBLIC_BASE_URL` and the S3 bucket are always allowed; every other host is refused so the optimizer cannot be used as an open proxy. Read at build time. |
 | `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP` | no | Daily automatic backup on/off (default `true`) and how many daily backups to keep (default 14, 1–3650). |
@@ -246,7 +249,7 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `QUIZ_ATTEMPT_SECRET` | no | Separate signing key for quiz attempts (generated otherwise). |
 | `TZ` | no | Server time zone, used for dates printed on certificates (e.g. `Asia/Kolkata`). |
 | `APP_VERSION` | no | Shown by `/api/health` (the Docker build passes it through). |
-| `DOMAIN`, `ACME_EMAIL`, `CRON_KEY` | Docker only | Read by `docker-compose.yml` for Caddy and the cron service, not by the app. |
+| `DOMAIN`, `ACME_EMAIL`, `CRON_KEY`, `POSTGRES_PASSWORD` | Docker only | Read by `docker-compose.yml` for Caddy, the cron service and the optional `postgres` service, not by the app. |
 
 Development only, ignored in production: `LL_DEV_LOGIN` (test sign-in route; the server warns when it is set, so remove it), `WEBHOOKS_ALLOW_PRIVATE_NETWORK` (outgoing webhooks to localhost) and `DEBUG` (stack traces from the `npm run db:*` scripts). `.env.example` lists every variable with a one-line comment.
 
@@ -276,6 +279,8 @@ KEY=<cron key>
 On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `APP_SECRET` changes the key, so update `CRON_KEY` and your crontab afterwards. A wrong or missing key returns `401 Unauthorized`; test a URL once by hand (`curl -i -H "Authorization: Bearer $KEY" https://learn.example.com/api/cron/emails`) and expect `200` with a JSON summary.
 
 ## 6. Backups and restores
+
+> With `DB_DRIVER=postgres` the backups described here are JSON exports and the `db:backup`/`db:restore`/`db:export` scripts refuse to run; see [section 15](#15-using-supabase--postgresql).
 
 The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & restore* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in the `backups/` folder next to the database (`/app/storage/backups/` in Docker, `/opt/learnloop/storage/backups/` in the section 3 layout), taken safely while the app runs.
 
@@ -404,7 +409,7 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 3. Rebuild and restart:
    - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).
    - systemd/pm2: `npm ci && npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`. The build replaces `.next/` completely, which is why the data must live outside it (section 3); if `.next/standalone/storage/` exists, move it out first as described there.
-4. Database changes are applied automatically when the server starts. Check `/api/health` and *Admin → Error log*.
+4. SQLite database changes are applied automatically when the server starts. With `DB_DRIVER=postgres`, run `npm run prisma:migrate` before restarting (section 15); the server refuses to start while tables are missing. Check `/api/health` and *Admin → Error log*.
 5. Run **Recalculate points** once after upgrading: *Admin → Settings → Points & leaderboard* (`/admin/settings/gamification`) → **Recalculate points from history** → **Recalculate**. It rescores existing lessons, quizzes and certificates with the current rules, so points and leaderboards stay correct when a release changed gamification. It is safe to run again.
 
 **Service worker version.** Whenever `public/sw.js` changes, bump its `VERSION` constant (for example `1.0.1` → `1.0.2`) in the same release. Installed apps only pick up a new service worker, and drop old cached pages, when that value changes.
@@ -433,3 +438,46 @@ Do this once the site is live on its final `https://` address (canonical URLs an
 - [ ] `/api/health` returns `ok` and an uptime monitor watches it; *Admin → Error log* shows no open errors and no configuration warnings.
 - [ ] Google Search Console property verified, `https://learn.example.com/sitemap.xml` submitted, and the site checked in the URL inspection tool (section 13).
 - [ ] Ran **Recalculate points** once if you upgraded an existing database (section 12).
+
+## 15. Using Supabase / PostgreSQL
+
+SQLite on the app server's disk stays the default and needs nothing else. Set `DB_DRIVER=postgres` to keep the records in PostgreSQL instead, for example a [Supabase](https://supabase.com) project (any PostgreSQL 13 or newer works). The app works exactly the same: it still loads every record into memory at start-up and writes only what changed, one transaction per save, so it still runs as **one** server process (no second replica or serverless instance on the same database). Uploads, video renditions and backups remain files in the data folder (or object storage, section 9).
+
+**1. Create the database.** In Supabase create a project and note the database password. Under *Project Settings → Database → Connection string* (or the **Connect** button) copy two URLs:
+
+- the **transaction pooler** URL (port **6543**) for the app: add `?pgbouncer=true&connection_limit=5` (Prisma needs `pgbouncer=true` behind this pooler);
+- the **session pooler** URL (port **5432**) or the direct connection for schema changes.
+
+```sh
+DB_DRIVER=postgres
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=5
+DIRECT_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+A self-hosted PostgreSQL without a pooler uses the same URL for both (`postgresql://user:password@host:5432/learnloop`). Without a hosted database, `docker compose --profile postgres up -d` starts PostgreSQL 16 next to the app (user and database `learnloop`, password `POSTGRES_PASSWORD` from `.env`, port 5432 on 127.0.0.1 only; inside Compose the host name is `postgres`, see `docker-compose.yml`).
+
+**2. Create the tables** from a checkout of the app (`npm install` also runs `prisma generate`), with `DATABASE_URL` and `DIRECT_URL` set in `.env` or the shell:
+
+```sh
+npm run prisma:migrate          # prisma migrate deploy: applies prisma/migrations
+```
+
+Run it again after every upgrade that ships a new migration (section 12). The schema is generated from the store's collections (`npm run prisma:schema`, see `prisma/schema.prisma`): one table per collection with the document as `jsonb`, its array position, and indexed `user_id`/`course_id`/`lesson_id`/`slug`/`email` columns where the record has them.
+
+**3. Copy the data.** Either let the app do it on first start (an empty PostgreSQL database is filled from `SQLITE_PATH` when that file exists, else from `DATA_FILE`, else with the starting data), or copy it yourself, with the app stopped, and check the result:
+
+```sh
+npm run db:to-postgres -- --dry-run            # what would be copied
+npm run db:to-postgres                         # storage/lms.sqlite (SQLITE_PATH) → DATABASE_URL
+npm run db:to-postgres -- export.json          # or a JSON export / .sqlite backup
+```
+
+The copy runs in one transaction, compares the number of records per collection before it commits, and refuses a database that already holds data unless you add `--force`. The SQLite file is only read, never changed or deleted.
+
+**4. Switch.** Set `DB_DRIVER=postgres` and `DATABASE_URL` (Docker: in `.env`) and restart. *Admin → Settings → Backup & restore* shows *PostgreSQL*, the server version and the database size; `/api/health` checks the connection on every probe.
+
+**Backups.** Supabase backs the database up daily (point-in-time recovery on paid plans) under *Database → Backups*. The app's own backups (daily automatic, manual, before every restore) are JSON exports of all records in the backups folder next to `SQLITE_PATH`; download them from the admin page or copy that folder off the server as in section 6. Restores from the admin page work as with SQLite (a JSON export or a `.sqlite` backup replaces everything in one transaction). `pg_dump` against `DIRECT_URL` works too, but is not needed by the app.
+
+**Rolling back to SQLite.** Download a JSON export (*Backup & restore → Download → JSON*), stop the app, set `DB_DRIVER=sqlite`, run `npm run db:restore -- <export.json>` (it creates the SQLite database from the export, or replaces an old `lms.sqlite` after saving it as a safety backup; without this step the app would reopen the old SQLite data) and start the app. The PostgreSQL data is left as it was, so you can switch back again with `npm run db:to-postgres -- --force`.
+
+**Notes.** The app logs a warning when `DATABASE_URL` uses port 6543 without `pgbouncer=true`, or when `DIRECT_URL` is missing. PostgreSQL cannot store the NUL character (`\u0000`) in text, so it is saved as `U+FFFD`, and `jsonb` does not keep the order of keys inside a record (the app never relies on it). Integration tests run against a throwaway server: `TEST_DATABASE_URL=postgresql://postgres:test@localhost:54329/postgres npm run test:pg` (each run uses temporary `test_*` schemas and drops them).

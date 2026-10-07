@@ -4,7 +4,7 @@ This is the contract for everyone (people and AI agents) changing this LMS. Read
 
 ## Hard rules
 
-1. **No third-party runtime libraries.** Allowed runtime dependencies: `next`, `react`, `react-dom`, `server-only`. UI, player, forms, icons, Markdown, dates, crypto, mail (SMTP), payments, S3 signing and i18n are all hand-built. Never import transitive packages from `node_modules` (e.g. `zod`).
+1. **No third-party runtime libraries.** Allowed runtime dependencies: `next`, `react`, `react-dom`, `server-only`, and `@prisma/client` (only in the PostgreSQL driver, `src/lib/db/postgres.ts`, loaded on demand; `prisma` is its dev-time CLI). UI, player, forms, icons, Markdown, dates, crypto, mail (SMTP), payments, S3 signing and i18n are all hand-built. Never import transitive packages from `node_modules` (e.g. `zod`).
 2. **Never embed YouTube or Vimeo.** Videos are self-hosted, served through signed URLs and played by the custom HLS player in `src/components/player` (`VideoPlayer`) or, on lesson pages, `src/components/learn/lesson-video.tsx` (`LessonVideo`, which records watch progress).
 3. **Next.js 16 conventions** differ from older versions. Read the relevant guide in `node_modules/next/dist/docs/` first.
    - `params` and `searchParams` are Promises: `const { slug } = await props.params`.
@@ -19,7 +19,7 @@ This is the contract for everyone (people and AI agents) changing this LMS. Read
 - The database lives in memory; the SQLite driver (`src/lib/db/sqlite.ts`, `sqlite-core.mjs`, built-in `node:sqlite`) stores one JSON document per row, one table per collection, and writes only changed documents in one transaction per mutation. `DB_DRIVER=json` exists for development and tests.
 - `mutate()` runs callbacks one at a time. Put every read-check-write sequence in **one** `mutate` callback, and change documents through references obtained inside it. Never call `mutate`/`insert`/`update` from inside a `mutate` callback (it deadlocks).
 - With SQLite, documents and collections are tracking Proxies: `structuredClone()` cannot copy them. Clone documents (`{ ...doc }`, `JSON.parse(JSON.stringify(doc))`) or use `exportDatabase()`.
-- Entity shapes and collection names are in `src/lib/types.ts`. Add new fields as **optional**. A new collection needs its type in `Database` and its name in `COLLECTIONS` (`store.ts`); its table is created automatically. Schema changes go in `MIGRATIONS` (`sqlite-core.mjs`): append a step and bump `SCHEMA_VERSION`, never edit a released step.
+- Entity shapes and collection names are in `src/lib/types.ts`. Add new fields as **optional**. A new collection needs its type in `Database` and its name in `COLLECTIONS` (`store.ts`); its SQLite table is created automatically. For PostgreSQL run `npm run prisma:schema -- --name add_<collection>` and commit `prisma/schema.prisma`, `src/lib/db/postgres-tables.mjs` and the new migration (`tests/postgres-schema.test.ts` fails until you do). Schema changes go in `MIGRATIONS` (`sqlite-core.mjs`): append a step and bump `SCHEMA_VERSION`, never edit a released step.
 - Ids come from `uid("prefix")` (`src/lib/utils.ts`). Dates are ISO strings (`YYYY-MM-DD` for day-only values). Money is stored in the smallest currency unit (cents/paise).
 - Record administrative actions with `audit(actor, "area.verb", { type, id }, meta)` from `src/lib/audit.ts` (never put secrets or request bodies in `meta`).
 

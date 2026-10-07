@@ -21,7 +21,7 @@
 - Drip content and prerequisites, installable PWA with offline page, calendar (`.ics`) feeds, gamification (points, badges, streaks, leaderboard).
 
 **Round 3: market-ready**
-- **Data:** SQLite database (built-in `node:sqlite`) with automatic daily backups, restore and JSON export.
+- **Data:** SQLite database (built-in `node:sqlite`) with automatic daily backups, restore and JSON export; optionally PostgreSQL / Supabase through Prisma (`DB_DRIVER=postgres`, see [DEPLOYMENT.md](DEPLOYMENT.md#15-using-supabase--postgresql)).
 - **Media:** resumable chunked uploads up to 10 GB, local or S3/R2 storage, HLS conversion queue, adaptive-bitrate player, transcripts and automatic captions.
 - **Commerce:** membership plans and subscriptions, bundles, installments, gifts, upsells, taxes/VAT invoices and currencies, abandoned-checkout reminders.
 - **Growth:** affiliates, teams (seat purchases and invitations), instructor marketplace with revenue split and earnings, analytics.
@@ -97,7 +97,7 @@ src/
   components/   ui/ kit, player/ (HLS engine and controls), layout/, and one folder per feature area
   i18n/         interface languages (no library): config, negotiation, formatter, messages/<locale>/<namespace>.ts
   lib/
-    db/         store API, SQLite and JSON drivers, migrations, backups, seed data
+    db/         store API, SQLite, PostgreSQL (Prisma) and JSON drivers, migrations, backups, seed data
     actions/    Server Actions ("use server"), one file per area
     services/   shared domain logic (progress, enrollment, notifications, badges, points, drip, ...)
     data/       read models (courses, users)
@@ -125,6 +125,10 @@ src/
 | `npm run db:backup` | Back up the database (`-- --list` lists backups) |
 | `npm run db:restore -- <backup>` | Restore a backup (takes a safety backup first) |
 | `npm run db:export` | Export the database as JSON |
+| `npm run test:pg` | PostgreSQL tests; the integration part needs `TEST_DATABASE_URL` (a throwaway server) |
+| `npm run prisma:schema` | Regenerate `prisma/schema.prisma` (and a migration) after adding a collection |
+| `npm run prisma:migrate` | Create or update the PostgreSQL tables (`prisma migrate deploy`, needs `DIRECT_URL`) |
+| `npm run db:to-postgres` | Copy the SQLite database or a JSON export into an empty PostgreSQL database |
 
 ## Going live
 

@@ -133,6 +133,9 @@ export function checkEnvironment(env: Env, options: { production: boolean; cwd?:
     if (value(env, "DB_DRIVER").toLowerCase() === "json") warn("DB_DRIVER", "DB_DRIVER=json rewrites the whole database file on every change. Use the default SQLite driver in production.");
   }
 
+  // Database driver.
+  checkDatabase(env, { fail, warn });
+
   // Data inside the build output is deleted by the next `next build`.
   if (production && options.cwd && isInsideBuildOutput(options.cwd)) {
     for (const spec of DATA_PATH_DEFAULTS) {
@@ -191,6 +194,40 @@ export function checkEnvironment(env: Env, options: { production: boolean; cwd?:
   if (secureFlag && !TRUE.includes(secureFlag) && !FALSE.includes(secureFlag)) warn("COOKIE_SECURE", "COOKIE_SECURE must be true or false.");
 
   return { production, errors, warnings };
+}
+
+const DB_DRIVERS = ["sqlite", "json", "postgres", "postgresql"];
+
+/** DB_DRIVER and, for PostgreSQL, DATABASE_URL / DIRECT_URL. */
+function checkDatabase(env: Env, report: { fail: (key: string, message: string) => void; warn: (key: string, message: string) => void }): void {
+  const driver = value(env, "DB_DRIVER").toLowerCase();
+  if (driver && !DB_DRIVERS.includes(driver)) {
+    report.warn("DB_DRIVER", "DB_DRIVER must be sqlite, json or postgres; the default SQLite driver is used.");
+    return;
+  }
+  if (driver !== "postgres" && driver !== "postgresql") return;
+  const raw = value(env, "DATABASE_URL");
+  if (!raw) {
+    report.fail("DATABASE_URL", "DB_DRIVER=postgres needs DATABASE_URL (Supabase: Project Settings → Database → Connection string, the pooled URL on port 6543).");
+    return;
+  }
+  let url: URL | null = null;
+  try {
+    url = new URL(raw);
+  } catch {
+    url = null;
+  }
+  if (!url || (url.protocol !== "postgresql:" && url.protocol !== "postgres:")) {
+    report.fail("DATABASE_URL", "DATABASE_URL must be a postgresql:// connection string.");
+    return;
+  }
+  // Supabase's transaction pooler (port 6543) does not support prepared statements: Prisma must be told.
+  if (url.port === "6543" && url.searchParams.get("pgbouncer") !== "true") {
+    report.warn("DATABASE_URL", "DATABASE_URL uses the transaction pooler (port 6543) without ?pgbouncer=true; add it (and connection_limit=1…5) or queries fail.");
+  }
+  if (!value(env, "DIRECT_URL")) {
+    report.warn("DIRECT_URL", "DIRECT_URL is not set; `npm run prisma:migrate` needs it (Supabase: the direct or session-pooler connection on port 5432). It may equal DATABASE_URL without a pooler.");
+  }
 }
 
 /** True while `next build` runs (checks are skipped: build machines rarely have runtime secrets). */

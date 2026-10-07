@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Database } from "@/lib/types";
 import { ChangeTracker, changeSetSize, idOf, isEmptyChangeSet, type DiffMode, type DiffRequest, type PendingChanges, type StoredIdWalk } from "./changes";
 import { isBusyError, type RawData } from "./sqlite-core.mjs";
-import type { OpenOrigin, StoreDriver } from "./driver";
+import { after, type MaybePromise, type OpenOrigin, type StoreDriver } from "./driver";
 
 /**
  * The in-memory database plus its persistence, independent of the storage
@@ -265,7 +265,8 @@ export class StoreEngine {
   mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
     return this.enqueue(async () => {
       await this.getDb();
-      this.checkExternal(true);
+      const check = this.checkExternal(true);
+      if (check) await check;
       const marker: MutationScope = { active: true };
       this.mutating = true;
       try {
@@ -434,16 +435,30 @@ export class StoreEngine {
     return this.sweep(names);
   }
 
-  /** Write everything outstanding and release the storage. */
-  close(reason: "exit" | "close" = "close"): void {
+  /**
+   * Write everything outstanding and release the storage. Synchronous for
+   * synchronous drivers; with an asynchronous driver (PostgreSQL) the last
+   * write runs after the mutations already queued, and the returned promise
+   * settles once the connection is closed.
+   */
+  close(reason: "exit" | "close" = "close"): void | Promise<void> {
     if (this.closed) return;
-    if (this.db && this.tracker) this.writeEverything(reason);
+    const async = this.driver.asynchronous === true;
+    // Asynchronous: behind the mutations already queued (which may still be loading the database).
+    const final = !this.tracker ? undefined : async ? this.enqueue(() => (this.db ? this.writeEverything(reason) : true)) : this.db ? this.writeEverything(reason) : undefined;
     this.closed = true;
     for (const timer of [this.flushTimer, this.retryTimer, this.sweepTimer]) if (timer) clearTimeout(timer);
     this.flushTimer = this.retryTimer = this.sweepTimer = null;
     if (this.exitHandler) process.off("exit", this.exitHandler);
     this.exitHandler = null;
-    this.driver.close();
+    if (!async) {
+      void this.driver.close();
+      return;
+    }
+    return Promise.resolve(final)
+      .catch((err) => this.recordError("save the last changes", err))
+      .then(() => this.driver.close())
+      .catch((err) => this.recordError("close the database", err));
   }
 
   /* ------------------------------------------------------------------ */
@@ -460,7 +475,8 @@ export class StoreEngine {
     this.stats.origin = origin;
     this.stats.loadMs = Math.round(performance.now() - started);
     this.stats.loadedDocuments = Object.values(stored.collections).reduce((n, docs) => n + docs.length, 0);
-    if (this.driver.incremental && !this.exitHandler) {
+    // An asynchronous driver cannot write from an exit handler; its changes are written by the coalesced flush.
+    if (this.driver.incremental && !this.driver.asynchronous && !this.exitHandler) {
       // Last chance on shutdown: write what is outstanding and leave a complete database file.
       this.exitHandler = () => this.close("exit");
       process.on("exit", this.exitHandler);
@@ -885,7 +901,13 @@ export class StoreEngine {
   /** Cheap bookkeeping on every read: external-change check and sweep scheduling. */
   private afterRead(): void {
     if (!this.tracker) return;
-    if (this.queued === 0) this.checkExternal(false);
+    if (this.queued === 0) {
+      if (!this.driver.asynchronous) this.checkExternal(false);
+      else if (Date.now() - this.lastExternalCheck >= this.options.externalCheckMs) {
+        // Network storage: check (and reload) in the queue, so it never overlaps a write.
+        void this.enqueue(() => this.checkExternal(false));
+      }
+    }
     this.scheduleSweep();
   }
 
@@ -907,9 +929,10 @@ export class StoreEngine {
     this.cancelFlushTimer();
     if (!this.db || !this.dirty || this.closed) return true;
     if (!this.tracker) return this.persistWhole();
-    const ok = this.writeTracked();
-    if (ok) this.scheduleSweep();
-    return ok;
+    return after(this.writeTracked(), (ok) => {
+      if (ok) this.scheduleSweep();
+      return ok;
+    });
   }
 
   /** Write what was recorded (whole file for non-incremental drivers), whether or not the flush timer is due. */
@@ -949,31 +972,37 @@ export class StoreEngine {
   }
 
   /** Write the recorded changes; after a failure they are kept and a retry is scheduled. */
-  private writeTracked(): boolean {
+  private writeTracked(): MaybePromise<boolean> {
     this.cancelFlushTimer();
     const requests = this.takePending();
     this.dirty = false;
-    if (this.store(requests, "flush")) return true;
-    this.restorePending(requests);
-    this.dirty = true;
-    this.scheduleRetry();
-    return false;
+    return after(this.store(requests, "flush"), (stored) => {
+      if (stored) return true;
+      this.restorePending(requests);
+      this.dirty = true;
+      this.scheduleRetry();
+      return false;
+    });
   }
 
   /** Compare every collection with storage and write the differences; after a failure a retry is scheduled. */
-  private writeEverything(reason: WriteReason): boolean {
+  private writeEverything(reason: WriteReason): MaybePromise<boolean> {
     this.cancelFlushTimer();
     const requests = this.takePending();
     for (const name of this.collections) requests.push({ name, mode: "full" });
     this.dirty = false;
-    if (this.store(requests, reason)) {
-      this.accessed.clear();
-      return true;
-    }
-    this.restorePending(requests);
-    this.dirty = true;
-    this.scheduleRetry();
-    return false;
+    // Collections handed out while an asynchronous write is in flight still need the sweep.
+    const compared = [...this.accessed];
+    return after(this.store(requests, reason), (stored) => {
+      if (stored) {
+        for (const name of compared) this.accessed.delete(name);
+        return true;
+      }
+      this.restorePending(requests);
+      this.dirty = true;
+      this.scheduleRetry();
+      return false;
+    });
   }
 
   private async replaceAllNow(data: RawData, source: string): Promise<void> {
@@ -989,18 +1018,29 @@ export class StoreEngine {
    * transaction. Returns the diff, or null (logged) when it could not be
    * computed or stored; the tracker then still describes the storage.
    */
-  private store(requests: DiffRequest[], reason: WriteReason): PendingChanges | null {
+  private store(requests: DiffRequest[], reason: WriteReason): MaybePromise<PendingChanges | null> {
     const db = this.db!;
     const started = performance.now();
     let pending: PendingChanges;
-    try {
-      pending = this.tracker!.diff(db as unknown as Loose, requests, db.settings);
-      // Incremental drivers write synchronously (see StoreDriver.incremental).
-      if (!isEmptyChangeSet(pending.changeSet)) void this.driver.persist(this.raw(db), pending.changeSet);
-    } catch (err) {
+    let write: MaybePromise<void> = undefined;
+    const failed = (err: unknown): null => {
       this.recordError(isBusyError(err) ? "save changes (the database is locked by another process)" : `save changes (${reason})`, err);
       return null;
+    };
+    try {
+      pending = this.tracker!.diff(db as unknown as Loose, requests, db.settings);
+      // Synchronous drivers have written when persist() returns. Asynchronous ones are only
+      // called from the queue (writes never overlap) and the diff is adopted once they finish.
+      if (!isEmptyChangeSet(pending.changeSet)) write = this.driver.persist(this.raw(db), pending.changeSet);
+    } catch (err) {
+      return failed(err);
     }
+    if (write instanceof Promise) return write.then(() => this.adopt(pending, started), failed);
+    return this.adopt(pending, started);
+  }
+
+  /** Adopt a stored diff in the tracker and count it. */
+  private adopt(pending: PendingChanges, started: number): PendingChanges {
     this.tracker!.commit(pending);
     this.failures = 0;
     this.stats.documentsCompared += pending.compared;
@@ -1113,11 +1153,15 @@ export class StoreEngine {
    * where the engine could not see it) is the collection settled with one
    * `identity` diff.
    */
-  private sweepSlice(cursor: SweepCursor): { ok: boolean; ms: number } {
+  private async sweepSlice(cursor: SweepCursor): Promise<{ ok: boolean; ms: number }> {
     const started = performance.now();
     const result = (ok: boolean) => ({ ok, ms: performance.now() - started });
+    // Synchronous drivers never reach an `await` below, so their slice still runs in one go.
     if (!this.db || !this.tracker || this.closed) return result(true);
-    if ((this.pending.size || this.dirty) && !this.writeTracked()) return result(false);
+    if (this.pending.size || this.dirty) {
+      const written = this.writeTracked();
+      if (!(written instanceof Promise ? await written : written)) return result(false);
+    }
     const source = this.db as unknown as Loose;
     const nextCollection = () => {
       cursor.collection++;
@@ -1132,7 +1176,8 @@ export class StoreEngine {
       if (!cursor.walk.valid()) {
         // Ids were removed or renumbered by a tracked write between slices: walk again from the start.
         if (++cursor.restarts > MAX_WALK_RESTARTS) {
-          if (!this.sweepStore(name, "identity", [], cursor)) return result(false);
+          const stored = this.sweepStore(name, "identity", [], cursor);
+          if (!(stored instanceof Promise ? await stored : stored)) return result(false);
           nextCollection();
           continue;
         }
@@ -1141,7 +1186,8 @@ export class StoreEngine {
       }
       const end = Math.min(docs.length, cursor.index + SWEEP_CHUNK);
       const chunk = docs.slice(cursor.index, end);
-      if (!this.sweepStore(name, "candidates", chunk, cursor)) return result(false);
+      const compared = this.sweepStore(name, "candidates", chunk, cursor);
+      if (!(compared instanceof Promise ? await compared : compared)) return result(false);
       // Membership and order: the chunk's ids must be the next stored ids.
       const walk = cursor.walk;
       let aligned = walk.valid();
@@ -1153,7 +1199,8 @@ export class StoreEngine {
       if (aligned && last && walk.next() !== null) aligned = false;
       if (!aligned && walk.valid()) {
         // A real difference (or a duplicate id): settle the whole collection at once.
-        if (!this.sweepStore(name, "identity", [], cursor)) return result(false);
+        const settledAll = this.sweepStore(name, "identity", [], cursor);
+        if (!(settledAll instanceof Promise ? await settledAll : settledAll)) return result(false);
         nextCollection();
       } else if (!aligned) {
         // Invalidated during this chunk; the next round restarts the walk.
@@ -1169,18 +1216,19 @@ export class StoreEngine {
   }
 
   /** One sweep comparison: store what differs and report it as changes the engine could not see. */
-  private sweepStore(name: string, mode: DiffMode, candidates: unknown[], cursor: SweepCursor): boolean {
-    const found = this.store([{ name, mode, candidates }], "sweep");
-    if (!found) {
-      this.scheduleRetry();
-      return false;
-    }
-    cursor.compared += found.compared;
-    for (const change of found.changeSet.collections) {
-      this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
-    }
-    if (found.changeSet.settings !== null) this.reportUntracked("the settings", 1);
-    return true;
+  private sweepStore(name: string, mode: DiffMode, candidates: unknown[], cursor: SweepCursor): MaybePromise<boolean> {
+    return after(this.store([{ name, mode, candidates }], "sweep"), (found) => {
+      if (!found) {
+        this.scheduleRetry();
+        return false;
+      }
+      cursor.compared += found.compared;
+      for (const change of found.changeSet.collections) {
+        this.reportUntracked(`"${change.name}"`, change.upserts.length + change.deletes.length + (change.order ? 1 : 0));
+      }
+      if (found.changeSet.settings !== null) this.reportUntracked("the settings", 1);
+      return true;
+    });
   }
 
   private reportUntracked(what: string, documents: number): void {
@@ -1195,35 +1243,53 @@ export class StoreEngine {
   /* External changes                                                    */
   /* ------------------------------------------------------------------ */
 
-  private checkExternal(force: boolean): void {
+  /** Returns a promise only with an asynchronous driver (synchronous drivers check and reload in one go). */
+  private checkExternal(force: boolean): void | Promise<void> {
     if (!this.tracker || !this.db || this.closed) return;
     const now = Date.now();
     if (!force && now - this.lastExternalCheck < this.options.externalCheckMs) return;
     this.lastExternalCheck = now;
-    if (!this.reloadNeeded) {
-      try {
-        this.reloadNeeded = this.driver.hasExternalChanges();
-      } catch (err) {
-        this.recordError("check the database for outside changes", err);
-        return;
-      }
-      if (!this.reloadNeeded) return;
-    }
-    // Keep this process's unsaved edits (they win per document), then read everything again.
-    // If they cannot be written now, the cache is kept and the reload is tried again at the next check.
-    if (!this.writeEverything("reload")) return;
-    let data: RawData;
+    if (this.reloadNeeded) return this.reloadExternal();
+    const failed = (err: unknown) => this.recordError("check the database for outside changes", err);
+    let changed: MaybePromise<boolean>;
     try {
-      data = this.driver.reload();
+      changed = this.driver.hasExternalChanges();
     } catch (err) {
-      this.recordError("reload the database after an outside change", err);
+      failed(err);
       return;
     }
-    const db = this.options.normalize(data);
-    this.install(db, this.raw(db));
-    this.reloadNeeded = false;
-    this.stats.externalReloads++;
-    console.info("[store] the database was changed by another process; reloaded it.");
+    const decide = (value: boolean): void | Promise<void> => {
+      this.reloadNeeded = value;
+      if (value) return this.reloadExternal();
+    };
+    if (changed instanceof Promise) return changed.then(decide, failed);
+    return decide(changed);
+  }
+
+  private reloadExternal(): void | Promise<void> {
+    const failed = (err: unknown) => this.recordError("reload the database after an outside change", err);
+    const adopt = (data: RawData) => {
+      if (this.closed) return;
+      const db = this.options.normalize(data);
+      this.install(db, this.raw(db));
+      this.reloadNeeded = false;
+      this.stats.externalReloads++;
+      console.info("[store] the database was changed by another process; reloaded it.");
+    };
+    // Keep this process's unsaved edits (they win per document), then read everything again.
+    // If they cannot be written now, the cache is kept and the reload is tried again at the next check.
+    return after(this.writeEverything("reload"), (written): void | Promise<void> => {
+      if (!written) return;
+      let data: MaybePromise<RawData>;
+      try {
+        data = this.driver.reload();
+      } catch (err) {
+        failed(err);
+        return;
+      }
+      if (data instanceof Promise) return data.then(adopt, failed);
+      adopt(data);
+    });
   }
 }
 

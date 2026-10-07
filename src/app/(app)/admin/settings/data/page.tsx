@@ -5,6 +5,7 @@ import { requireRole } from "@/lib/auth/session";
 import { siteConfig } from "@/lib/config";
 import { MAX_BACKUP_UPLOAD_BYTES, getBackupManager, type BackupInfo, type StorageOverview } from "@/lib/db/backup";
 import { BUSY_TIMEOUT_MS } from "@/lib/db/sqlite-core.mjs";
+import { databaseFile } from "@/lib/db/store";
 import { StatCard } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
@@ -26,6 +27,7 @@ const STALE_BACKUP_MS = 48 * 60 * 60 * 1000;
 const ORIGIN_LABELS: Record<NonNullable<StorageOverview["stats"]["origin"]>, string> = {
   existing: "Opened an existing database",
   "imported-json": "Imported from the JSON database",
+  "imported-sqlite": "Imported from the SQLite database",
   seeded: "Created with starting data",
 };
 
@@ -145,6 +147,7 @@ export default async function DataSettingsPage() {
   const [overview, uploads] = await Promise.all([manager.overview(), uploadsUsage(uploadPath)]);
   const { info, stats, automatic } = overview;
   const sqlite = info.driver === "sqlite";
+  const postgres = info.driver === "postgres";
   const now = new Date();
 
   // A write error matters until a later write succeeded.
@@ -183,7 +186,13 @@ export default async function DataSettingsPage() {
             <Command>DB_AUTO_BACKUP</Command> is off, so only the backups you create here or with <Command>npm run db:backup</Command> exist.
           </Notice>
         )}
-        {!sqlite && (
+        {postgres && (
+          <Notice tone="info" title="This site stores its data in PostgreSQL">
+            Backups made here are JSON exports of the whole database, written to the server&apos;s disk. Your PostgreSQL host keeps its own backups as well (on Supabase: Database →
+            Backups, daily, with point-in-time recovery on paid plans).
+          </Notice>
+        )}
+        {info.driver === "json" && (
           <Notice tone="info" title="This site stores its data in a JSON file">
             <Command>DB_DRIVER=json</Command> rewrites the whole file on every change. Remove the setting and restart to move the data into SQLite automatically (the JSON file is kept).
           </Notice>
@@ -200,7 +209,7 @@ export default async function DataSettingsPage() {
         <StatCard
           label="Database size"
           value={info.sizeBytes === null ? "—" : formatBytes(info.sizeBytes)}
-          hint={info.modifiedAt ? `Written ${relativeTime(info.modifiedAt, now)}` : "Not written to disk yet"}
+          hint={info.modifiedAt ? `Written ${relativeTime(info.modifiedAt, now)}` : postgres ? "Tables and indexes in PostgreSQL" : "Not written to disk yet"}
           icon={<Icon.Database className="size-5" />}
         />
         <StatCard
@@ -229,25 +238,36 @@ export default async function DataSettingsPage() {
         <div className="px-4 py-4 sm:px-5">
           <BackupsManager backups={toRows(overview.backups, now)} storageFormat={sqlite ? "sqlite" : "json"} maxUploadBytes={MAX_BACKUP_UPLOAD_BYTES} />
           <p className="mt-4 break-all text-xs text-ink-muted">
-            Stored in <span className="font-mono">{overview.backupsDir}</span>, on the same disk as the database. Download important backups or copy this folder to another machine.
+            Stored in <span className="font-mono">{overview.backupsDir}</span>
+            {postgres ? ", on the app server's disk." : ", on the same disk as the database."} Download important backups or copy this folder to another machine.
           </p>
         </div>
       </SettingsSection>
 
       <SettingsSection title="Database" description="Where the data lives and how it is being written." className="mt-6">
-        <InfoRow label="Storage" description={sqlite ? "SQLite through Node's built-in driver. Only changed records are written." : "One JSON file, rewritten on every change."}>
+        <InfoRow
+          label="Storage"
+          description={
+            sqlite
+              ? "SQLite through Node's built-in driver. Only changed records are written."
+              : postgres
+                ? "PostgreSQL through Prisma. Every record is held in memory; only changed records are written, one transaction per save."
+                : "One JSON file, rewritten on every change."
+          }
+        >
           <p className="flex flex-wrap items-center gap-2 sm:justify-end">
-            <Badge tone={sqlite ? "success" : "neutral"} size="xs">
-              {sqlite ? "SQLite" : "JSON file"}
+            <Badge tone={sqlite || postgres ? "success" : "neutral"} size="xs">
+              {sqlite ? "SQLite" : postgres ? "PostgreSQL" : "JSON file"}
             </Badge>
             {sqlite && info.sqliteVersion && <span className="text-xs text-ink-muted">SQLite {info.sqliteVersion}</span>}
+            {postgres && info.serverVersion && <span className="text-xs text-ink-muted">{info.serverVersion}</span>}
             {info.schemaVersion !== null && <span className="text-xs text-ink-muted">schema {info.schemaVersion}</span>}
           </p>
         </InfoRow>
-        <InfoRow label="File">
+        <InfoRow label={postgres ? "Database" : "File"}>
           <p className="break-all font-mono text-[13px]">{info.file}</p>
           <p className="mt-0.5 text-xs text-ink-muted">
-            {info.sizeBytes === null ? "Not created yet" : formatBytes(info.sizeBytes)}
+            {info.sizeBytes === null ? (postgres ? "Size unknown" : "Not created yet") : formatBytes(info.sizeBytes)}
             {sqlite && info.walBytes ? ` (${formatBytes(info.walBytes)} in the write-ahead log)` : ""}
             {info.modifiedAt && ` · written ${formatDateTime(info.modifiedAt)}`}
           </p>
@@ -295,8 +315,10 @@ export default async function DataSettingsPage() {
             <h4 className="font-medium text-ink">Run one app process per database</h4>
             <p className="mt-0.5">
               {sqlite ? "SQLite lets one process write at a time, and the" : "The"} app keeps the whole database in memory. Run a single server process (one{" "}
-              <Command>npm start</Command>, no cluster mode, no second replica or serverless instance on the same {sqlite ? "file" : "JSON file"}). A second process would wait for the
-              write lock (up to {formatNumber(BUSY_TIMEOUT_MS / 1000)} seconds, then the change fails with “database is locked”){sqlite ? "" : " or overwrite the other process's changes"}.
+              <Command>npm start</Command>, no cluster mode, no second replica or serverless instance on the same {sqlite ? "file" : postgres ? "database" : "JSON file"}).{" "}
+              {postgres
+                ? "A second process would only notice the other's changes by reloading everything, and edits made at the same moment can overwrite each other."
+                : `A second process would wait for the write lock (up to ${formatNumber(BUSY_TIMEOUT_MS / 1000)} seconds, then the change fails with “database is locked”)${sqlite ? "" : " or overwrite the other process's changes"}.`}{" "}
               Scale up with a larger server rather than more processes.
             </p>
           </div>
@@ -321,8 +343,16 @@ export default async function DataSettingsPage() {
           <div>
             <h4 className="font-medium text-ink">Keep the storage folder on a persistent local disk</h4>
             <p className="mt-0.5">
-              Mount <span className="font-mono">storage/</span> on a volume that survives restarts and redeploys. Do not put the database on a network share (NFS, SMB): file locking there is not
-              reliable and can damage it.
+              {postgres ? (
+                <>
+                  The records live in PostgreSQL, but backups and uploads are files: mount <span className="font-mono">storage/</span> on a volume that survives restarts and redeploys.
+                </>
+              ) : (
+                <>
+                  Mount <span className="font-mono">storage/</span> on a volume that survives restarts and redeploys. Do not put the database on a network share (NFS, SMB): file locking there
+                  is not reliable and can damage it.
+                </>
+              )}
             </p>
           </div>
           <div>
@@ -332,7 +362,23 @@ export default async function DataSettingsPage() {
               <span className="font-mono">{siteConfig.uploadDir}</span>) are not part of database backups: copy that folder too.
             </p>
           </div>
-          <div>
+          {postgres && (
+            <div>
+              <h4 className="font-medium text-ink">Command line, on the server</h4>
+              <ul className="mt-1 space-y-1.5">
+                <li>
+                  <Command>npm run prisma:migrate</Command> creates or updates the tables after an upgrade (needs <Command>DIRECT_URL</Command>).
+                </li>
+                <li>
+                  <Command>npm run db:to-postgres</Command> copies a SQLite database or JSON export into an empty PostgreSQL database.
+                </li>
+                <li>
+                  To go back to SQLite, download a JSON export here, set <Command>DB_DRIVER=sqlite</Command> and restore the export (see DEPLOYMENT.md).
+                </li>
+              </ul>
+            </div>
+          )}
+          <div hidden={postgres}>
             <h4 className="font-medium text-ink">Command line, on the server</h4>
             <ul className="mt-1 space-y-1.5">
               <li>
@@ -346,7 +392,7 @@ export default async function DataSettingsPage() {
               </li>
             </ul>
           </div>
-          <div>
+          <div hidden={!sqlite}>
             <h4 className="font-medium text-ink">If the server will not start because the database is damaged</h4>
             <p className="mt-0.5">
               Every start runs SQLite&apos;s quick integrity check and stops with instructions when it fails, rather than serving damaged data. Stop the app, run{" "}
@@ -361,8 +407,23 @@ export default async function DataSettingsPage() {
         description="Deployment values read from your .env file when the server started. Edit .env and restart the server to change them."
         className="mt-6"
       >
-        <EnvRow name="DB_DRIVER" env={fromEnv("DB_DRIVER")} description="Where the data is stored: sqlite (default) or json (the original single JSON file)." value={info.driver} />
-        {sqlite ? (
+        <EnvRow
+          name="DB_DRIVER"
+          env={fromEnv("DB_DRIVER")}
+          description="Where the data is stored: sqlite (default), postgres (PostgreSQL or Supabase) or json (the original single JSON file)."
+          value={info.driver}
+        />
+        {postgres ? (
+          <>
+            <EnvRow name="DATABASE_URL" env={fromEnv("DATABASE_URL")} description="The PostgreSQL connection (shown without the user name and password)." value={info.file} />
+            <EnvRow
+              name="SQLITE_PATH"
+              env={fromEnv("SQLITE_PATH")}
+              description="Copied into PostgreSQL when the database is empty. Backups go to a backups folder next to it."
+              value={databaseFile("sqlite")}
+            />
+          </>
+        ) : sqlite ? (
           <EnvRow name="SQLITE_PATH" env={fromEnv("SQLITE_PATH")} description="The SQLite database file. Relative paths start at the project root. Backups go to a backups folder next to it." value={info.file} />
         ) : (
           <EnvRow name="DATA_FILE" env={fromEnv("DATA_FILE")} description="The JSON database file. Relative paths start at the project root." value={info.file} />

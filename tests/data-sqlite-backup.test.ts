@@ -612,10 +612,10 @@ describe("BackupManager on a running SQLite store", () => {
     const engine = sqliteEngine(path.join(folder(), "lms.sqlite"));
     const manager = new BackupManager(engine);
     await manager.create({ kind: "auto", date: new Date(2026, 8, 30) });
-    const quick = manager.checkIntegrity("quick");
+    const quick = await manager.checkIntegrity("quick");
     assert.equal(quick.ok, true);
     assert.deepEqual(quick.messages, []);
-    assert.equal(manager.checkIntegrity("full").mode, "full");
+    assert.equal((await manager.checkIntegrity("full")).mode, "full");
 
     const overview = await manager.overview();
     assert.equal(overview.info.driver, "sqlite");

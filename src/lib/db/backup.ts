@@ -449,11 +449,14 @@ export class BackupManager {
     }
   }
 
-  /** `PRAGMA quick_check` (or the thorough `integrity_check`) on the live database. */
-  checkIntegrity(mode: "quick" | "full"): IntegrityReport {
+  /**
+   * `PRAGMA quick_check` (or the thorough `integrity_check`) on the live
+   * SQLite database; for PostgreSQL a connectivity check plus row counts.
+   */
+  async checkIntegrity(mode: "quick" | "full"): Promise<IntegrityReport> {
     const started = performance.now();
     try {
-      const result = this.engine.driver.checkIntegrity(mode);
+      const result = await this.engine.driver.checkIntegrity(mode);
       return { ok: result.ok, mode, messages: result.ok ? [] : result.messages.slice(0, 20), ms: Math.round(performance.now() - started) };
     } catch (err) {
       return { ok: false, mode, messages: [messageOf(err)], ms: Math.round(performance.now() - started) };

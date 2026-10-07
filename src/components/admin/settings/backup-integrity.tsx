@@ -11,7 +11,7 @@ import { useFormAction } from "./use-form-action";
  * "Quick" is what the server runs at every start; "full" also verifies the
  * indexes and takes longer on a large database.
  */
-export function BackupIntegrity({ driver }: { driver: "sqlite" | "json" }) {
+export function BackupIntegrity({ driver }: { driver: "sqlite" | "json" | "postgres" }) {
   const t = useT("admin");
   const f = useFormatter();
   const { state, pending, submit } = useFormAction(checkIntegrityAction, { toastSuccess: false });
@@ -29,14 +29,14 @@ export function BackupIntegrity({ driver }: { driver: "sqlite" | "json" }) {
         <div className="min-w-0 sm:max-w-md">
           <p className="text-sm font-medium text-ink">{t("backups.integrity.title")}</p>
           <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">
-            {driver === "sqlite" ? t("backups.integrity.sqliteHint") : t("backups.integrity.jsonHint")}
+            {driver === "sqlite" ? t("backups.integrity.sqliteHint") : driver === "postgres" ? t("backups.integrity.postgresHint") : t("backups.integrity.jsonHint")}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button variant="outline" size="sm" loading={pending} leftIcon={<Icon.ShieldCheck className="size-4" />} onClick={() => run("quick")}>
-            {driver === "sqlite" ? t("backups.integrity.quick") : t("backups.integrity.checkFile")}
+            {driver === "json" ? t("backups.integrity.checkFile") : t("backups.integrity.quick")}
           </Button>
-          {driver === "sqlite" && (
+          {driver !== "json" && (
             <Button variant="outline" size="sm" disabled={pending} onClick={() => run("full")}>
               {t("backups.integrity.full")}
             </Button>
@@ -62,7 +62,7 @@ export function BackupIntegrity({ driver }: { driver: "sqlite" | "json" }) {
                 <li key={index}>{message}</li>
               ))}
             </ul>
-            <p className="mt-2 text-ink">
+            <p className="mt-2 text-ink" hidden={driver === "postgres"}>
               {t.rich("backups.integrity.recover", {
                 command: "npm run db:restore -- latest",
                 code: (chunks) => (

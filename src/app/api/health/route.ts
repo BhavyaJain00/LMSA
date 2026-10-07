@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { NextResponse } from "next/server";
 import { siteConfig } from "@/lib/config";
 import { databaseEnv, mediaEnv } from "@/lib/server-env";
-import { getDb } from "@/lib/db/store";
+import { getStoreEngine } from "@/lib/db/store";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { publicHealthReport, type HealthCheck as Check, type HealthReport } from "./report";
 
@@ -42,16 +42,20 @@ async function timed(fn: () => Promise<string | undefined>): Promise<Check> {
   }
 }
 
+/** The store is loaded; a network database (PostgreSQL) must also answer right now. Admins see which driver runs. */
 async function checkDatabase(): Promise<string | undefined> {
-  const db = await getDb();
+  const engine = await getStoreEngine();
+  const db = await engine.getDb();
   if (!db.settings || !Array.isArray(db.users)) throw new Error("database not loaded");
-  return undefined;
+  if (engine.driver.ping) await engine.driver.ping();
+  return engine.driver.kind;
 }
 
 /** Write and remove a probe file in the database and upload folders. */
 async function checkStorage(): Promise<string | undefined> {
   const root = process.cwd();
-  const dataFile = databaseEnv.driver === "sqlite" ? databaseEnv.sqlitePath : siteConfig.dataFile;
+  // SQLite file, JSON file, or (PostgreSQL) the folder of the JSON backups next to SQLITE_PATH.
+  const dataFile = databaseEnv.driver === "json" ? siteConfig.dataFile : databaseEnv.sqlitePath;
   const dirs = Array.from(new Set([path.dirname(dataFile), siteConfig.uploadDir].map((d) => path.resolve(/* turbopackIgnore: true */ root, d))));
   for (const dir of dirs) {
     await fs.mkdir(dir, { recursive: true });

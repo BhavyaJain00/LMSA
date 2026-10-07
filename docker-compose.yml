@@ -79,6 +79,39 @@ services:
         target: /etc/crontabs/root
     command: ["crond", "-f", "-l", "8", "-c", "/etc/crontabs"]
 
+  # Optional PostgreSQL for DB_DRIVER=postgres when you do not use Supabase or
+  # another hosted database (DEPLOYMENT.md, section 15):
+  #
+  #   docker compose --profile postgres up -d
+  #
+  # then in .env: DB_DRIVER=postgres,
+  #   DATABASE_URL=postgresql://learnloop:${POSTGRES_PASSWORD}@postgres:5432/learnloop
+  #   DIRECT_URL=<the same URL>
+  # and run `npm run prisma:migrate` once (from the host, use localhost:5432).
+  # Not published beyond 127.0.0.1; its data lives in the `postgres` volume.
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: learnloop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learnloop}
+      POSTGRES_DB: learnloop
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnloop -d learnloop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 configs:
   crontab:
     content: |
@@ -92,3 +125,4 @@ volumes:
   storage:
   caddy_data:
   caddy_config:
+  postgres:

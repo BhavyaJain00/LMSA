@@ -399,6 +399,7 @@ const adminMessages: Translation<typeof en> = {
   "backups.integrity.title": "Contrôle d'intégrité",
   "backups.integrity.sqliteHint": "Demande à SQLite de vérifier le fichier de la base de données. Le contrôle rapide s'exécute aussi à chaque démarrage du serveur ; le contrôle complet vérifie également les index et prend plus de temps sur une base volumineuse.",
   "backups.integrity.jsonHint": "Relit depuis le disque le fichier JSON de la base de données et vérifie qu'il peut être analysé.",
+  "backups.integrity.postgresHint": "Vérifie que le serveur PostgreSQL répond et que toutes les tables existent. La vérification complète confirme aussi que l'id et les colonnes indexées de chaque enregistrement correspondent à l’enregistrement.",
   "backups.integrity.quick": "Contrôle rapide",
   "backups.integrity.checkFile": "Vérifier le fichier",
   "backups.integrity.full": "Contrôle complet",

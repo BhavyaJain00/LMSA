@@ -403,6 +403,7 @@ const adminMessages = {
   "backups.integrity.title": "Integrity check",
   "backups.integrity.sqliteHint": "Asks SQLite to verify the database file. The quick check also runs every time the server starts; the full check verifies the indexes too and takes longer on a large database.",
   "backups.integrity.jsonHint": "Reads the JSON database file back from disk and checks that it can be parsed.",
+  "backups.integrity.postgresHint": "Checks that the PostgreSQL server answers and every table exists. The full check also confirms that each record's id and indexed columns match the record.",
   "backups.integrity.quick": "Quick check",
   "backups.integrity.checkFile": "Check file",
   "backups.integrity.full": "Full check",

@@ -399,6 +399,7 @@ const adminMessages: Translation<typeof en> = {
   "backups.integrity.title": "अखंडता जाँच",
   "backups.integrity.sqliteHint": "SQLite से डेटाबेस फ़ाइल की जाँच करवाता है। त्वरित जाँच हर बार सर्वर शुरू होने पर भी चलती है; पूरी जाँच इंडेक्स की भी पुष्टि करती है और बड़े डेटाबेस पर ज़्यादा समय लेती है।",
   "backups.integrity.jsonHint": "JSON डेटाबेस फ़ाइल को डिस्क से दोबारा पढ़ता है और जाँचता है कि उसे पार्स किया जा सकता है।",
+  "backups.integrity.postgresHint": "जाँचता है कि PostgreSQL सर्वर जवाब देता है और हर टेबल मौजूद है। पूरी जाँच यह भी पुष्टि करती है कि हर रिकॉर्ड की id और इंडेक्स किए गए कॉलम रिकॉर्ड से मेल खाते हैं।",
   "backups.integrity.quick": "त्वरित जाँच",
   "backups.integrity.checkFile": "फ़ाइल जाँचें",
   "backups.integrity.full": "पूरी जाँच",

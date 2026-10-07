@@ -134,7 +134,7 @@ export async function checkIntegrityAction(_prev: ActionResult<IntegrityReport> 
   const mode = fd(formData, "mode") === "full" ? "full" : "quick";
   try {
     const manager = await getBackupManager();
-    const report = manager.checkIntegrity(mode);
+    const report = await manager.checkIntegrity(mode);
     return { ok: true, data: report, message: report.ok ? "No problems found" : "The check found problems" };
   } catch (err) {
     return { ok: false, error: describeBackupFailure(err, "The integrity check could not run. Please try again.").error };

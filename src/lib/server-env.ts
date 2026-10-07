@@ -135,13 +135,23 @@ export const aiEnv = {
   anthropicApiKey: read("ANTHROPIC_API_KEY"),
 };
 
-export type DatabaseDriver = "json" | "sqlite";
+export type DatabaseDriver = "json" | "sqlite" | "postgres";
+
+/** DB_DRIVER: "json", "postgres" (also "postgresql"), anything else is the default "sqlite". */
+export function parseDatabaseDriver(value: string | undefined): DatabaseDriver {
+  const v = (value ?? "").trim().toLowerCase();
+  if (v === "json") return "json";
+  if (v === "postgres" || v === "postgresql") return "postgres";
+  return "sqlite";
+}
 
 /** Which database backend the store uses. */
 export const databaseEnv = {
-  driver: (read("DB_DRIVER").toLowerCase() === "json" ? "json" : "sqlite") as DatabaseDriver,
-  /** Relative to the project root, or absolute. */
+  driver: parseDatabaseDriver(read("DB_DRIVER")),
+  /** Relative to the project root, or absolute. With DB_DRIVER=postgres: imported into an empty database, and the backups folder sits next to it. */
   sqlitePath: read("SQLITE_PATH") || "storage/lms.sqlite",
+  /** PostgreSQL connection for the app (Supabase: the pooled URL, port 6543, ?pgbouncer=true&connection_limit=…). */
+  databaseUrl: read("DATABASE_URL"),
 };
 
 /** Mask a secret for display in admin screens: "sk_live_…a1b2". */

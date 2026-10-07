@@ -399,6 +399,7 @@ const adminMessages: Translation<typeof en> = {
   "backups.integrity.title": "فحص السلامة",
   "backups.integrity.sqliteHint": "يطلب من SQLite التحقق من ملف قاعدة البيانات. يعمل الفحص السريع أيضًا عند كل تشغيل للخادم، أما الفحص الكامل فيتحقق من الفهارس كذلك ويستغرق وقتًا أطول مع قاعدة بيانات كبيرة.",
   "backups.integrity.jsonHint": "يعيد قراءة ملف قاعدة بيانات JSON من القرص ويتحقق من إمكانية تحليله.",
+  "backups.integrity.postgresHint": "يتحقق من أن خادم PostgreSQL يستجيب وأن كل الجداول موجودة. ويتأكد الفحص الكامل أيضًا من تطابق معرّف كل سجل وأعمدته المفهرسة مع السجل نفسه.",
   "backups.integrity.quick": "فحص سريع",
   "backups.integrity.checkFile": "فحص الملف",
   "backups.integrity.full": "فحص كامل",

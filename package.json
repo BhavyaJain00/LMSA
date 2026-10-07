@@ -11,9 +11,16 @@
     "test:watch": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test --watch \"tests/**/*.test.ts\"",
     "db:backup": "node scripts/db-backup.mjs",
     "db:restore": "node scripts/db-restore.mjs",
-    "db:export": "node scripts/db-export-json.mjs"
+    "db:export": "node scripts/db-export-json.mjs",
+    "test:pg": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./tests/register.mjs --test \"tests/postgres-*.test.ts\"",
+    "postinstall": "prisma generate",
+    "prisma:schema": "node scripts/prisma-generate-schema.mjs",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "db:to-postgres": "node scripts/db-copy-to-postgres.mjs"
   },
   "dependencies": {
+    "@prisma/client": "6.19.3",
     "next": "16.3.6",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -26,6 +33,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
+    "prisma": "6.19.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

@@ -16,7 +16,11 @@ ARG NODE_IMAGE=node:24-slim
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
+# openssl: Prisma picks its query engine for the installed OpenSSL (DB_DRIVER=postgres).
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
+# `npm ci` runs `prisma generate` (postinstall), which reads the schema.
+COPY prisma ./prisma
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
 # ---------------------------------------------------------------------------
@@ -49,8 +53,9 @@ WORKDIR /app
 # ffmpeg/ffprobe: HLS conversion, video duration and thumbnails.
 # ca-certificates: outgoing HTTPS (Stripe, Razorpay, SMTP over TLS, S3, webhooks).
 # tini: forwards signals so `docker stop` shuts the server down cleanly.
+# openssl: needed by Prisma's query engine (DB_DRIVER=postgres).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini openssl \
   && rm -rf /var/lib/apt/lists/*
 
 ARG APP_VERSION=""
@@ -67,7 +72,7 @@ COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/scripts ./scripts
-COPY --from=build --chown=node:node /app/src/lib/db/sqlite-core.mjs /app/src/lib/db/backup-core.mjs ./src/lib/db/
+COPY --from=build --chown=node:node /app/src/lib/db/sqlite-core.mjs /app/src/lib/db/backup-core.mjs /app/src/lib/db/postgres-core.mjs /app/src/lib/db/postgres-tables.mjs ./src/lib/db/
 
 # Persistent data; the image cache (.next/cache) must be writable too.
 # /app/storage starts empty: Docker seeds a new named volume from the image's
