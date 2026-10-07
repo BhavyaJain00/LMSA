@@ -3,14 +3,18 @@ import { getDb } from "@/lib/db/store";
 import { SettingsPanelHeader } from "@/components/admin/settings/settings-ui";
 import { Tabs } from "@/components/ui/tabs";
 import { getT } from "@/i18n/server";
+import { AdminI18n } from "@/components/admin/i18n";
 
-/** SEO settings: search appearance, indexing (sitemap, feeds, IndexNow), redirects and consent-gated tracking tags. */
+/**
+ * SEO settings: search appearance, indexing (sitemap, feeds, IndexNow), redirects and consent-gated tracking tags.
+ * Provides the search appearance form's client messages (`seoForm.`).
+ */
 export default async function SeoSettingsLayout({ children }: LayoutProps<"/admin/settings/seo">) {
   const t = await getT("admin");
   await requireRole(["admin"], "/admin/settings/seo");
   const db = await getDb();
   return (
-    <>
+    <AdminI18n section="settingsSeo">
       <SettingsPanelHeader title={t("pages.settings.seo.title")} description={t("pages.settings.seo.description")} />
       <Tabs
         className="mb-5"
@@ -22,6 +26,6 @@ export default async function SeoSettingsLayout({ children }: LayoutProps<"/admi
         ]}
       />
       {children}
-    </>
+    </AdminI18n>
   );
 }

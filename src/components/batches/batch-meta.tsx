@@ -42,8 +42,8 @@ export function BatchCover({
         />
       ) : (
         <div className={cn("absolute inset-0 bg-gradient-to-br", batchGradient(batch.id))} aria-hidden="true">
-          <Icon.Users className="absolute -bottom-4 -right-4 size-28 text-white/15" />
-          <span className="absolute left-4 top-1/2 max-w-[80%] -translate-y-1/2 text-xl font-semibold leading-tight text-white/95 line-clamp-2">
+          <Icon.Users className="absolute -bottom-4 -end-4 size-28 text-white/15" />
+          <span className="absolute start-4 top-1/2 max-w-[80%] -translate-y-1/2 text-xl font-semibold leading-tight text-white/95 line-clamp-2">
             {batch.title}
           </span>
         </div>

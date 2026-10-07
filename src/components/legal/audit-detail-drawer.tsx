@@ -89,7 +89,7 @@ export function AuditDetailDrawer({ detail, closeHref }: { detail: AuditDetail; 
     <dialog
       ref={ref}
       aria-labelledby="audit-detail-title"
-      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-dvh w-full max-w-md border-l border-border bg-surface-1 p-0 text-ink shadow-pop backdrop:bg-black/40 open:animate-fade-in"
+      className="fixed inset-y-0 end-0 start-auto m-0 h-dvh max-h-dvh w-full max-w-md border-s border-border bg-surface-1 p-0 text-ink shadow-pop backdrop:bg-black/40 open:animate-fade-in"
       onClick={(e) => {
         if (e.target === ref.current) close();
       }}

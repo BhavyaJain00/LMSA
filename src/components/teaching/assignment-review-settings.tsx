@@ -178,7 +178,7 @@ export function AssignmentReviewSettings({
                       Reviews are handed out when submissions close on <LocalDateTime iso={deadline} />, so everyone who submitted is included.
                     </span>
                   ) : (
-                    <span>Reviews are handed out as learners submit, spread evenly so nobody reviews much more than others. Set a schedule end above to hand them all out at once instead.</span>
+                    <span>Reviews are handed out as learners submit, spread evenly so no submission gets more reviews than set. The last few to submit may wait for the next classmate, or up to two days, before their reviews are handed out. Set a schedule end above to hand them all out at once instead.</span>
                   )}
                 </p>
               </div>

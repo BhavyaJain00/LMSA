@@ -1,7 +1,9 @@
 import type { AnalyticsEvent, MembershipPlan, Payment, Subscription } from "@/lib/types";
 import {
+  ANONYMOUS_VIEWS_ROLLUP,
   ATTRIBUTION_DAYS,
   CHECKOUT_STARTED,
+  CONSENTED_VIEWS_ROLLUP,
   DAY_MS,
   ENTRY_MARK,
   PAGE_VIEW,
@@ -10,6 +12,7 @@ import {
   ROLLUP_SUM_PREFIX,
   SIGN_UP,
   VISITORS_ROLLUP,
+  VISITOR_DAY,
   coursePageSlug,
   inRange,
   isProductPage,
@@ -52,6 +55,8 @@ export interface EventCount {
   actor?: string;
   /** Raw anonymous event marked as its tab's first at a funnel stage. */
   firstReach?: boolean;
+  /** On a `VISITOR_DAY` row: `view` and the funnel stages that visitor reached that day. */
+  marks?: readonly string[];
   userId?: string;
   raw: boolean;
 }
@@ -67,6 +72,8 @@ export function toEventCount(e: AnalyticsEvent): EventCount {
   const base = { at: e.createdAt, path: e.path, referrer: e.referrer, utm: e.utm, itemType: e.itemType, itemId: e.itemId, currency: e.currency };
   if (e.name.startsWith(ROLLUP_SUM_PREFIX)) return { ...base, name: e.name.slice(ROLLUP_SUM_PREFIX.length), count: 0, sum: e.value ?? 0, raw: false };
   if (e.name.startsWith(ROLLUP_COUNT_PREFIX)) return { ...base, name: e.name.slice(ROLLUP_COUNT_PREFIX.length), count: e.value ?? 0, sum: 0, raw: false };
+  // A visitor-day row stands for people, not events: it counts no events of its own.
+  if (e.name === VISITOR_DAY) return { at: e.createdAt, name: VISITOR_DAY, count: 0, sum: 0, actor: actorKey(e), userId: e.userId, marks: visitorDayMarks(e), raw: true };
   const count: EventCount = { ...base, name: e.name, count: 1, sum: e.value ?? 0, actor: actorKey(e), userId: e.userId, raw: true };
   if (e.firstReach) count.firstReach = true;
   return count;
@@ -117,6 +124,15 @@ export function attributeConversions(events: readonly AnalyticsEvent[]): Map<str
   return out;
 }
 
+/**
+ * A visit `attributeConversions` can credit with a later sign-up or
+ * purchase: a landing page view with a referrer or campaign tags, recorded
+ * with a visitor or member id. Such visits stay raw until `RETENTION_DAYS`.
+ */
+export function isAttributionTouch(e: AnalyticsEvent): boolean {
+  return e.name === PAGE_VIEW && e.itemType === ENTRY_MARK && (!!e.referrer || !!e.utm) && !!actorKey(e);
+}
+
 /** Copy of `events` with the attribution of `attributeConversions` applied. */
 export function withAttribution(events: readonly AnalyticsEvent[]): AnalyticsEvent[] {
   const touches = attributeConversions(events);
@@ -131,27 +147,20 @@ export function withAttribution(events: readonly AnalyticsEvent[]): AnalyticsEve
   });
 }
 
-function rollupKey(name: string, day: string, e: Pick<AnalyticsEvent, "path" | "referrer" | "utm" | "itemType" | "itemId" | "currency">): string {
+type Dims = Pick<AnalyticsEvent, "path" | "referrer" | "utm" | "itemType" | "itemId" | "currency">;
+
+function rollupKey(name: string, day: string, e: Dims): string {
   return [name, day, e.path ?? "", e.referrer ?? "", e.utm?.source ?? "", e.utm?.medium ?? "", e.utm?.campaign ?? "", e.itemType ?? "", e.itemId ?? "", e.currency ?? ""].join("\u0001");
 }
 
-/**
- * Fold raw events into daily rollups (no visitor or member ids): one
- * `rollup:<name>` row per day and dimension set with the count, a
- * `rollup-sum:<name>` row when the events carried values, one
- * `rollup:visitors` row per day with that day's unique visitors (visitors
- * recorded with consent, plus visits recorded without), and one
- * `rollup:reach:<stage>` row per day and funnel stage with the people who
- * reached it (counted the same way), so the funnel reads the same after
- * compaction. Rows that match an
- * existing rollup are added to it. Returns the rows to keep (existing ones
- * updated in place on a copy, new ones appended).
- */
-export function buildRollups(raw: readonly AnalyticsEvent[], existing: readonly AnalyticsEvent[], newId: () => string): AnalyticsEvent[] {
+type AddRollup = (name: string, day: string, dims: Dims, value: number) => void;
+
+/** Rollup rows being built: copies of `existing` (never changed in place), and `add` to grow or create a row. */
+function rollupWriter(existing: readonly AnalyticsEvent[], newId: () => string): { rows: AnalyticsEvent[]; add: AddRollup } {
   const rows = existing.map((r) => ({ ...r }));
   const index = new Map<string, AnalyticsEvent>();
   for (const r of rows) index.set(rollupKey(r.name, r.createdAt.slice(0, 10), r), r);
-  const add = (name: string, day: string, dims: Pick<AnalyticsEvent, "path" | "referrer" | "utm" | "itemType" | "itemId" | "currency">, value: number) => {
+  const add: AddRollup = (name, day, dims, value) => {
     const key = rollupKey(name, day, dims);
     const found = index.get(key);
     if (found) {
@@ -168,41 +177,155 @@ export function buildRollups(raw: readonly AnalyticsEvent[], existing: readonly 
     rows.push(row);
     index.set(key, row);
   };
+  return { rows, add };
+}
 
-  const visitors = new Map<string, { actors: Set<string>; anonymousVisits: number }>();
-  const reached = new Map<string, { actors: Set<string>; anonymous: number }>();
+/** The count row of an event, its sum row when it carried a value, and the consent split of page views. */
+function addEventRows(add: AddRollup, e: AnalyticsEvent, day: string): void {
+  const dims: Dims = { path: e.path, referrer: e.referrer, utm: e.utm, itemType: e.itemType, itemId: e.itemId, currency: e.currency };
+  add(`${ROLLUP_COUNT_PREFIX}${e.name}`, day, dims, 1);
+  if (typeof e.value === "number" && e.value !== 0) add(`${ROLLUP_SUM_PREFIX}${e.name}`, day, dims, e.value);
+  if (e.name === PAGE_VIEW) add(actorKey(e) ? CONSENTED_VIEWS_ROLLUP : ANONYMOUS_VIEWS_ROLLUP, day, {}, 1);
+}
+
+/** Mark of a visitor-day row for "viewed at least one page" (the funnel stages are the other marks). */
+const VIEW_MARK = "view";
+
+/** The marks stored on a `VISITOR_DAY` row. */
+export function visitorDayMarks(e: Pick<AnalyticsEvent, "itemType">): string[] {
+  return (e.itemType ?? "").split(" ").filter(Boolean);
+}
+
+/** What one raw event says about its visitor: `view` for a page view, plus each funnel stage it reaches. */
+function marksOf(e: AnalyticsEvent): string[] {
+  if (e.name === VISITOR_DAY) return visitorDayMarks(e);
+  const marks: string[] = e.name === PAGE_VIEW ? [VIEW_MARK] : [];
+  const count = toEventCount(e);
+  for (const stage of REACH_STAGES) if (STAGE_TESTS[stage](count)) marks.push(stage);
+  return marks;
+}
+
+interface Tally {
+  actors: Set<string>;
+  anonymous: number;
+}
+
+/** People per day (`visitors`) and per day and stage (`reached`): ids seen, plus anonymous ones counted once each. */
+interface People {
+  visitors: Map<string, Tally>;
+  reached: Map<string, Tally>;
+}
+
+const newPeople = (): People => ({ visitors: new Map(), reached: new Map() });
+
+function tallyOf(map: Map<string, Tally>, key: string): Tally {
+  let t = map.get(key);
+  if (!t) map.set(key, (t = { actors: new Set(), anonymous: 0 }));
+  return t;
+}
+
+/** Count the person behind `e` (a raw event or a visitor-day row) on `day`. */
+function tallyPeople(people: People, e: AnalyticsEvent, day: string): void {
+  const actor = actorKey(e);
+  if (actor) {
+    for (const mark of marksOf(e)) {
+      if (mark === VIEW_MARK) tallyOf(people.visitors, day).actors.add(actor);
+      else tallyOf(people.reached, `${day}|${mark}`).actors.add(actor);
+    }
+    return;
+  }
+  // A visitor-day row whose member was erased: nobody is left to count.
+  if (e.name === VISITOR_DAY) return;
+  const count = toEventCount(e);
+  if (e.name === PAGE_VIEW && e.itemType === ENTRY_MARK) tallyOf(people.visitors, day).anonymous++;
+  for (const stage of REACH_STAGES) if (STAGE_TESTS[stage](count) && anonymousReaches(count, stage)) tallyOf(people.reached, `${day}|${stage}`).anonymous++;
+}
+
+/** The daily visitors row and one daily reach row per funnel stage. */
+function addPeopleRows(add: AddRollup, people: People): void {
+  for (const [day, v] of people.visitors) {
+    const n = v.actors.size + v.anonymous;
+    if (n) add(VISITORS_ROLLUP, day, {}, n);
+  }
+  for (const [key, r] of people.reached) {
+    const [day, stage] = key.split("|") as [string, ReachStage];
+    const n = r.actors.size + r.anonymous;
+    if (n) add(`${ROLLUP_COUNT_PREFIX}${reachName(stage)}`, day, {}, n);
+  }
+}
+
+/**
+ * Fold raw events into daily rollups (no visitor or member ids): one
+ * `rollup:<name>` row per day and dimension set with the count, a
+ * `rollup-sum:<name>` row when the events carried values, the day's page
+ * views split by consent, one `rollup:visitors` row per day with that day's
+ * unique visitors (visitors with an id, plus visits recorded without), and
+ * one `rollup:reach:<stage>` row per day and funnel stage with the people who
+ * reached it (counted the same way), so the funnel reads the same after
+ * compaction. `VISITOR_DAY` rows among `raw` count as the people they stand
+ * for. Rows that match an existing rollup are added to it. Returns the rows
+ * to keep (existing ones updated on a copy, new ones appended).
+ */
+export function buildRollups(raw: readonly AnalyticsEvent[], existing: readonly AnalyticsEvent[], newId: () => string): AnalyticsEvent[] {
+  const { rows, add } = rollupWriter(existing, newId);
+  const people = newPeople();
   for (const e of raw) {
     if (isRollup(e)) continue;
     const day = e.createdAt.slice(0, 10);
-    const dims = { path: e.path, referrer: e.referrer, utm: e.utm, itemType: e.itemType, itemId: e.itemId, currency: e.currency };
-    add(`${ROLLUP_COUNT_PREFIX}${e.name}`, day, dims, 1);
-    if (typeof e.value === "number" && e.value !== 0) add(`${ROLLUP_SUM_PREFIX}${e.name}`, day, dims, e.value);
-    if (e.name === PAGE_VIEW) {
-      let v = visitors.get(day);
-      if (!v) visitors.set(day, (v = { actors: new Set(), anonymousVisits: 0 }));
-      const actor = actorKey(e);
-      if (actor) v.actors.add(actor);
-      else if (e.itemType === ENTRY_MARK) v.anonymousVisits++;
-    }
-    const count = toEventCount(e);
-    for (const stage of REACH_STAGES) {
-      if (!STAGE_TESTS[stage](count)) continue;
-      const key = `${day}|${stage}`;
-      let r = reached.get(key);
-      if (!r) reached.set(key, (r = { actors: new Set(), anonymous: 0 }));
-      if (count.actor) r.actors.add(count.actor);
-      else if (anonymousReaches(count, stage)) r.anonymous++;
-    }
+    if (e.name !== VISITOR_DAY) addEventRows(add, e, day);
+    tallyPeople(people, e, day);
   }
-  for (const [day, v] of visitors) {
-    const n = v.actors.size + v.anonymousVisits;
-    if (n) add(VISITORS_ROLLUP, day, {}, n);
-  }
-  for (const [key, r] of reached) {
-    const [day, stage] = key.split("|") as [string, ReachStage];
-    add(`${ROLLUP_COUNT_PREFIX}${reachName(stage)}`, day, {}, r.actors.size + r.anonymous);
-  }
+  addPeopleRows(add, people);
   return rows;
+}
+
+function visitorDayKey(day: string, e: Pick<AnalyticsEvent, "anonId" | "userId">): string {
+  return `${day}|${e.anonId ?? ""}|${e.userId ?? ""}`;
+}
+
+/**
+ * Fold recent page views and checkout starts into daily counts while keeping
+ * who was there: the same count rows as `buildRollups`, anonymous visitors
+ * and stage reaches added to the daily `visitors` / `reach` rows, and one
+ * `VISITOR_DAY` row per visitor id pair (`anonId`, `userId`) and day with
+ * what they did, so unique visitors and the funnel stay exact over periods
+ * of several days and member↔visitor links stay available for attribution.
+ * An existing visitor-day row of the same visitor and day is merged into
+ * (on a copy). Returns the rollup rows and the visitor-day rows to keep.
+ */
+export function rollupTraffic(
+  traffic: readonly AnalyticsEvent[],
+  existing: readonly AnalyticsEvent[],
+  visitorDays: readonly AnalyticsEvent[],
+  newId: () => string,
+): { rows: AnalyticsEvent[]; visitorDays: AnalyticsEvent[] } {
+  const { rows, add } = rollupWriter(existing, newId);
+  const anonymous = newPeople();
+  const days = new Map<string, AnalyticsEvent>();
+  for (const v of visitorDays) days.set(visitorDayKey(v.createdAt.slice(0, 10), v), { ...v });
+  for (const e of traffic) {
+    if (isRollup(e) || e.name === VISITOR_DAY) continue;
+    const day = e.createdAt.slice(0, 10);
+    addEventRows(add, e, day);
+    if (!actorKey(e)) {
+      tallyPeople(anonymous, e, day);
+      continue;
+    }
+    const marks = marksOf(e);
+    if (!marks.length) continue;
+    const key = visitorDayKey(day, e);
+    let row = days.get(key);
+    if (!row) {
+      row = { id: newId(), name: VISITOR_DAY, createdAt: `${day}T00:00:00.000Z` };
+      if (e.anonId) row.anonId = e.anonId;
+      if (e.userId) row.userId = e.userId;
+      days.set(key, row);
+    }
+    const merged = new Set([...visitorDayMarks(row), ...marks]);
+    row.itemType = [VIEW_MARK, ...REACH_STAGES].filter((m) => merged.has(m)).join(" ");
+  }
+  addPeopleRows(add, anonymous);
+  return { rows, visitorDays: [...days.values()] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,7 +335,8 @@ export function buildRollups(raw: readonly AnalyticsEvent[], existing: readonly 
 /**
  * Visitors in a period: unique visitors recorded with consent, plus every
  * visit recorded without (they cannot be told apart), plus the daily unique
- * visitors of compacted days.
+ * visitors of compacted days. A visitor-day row counts its visitor like one
+ * of their page views would.
  */
 export function countVisitors(counts: readonly EventCount[]): number {
   const actors = new Set<string>();
@@ -220,12 +344,32 @@ export function countVisitors(counts: readonly EventCount[]): number {
   let rolled = 0;
   for (const c of counts) {
     if (c.name === "visitors" && !c.raw) rolled += c.count;
-    else if (c.name === PAGE_VIEW && c.raw) {
+    else if (c.name === VISITOR_DAY) {
+      if (c.actor && c.marks?.includes("view")) actors.add(c.actor);
+    } else if (c.name === PAGE_VIEW && c.raw) {
       if (c.actor) actors.add(c.actor);
       else if (c.itemType === ENTRY_MARK) anonymous += 1;
     }
   }
   return actors.size + anonymous + rolled;
+}
+
+/** Share (percent) of page views recorded with analytics consent, from raw page views and the daily consent split. */
+export function consentedViewShare(counts: readonly EventCount[]): number {
+  const consented = CONSENTED_VIEWS_ROLLUP.slice(ROLLUP_COUNT_PREFIX.length);
+  const anonymous = ANONYMOUS_VIEWS_ROLLUP.slice(ROLLUP_COUNT_PREFIX.length);
+  let yes = 0;
+  let all = 0;
+  for (const c of counts) {
+    if (c.raw && c.name === PAGE_VIEW) {
+      all++;
+      if (c.actor) yes++;
+    } else if (!c.raw && c.name === consented) {
+      yes += c.count;
+      all += c.count;
+    } else if (!c.raw && c.name === anonymous) all += c.count;
+  }
+  return ratio(yes, all);
 }
 
 export function countWhere(counts: readonly EventCount[], test: (c: EventCount) => boolean): number {
@@ -260,14 +404,17 @@ function anonymousReaches(c: Pick<EventCount, "firstReach">, stage: ReachStage):
 /**
  * People who reached a funnel stage: unique actors among raw events
  * recorded with an id, plus anonymous visits counted once per stage (see
- * `anonymousReaches`), plus the daily reach of compacted days.
+ * `anonymousReaches`), plus the daily reach of compacted days. A
+ * visitor-day row counts its visitor at each stage it marks.
  */
 export function reach(counts: readonly EventCount[], stage: ReachStage): number {
   const test = STAGE_TESTS[stage];
   const actors = new Set<string>();
   let other = 0;
   for (const c of counts) {
-    if (!c.raw) {
+    if (c.name === VISITOR_DAY) {
+      if (c.actor && c.marks?.includes(stage)) actors.add(c.actor);
+    } else if (!c.raw) {
       if (c.name === reachName(stage)) other += c.count;
     } else if (test(c)) {
       if (c.actor) actors.add(c.actor);

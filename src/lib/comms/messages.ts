@@ -42,6 +42,7 @@ import {
   type ReportStatus,
   type ThreadAccess,
   teacherIds,
+  teachersAmong,
 } from "./messages-core";
 
 /**
@@ -173,13 +174,26 @@ function messageView(m: DirectMessage, forModerator = false): MessageView {
   return { id: m.id, senderId: m.senderId, body: m.body, removed: false, createdAt: m.createdAt };
 }
 
+/** The accounts of `ids` (one pass over the users, keeping only those). */
+function usersById(db: Database, ids: Iterable<string>): Map<string, User> {
+  const wanted = new Set(ids);
+  const out = new Map<string, User>();
+  if (!wanted.size) return out;
+  for (const u of db.users) {
+    if (!wanted.has(u.id)) continue;
+    out.set(u.id, u);
+    if (out.size === wanted.size) break;
+  }
+  return out;
+}
+
 /**
- * What `canReply` needs, looked up only for the members it asks about:
- * staff status from roles and the course/batch instructor lists, and (only for
- * learner-to-learner conversations) the shared courses and batches.
+ * What `canReply` needs for a conversation, looked up only for its
+ * participants: staff status from roles and the course/batch instructor lists,
+ * and (only for learner-to-learner conversations) the shared courses and batches.
  */
-function replyContext(db: Database, teachers: ReadonlySet<string> = teacherIds(db)): ReplyContext {
-  const users = new Map(db.users.map((u) => [u.id, u]));
+function replyContext(db: Database, participantIds: readonly string[], teachers: ReadonlySet<string> = teachersAmong(db, participantIds)): ReplyContext {
+  const users = usersById(db, participantIds);
   const learning = new Map<string, Set<string>>();
   const keysOf = (userId: string): Set<string> => {
     let keys = learning.get(userId);
@@ -208,7 +222,7 @@ function replyContext(db: Database, teachers: ReadonlySet<string> = teacherIds(d
 /** Why `viewer` can't reply in `conversation` (null when they can). */
 function replyBlockedFor(db: Database, conversation: Conversation, viewer: User, access: Exclude<ThreadAccess, null>, teachers?: ReadonlySet<string>): string | null {
   if (access === "moderator") return "You're viewing this reported conversation as a moderator.";
-  const decision = canReply(messagingPolicy(db.settings), conversation, member(viewer), replyContext(db, teachers));
+  const decision = canReply(messagingPolicy(db.settings), conversation, member(viewer), replyContext(db, conversation.participantIds, teachers));
   return decision.ok ? null : REPLY_BLOCKED_MESSAGES[decision.reason];
 }
 
@@ -317,10 +331,13 @@ export interface InboxPage {
 }
 
 export function listInbox(db: Database, userId: string, query: InboxQuery = {}): InboxPage {
-  const teachers = teacherIds(db);
-  const users = new Map(db.users.map((u) => [u.id, u]));
-  const courses = new Map(db.courses.map((c) => [c.id, c]));
   const mine = db.conversations.filter((c) => c.participantIds.includes(userId));
+  // Role labels and names only for the members shown: never a directory of the whole site.
+  const shown = new Set(mine.flatMap((c) => c.participantIds).filter((id) => id !== userId));
+  const teachers = teachersAmong(db, shown);
+  const users = usersById(db, shown);
+  const courseIds = new Set(mine.map((c) => c.courseId).filter((id): id is string => !!id));
+  const courses = new Map(db.courses.filter((c) => courseIds.has(c.id)).map((c) => [c.id, c]));
   const byConversation = messagesByConversation(db, new Set(mine.map((c) => c.id)));
   let unreadTotal = 0;
   const rows: ConversationSummary[] = [];
@@ -380,8 +397,9 @@ export function buildThread(db: Database, viewer: User, conversationId: string, 
   const access = threadAccess(conversation, viewer);
   if (!access) return { ok: false, status: 404 };
   const moderator = access === "moderator";
-  const teachers = teacherIds(db);
-  const users = new Map(db.users.map((u) => [u.id, u]));
+  const people = [...conversation.participantIds, ...(conversation.reportedBy ? [conversation.reportedBy] : []), ...(conversation.reportResolvedBy ? [conversation.reportResolvedBy] : [])];
+  const teachers = teachersAmong(db, people);
+  const users = usersById(db, people);
   const all = conversationMessages(db, conversation.id);
   const limit = Math.min(200, Math.max(1, Math.floor(query.limit ?? MESSAGE_LIMITS.threadPage)));
   let end = all.length;
@@ -441,12 +459,19 @@ export interface ThreadUpdate {
  * once and never builds the participant views (the client already has them).
  */
 export async function pollThread(viewer: User, conversationId: string, afterId: string | null, knownIds: readonly string[], markRead: boolean): Promise<ThreadUpdate | null> {
-  if (markRead) await markConversationRead(viewer.id, conversationId);
-  const db = await getDb();
-  const conversation = db.conversations.find((c) => c.id === conversationId);
+  let db = await getDb();
+  let conversation = db.conversations.find((c) => c.id === conversationId);
   const access = conversation ? threadAccess(conversation, viewer) : null;
   if (!conversation || !access) return null;
-  const messages = conversationMessages(db, conversationId);
+  let messages = conversationMessages(db, conversationId);
+  // Marking read writes (and reads the messages again) only when something is unread.
+  if (markRead && access === "participant" && hasUnreadFor(db, messages, viewer.id, conversationId)) {
+    await markConversationRead(viewer.id, conversationId);
+    db = await getDb();
+    conversation = db.conversations.find((c) => c.id === conversationId);
+    if (!conversation) return null;
+    messages = conversationMessages(db, conversationId);
+  }
   let fresh = messages;
   if (afterId) {
     const index = messages.findIndex((m) => m.id === afterId);
@@ -462,14 +487,20 @@ export async function pollThread(viewer: User, conversationId: string, afterId: 
   };
 }
 
+/** Whether a participant has unread messages (`messages`: the conversation's) or an unread notification for the conversation. */
+function hasUnreadFor(db: Database, messages: readonly DirectMessage[], userId: string, conversationId: string): boolean {
+  if (messages.some((m) => isUnreadFor(m, userId))) return true;
+  const link = threadPath(conversationId);
+  return db.notifications.some((n) => n.userId === userId && !n.read && n.link === link);
+}
+
 /** Mark every message of a conversation read for a participant, plus the matching notifications. Returns the number of messages marked. */
 export async function markConversationRead(userId: string, conversationId: string): Promise<number> {
   const db = await getDb();
   const conversation = db.conversations.find((c) => c.id === conversationId);
   if (!conversation?.participantIds.includes(userId)) return 0;
   const link = threadPath(conversationId);
-  const pending = db.directMessages.some((m) => m.conversationId === conversationId && isUnreadFor(m, userId)) || db.notifications.some((n) => n.userId === userId && !n.read && n.link === link);
-  if (!pending) return 0;
+  if (!hasUnreadFor(db, db.directMessages.filter((m) => m.conversationId === conversationId), userId, conversationId)) return 0;
   return mutate((d) => {
     let n = 0;
     for (const m of d.directMessages) {
@@ -595,7 +626,7 @@ export async function sendMessage(sender: User, conversationId: string, rawBody:
   const db = await getDb();
   const conversation = db.conversations.find((c) => c.id === conversationId);
   if (!conversation || !conversation.participantIds.includes(sender.id)) return { ok: false, error: "This conversation doesn't exist." };
-  const check = canReply(policy, conversation, member(sender), replyContext(db));
+  const check = canReply(policy, conversation, member(sender), replyContext(db, conversation.participantIds));
   if (!check.ok) return { ok: false, error: check.reason === "unavailable" ? "The other member's account is no longer active." : REPLY_BLOCKED_MESSAGES[check.reason] };
   const rate = sendRateError(sender.id, null);
   if (rate) return { ok: false, error: rate };
@@ -722,7 +753,7 @@ export function messageLinkFor(db: Database, viewer: User | null, recipientId: s
   const existing = findDirectConversation(db.conversations, viewer.id, recipient.id);
   // An existing conversation only counts while the viewer may still reply in it (learners who
   // stopped sharing a course, or after learner-to-learner messages were switched off, may not).
-  if (existing && canReply(messagingPolicy(db.settings), existing, member(viewer), replyContext(db)).ok) return threadPath(existing.id);
+  if (existing && canReply(messagingPolicy(db.settings), existing, member(viewer), replyContext(db, existing.participantIds)).ok) return threadPath(existing.id);
   if (!decideFor(db, viewer, recipient, courseId).ok) return null;
   const params = new URLSearchParams({ to: recipient.username });
   if (courseId) params.set("course", courseId);

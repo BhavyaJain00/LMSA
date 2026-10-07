@@ -5,10 +5,13 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { LanguageSelect } from "@/components/layout/language-switcher";
 import { I18nProvider } from "@/i18n/provider";
 
+/** Key prefixes the auth screens' client components read; the action messages (`errors.`, `flash.`, …) stay on the server. */
+const AUTH_CLIENT_KEYS = ["fields.", "links.", "error.", "login.", "register.", "forgot.", "reset.", "twoFactor.", "verify."];
+
 export default async function AuthLayout({ children }: LayoutProps<"/">) {
   const settings = await getSettings();
   return (
-    <I18nProvider namespaces={["auth"]}>
+    <I18nProvider namespaces={["auth"]} pick={{ auth: AUTH_CLIENT_KEYS }}>
       <div className="flex min-h-screen flex-col bg-surface">
         <header className="flex items-center justify-between gap-3 px-4 py-4 sm:px-6">
           <Link href="/" className="flex min-w-0 items-center gap-2.5">

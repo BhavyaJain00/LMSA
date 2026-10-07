@@ -121,6 +121,27 @@ export function teacherIds(source: Pick<DirectorySource, "courses" | "batches">)
   return out;
 }
 
+/**
+ * The members of `ids` who teach something. For views that label a handful of
+ * participants (inbox, thread, polling): it only remembers those members and
+ * stops reading courses and batches once all of them were found.
+ */
+export function teachersAmong(source: Pick<DirectorySource, "courses" | "batches">, ids: Iterable<string>): Set<string> {
+  const wanted = new Set(ids);
+  const out = new Set<string>();
+  if (!wanted.size) return out;
+  const see = (id: string | undefined): boolean => {
+    if (id && wanted.has(id)) out.add(id);
+    return out.size === wanted.size;
+  };
+  for (const c of source.courses) {
+    for (const id of c.instructorIds) if (see(id)) return out;
+    if (see(c.evaluatorId)) return out;
+  }
+  for (const b of source.batches) for (const id of b.instructorIds) if (see(id)) return out;
+  return out;
+}
+
 /** Moderators (and admins) review reported conversations. */
 export function isMessageModerator(member: Pick<MessagingMember, "roles"> | null | undefined): boolean {
   return !!member && member.roles.some((r) => r === "admin" || r === "moderator");

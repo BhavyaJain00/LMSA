@@ -56,7 +56,7 @@ export const CueRow = memo(function CueRow({ index, cue, isLast, selected, activ
         selected && "bg-info/8",
       )}
     >
-      {active && <span aria-hidden className="absolute inset-y-0 left-0 w-0.75 bg-accent" />}
+      {active && <span aria-hidden className="absolute inset-y-0 start-0 w-0.75 bg-accent" />}
       <div className="flex flex-col items-center gap-1 pt-1.5 sm:row-span-1">
         <input
           type="checkbox"

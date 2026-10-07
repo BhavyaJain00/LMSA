@@ -1,10 +1,6 @@
-import { I18nProvider } from "@/i18n/provider";
+import { AdminI18n } from "@/components/admin/i18n";
 
-/** The API reference's client parts (endpoint browser, code samples) read the `developers.` messages. */
+/** The API reference's client parts (endpoint browser, code samples) read the `developers.` messages; see `src/components/admin/i18n-slices.ts`. */
 export default function DevelopersLayout({ children }: LayoutProps<"/developers">) {
-  return (
-    <I18nProvider namespaces={["admin"]} pick={{ admin: ["developers.", "errorPages."] }}>
-      {children}
-    </I18nProvider>
-  );
+  return <AdminI18n section="developers">{children}</AdminI18n>;
 }

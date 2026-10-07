@@ -3,6 +3,7 @@ import type { Course, Database, Organization, OrgSeat, Payment, User } from "@/l
 import type { DomainEventMap } from "@/lib/events";
 import { getDb, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
+import { isEmailVerified } from "@/lib/auth/account-status";
 import { safeEqual } from "@/lib/auth/crypto";
 import { generateRawToken, hashAuthToken, isWellFormedToken } from "@/lib/auth/tokens";
 import { resolveCourseAccess } from "@/lib/commerce/access";
@@ -594,7 +595,7 @@ async function enrollInTeamCourses(userId: string, courseIds: readonly string[])
   for (const courseId of courseIds) await enrollUserInCourse(userId, courseId, { notifyInstructors: false });
 }
 
-export type JoinProblem = "invalid" | "expired" | "revoked" | "used" | "full" | "already_member" | "disabled" | "wrong_account";
+export type JoinProblem = "invalid" | "expired" | "revoked" | "used" | "full" | "already_member" | "disabled" | "wrong_account" | "unconfirmed";
 
 export const JOIN_PROBLEM_MESSAGES: Record<JoinProblem, string> = {
   invalid: "This invitation link is not valid. Check that you opened the latest invitation email, or ask your team manager for a new one.",
@@ -606,11 +607,36 @@ export const JOIN_PROBLEM_MESSAGES: Record<JoinProblem, string> = {
   disabled: "Your account can't accept invitations right now.",
   wrong_account:
     "This invitation is for another email address. Sign in with the account that uses the invited address, or ask your team manager to send the seat to your account's address.",
+  unconfirmed:
+    "Confirm your email address first: open the confirmation link we emailed you, or send a new one from Settings → Security. Then open this invitation again.",
 };
 
 /** Whether `account` is the one an invitation to `seat.email` was meant for (its current address, any case). */
 export function inviteMatchesAccount(seat: Pick<OrgSeat, "email">, account: Pick<User, "email">): boolean {
   return seat.email.trim().toLowerCase() === account.email.trim().toLowerCase();
+}
+
+/**
+ * Why `account` (the stored record, never the session copy) cannot take the
+ * seat reserved for `seat.email`, or null when it can: the account must be
+ * enabled, use the invited address and have confirmed that address. Without
+ * the confirmation, someone holding a forwarded or leaked link could register
+ * the invitee's address before they do and take the paid seat. Accounts that
+ * never needed confirming (created by an administrator) count as confirmed.
+ */
+export function inviteAccountProblem(
+  seat: Pick<OrgSeat, "email">,
+  account: Pick<User, "email" | "enabled" | "emailVerifiedAt" | "emailVerificationRequired"> | undefined,
+): "disabled" | "wrong_account" | "unconfirmed" | null {
+  if (!account?.enabled) return "disabled";
+  if (!inviteMatchesAccount(seat, account)) return "wrong_account";
+  return isEmailVerified(account) ? null : "unconfirmed";
+}
+
+/** `inviteAccountProblem` for a signed-in member, read from the stored account (for the `/join/<token>` page). */
+export async function inviteAccountProblemFor(seat: Pick<OrgSeat, "email">, userId: string): Promise<ReturnType<typeof inviteAccountProblem>> {
+  const db = await getDb();
+  return inviteAccountProblem(seat, db.users.find((u) => u.id === userId));
 }
 
 /** The seat an invitation token belongs to (constant-time comparison over the stored hashes). */
@@ -681,8 +707,8 @@ export type AcceptResult = { ok: true; team: { id: string; name: string }; cours
 /**
  * Turn an invitation into the member's seat (inside one serialized write),
  * then enroll them. The seat only goes to the account that uses the invited
- * address (read from the stored account, never from the caller): a
- * forwarded or leaked link cannot hand a paid seat to someone else.
+ * address and has confirmed it (read from the stored account, never from the
+ * caller): a forwarded or leaked link cannot hand a paid seat to someone else.
  */
 async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pick<User, "id" | "name">, now: Date): Promise<AcceptResult> {
   const outcome = await mutate((d) => {
@@ -690,9 +716,8 @@ async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pi
     const org = seat ? d.organizations.find((o) => o.id === seat.orgId) : undefined;
     const problem = inviteProblem(org ? seat : undefined, now.getTime());
     if (problem || !seat || !org) return { problem: problem ?? ("invalid" as const) };
-    const account = d.users.find((u) => u.id === user.id);
-    if (!account?.enabled) return { problem: "disabled" as const };
-    if (!inviteMatchesAccount(seat, account)) return { problem: "wrong_account" as const };
+    const accountProblem = inviteAccountProblem(seat, d.users.find((u) => u.id === user.id));
+    if (accountProblem) return { problem: accountProblem };
     const seats = d.orgSeats.filter((s) => s.orgId === org.id);
     if (seats.some((s) => s.id !== seat.id && s.status === "active" && s.userId === user.id)) return { problem: "already_member" as const };
     if (seats.filter((s) => s.status === "active").length >= org.seatCount) return { problem: "full" as const };
@@ -714,7 +739,7 @@ async function activateSeat(find: (d: Database) => OrgSeat | undefined, user: Pi
   return { ok: true, team: { id: org.id, name: org.name }, courses };
 }
 
-/** Accept the invitation behind an emailed link, with the account that uses the invited address. Single use. */
+/** Accept the invitation behind an emailed link, with the confirmed account that uses the invited address. Single use. */
 export async function acceptInvite(rawToken: string, user: Pick<User, "id" | "name">, now: Date = new Date()): Promise<AcceptResult> {
   return activateSeat((d) => seatForToken(d, rawToken), user, now);
 }

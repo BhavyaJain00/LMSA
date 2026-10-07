@@ -8,15 +8,17 @@
  * too — every real browser sends one.
  *
  * Crawlers are matched by their crawler names, never by a brand alone: the
- * DuckDuckGo browser ("DuckDuckGo/5") and Pinterest's in-app browser
- * ("[Pinterest/iOS]") are real people.
+ * DuckDuckGo browser ("DuckDuckGo/5"), Pinterest's in-app browser
+ * ("[Pinterest/iOS]"), the Yandex app ("YandexSearch/"), the Slack and
+ * Discord desktop apps ("Slack/4", "discord/1") and Telegram's in-app
+ * browser ("Telegram-Android/10") are real people, and so is a Cubot phone
+ * ("CUBOT X30").
  */
 
 const BOT_PATTERN = new RegExp(
   [
     // Words ending in "bot" (Googlebot, PinterestBot, DuckDuckBot, ...), but not the Cubot phone brand.
     "(?<!cu)bot\\b",
-    "(?<!cu)bot/",
     "crawl",
     "spider",
     "slurp",
@@ -30,11 +32,10 @@ const BOT_PATTERN = new RegExp(
     "outbrain",
     "vkshare",
     "w3c_validator",
-    "whatsapp",
-    "telegram",
+    // WhatsApp's link unfurler ("WhatsApp/2.23.20.0 A"); its chats open links in the system browser.
+    "^whatsapp/",
     "skypeuripreview",
-    "slack",
-    "discord",
+    "slack-imgproxy",
     "bitlybot",
     "lighthouse",
     "pagespeed",
@@ -71,7 +72,8 @@ const BOT_PATTERN = new RegExp(
     "adsbot",
     "google-inspectiontool",
     "chrome-lighthouse",
-    "yandex",
+    // Yandex crawlers not named "...bot" (YandexImages/3.0, YandexMetrika/2.0, ...), not the Yandex app or browser.
+    "yandex(?!search|browser|app)[a-z]*/",
     "baiduspider",
     "petalbot",
     "bytespider",
@@ -79,7 +81,7 @@ const BOT_PATTERN = new RegExp(
     "claudebot",
     "anthropic-ai",
     "ccbot",
-    "perplexity",
+    "perplexity-user",
     "applebot",
     "semrush",
     "ahrefs",

@@ -80,7 +80,7 @@ export function InstallPrompt({ appName }: { appName: string }) {
   return (
     <aside
       aria-labelledby={titleId}
-      className="fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-md animate-fade-in rounded-card border border-border bg-surface-1 p-4 shadow-pop sm:inset-x-auto sm:right-4 sm:bottom-4 sm:left-auto sm:w-96 lg:bottom-4 print:hidden"
+      className="fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-40 mx-auto max-w-md animate-fade-in rounded-card border border-border bg-surface-1 p-4 shadow-pop sm:inset-x-auto sm:end-4 sm:bottom-4 sm:start-auto sm:w-96 lg:bottom-4 print:hidden"
     >
       <div className="flex items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-fg">

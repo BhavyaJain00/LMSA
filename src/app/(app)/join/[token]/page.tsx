@@ -5,11 +5,12 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { getRequestInfo } from "@/lib/auth/request-info";
 import { logoutAction } from "@/lib/actions/auth";
 import { joinAttemptAllowed } from "@/lib/growth/team-checkout";
-import { JOIN_PROBLEM_MESSAGES, inviteMatchesAccount, lookupInvite, type JoinProblem } from "@/lib/growth/teams";
+import { JOIN_PROBLEM_MESSAGES, inviteAccountProblemFor, lookupInvite, type JoinProblem } from "@/lib/growth/teams";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { AcceptInviteForm } from "@/components/growth/team-join";
+import { ResendVerificationButton } from "@/components/security/resend-verification-button";
 import { formatDate, pluralize } from "@/lib/utils";
 
 // The address carries a secret: keep it out of search engines and of the Referer header of outgoing links.
@@ -24,6 +25,7 @@ const PROBLEM_TITLES: Record<JoinProblem, string> = {
   already_member: "You're already on this team",
   disabled: "Your account can't accept invitations",
   wrong_account: "This invitation is for another address",
+  unconfirmed: "Confirm your email address first",
 };
 
 function Shell({ children }: { children: ReactNode }) {
@@ -98,8 +100,8 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
 
   const { invite } = lookup;
   const next = encodeURIComponent(`/join/${token}`);
-  // Only the account that uses the invited address can take the seat (see `acceptInvite`).
-  const otherAccount = !!user && !inviteMatchesAccount(invite, user);
+  // Only the enabled account that uses the invited address, and has confirmed it, can take the seat (see `acceptInvite`).
+  const accountProblem = user ? await inviteAccountProblemFor(invite, user.id) : null;
 
   return (
     <Shell>
@@ -137,7 +139,7 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
       <div className="mt-6 space-y-3">
         {user ? (
           <>
-            {otherAccount ? (
+            {accountProblem === "wrong_account" ? (
               <>
                 <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-start text-sm text-ink">
                   You&apos;re signed in as <span className="break-all font-medium">{user.email}</span>, but this seat is reserved for{" "}
@@ -150,6 +152,23 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
                   </Button>
                 </form>
               </>
+            ) : accountProblem === "unconfirmed" ? (
+              <>
+                <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-start text-sm text-ink">
+                  Confirm <span className="break-all font-medium">{invite.email}</span> before you accept: open the confirmation link we emailed to that address, then
+                  open this invitation again. This keeps the paid seat safe if the invitation was forwarded to someone else.
+                </p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <ResendVerificationButton size="lg" label="Send a new confirmation link" />
+                  <ButtonLink href="/settings/security" size="lg" variant="ghost">
+                    Account security
+                  </ButtonLink>
+                </div>
+              </>
+            ) : accountProblem === "disabled" ? (
+              <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-start text-sm text-ink">
+                {JOIN_PROBLEM_MESSAGES.disabled}
+              </p>
             ) : (
               <AcceptInviteForm token={token} label="Accept invitation" />
             )}

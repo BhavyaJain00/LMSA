@@ -71,7 +71,7 @@ export function BundleCard({ bundle, headingLevel = "h2", priority, className }:
     >
       <div className="relative">
         <BundleCover title={bundle.title} imageUrl={bundle.imageUrl} courses={bundle.courses} priority={priority} className="h-40 border-b border-border" />
-        <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-1.5">
+        <div className="absolute start-3 top-3 z-10 flex flex-wrap gap-1.5">
           <SavingsBadge percent={bundle.savingsPercent} size="xs" className="bg-surface-1 shadow-sm" />
           {bundle.ownsAll && (
             <Badge tone="accent" size="xs" className="bg-surface-1 shadow-sm">

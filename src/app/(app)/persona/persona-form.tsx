@@ -174,7 +174,7 @@ export function PersonaForm({
           <IconButton
             label="Back"
             size="icon-sm"
-            className="absolute -top-10 left-0 sm:-left-12 sm:top-1"
+            className="absolute -top-10 start-0 sm:-start-12 sm:top-1"
             onClick={() => setStep((s) => Math.max(0, s - 1))}
             disabled={pending}
           >

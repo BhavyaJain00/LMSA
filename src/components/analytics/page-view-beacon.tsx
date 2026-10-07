@@ -3,31 +3,25 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { getConsent } from "@/components/legal/consent-client";
-import { funnelStageOf } from "@/lib/growth/analytics-shared";
+import { createPageViewReporter } from "./page-view-report";
 
 /**
  * Sends one page view per route to `/api/analytics` with `sendBeacon`
  * (fetch keepalive as a fallback). Nothing is sent when the browser asks
- * not to be tracked (Do-Not-Track / Global Privacy Control).
- *
- * Only the path is sent (the query string never leaves the page), plus, on
- * the first page of a visit, the referring site's origin and the UTM tags.
- * The current analytics-consent decision goes along: without consent the
- * server stores the page view without any visitor or member id, so the
- * beacon also says when this tab reaches a funnel stage (a product page, a
- * checkout) for the first time, letting the funnel count such a visitor once
- * per stage.
+ * not to be tracked (Do-Not-Track / Global Privacy Control). What is sent is
+ * decided in `page-view-report.ts`.
  *
  * The beacon is mounted by each route group's layout (app, learn, public),
  * so moving between groups remounts it; "first page of this document" is
- * therefore kept at module scope, not in the component.
+ * therefore kept at module scope (one reporter per document), not in the
+ * component, so a remount never starts a new visit.
  */
 
 const ENDPOINT = "/api/analytics";
 const STAGES_KEY = "ll_funnel_stages";
 
-/** Whether this document already reported its first page (survives remounts across route groups). */
-let documentViewSent = false;
+/** One reporter for the whole document (survives remounts across route groups). */
+const reportPageView = createPageViewReporter();
 /** Funnel stages reported by this tab, when sessionStorage is not available. */
 const stagesInMemory = new Set<string>();
 
@@ -58,17 +52,6 @@ function isFreshNavigation(): boolean {
   return !nav || nav.type === "navigate";
 }
 
-/** Origin of an external referrer ("" for none or this site). */
-function externalReferrer(): string {
-  if (!document.referrer) return "";
-  try {
-    const url = new URL(document.referrer);
-    return url.host === window.location.host ? "" : url.origin;
-  } catch {
-    return "";
-  }
-}
-
 function send(body: Record<string, unknown>): void {
   const data = JSON.stringify(body);
   try {
@@ -86,22 +69,16 @@ export function PageViewBeacon() {
   useEffect(() => {
     if (!pathname || lastPath.current === pathname) return;
     lastPath.current = pathname;
-    const first = !documentViewSent;
-    documentViewSent = true;
-    if (trackingRefused()) return;
-
-    const referrer = first ? externalReferrer() : "";
-    const sameSiteReferrer = first && !!document.referrer && !referrer;
-    const body: Record<string, unknown> = { path: pathname, consent: getConsent().analytics, entry: first && isFreshNavigation() && !sameSiteReferrer };
-    if (body.entry) {
-      if (referrer) body.referrer = referrer;
-      const params = new URLSearchParams(window.location.search);
-      const utm = { source: params.get("utm_source") ?? undefined, medium: params.get("utm_medium") ?? undefined, campaign: params.get("utm_campaign") ?? undefined };
-      if (utm.source || utm.medium || utm.campaign) body.utm = utm;
-    }
-    const stage = funnelStageOf(pathname);
-    if (stage && firstTimeAt(stage)) body.firstReach = true;
-    send(body);
+    const body = reportPageView(pathname, {
+      trackingRefused: trackingRefused(),
+      consent: getConsent().analytics,
+      freshNavigation: isFreshNavigation(),
+      documentReferrer: document.referrer,
+      host: window.location.host,
+      search: window.location.search,
+      firstTimeAt,
+    });
+    if (body) send(body);
   }, [pathname]);
 
   return null;

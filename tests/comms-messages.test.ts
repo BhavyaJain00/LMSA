@@ -22,6 +22,7 @@ import {
   reportStatus,
   safeMessageUrl,
   startsUnreadRun,
+  teachersAmong,
   threadAccess,
   type DirectorySource,
   type MessagingMember,
@@ -117,6 +118,13 @@ describe("message permissions", () => {
     isStaff: (id) => isMessagingStaff(m(id, id === "mod" ? ["moderator"] : ["student"]), dir),
     areClassmates: (a, b) => [...(dir.learning.get(a) ?? [])].some((k) => dir.learning.get(b)?.has(k)),
     ...over,
+  });
+
+  it("finds which of a few members teach, without a site-wide directory", () => {
+    assert.deepEqual([...teachersAmong(source, ["ann", "teacher", "grader", "batch-teacher"])].sort(), ["batch-teacher", "grader", "teacher"]);
+    assert.deepEqual([...teachersAmong(source, ["ann", "cat"])], []);
+    assert.deepEqual([...teachersAmong(source, [])], []);
+    assert.deepEqual([...teachersAmong(source, ["other-teacher"])], ["other-teacher"]);
   });
 
   it("lets any participant reply while messaging is on and someone else is still active", () => {
@@ -409,6 +417,12 @@ describe("inbox, threads and polling", () => {
 
   it("lists conversations with unread counts, previews, search and the unread filter", async () => {
     const a = await start(ann, teacher, "From Ann");
+    // Both conversations can be created in the same millisecond; age Ann's so
+    // "newest first" does not fall back to the random-id tie-break.
+    await mutate((d) => {
+      const conversation = d.conversations.find((c) => c.id === a.conversationId)!;
+      conversation.lastMessageAt = new Date(Date.parse(conversation.lastMessageAt) - 60_000).toISOString();
+    });
     await start(bob, teacher, "From **Bob**");
     await markConversationRead(teacher.id, a.conversationId);
     const db = await getDb();
@@ -474,6 +488,35 @@ describe("inbox, threads and polling", () => {
     assert.deepEqual(removed?.removedIds, [firstId]);
     assert.deepEqual(removed?.messages, []);
     assert.equal(await pollThread(cat, opened.conversationId, null, [], true), null);
+  });
+
+  it("marks a polled thread read in the same pass, including a notification left unread", async () => {
+    const opened = await start(ann, teacher, "hello");
+    const update = await pollThread(teacher, opened.conversationId, null, [], true);
+    assert.deepEqual(update?.messages.map((x) => x.body), ["hello"], "the poll answers with the state after marking");
+    let db = await getDb();
+    assert.ok(db.directMessages.every((x) => x.readBy.includes(teacher.id)));
+    // Messages already read, but the in-app notification is still unread: the poll clears it too.
+    await mutate((d) => {
+      for (const n of d.notifications) if (n.userId === teacher.id && n.link === `/messages/${opened.conversationId}`) n.read = false;
+    });
+    await pollThread(teacher, opened.conversationId, opened.message.id, [], true);
+    db = await getDb();
+    assert.equal(db.notifications.filter((n) => n.userId === teacher.id && !n.read).length, 0);
+    // Without read=1 nothing is marked.
+    const next = await sendMessage(ann, opened.conversationId, "still there?");
+    assert.ok(next.ok);
+    await pollThread(teacher, opened.conversationId, opened.message.id, [], false);
+    assert.equal(countUnreadMessages(await getDb(), teacher.id), 1);
+  });
+
+  it("labels roles in the inbox and threads from the participants only", async () => {
+    const opened = await start(ann, teacher, "Question about lesson 2");
+    const db = await getDb();
+    assert.equal(listInbox(db, teacher.id).items[0].others[0].role, undefined, "a learner has no label");
+    const thread = buildThread(db, ann, opened.conversationId);
+    assert.ok(thread.ok);
+    if (thread.ok) assert.deepEqual(thread.thread.participants.map((p) => p.role), [undefined, "Instructor"]);
   });
 
   it("removes only your own messages (moderators: in reported conversations)", async () => {

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { agreementArticle, agreementListParts, type AgreementLink } from "@/lib/legal/agreement";
 import { intlLocale } from "@/i18n/config";
-import { useLocale } from "@/i18n/client";
+import { useLocale, useT } from "@/i18n/client";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
  */
 export function LegalAgreement({ documents, lead, className }: { documents: readonly AgreementLink[]; lead: string; className?: string }) {
   const locale = intlLocale(useLocale());
+  const t = useT("common");
   if (!documents.length) return null;
   const parts = agreementListParts(documents.length, locale);
   return (
@@ -30,7 +31,7 @@ export function LegalAgreement({ documents, lead, className }: { documents: read
         return (
           <Link key={doc.slug} href={doc.href} target="_blank" rel="noopener" className="font-medium text-ink-muted underline underline-offset-2 hover:text-ink">
             {doc.title}
-            <span className="sr-only"> (opens in a new tab)</span>
+            <span className="sr-only"> {t("a11y.opensInNewTab")}</span>
           </Link>
         );
       })}

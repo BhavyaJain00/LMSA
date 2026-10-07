@@ -217,11 +217,13 @@ export default async function LearnLayout({ children }: LayoutProps<"/">) {
   `global.player.*` (the video and audio player) comes from `PlayerI18n`
   (`src/components/player/player-i18n.tsx`): wrap any new page that renders
   `VideoPlayer` or `AudioPlayer` in it.
-- `/admin` is split by section: the admin layout sends only shared admin
-  slices, and the settings, members, data and badges layouts add theirs
-  (`src/components/admin/i18n-slices.ts`). A new client prefix in `admin` is
-  sent on the settings pages; claim it for another section there if it is
-  used elsewhere.
+- `/admin` is split by route: the admin layout sends only shared admin
+  slices, the members and settings layouts add theirs, and every settings
+  page's own `layout.tsx` adds its form's slice (`<AdminI18n section=…>`,
+  sections listed in `src/components/admin/i18n-slices.ts`). A new client
+  prefix in `admin` must be added to the section of the route that renders
+  it; `tests/i18n-payload.test.ts` fails for a prefix no section provides and
+  for a client component whose keys its route's layouts do not provide.
 - A simpler alternative for small client components: translate in the server
   parent with `getT` and pass the strings as props.
 - Without a provider, `useT` shows keys instead of text and logs a development

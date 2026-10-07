@@ -190,7 +190,7 @@ describe("retention job", () => {
   it("folds raw events older than 90 days into rollups without changing the numbers", async () => {
     const now = Date.parse("2026-06-15T12:00:00.000Z");
     const old = Date.parse("2026-02-10T09:00:00.000Z");
-    const recent = now - 5 * DAY;
+    const recent = now - 60 * 60 * 1000;
     const ev = (id: string, ms: number, e: Partial<AnalyticsEvent> & Pick<AnalyticsEvent, "name">): AnalyticsEvent => ({ id, createdAt: new Date(ms).toISOString(), ...e });
     await setup({
       analyticsEvents: [

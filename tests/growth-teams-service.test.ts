@@ -547,7 +547,7 @@ describe("accepting an invitation", () => {
     assert.equal((await seatOf("sam@example.org")).status, "invited");
     assert.equal((await lookupInvite(token)).ok, true, "the link still works for the right account");
 
-    // The link itself proves the mailbox, so the account's address need not be confirmed yet.
+    // An account that never needed confirming (created by an administrator) takes the seat.
     assert.ok((await acceptInvite(token, stranger)).ok);
     const seat = await seatOf("sam@example.org");
     assert.deepEqual([seat.userId, seat.status], [stranger.id, "active"]);

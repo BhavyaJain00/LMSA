@@ -15,6 +15,8 @@ import {
   PURCHASE,
   RETENTION_DAYS,
   SIGN_UP,
+  TRAFFIC_RAW_DAYS,
+  VISITOR_DAY,
   checkoutTarget,
   dayKeys,
   dayStartMs,
@@ -34,12 +36,14 @@ import {
   campaignTable,
   computeCohorts,
   computeMrr,
+  consentedViewShare,
   countVisitors,
   countCheckoutPurchases,
   countWhere,
   couponPerformance,
   dailySeries,
   funnelStages,
+  isAttributionTouch,
   isPageView,
   isRollup,
   isVisit,
@@ -50,6 +54,7 @@ import {
   revenueByItem,
   revenueIn,
   revenueSeries,
+  rollupTraffic,
   subscriptionMovement,
   summarizeRevenue,
   toEventCount,
@@ -70,7 +75,7 @@ import {
 /**
  * First-party analytics on the server (growth area): page views from the
  * beacon (`/api/analytics`), business events from domain events
- * (`growth/handlers.ts`), the 90-day retention job and the report behind
+ * (`growth/handlers.ts`), the retention job and the report behind
  * `/admin/analytics`.
  */
 
@@ -121,15 +126,24 @@ export function pageViewEvents(payload: BeaconPayload, ctx: PageViewContext, now
   return events;
 }
 
+/**
+ * Whether the same visitor or member started the checkout of the same item in
+ * the last `CHECKOUT_DEDUPE_MS`. Scans back from the newest event and stops
+ * at the first page view or checkout start older than that (those are
+ * appended as they happen; rollups, visitor days and referral links carry
+ * older dates and are skipped). `findLast` runs natively on the store's
+ * array, and inside a mutation the store records only the event it returns.
+ */
 function isDuplicateCheckout(db: Pick<Database, "analyticsEvents">, e: AnalyticsEvent, nowMs: number): boolean {
   if (!e.anonId && !e.userId) return false;
-  for (let i = db.analyticsEvents.length - 1; i >= 0; i--) {
-    const prev = db.analyticsEvents[i]!;
-    if (Date.parse(prev.createdAt) < nowMs - CHECKOUT_DEDUPE_MS) break;
-    if (prev.name !== CHECKOUT_STARTED || prev.itemType !== e.itemType || prev.itemId !== e.itemId) continue;
-    if ((e.anonId && prev.anonId === e.anonId) || (e.userId && prev.userId === e.userId)) return true;
-  }
-  return false;
+  const since = nowMs - CHECKOUT_DEDUPE_MS;
+  const hit = db.analyticsEvents.findLast((prev) => {
+    if (prev.name !== PAGE_VIEW && prev.name !== CHECKOUT_STARTED) return false;
+    if (Date.parse(prev.createdAt) < since) return true;
+    if (prev.name !== CHECKOUT_STARTED || prev.itemType !== e.itemType || prev.itemId !== e.itemId) return false;
+    return !!((e.anonId && prev.anonId === e.anonId) || (e.userId && prev.userId === e.userId));
+  });
+  return !!hit && Date.parse(hit.createdAt) >= since;
 }
 
 /** Store the events of a beacon hit (a repeated checkout start of the same visitor is skipped). */
@@ -239,65 +253,99 @@ export function retentionCutoffMs(nowMs: number): number {
   return dayStartMs(utcDayKey(nowMs)) - RETENTION_DAYS * DAY_MS;
 }
 
+/** Page views and checkout starts created before this instant are folded into daily counts and visitor days. */
+export function trafficCutoffMs(nowMs: number): number {
+  return dayStartMs(utcDayKey(nowMs)) - TRAFFIC_RAW_DAYS * DAY_MS;
+}
+
+const isTraffic = (e: AnalyticsEvent) => e.name === PAGE_VIEW || e.name === CHECKOUT_STARTED;
+
+/** What the plan relied on in a row it removes (erasure removes `userId`; a rollup or visitor day grows). */
+const fingerprint = (e: AnalyticsEvent) => `${e.userId ?? ""}|${e.value ?? 0}|${e.itemType ?? ""}`;
+
 /**
- * Fold raw events older than `RETENTION_DAYS` (whole UTC days) into daily
- * rollups and delete them. Sign-ups and purchases are credited to their
- * campaign first, so the rollups keep that attribution. Affiliate referral
- * links stay raw: commissions rely on them.
+ * The retention job, in two steps over whole UTC days:
  *
- * The work is planned outside the write lock (stored events never change,
- * and only this job writes rollups); the lock is held just long enough to
- * check the plan still applies and swap the rows in with one `filter`
- * assignment, which the store records as the removals and additions it is.
+ *  1. Page views and checkout starts older than `TRAFFIC_RAW_DAYS` become
+ *     daily counts plus one visitor-day row per consenting visitor and day
+ *     (`rollupTraffic`), so the store does not keep every page view for
+ *     months. Visits with a referrer or campaign and an id stay raw: later
+ *     sign-ups and purchases are credited to them.
+ *  2. Everything older than `RETENTION_DAYS` (those visits, visitor days,
+ *     conversions) is folded into daily rollups without any id
+ *     (`buildRollups`). Sign-ups and purchases are credited to their
+ *     campaign first, so the rollups keep that attribution.
+ *
+ * Affiliate referral links stay raw: commissions rely on them.
+ *
+ * The work is planned outside the write lock (only this job writes rollups
+ * and visitor days); the lock is held just long enough to check the plan
+ * still applies and swap the rows in with one `filter` assignment, which the
+ * store records as the removals and additions it is.
  */
 export async function compactAnalytics(nowMs: number = Date.now()): Promise<{ compacted: number; rollups: number }> {
   const cutoff = retentionCutoffMs(nowMs);
+  const trafficCutoff = trafficCutoffMs(nowMs);
   const db = await getDb();
   const old: AnalyticsEvent[] = [];
+  const traffic: AnalyticsEvent[] = [];
   const linking: AnalyticsEvent[] = [];
   const existing: AnalyticsEvent[] = [];
+  const visitorDays: AnalyticsEvent[] = [];
   for (const e of db.analyticsEvents) {
-    if (isRollup(e)) existing.push(e);
-    else if (e.name === REFERRAL_EVENT) continue;
-    else if (Date.parse(e.createdAt) < cutoff) old.push(e);
+    if (isRollup(e)) {
+      existing.push(e);
+      continue;
+    }
+    if (e.name === REFERRAL_EVENT) continue;
+    const at = Date.parse(e.createdAt);
+    if (at < cutoff) {
+      old.push(e);
+      continue;
+    }
+    if (e.name === VISITOR_DAY) visitorDays.push(e);
+    else if (isTraffic(e) && at < trafficCutoff && !isAttributionTouch(e)) traffic.push(e);
     // Later events can still tie a visitor id to a member, which attribution of old conversions needs.
-    else if (e.userId && e.anonId) linking.push(e);
+    if (e.userId && e.anonId) linking.push(e);
   }
-  if (!old.length) return { compacted: 0, rollups: 0 };
+  if (!old.length && !traffic.length) return { compacted: 0, rollups: 0 };
 
+  const newId = () => uid("evr_");
   // Attribution only looks back in time, so the expired events plus the visitor↔member links are enough.
-  const attributed = withAttribution([...old, ...linking]).slice(0, old.length);
-  const before = new Map(existing.map((r) => [r.id, r.value ?? 0]));
-  const built = buildRollups(attributed, existing, () => uid("evr_"));
-  // A rollup that grew is replaced by a copy with a new id, so the swap below is removals plus additions only.
-  const replaced = new Set<string>();
+  const built = old.length ? buildRollups(withAttribution([...old, ...linking]).slice(0, old.length), existing, newId) : existing;
+  const folded = rollupTraffic(traffic, built, visitorDays, newId);
+
+  const removed = new Map<string, string>();
+  for (const e of old) removed.set(e.id, fingerprint(e));
+  for (const e of traffic) removed.set(e.id, fingerprint(e));
+  const kept = new Map([...existing, ...visitorDays].map((r) => [r.id, fingerprint(r)]));
+  // A rollup or visitor day that changed is replaced by a copy with a new id, so the swap below is removals plus additions only.
   const additions: AnalyticsEvent[] = [];
-  for (const row of built) {
-    const previous = before.get(row.id);
-    if (previous === undefined) additions.push(row);
-    else if ((row.value ?? 0) !== previous) {
-      replaced.add(row.id);
-      additions.push({ ...row, id: uid("evr_") });
+  let added = 0;
+  for (const row of [...folded.rows, ...folded.visitorDays]) {
+    const previous = kept.get(row.id);
+    if (previous === undefined) {
+      additions.push(row);
+      added++;
+    } else if (fingerprint(row) !== previous) {
+      removed.set(row.id, previous);
+      additions.push({ ...row, id: newId() });
     }
   }
-  const oldIds = new Set(old.map((e) => e.id));
 
   return mutate((d) => {
     // Stop if another run or an erasure changed what was planned; the next run starts over.
-    let foundOld = 0;
-    let foundReplaced = 0;
+    let found = 0;
     const stale = d.analyticsEvents.some((e) => {
-      if (oldIds.has(e.id)) foundOld++;
-      else if (replaced.has(e.id)) {
-        foundReplaced++;
-        return (e.value ?? 0) !== before.get(e.id);
-      }
-      return false;
+      const expected = removed.get(e.id);
+      if (expected === undefined) return false;
+      found++;
+      return fingerprint(e) !== expected;
     });
-    if (stale || foundOld !== oldIds.size || foundReplaced !== replaced.size) return { compacted: 0, rollups: 0 };
-    d.analyticsEvents = d.analyticsEvents.filter((e) => !oldIds.has(e.id) && !replaced.has(e.id));
+    if (stale || found !== removed.size) return { compacted: 0, rollups: 0 };
+    d.analyticsEvents = d.analyticsEvents.filter((e) => !removed.has(e.id));
     d.analyticsEvents.push(...additions);
-    return { compacted: old.length, rollups: built.length - existing.length };
+    return { compacted: old.length + traffic.length, rollups: added };
   });
 }
 
@@ -534,8 +582,13 @@ function buildAnalyticsReport(db: Database, range: DateRange, nowMs: number): An
   const byType = new Map<string, number>();
   for (const i of items) if (i.currency === currency) byType.set(i.itemType, (byType.get(i.itemType) ?? 0) + i.net);
 
-  const rawInRange = counts.filter((c) => c.raw && c.name === PAGE_VIEW);
-  const oldestRaw = raw.reduce<string | null>((min, e) => (min === null || e.createdAt < min ? e.createdAt : min), null);
+  // Visitor days stand for page views already folded into daily counts: they are reported with the daily totals.
+  let visitorDayRows = 0;
+  let oldestRaw: string | null = null;
+  for (const e of raw) {
+    if (e.name === VISITOR_DAY) visitorDayRows++;
+    else if (oldestRaw === null || e.createdAt < oldestRaw) oldestRaw = e.createdAt;
+  }
   const learners = db.users.filter((u) => !u.roles.includes("admin"));
 
   return {
@@ -577,10 +630,10 @@ function buildAnalyticsReport(db: Database, range: DateRange, nowMs: number): An
     affiliates: affiliatePerformance(db, bounds),
     cohorts: computeCohorts(learners, activity, { nowMs, cohorts: COHORT_COUNT, weeks: COHORT_WEEKS, endMs: bounds.endMs }),
     tracking: {
-      rawEvents: raw.length,
-      rollupRows: rollups.length,
+      rawEvents: raw.length - visitorDayRows,
+      rollupRows: rollups.length + visitorDayRows,
       oldestRaw,
-      consentedShare: ratio(rawInRange.filter((c) => c.actor).length, rawInRange.length),
+      consentedShare: consentedViewShare(counts),
     },
   };
 }

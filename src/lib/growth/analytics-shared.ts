@@ -11,8 +11,14 @@
  *  - Paths are reduced to their route shape where they could carry a secret
  *    (seat invitations, tokens) and query strings are never stored.
  *  - Referrers are reduced to the host name.
- *  - Raw events are kept for `RETENTION_DAYS`, then folded into daily
- *    rollups without any visitor id.
+ *  - Page views and checkout starts are kept one by one only for the
+ *    current and previous UTC day (`TRAFFIC_RAW_DAYS`). Then they become
+ *    daily counts, plus one `visitor_day` row per consenting visitor and day
+ *    (which pages of the funnel they reached), so unique visitors and the
+ *    funnel stay exact over any period without keeping every page view.
+ *  - Those rows, conversions and the visits that carried a campaign or a
+ *    referrer (needed to credit later sign-ups and purchases) are kept for
+ *    `RETENTION_DAYS`, then folded into daily rollups without any visitor id.
  */
 
 export const PAGE_VIEW = "page_view";
@@ -33,9 +39,26 @@ export const ROLLUP_COUNT_PREFIX = "rollup:";
 export const ROLLUP_SUM_PREFIX = "rollup-sum:";
 /** Daily unique visitors of a compacted day. */
 export const VISITORS_ROLLUP = `${ROLLUP_COUNT_PREFIX}visitors`;
+/** Daily page views of visitors who accepted analytics cookies, and of those who did not (for the consent share). */
+export const CONSENTED_VIEWS_ROLLUP = `${ROLLUP_COUNT_PREFIX}views:consented`;
+export const ANONYMOUS_VIEWS_ROLLUP = `${ROLLUP_COUNT_PREFIX}views:anonymous`;
+/**
+ * One consenting visitor (`anonId` and/or `userId`) on one UTC day, once their
+ * page views of that day were folded into counts: `itemType` lists, separated
+ * by spaces, `view` when they viewed a page plus each funnel stage they
+ * reached (`visit`, `product`, `checkout`).
+ */
+export const VISITOR_DAY = "visitor_day";
 
 /** Raw events older than this are folded into daily rollups. */
 export const RETENTION_DAYS = 90;
+/**
+ * Page views and checkout starts are kept one by one for the current UTC day
+ * and this many days before it, then folded into daily counts and
+ * `VISITOR_DAY` rows (a visit with a campaign or referrer stays raw for
+ * `RETENTION_DAYS`, for attribution).
+ */
+export const TRAFFIC_RAW_DAYS = 1;
 /** A sign-up or purchase is credited to the last campaign/referrer touch within this many days. */
 export const ATTRIBUTION_DAYS = 30;
 /** Longest range the dashboard accepts. */

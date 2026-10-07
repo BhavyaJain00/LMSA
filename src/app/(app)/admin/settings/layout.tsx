@@ -7,8 +7,9 @@ import { AdminI18n } from "@/components/admin/i18n";
 
 /**
  * Admin settings shell: page header + grouped sub-navigation. Every page and
- * Server Action below re-checks the admin role as well. Provides the settings
- * forms' client messages (see `src/components/admin/i18n-slices.ts`).
+ * Server Action below re-checks the admin role as well. Provides the
+ * sub-navigation's client messages; each settings page's layout adds its own
+ * form's slice (see `src/components/admin/i18n-slices.ts`).
  */
 export default async function SettingsLayout({ children }: LayoutProps<"/admin/settings">) {
   const t = await getT("admin");

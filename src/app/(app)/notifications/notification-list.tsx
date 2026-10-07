@@ -100,7 +100,7 @@ export function NotificationList({ groups }: { groups: NotificationGroup[] }) {
                   {n.from ? (
                     <span className="relative shrink-0">
                       <Avatar name={n.from.name} src={n.from.avatarUrl} size="md" />
-                      <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-surface-1 text-ink-muted ring-2 ring-surface-1 [&>svg]:size-3">
+                      <span className="absolute -bottom-1 -end-1 flex size-5 items-center justify-center rounded-full bg-surface-1 text-ink-muted ring-2 ring-surface-1 [&>svg]:size-3">
                         {typeIcon[n.type]}
                       </span>
                     </span>

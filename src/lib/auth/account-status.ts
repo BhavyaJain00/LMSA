@@ -61,14 +61,24 @@ export function mustSetUpTwoFactor(
   return security.allowTwoFactor && security.enforceTwoFactorForStaff && hasStaffRole(user) && !isTwoFactorActive(user);
 }
 
-/** "3 minutes", "1 hour", "a few seconds" — for lockout and rate-limit messages. */
-export function formatWait(ms: number): string {
+/** A wait rounded up for people: "a few seconds" (under 45 s), whole minutes, or whole hours. */
+export type WaitAmount = { unit: "seconds" } | { unit: "minutes" | "hours"; count: number };
+
+/** Round a wait the way lockout and rate-limit messages show it (shared by `formatWait` and translated messages). */
+export function waitAmount(ms: number): WaitAmount {
   const seconds = Math.ceil(Math.max(0, ms) / 1000);
-  if (seconds < 45) return "a few seconds";
+  if (seconds < 45) return { unit: "seconds" };
   const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  const hours = Math.ceil(minutes / 60);
-  return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  if (minutes < 60) return { unit: "minutes", count: minutes };
+  return { unit: "hours", count: Math.ceil(minutes / 60) };
+}
+
+/** "3 minutes", "1 hour", "a few seconds" — for lockout and rate-limit messages (English). */
+export function formatWait(ms: number): string {
+  const wait = waitAmount(ms);
+  if (wait.unit === "seconds") return "a few seconds";
+  const unit = wait.unit === "minutes" ? "minute" : "hour";
+  return `${wait.count} ${wait.count === 1 ? unit : `${unit}s`}`;
 }
 
 /** "a•••@example.com" — shows enough of an address to recognise it without echoing it in full. */

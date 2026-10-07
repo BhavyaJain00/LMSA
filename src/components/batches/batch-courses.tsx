@@ -21,7 +21,7 @@ async function CourseCover({ course }: { course: BatchCourseItem }) {
         </div>
       )}
       {course.completed && (
-        <Badge tone="success" className="absolute right-3 top-3 bg-surface-1/90 backdrop-blur">
+        <Badge tone="success" className="absolute end-3 top-3 bg-surface-1/90 backdrop-blur">
           <Icon.CheckCircle className="size-3" /> {t("card.completed")}
         </Badge>
       )}

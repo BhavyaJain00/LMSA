@@ -8,6 +8,11 @@
  *    the matching `.ts` file or `index.ts`, the way the bundler does.
  *  - `server-only`, `next/headers`, `next/navigation`, `next/cache` and `next/server` are
  *    replaced by the small fakes in `tests/stubs/`.
+ *  - The project's own `.ts` files (tests and app code) are ES modules, so
+ *    they are marked "module-typescript". package.json has no
+ *    `"type": "module"` (the standalone server build copies it), and without
+ *    the hint Node first tries each file as CommonJS, then reparses it and
+ *    prints a MODULE_TYPELESS_PACKAGE_JSON warning per test process.
  *
  * React components (`.tsx`) are deliberately not loadable: Node's type
  * stripping does not transform JSX, and tests cover the pure modules only.
@@ -58,7 +63,19 @@ function notFound(specifier, parentURL) {
   return error;
 }
 
+/** Marks the project's own TypeScript files as ES modules (see the header). */
+function withFormat(result) {
+  if (result.format || !result.url.startsWith("file:") || !/\.m?ts$/.test(result.url)) return result;
+  const file = fileURLToPath(result.url);
+  if (!file.startsWith(ROOT) || file.includes(`${path.sep}node_modules${path.sep}`)) return result;
+  return { ...result, format: "module-typescript" };
+}
+
 export async function resolve(specifier, context, nextResolve) {
+  return withFormat(await resolveModule(specifier, context, nextResolve));
+}
+
+async function resolveModule(specifier, context, nextResolve) {
   const stub = STUBS.get(specifier);
   if (stub) return { url: pathToFileURL(path.join(TESTS_DIR, "stubs", stub)).href, shortCircuit: true };
 

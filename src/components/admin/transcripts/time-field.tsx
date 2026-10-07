@@ -89,7 +89,7 @@ export function TimeField({
         )}
       />
       {error && (
-        <span role="alert" className="absolute left-0 top-full z-10 mt-1 w-max max-w-56 rounded-md bg-danger px-2 py-1 text-[11px] font-medium text-white shadow-pop">
+        <span role="alert" className="absolute start-0 top-full z-10 mt-1 w-max max-w-56 rounded-md bg-danger px-2 py-1 text-[11px] font-medium text-white shadow-pop">
           {error}
         </span>
       )}

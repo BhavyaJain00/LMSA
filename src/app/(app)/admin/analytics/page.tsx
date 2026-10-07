@@ -4,7 +4,7 @@ import { after } from "next/server";
 import { requireRole } from "@/lib/auth/session";
 import { getAnalyticsReport, maybeCompactAnalytics, type AnalyticsReport, type ExportSection, type ItemRevenueView } from "@/lib/growth/analytics";
 import { DIRECT } from "@/lib/growth/analytics-metrics";
-import { ATTRIBUTION_DAYS, RETENTION_DAYS, parseRange, rangeQuery } from "@/lib/growth/analytics-shared";
+import { ATTRIBUTION_DAYS, RETENTION_DAYS, TRAFFIC_RAW_DAYS, parseRange, rangeQuery } from "@/lib/growth/analytics-shared";
 import { Badge } from "@/components/ui/badge";
 import { buttonClasses } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, PageHeader, StatCard } from "@/components/ui/card";
@@ -404,8 +404,9 @@ export default async function AdminAnalyticsPage(props: PageProps<"/admin/analyt
           Privacy
         </Badge>
         <span>
-          {report.tracking.consentedShare}% of page views in this period came from visitors who accepted analytics cookies. Raw events are kept for {RETENTION_DAYS} days,
-          then only as daily totals ({formatNumber(report.tracking.rawEvents)} raw events and {formatNumber(report.tracking.rollupRows)} daily totals stored
+          {report.tracking.consentedShare}% of page views in this period came from visitors who accepted analytics cookies. Page views are kept one by one for up to{" "}
+          {TRAFFIC_RAW_DAYS + 1} days and then as daily totals; visits from a campaign or another site, sign-ups and purchases are kept for {RETENTION_DAYS} days, then
+          only as daily totals ({formatNumber(report.tracking.rawEvents)} raw events and {formatNumber(report.tracking.rollupRows)} daily totals stored
           {report.tracking.oldestRaw ? `; oldest raw event from ${formatDate(report.tracking.oldestRaw)}` : ""}).
         </span>
       </p>

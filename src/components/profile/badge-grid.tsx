@@ -52,7 +52,7 @@ export function BadgeGrid({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={b.imageUrl} alt="" className={cn("object-contain transition-transform group-hover:scale-105", compact ? "size-14" : "size-20")} loading="lazy" />
                 {b.count > 1 && (
-                  <span className="absolute -bottom-1 -right-2 rounded-full bg-surface-3 px-1.5 py-px text-[11px] font-semibold text-ink ring-2 ring-surface-1">
+                  <span className="absolute -bottom-1 -end-2 rounded-full bg-surface-3 px-1.5 py-px text-[11px] font-semibold text-ink ring-2 ring-surface-1">
                     {t("profile.badges.times", { count: b.count })}
                   </span>
                 )}

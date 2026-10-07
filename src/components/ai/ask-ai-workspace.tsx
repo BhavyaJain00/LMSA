@@ -102,7 +102,7 @@ function ConversationList({ conversations, activeId, loadingId, onOpen, onDelete
                     id={`${idPrefix}-${c.id}`}
                     onClick={() => onOpen(c.id)}
                     aria-current={active ? "true" : undefined}
-                    className="block w-full rounded-lg py-2 pl-3 pr-10 text-left focus-visible:outline-2 focus-visible:outline-accent"
+                    className="block w-full rounded-lg py-2 ps-3 pe-10 text-start focus-visible:outline-2 focus-visible:outline-accent"
                   >
                     <span className={cn("block truncate text-sm", active ? "font-medium text-ink" : "text-ink")}>{c.title}</span>
                     <span className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-faint">
@@ -126,7 +126,7 @@ function ConversationList({ conversations, activeId, loadingId, onOpen, onDelete
                     onClick={() => onDelete(c)}
                     aria-label={`Delete conversation “${c.title}”`}
                     title="Delete conversation"
-                    className="absolute right-1.5 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-faint hover:bg-surface-3 hover:text-danger focus-visible:outline-2 focus-visible:outline-accent lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover:opacity-100"
+                    className="absolute end-1.5 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-faint hover:bg-surface-3 hover:text-danger focus-visible:outline-2 focus-visible:outline-accent lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover:opacity-100"
                   >
                     <Icon.Trash className="size-3.5" />
                   </button>

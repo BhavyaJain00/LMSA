@@ -41,14 +41,25 @@ export function passwordRequirements(password: string, minLength = PASSWORD_MIN_
   ];
 }
 
-/** Returns an error message when the password breaks the policy, otherwise null. */
-export function checkPasswordPolicy(password: string, minLength = PASSWORD_MIN_LENGTH_FLOOR): string | null {
+/** Which policy rule a password breaks, so callers can word the message in the reader's language. */
+export type PasswordPolicyIssue = { code: "too_short"; min: number } | { code: "too_long"; max: number } | { code: "letters_and_numbers" };
+
+/** The first policy rule the password breaks, or null when it meets the policy. */
+export function passwordPolicyIssue(password: string, minLength = PASSWORD_MIN_LENGTH_FLOOR): PasswordPolicyIssue | null {
   const min = clampMinLength(minLength);
-  const length = [...password].length;
-  if (length < min) return `Password must be at least ${min} characters.`;
-  if (password.length > PASSWORD_MAX_LENGTH) return `Password must be at most ${PASSWORD_MAX_LENGTH} characters.`;
-  if (!HAS_LETTER.test(password) || !HAS_DIGIT.test(password)) return "Password must contain letters and numbers.";
+  if ([...password].length < min) return { code: "too_short", min };
+  if (password.length > PASSWORD_MAX_LENGTH) return { code: "too_long", max: PASSWORD_MAX_LENGTH };
+  if (!HAS_LETTER.test(password) || !HAS_DIGIT.test(password)) return { code: "letters_and_numbers" };
   return null;
+}
+
+/** Returns an error message (English) when the password breaks the policy, otherwise null. */
+export function checkPasswordPolicy(password: string, minLength = PASSWORD_MIN_LENGTH_FLOOR): string | null {
+  const issue = passwordPolicyIssue(password, minLength);
+  if (!issue) return null;
+  if (issue.code === "too_short") return `Password must be at least ${issue.min} characters.`;
+  if (issue.code === "too_long") return `Password must be at most ${issue.max} characters.`;
+  return "Password must contain letters and numbers.";
 }
 
 /* ------------------------------------------------------------------ */

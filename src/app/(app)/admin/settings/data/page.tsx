@@ -69,7 +69,7 @@ function InfoRow({ label, description, children }: { label: ReactNode; descripti
         <p className="text-sm font-medium text-ink">{label}</p>
         {description && <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{description}</p>}
       </div>
-      <div className="mt-1.5 min-w-0 text-sm text-ink sm:mt-0 sm:w-96 sm:shrink-0 sm:text-right">{children}</div>
+      <div className="mt-1.5 min-w-0 text-sm text-ink sm:mt-0 sm:w-96 sm:shrink-0 sm:text-end">{children}</div>
     </div>
   );
 }
@@ -92,7 +92,7 @@ function EnvRow({ name, description, value, env, children }: { name: string; des
         </p>
         <p className="mt-1 text-xs leading-relaxed text-ink-muted">{description}</p>
       </div>
-      <div className="mt-2 min-w-0 text-sm text-ink sm:mt-0 sm:w-80 sm:shrink-0 sm:text-right">
+      <div className="mt-2 min-w-0 text-sm text-ink sm:mt-0 sm:w-80 sm:shrink-0 sm:text-end">
         {value !== undefined && <p className="break-all font-mono text-[13px]">{value}</p>}
         {children}
       </div>
