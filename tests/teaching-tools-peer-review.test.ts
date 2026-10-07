@@ -158,10 +158,15 @@ describe("handing out peer reviews", () => {
     await mutate((db) => {
       db.assignmentSubmissions.push(makeSubmission(eli.id, { submittedAt: new Date().toISOString() }));
     });
-    assert.equal(await syncPeerAssignments(), 2);
+    // Everyone else is fully reviewed and has a full load: the newcomer waits for the next classmate
+    // instead of piling a third review onto earlier work.
+    assert.equal(await syncPeerAssignments(), 0);
+    // Nobody else turned up: after the overflow wait the newcomer is brought in anyway, both ways.
+    assert.equal(await syncPeerAssignments({ now: Date.now() + 2 * DAY + 60_000 }), 4);
     const db = await getDb();
     assert.deepEqual(db.peerReviews.slice(0, 8).map((r) => r.id), before);
-    assert.equal(db.peerReviews.filter((r) => r.reviewerId === eli.id).length, 2, "the newcomer has reviews to write straight away");
+    assert.equal(db.peerReviews.filter((r) => r.reviewerId === eli.id).length, 2, "the newcomer has reviews to write");
+    assert.equal(db.peerReviews.filter((r) => r.submissionId === "asub_s5").length, 2, "and is reviewed twice");
     assert.ok(db.peerReviews.every((r) => r.reviewerId !== eli.id || r.submissionId !== "asub_s5"));
   });
 

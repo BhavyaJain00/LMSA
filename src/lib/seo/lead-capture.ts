@@ -14,6 +14,7 @@ import { coursePath } from "./content-index";
 import { leadConfirmUrl, leadUnsubscribeUrl, isLeadId } from "./lead-tokens";
 import { type LeadQuery, type LeadStats, filterLeads, leadStats, normalizeLeadSource } from "./leads";
 import { isCoursePublic } from "./visibility";
+import { isLessonPublishedNow } from "@/lib/teaching/scheduling";
 import { paginate } from "./landing";
 
 /**
@@ -75,13 +76,14 @@ export async function renderSyllabusEmail(lead: Pick<Lead, "id" | "email" | "nam
   const chapters = db.chapters.filter((c) => c.courseId === course.id).sort((a, b) => a.order - b.order);
   const blocks: EmailBlock[] = [{ type: "paragraph", text: course.shortIntroduction || `Here is everything ${course.title} covers.` }];
   chapters.forEach((chapter, ci) => {
-    const lessons = db.lessons.filter((l) => l.chapterId === chapter.id).sort((a, b) => a.order - b.order);
-    if (!lessons.length) return;
-    blocks.push({
-      type: "details",
-      title: `${ci + 1}. ${chapter.title}`,
-      rows: lessons.map((l, li) => ({ label: `${ci + 1}.${li + 1}`, value: l.includeInPreview ? `${l.title} (free preview)` : l.title })),
-    });
+    // Scheduled lessons stay out until their publish time; numbering keeps their place (as lesson links do).
+    const now = Date.now();
+    const rows = db.lessons
+      .filter((l) => l.chapterId === chapter.id)
+      .sort((a, b) => a.order - b.order)
+      .flatMap((l, li) => (isLessonPublishedNow(l, now) ? [{ label: `${ci + 1}.${li + 1}`, value: l.includeInPreview ? `${l.title} (free preview)` : l.title }] : []));
+    if (!rows.length) return;
+    blocks.push({ type: "details", title: `${ci + 1}. ${chapter.title}`, rows });
   });
   if (course.outcomes.length) blocks.push({ type: "paragraph", text: "By the end you will be able to:" }, { type: "list", items: course.outcomes.slice(0, 8) });
   blocks.push({ type: "button", label: "See the course", url: `${siteConfig.appUrl}${coursePath(course.slug)}` });
@@ -286,7 +288,8 @@ export async function getFreeResources(limits: { courses?: number; previews?: nu
     chapters.forEach((chapter, ci) => {
       const lessons = db.lessons.filter((l) => l.chapterId === chapter.id).sort((a, b) => a.order - b.order);
       lessons.forEach((lesson, li) => {
-        if (!lesson.includeInPreview || previews.length >= max) return;
+        // A scheduled lesson is not public yet; the gapped number (li + 1) is the one its link resolves to.
+        if (!lesson.includeInPreview || previews.length >= max || !isLessonPublishedNow(lesson)) return;
         previews.push({
           id: lesson.id,
           title: lesson.title,

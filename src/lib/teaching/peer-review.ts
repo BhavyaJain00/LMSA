@@ -56,6 +56,28 @@ export function participatingSubmissions(db: Database, assignmentId: string): As
   });
 }
 
+/**
+ * Open reviews of an assignment that can no longer be written as handed out:
+ * the reviewer or the author left peer review since (account disabled or
+ * deleted, or given a staff role). They stop counting toward coverage and are
+ * dropped by the next sync, so the submission gets a replacement reviewer.
+ * Submitted reviews are kept: that feedback was given.
+ */
+export function staleOpenReviewIds(db: Database, assignmentId: string): Set<string> {
+  const users = new Map(db.users.map((u) => [u.id, u]));
+  const takesPart = (userId: string | undefined) => {
+    const user = userId ? users.get(userId) : undefined;
+    return !!user && takesPartInPeerReview(user);
+  };
+  const authorOf = new Map(db.assignmentSubmissions.filter((s) => s.assignmentId === assignmentId).map((s) => [s.id, s.userId]));
+  const out = new Set<string>();
+  for (const r of db.peerReviews) {
+    if (r.assignmentId !== assignmentId || r.status !== "assigned") continue;
+    if (!takesPart(r.reviewerId) || (authorOf.has(r.submissionId) && !takesPart(authorOf.get(r.submissionId)))) out.add(r.id);
+  }
+  return out;
+}
+
 interface CreatedReview {
   id: string;
   reviewerId: string;
@@ -84,7 +106,10 @@ function insertPairs(db: Database, assignmentId: string, pairs: PeerPair[], nowI
 export function planForAssignment(db: Database, assignment: Assignment, config: PeerConfig, now: number): PeerPair[] {
   const subs = participatingSubmissions(db, assignment.id);
   if (subs.length < 2) return [];
-  const existing = db.peerReviews.filter((r) => r.assignmentId === assignment.id).map((r) => ({ submissionId: r.submissionId, reviewerId: r.reviewerId }));
+  const stale = staleOpenReviewIds(db, assignment.id);
+  const existing = db.peerReviews
+    .filter((r) => r.assignmentId === assignment.id && !stale.has(r.id))
+    .map((r) => ({ submissionId: r.submissionId, reviewerId: r.reviewerId }));
   const deadline = allocationMode(assignment) === "deadline";
   const overflow = new Set(subs.filter((s) => deadline || now - new Date(s.submittedAt).getTime() >= ROLLING_OVERFLOW_AFTER_MS).map((s) => s.id));
   return planPeerAssignments({
@@ -121,21 +146,30 @@ export async function notifyNewReviews(created: CreatedReview[]): Promise<void> 
   }
 }
 
-/** What a sync would change: whether orphaned reviews exist, and the new reviews to hand out per assignment. */
-function planSync(db: Database, opts: { only: Set<string> | null; force?: boolean; now: number }): { orphans: boolean; plans: { assignmentId: string; pairs: PeerPair[] }[] } {
+/**
+ * What a sync would change: whether orphaned reviews exist, the open reviews
+ * to drop because their reviewer or author left peer review, and the new
+ * reviews to hand out per assignment.
+ */
+function planSync(
+  db: Database,
+  opts: { only: Set<string> | null; force?: boolean; now: number },
+): { orphans: boolean; stale: Set<string>; plans: { assignmentId: string; pairs: PeerPair[] }[] } {
   const assignmentIds = new Set(db.assignments.map((a) => a.id));
   const submissionIds = new Set(db.assignmentSubmissions.map((s) => s.id));
   const orphans = db.peerReviews.some((r) => !assignmentIds.has(r.assignmentId) || !submissionIds.has(r.submissionId));
+  const stale = new Set<string>();
   const plans: { assignmentId: string; pairs: PeerPair[] }[] = [];
   for (const assignment of db.assignments) {
     if (opts.only && !opts.only.has(assignment.id)) continue;
     const config = activePeerConfig(assignment);
     if (!config) continue;
+    for (const id of staleOpenReviewIds(db, assignment.id)) stale.add(id);
     if (!opts.force && !allocationOpen(assignment, opts.now)) continue;
     const pairs = planForAssignment(db, assignment, config, opts.now);
     if (pairs.length) plans.push({ assignmentId: assignment.id, pairs });
   }
-  return { orphans, plans };
+  return { orphans, stale, plans };
 }
 
 /**
@@ -149,7 +183,7 @@ export async function syncPeerAssignments(opts: { assignmentIds?: string[]; forc
   const now = opts.now ?? Date.now();
   const scope = { only: opts.assignmentIds ? new Set(opts.assignmentIds) : null, force: opts.force, now };
   const preview = planSync(await getDb(), scope);
-  if (!preview.orphans && !preview.plans.length) return 0;
+  if (!preview.orphans && !preview.stale.size && !preview.plans.length) return 0;
 
   const nowIso = new Date(now).toISOString();
   const created = await mutate((db) => {
@@ -160,6 +194,8 @@ export async function syncPeerAssignments(opts: { assignmentIds?: string[]; forc
       const submissionIds = new Set(db.assignmentSubmissions.map((s) => s.id));
       db.peerReviews = db.peerReviews.filter((r) => assignmentIds.has(r.assignmentId) && submissionIds.has(r.submissionId));
     }
+    // Planned without them, so their submissions get replacement reviewers right away.
+    if (work.stale.size) db.peerReviews = db.peerReviews.filter((r) => !work.stale.has(r.id));
     return work.plans.flatMap((p) => insertPairs(db, p.assignmentId, p.pairs, nowIso));
   });
   await notifyNewReviews(created);
@@ -171,12 +207,17 @@ export async function sendPeerReviewReminders(now: number = Date.now()): Promise
   const db = await getDb();
   const assignments = new Map(db.assignments.map((a) => [a.id, a]));
   const sent = new Set(db.notifications.filter((n) => n.dedupeKey?.startsWith("peer-")).map((n) => `${n.userId}\u0000${n.dedupeKey}`));
+  const stale = new Map<string, Set<string>>();
   let count = 0;
   for (const review of db.peerReviews) {
     if (review.status !== "assigned") continue;
     const assignment = assignments.get(review.assignmentId);
     const config = assignment ? activePeerConfig(assignment) : null;
     if (!assignment || !config) continue;
+    // Never chase a reviewer who left peer review (the next sync drops the review).
+    let dropped = stale.get(assignment.id);
+    if (!dropped) stale.set(assignment.id, (dropped = staleOpenReviewIds(db, assignment.id)));
+    if (dropped.has(review.id)) continue;
     const stage = reminderStage(review, config.dueDays, now);
     if (!stage) continue;
     const key = reminderKey(review.id, stage);

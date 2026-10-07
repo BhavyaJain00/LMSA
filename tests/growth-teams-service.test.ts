@@ -213,8 +213,12 @@ describe("buying seats", () => {
   });
 
   it("does not change a draft that already has an order and clears abandoned drafts", async () => {
-    const stale: Organization = { id: "org_stale", name: "Old Draft", slug: "old-draft", ownerId: bob.id, managerIds: [], seatCount: 0, courseIds: [js.id], createdAt: new Date(Date.now() - 45 * DAY).toISOString() };
-    await setup({ organizations: [stale] });
+    const longAgo = new Date(Date.now() - 45 * DAY).toISOString();
+    const stale: Organization = { id: "org_stale", name: "Old Draft", slug: "old-draft", ownerId: bob.id, managerIds: [], seatCount: 0, courseIds: [js.id], createdAt: longAgo, checkoutDraft: true };
+    // Set up by an administrator with no seats yet, and a checkout draft waiting for its invoice: both are kept.
+    const adminMade: Organization = { id: "org_admin0", name: "Admin Made", slug: "admin-made", ownerId: bob.id, managerIds: [], seatCount: 0, courseIds: [js.id], createdAt: longAgo };
+    const invoiced: Organization = { ...stale, id: "org_invoiced", name: "Invoice Pending", slug: "invoice-pending", checkoutDraft: undefined };
+    await setup({ organizations: [stale, adminMade, invoiced] });
     const first = await startTeamPurchase(stranger, { name: "Globex", courseIds: [js.id], seats: 4 });
     assert.ok(first.ok);
     await mutate((d) => {
@@ -224,7 +228,7 @@ describe("buying seats", () => {
     assert.ok(second.ok);
     assert.notEqual(second.org.id, first.org.id);
     const db = await getDb();
-    assert.deepEqual(db.organizations.map((o) => o.name).sort(), ["Globex", "Globex Labs"], "the 45-day-old unpaid draft is gone");
+    assert.deepEqual(db.organizations.map((o) => o.name).sort(), ["Admin Made", "Globex", "Globex Labs", "Invoice Pending"], "only the 45-day-old abandoned checkout draft is gone");
     assert.deepEqual(db.organizations.find((o) => o.id === first.org.id)?.courseIds, [js.id]);
     assert.equal(second.org.slug, "globex-labs");
   });
@@ -462,11 +466,9 @@ describe("invitations", () => {
     assert.equal((await seats()).length, 3);
   });
 
-  it("recognise a member by their account address when they were invited at another one", async () => {
-    await setup();
-    const invited = await inviteMembers(acme.id, owner, [{ email: "ada.work@example.com" }]);
-    assert.ok(invited.ok);
-    assert.ok((await acceptInvite(await joinToken("ada.work@example.com"), ada)).ok);
+  it("recognise a member by their account address when their seat was assigned at another one", async () => {
+    // Ada joined with ada.work@ and later changed her account's address.
+    await setup({ orgSeats: [{ id: "seat_adawork", orgId: acme.id, email: "ada.work@example.com", userId: ada.id, status: "active", assignedAt: VERIFIED, activatedAt: VERIFIED }] });
     const result = await inviteMembers(acme.id, owner, [{ email: ada.email }]);
     assert.deepEqual(result, { ok: true, sent: 0, skipped: [{ email: ada.email, reason: "already_member" }] });
   });
@@ -534,14 +536,23 @@ describe("accepting an invitation", () => {
     assert.deepEqual(await enrolledCourses(bob.id), []);
   });
 
-  it("gives the seat to whoever holds the emailed link, even under another address", async () => {
+  it("only gives the seat to the account that uses the invited address, whoever holds the link", async () => {
     await setup();
-    await inviteMembers(acme.id, owner, [{ email: "someone@example.com" }]);
-    assert.ok((await acceptInvite(await joinToken("someone@example.com"), stranger)).ok);
-    const seat = await seatOf("someone@example.com");
-    assert.deepEqual([seat.userId, seat.email], [stranger.id, "someone@example.com"]);
+    await inviteMembers(acme.id, owner, [{ email: stranger.email }]);
+    const token = await joinToken("sam@example.org");
+    // A forwarded or leaked link does not let another account take the paid seat.
+    assert.deepEqual(await acceptInvite(token, ada), { ok: false, problem: "wrong_account" });
+    assert.deepEqual(await acceptInvite(token, Object.assign({}, ada, { email: stranger.email })), { ok: false, problem: "wrong_account" }, "the address is read from the stored account");
+    assert.deepEqual(await enrolledCourses(ada.id), []);
+    assert.equal((await seatOf("sam@example.org")).status, "invited");
+    assert.equal((await lookupInvite(token)).ok, true, "the link still works for the right account");
+
+    // The link itself proves the mailbox, so the account's address need not be confirmed yet.
+    assert.ok((await acceptInvite(token, stranger)).ok);
+    const seat = await seatOf("sam@example.org");
+    assert.deepEqual([seat.userId, seat.status], [stranger.id, "active"]);
     const [row] = await listSeats(acme.id, { status: "active", q: "sam" });
-    assert.deepEqual([row.user?.email, row.email, row.state, row.role], [stranger.email, "someone@example.com", "active", null]);
+    assert.deepEqual([row.user?.email, row.state, row.role], [stranger.email, "active", null]);
   });
 
   it("refuses malformed, unknown, expired and cancelled links", async () => {
@@ -572,16 +583,18 @@ describe("accepting an invitation", () => {
 
   it("never gives one person two seats or more members than seats", async () => {
     const spare = generateRawToken();
+    const adaLink = generateRawToken();
     await setup({
       organizations: [{ ...acme, seatCount: 1 }],
       orgSeats: [
         { id: "seat_bob", orgId: acme.id, email: bob.email, userId: bob.id, status: "active", assignedAt: VERIFIED, activatedAt: VERIFIED },
-        { id: "seat_spare", orgId: acme.id, email: "spare@example.com", status: "invited", assignedAt: new Date().toISOString(), inviteTokenHash: hashAuthToken(spare) },
+        { id: "seat_spare", orgId: acme.id, email: bob.email, status: "invited", assignedAt: new Date().toISOString(), inviteTokenHash: hashAuthToken(spare) },
+        { id: "seat_ada", orgId: acme.id, email: ada.email, status: "invited", assignedAt: new Date().toISOString(), inviteTokenHash: hashAuthToken(adaLink) },
       ],
     });
     assert.deepEqual(await acceptInvite(spare, bob), { ok: false, problem: "already_member" });
-    assert.deepEqual(await acceptInvite(spare, ada), { ok: false, problem: "full" }, "seats were removed after the invitation went out");
-    assert.equal((await seatOf("spare@example.com")).status, "invited");
+    assert.deepEqual(await acceptInvite(adaLink, ada), { ok: false, problem: "full" }, "seats were removed after the invitation went out");
+    assert.equal((await seatOf(ada.email)).status, "invited");
   });
 
   it("can be done in the app by the account whose confirmed address was invited", async () => {
@@ -645,12 +658,12 @@ describe("revoking and reassigning seats", () => {
   it("moves a seat to someone else in one step", async () => {
     await setup({ organizations: [{ ...acme, seatCount: 1 }] });
     const seat = await join(ada);
-    const result = await reassignSeat(acme.id, seat.id, { email: "new@example.com", name: "New Hire" }, manager);
-    assert.deepEqual(result, { ok: true, from: ada.email, to: "new@example.com" });
-    assert.deepEqual((await seats()).map((s) => [s.email, s.status]), [[ada.email, "revoked"], ["new@example.com", "invited"]]);
+    const result = await reassignSeat(acme.id, seat.id, { email: stranger.email, name: "New Hire" }, manager);
+    assert.deepEqual(result, { ok: true, from: ada.email, to: stranger.email });
+    assert.deepEqual((await seats()).map((s) => [s.email, s.status]), [[ada.email, "revoked"], [stranger.email, "invited"]]);
     assert.deepEqual(await enrolledCourses(ada.id), []);
     assert.ok((await subjectsFor(ada.id)).includes("Your seat in the Acme Corp team was removed"));
-    assert.ok((await acceptInvite(await joinToken("new@example.com"), stranger)).ok, "the team was full, the seat moved anyway");
+    assert.ok((await acceptInvite(await joinToken(stranger.email), stranger)).ok, "the team was full, the seat moved anyway");
     assert.deepEqual(seatUsage(await team(), await seats()), { total: 1, active: 1, invited: 0, used: 1, available: 0, over: 0 });
   });
 

@@ -274,9 +274,11 @@ describe("admin report and export", () => {
       subscriptions: [sub("sub_1", "active"), sub("sub_2", "trialing")],
       analyticsEvents: [
         { id: "v1", name: PAGE_VIEW, path: "/", itemType: ENTRY_MARK, referrer: "google.com", createdAt: day(1) },
-        { id: "v2", name: PAGE_VIEW, path: "/courses/js", createdAt: day(1) },
+        { id: "v2", name: PAGE_VIEW, path: "/courses/js", firstReach: true, createdAt: day(1) },
+        { id: "v2b", name: PAGE_VIEW, path: "/courses/py", createdAt: day(1) },
         { id: "v3", name: PAGE_VIEW, path: "/blog", itemType: ENTRY_MARK, anonId: "C", utm: { source: "news", campaign: "may" }, createdAt: day(2) },
-        { id: "v4", name: CHECKOUT_STARTED, itemType: "course", itemId: "js", createdAt: day(1) },
+        { id: "v4", name: CHECKOUT_STARTED, itemType: "course", itemId: "js", firstReach: true, createdAt: day(1) },
+        { id: "v4b", name: CHECKOUT_STARTED, itemType: "course", itemId: "js", createdAt: day(1) },
       ],
       activities: [{ id: "act_1", userId: learner.id, date: day(1).slice(0, 10), type: "lesson_complete", createdAt: day(1) }],
     }),
@@ -286,7 +288,7 @@ describe("admin report and export", () => {
     const report = await getAnalyticsReport(parseRange({ range: "7" }, now), now);
     const k = report.kpis;
     assert.equal(k.visitors, 2);
-    assert.equal(k.pageViews, 3);
+    assert.equal(k.pageViews, 4);
     assert.equal(k.signups, 1);
     assert.equal(k.orders, 2);
     assert.equal(k.conversionRate, 100);
@@ -306,7 +308,7 @@ describe("admin report and export", () => {
     );
     assert.equal(report.campaigns[0]!.campaign, "may");
     assert.equal(report.series.length, 7);
-    assert.equal(report.tracking.consentedShare, 33.3);
+    assert.equal(report.tracking.consentedShare, 25);
   });
 
   it("exports report sections as CSV for administrators only", async () => {

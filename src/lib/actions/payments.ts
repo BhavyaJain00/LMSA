@@ -86,6 +86,7 @@ import { processAbandonedCheckouts } from "@/lib/commerce/checkout-sessions";
 import { countryCode, type TaxContext } from "@/lib/commerce/tax";
 import { reverseChargeCheck } from "@/lib/commerce/vies";
 import { referralAffiliateIdForCheckout } from "@/lib/growth/attribution";
+import { trackCheckoutStarted } from "@/lib/growth/checkout-tracking";
 
 /* ------------------------------------------------------------------ */
 /* Checkout                                                            */
@@ -212,6 +213,8 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   const billing = billingFields(input, settings.commerce.applyTax);
   // Referral attribution is stamped now, from the cookie, so the sale is credited even if the click was never linked.
   const affiliateId = await referralAffiliateIdForCheckout(user.id);
+  // The funnel's "started checkout" stage, also for buyers whose browser sends no page-view beacon.
+  await trackCheckoutStarted({ userId: user.id, itemType: type, itemId });
   const referral = affiliateId ? { affiliateId } : {};
   const orderGateway = total <= 0 ? "free" : gateway;
   const createdAt = new Date().toISOString();

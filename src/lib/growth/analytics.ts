@@ -143,12 +143,15 @@ export async function recordPageView(payload: BeaconPayload, ctx: PageViewContex
 }
 
 /**
- * Record that a member opened the checkout of an item, for code paths that
- * start a checkout without a page view (e.g. a server action). Deduplicated
- * like beacon checkouts.
+ * Record that a visitor started the checkout of an item, for code paths that
+ * start a checkout without a page view (the order server action, see
+ * `checkout-tracking.ts`). Deduplicated like beacon checkouts, so a checkout
+ * the beacon already reported for the same visitor or member counts once.
+ * Only call it with ids the visitor consented to.
  */
-export async function recordCheckoutStarted(input: { userId?: string; itemType: string; itemId: string }, nowMs: number = Date.now()): Promise<boolean> {
+export async function recordCheckoutStarted(input: { userId?: string; anonId?: string; itemType: string; itemId: string }, nowMs: number = Date.now()): Promise<boolean> {
   const event: AnalyticsEvent = { id: uid("evt_"), name: CHECKOUT_STARTED, itemType: input.itemType, itemId: input.itemId, createdAt: new Date(nowMs).toISOString() };
+  if (input.anonId) event.anonId = input.anonId;
   if (input.userId) event.userId = input.userId;
   return mutate((db) => {
     if (isDuplicateCheckout(db, event, nowMs)) return false;

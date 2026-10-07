@@ -72,7 +72,8 @@
   --color-danger: var(--danger);
   --color-info: var(--info);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  /* `--font-script` puts a script face before Geist for Arabic / Hindi pages (see "Interface languages" below). */
+  --font-sans: var(--font-script, var(--font-geist-sans)), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --shadow-card: var(--shadow);
@@ -107,6 +108,17 @@ body {
  */
 :where(:lang(ar), :lang(hi)) {
   letter-spacing: normal !important;
+}
+
+/*
+ * Geist covers Latin only. On Arabic and Hindi pages a Noto face for the script
+ * comes first (loaded in src/app/layout.tsx); Geist follows for anything it lacks.
+ */
+html:lang(ar) {
+  --font-script: var(--font-noto-arabic), var(--font-geist-sans);
+}
+html:lang(hi) {
+  --font-script: var(--font-noto-devanagari), var(--font-geist-sans);
 }
 
 ::selection {

@@ -6,8 +6,11 @@ import { getSettings } from "@/lib/db/store";
 import { getT } from "@/i18n/server";
 import { I18nProvider } from "@/i18n/provider";
 
-/** Message slices the lesson player needs on the client. */
-const LEARN_PICK = { learning: ["learn.", "player.", "quiz.", "assignment.", "exercise.", "ai."] } as const;
+/**
+ * Message slices the lesson player needs on the client. `global.player.` (the video and audio
+ * player) is not in the root layout's slice, so it is provided here.
+ */
+const LEARN_PICK = { learning: ["learn.", "global.player.", "quiz.", "assignment.", "exercise.", "ai."] } as const;
 
 /**
  * Full-width frame for the lesson player. Pages in this group do not get the

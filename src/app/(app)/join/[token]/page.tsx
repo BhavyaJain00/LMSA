@@ -3,9 +3,10 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getRequestInfo } from "@/lib/auth/request-info";
+import { logoutAction } from "@/lib/actions/auth";
 import { joinAttemptAllowed } from "@/lib/growth/team-checkout";
-import { JOIN_PROBLEM_MESSAGES, lookupInvite, type JoinProblem } from "@/lib/growth/teams";
-import { ButtonLink } from "@/components/ui/button";
+import { JOIN_PROBLEM_MESSAGES, inviteMatchesAccount, lookupInvite, type JoinProblem } from "@/lib/growth/teams";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
 import { AcceptInviteForm } from "@/components/growth/team-join";
@@ -22,6 +23,7 @@ const PROBLEM_TITLES: Record<JoinProblem, string> = {
   full: "No free seat right now",
   already_member: "You're already on this team",
   disabled: "Your account can't accept invitations",
+  wrong_account: "This invitation is for another address",
 };
 
 function Shell({ children }: { children: ReactNode }) {
@@ -96,7 +98,8 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
 
   const { invite } = lookup;
   const next = encodeURIComponent(`/join/${token}`);
-  const otherAccount = !!user && user.email.toLowerCase() !== invite.email.toLowerCase();
+  // Only the account that uses the invited address can take the seat (see `acceptInvite`).
+  const otherAccount = !!user && !inviteMatchesAccount(invite, user);
 
   return (
     <Shell>
@@ -134,13 +137,22 @@ export default async function JoinTeamPage(props: PageProps<"/join/[token]">) {
       <div className="mt-6 space-y-3">
         {user ? (
           <>
-            {otherAccount && (
-              <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-ink">
-                You&apos;re signed in as <span className="break-all font-medium">{user.email}</span>. Accepting gives the seat to this account. If the invitation is meant for another account of
-                yours, sign out and open the link again.
-              </p>
+            {otherAccount ? (
+              <>
+                <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-start text-sm text-ink">
+                  You&apos;re signed in as <span className="break-all font-medium">{user.email}</span>, but this seat is reserved for{" "}
+                  <span className="break-all font-medium">{invite.email}</span>. Sign out and sign in with the account that uses that address, then open the link again. If you
+                  don&apos;t have one, ask your team manager to send the seat to {user.email} instead.
+                </p>
+                <form action={logoutAction}>
+                  <Button type="submit" size="lg" variant="outline" className="w-full" leftIcon={<Icon.LogOut className="size-5" />}>
+                    Sign out
+                  </Button>
+                </form>
+              </>
+            ) : (
+              <AcceptInviteForm token={token} label="Accept invitation" />
             )}
-            <AcceptInviteForm token={token} label={otherAccount ? `Accept as ${user.name}` : "Accept invitation"} />
           </>
         ) : (
           <>

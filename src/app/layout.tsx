@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Noto_Sans_Arabic, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { getSettings } from "@/lib/db/store";
 import { readFlash } from "@/lib/flash";
@@ -15,12 +15,25 @@ import { NAMESPACES, documentDir } from "@/i18n/config";
 import { getLocale } from "@/i18n/server";
 import { I18nProvider } from "@/i18n/provider";
 import { globalSlices } from "@/i18n/provided";
+import { englishMessages } from "@/i18n/catalog";
 
-/** Provided in full on every page; every other namespace contributes only its `global.` keys. */
-const ROOT_PICK = globalSlices(["common", "shell"]);
+/**
+ * Provided in full on every page; every other namespace contributes only its `global.` keys,
+ * except the large areas the pages that use them provide (`ROUTE_PROVIDED_GLOBALS`, e.g. the player).
+ */
+const ROOT_PICK = globalSlices(["common", "shell"], (namespace) => Object.keys(englishMessages(namespace)));
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+/*
+ * Geist has no Arabic or Devanagari glyphs. These self-hosted variable faces (every weight, so the
+ * 650 headings render as designed) are put first in the font stack only when the page language is
+ * `ar` / `hi` (see `--font-script` in globals.css). Their @font-face rules carry unicode-range and
+ * are never referenced in other languages, so they are not downloaded there; `preload: false`
+ * keeps them out of every page's <head>. No fallback-metrics face: Geist follows them in the stack.
+ */
+const notoArabic = Noto_Sans_Arabic({ variable: "--font-noto-arabic", subsets: ["arabic"], preload: false, adjustFontFallback: false, display: "swap" });
+const notoDevanagari = Noto_Sans_Devanagari({ variable: "--font-noto-devanagari", subsets: ["devanagari"], preload: false, adjustFontFallback: false, display: "swap" });
 
 /** Site-wide metadata: title template, verification tags, RSS alternates, og:locale, noindex-by-default robots (see `rootMetadata`). */
 export async function generateMetadata(): Promise<Metadata> {
@@ -33,7 +46,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // The interface language sets lang/dir; an explicit admin text direction (Settings → General) overrides dir.
   const dir = documentDir(locale, settings.textDirection);
   return (
-    <html lang={locale} dir={dir} className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`} suppressHydrationWarning>
+    <html lang={locale} dir={dir} className={`${geistSans.variable} ${geistMono.variable} ${notoArabic.variable} ${notoDevanagari.variable} h-full antialiased`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <style>{`:root{--accent:${settings.brand.accentColor};}`}</style>

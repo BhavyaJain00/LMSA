@@ -240,13 +240,16 @@ describe("funnel computation", () => {
     assert.equal(stages[2]!.dropOff, 0);
   });
 
-  it("counts visitors with consent once per stage and anonymous events each time", () => {
+  it("counts visitors with consent once per stage, and anonymous visitors once per stage of their tab", () => {
     const counts = [
       ev({ name: PAGE_VIEW, path: "/", itemType: ENTRY_MARK, anonId: "A" }),
       ev({ name: PAGE_VIEW, path: "/courses/js", anonId: "A" }),
       ev({ name: PAGE_VIEW, path: "/courses/py", anonId: "A" }),
       ev({ name: PAGE_VIEW, path: "/", itemType: ENTRY_MARK }),
-      ev({ name: PAGE_VIEW, path: "/pricing" }),
+      ev({ name: PAGE_VIEW, path: "/pricing", firstReach: true }),
+      // The same anonymous tab browsing more offers is still one person at "product".
+      ev({ name: PAGE_VIEW, path: "/courses/js" }),
+      ev({ name: PAGE_VIEW, path: "/courses/py" }),
       ev({ name: PAGE_VIEW, path: "/blog/x" }),
       ev({ name: CHECKOUT_STARTED, itemType: "course", itemId: "js", anonId: "A" }),
       ev({ name: CHECKOUT_STARTED, itemType: "course", itemId: "js", anonId: "A" }),

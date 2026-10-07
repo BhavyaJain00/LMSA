@@ -171,16 +171,22 @@ describe("incremental allocation (rolling submissions)", () => {
     assert.ok(Math.max(...received.values()) <= 3);
   });
 
-  it("pairs a waiting newcomer with the next one to submit", () => {
-    const submissions = cohort(6);
+  it("pairs waiting newcomers with the next ones to submit", () => {
+    const submissions = cohort(7);
     const existing = planPeerAssignments({ submissions: submissions.slice(0, 4), existing: [], reviewsPerSubmission: 2, seed: "asg_p" });
     assert.deepEqual(planPeerAssignments({ submissions: submissions.slice(0, 5), existing, reviewsPerSubmission: 2, seed: "asg_p" }), []);
-    const added = planPeerAssignments({ submissions, existing, reviewsPerSubmission: 2, seed: "asg_p" });
-    assertSound(submissions, [...existing, ...added]);
-    const { load, received } = tally(submissions, [...existing, ...added]);
+
+    existing.push(...planPeerAssignments({ submissions: submissions.slice(0, 6), existing, reviewsPerSubmission: 2, seed: "asg_p" }));
+    let counts = tally(submissions.slice(0, 6), existing);
+    assert.deepEqual([counts.received.get("sub_05"), counts.received.get("sub_06")], [1, 1], "the two newcomers review each other");
+    assert.deepEqual([counts.load.get("usr_05"), counts.load.get("usr_06")], [1, 1]);
+
+    existing.push(...planPeerAssignments({ submissions, existing, reviewsPerSubmission: 2, seed: "asg_p" }));
+    assertSound(submissions, existing);
+    counts = tally(submissions, existing);
     for (const s of submissions) {
-      assert.equal(received.get(s.id), 2);
-      assert.equal(load.get(s.authorId), 2);
+      assert.equal(counts.received.get(s.id), 2, `${s.id} has two reviewers`);
+      assert.equal(counts.load.get(s.authorId), 2, `${s.authorId} has two reviews to write`);
     }
   });
 
