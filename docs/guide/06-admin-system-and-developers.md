@@ -584,7 +584,7 @@ The daily automatic backup runs inside the app. Add a nightly **off-site copy** 
 
 ### Pre-launch checklist
 
-From [DEPLOYMENT.md, section 13](../../DEPLOYMENT.md#13-pre-launch-checklist), with where to do each item:
+From [DEPLOYMENT.md, section 14](../../DEPLOYMENT.md#14-pre-launch-checklist), with where to do each item:
 
 - [ ] Legal pages (privacy, terms, refunds, cookies) reviewed with a lawyer, edited and published in **Admin → Settings → Legal pages**. Cookie banner on if you use analytics or marketing pixels.
 - [ ] `APP_SECRET` set to a long random value and stored safely with the rest of `.env`.

@@ -433,8 +433,6 @@ Use this only when you already built real content on top of the demo site.
 5. Delete demo coupons (**Settings → Coupons**), plans and bundles (**Settings → Plans, bundles & installments**), the demo upsell (**Upsells**), tax rules (**Settings → Taxes & currencies**), job openings, blog articles and badges you do not want.
 6. Review every settings page: the demo values (for example the contact email) stay until you change them.
 
-> **Note.** DEPLOYMENT.md's pre-launch checklist says to search for `example.com` addresses to find demo accounts. The demo accounts actually use `@learnloop.test`; search for that instead.
-
 ### Option C: reload the demo data (test copies only)
 
 **Where.** **Admin → Settings → Backup & restore** (`/admin/settings/data`), red card **Reload demo data** at the bottom.
