@@ -43,8 +43,12 @@ export const siteConfig = {
   cookieSecure: envBool("COOKIE_SECURE", process.env.NODE_ENV === "production"),
   /** Where uploaded files are stored (relative to the project root, or absolute). */
   uploadDir: envString("UPLOAD_DIR", "storage/uploads"),
-  /** Where the JSON database lives (relative to the project root, or absolute). */
-  dataFile: envString("DATA_FILE", "storage/db.json"),
+  /**
+   * Folder for the app's own files besides uploads: database backups (JSON
+   * exports, in `backups/`), SEO files (`seo/`) and, in development, the
+   * generated app secret. Relative to the project root, or absolute.
+   */
+  storageDir: envString("STORAGE_DIR", "storage"),
   /** On first run, load the demo courses and users (true) or start empty with one admin (false). */
   seedDemoData: envBool("SEED_DEMO_DATA", true),
   /** First admin account created when SEED_DEMO_DATA=false. */

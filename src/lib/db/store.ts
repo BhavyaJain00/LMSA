@@ -7,11 +7,9 @@ import { mergeSettings } from "./defaults";
 import { buildInitialDatabase } from "./bootstrap";
 import { buildSeedDatabase } from "./seed";
 import { StoreEngine, type EngineStats } from "./engine";
-import { JsonDriver } from "./json-driver";
-import { SqliteDriver } from "./sqlite";
 import { PostgresDriver } from "./postgres";
 import { describeDatabaseUrl } from "./postgres-core.mjs";
-import { backupsDirFor, rawDataToJson, type RawData } from "./sqlite-core.mjs";
+import { backupsDirIn, rawDataToJson, type RawData } from "./data-core.mjs";
 import { automaticBackupState, automaticBackupsEnabled, nextLocalMidnight } from "./backup-core.mjs";
 import type { DriverKind, StoreDriver } from "./driver";
 
@@ -20,26 +18,23 @@ import type { DriverKind, StoreDriver } from "./driver";
  *
  * Every query in the app goes through the small API exported here (`getDb`,
  * `all`, `findById`, `insert`, `update`, `remove`, `mutate`, …). The whole
- * database is held in memory for fast reads; persistence is delegated to a
- * driver chosen with DB_DRIVER:
+ * database is held in memory for fast reads; it is stored in PostgreSQL
+ * (Supabase) through Prisma (DATABASE_URL, `postgres.ts`): only changed
+ * documents are written, in one transaction per flush. An empty database is
+ * filled with the demo data or the bootstrap admin (SEED_DEMO_DATA).
+ * Backups are JSON exports (`backup.ts`).
  *
- *  - `sqlite` (default): `storage/lms.sqlite` (SQLITE_PATH) through Node's
- *    built-in `node:sqlite`. Only changed documents are written, per
- *    transaction. On first start an existing `storage/db.json` is imported
- *    and kept as `db.json.migrated-<timestamp>`.
- *  - `json`: the original single JSON file (DATA_FILE), rewritten on change.
- *  - `postgres`: PostgreSQL (Supabase) through Prisma (DATABASE_URL), one
- *    transaction per flush. An empty database is filled from the SQLite
- *    file, else db.json, else the seed. Backups are JSON exports.
+ * Test runs use an in-memory driver installed by the test bootstrap
+ * (`tests/register.mjs`, only with NODE_ENV=test); the app never imports it.
  *
  * `mutate()` runs callbacks one at a time, so read-check-write sequences in
  * one callback are safe against concurrent requests. See `engine.ts`.
  *
  * The first request of each day also starts the automatic backup
- * (`backup.ts`; `storage/backups`, newest 14 kept).
+ * (`backup.ts`; `storage/backups`, newest 14 kept, unless DB_AUTO_BACKUP=false).
  *
- * With SQLite the database object and its collection arrays are tracking
- * Proxies (documents are plain objects). They read like the real thing, but
+ * The database object and its collection arrays are tracking Proxies
+ * (documents are plain objects). They read like the real thing, but
  * `structuredClone()` cannot copy a Proxy: clone documents, or use
  * `exportDatabase()` for the whole contents. Change a document through a
  * reference obtained inside the `mutate()` callback (from `db`, or with
@@ -152,7 +147,7 @@ export const COLLECTIONS: CollectionName[] = [
 /* ------------------------------------------------------------------ */
 
 /** Bump when the engine's behaviour changes so a hot reload replaces the running one. */
-const ENGINE_VERSION = 5;
+const ENGINE_VERSION = 6;
 
 interface EngineHolder {
   engine: StoreEngine;
@@ -161,24 +156,46 @@ interface EngineHolder {
   file: string;
 }
 
-/** State of the pre-SQLite store module, found after a development hot reload. */
-interface LegacyStoreState {
-  db: Database | null;
-  dirty?: boolean;
-  flushTimer?: NodeJS.Timeout | null;
+/**
+ * Test runs only: how the test bootstrap (`tests/register.mjs`) provides the
+ * in-memory driver (`tests/helpers/memory-driver.ts`). It is installed only
+ * by that bootstrap, which refuses to unless NODE_ENV is "test" and records
+ * so in `testRun`; no app code installs it, and a built app never loads the
+ * test bootstrap. Tests may switch NODE_ENV afterwards (to check production
+ * behaviour) and keep their throwaway database.
+ */
+export interface TestStoreHook {
+  /** Always true: set by the bootstrap after checking NODE_ENV === "test". */
+  readonly testRun: true;
+  /** Identifies the current test database; a new value makes the store open a new engine. */
+  target(): string;
+  create(options: { collections: readonly string[]; backupsDir: string }): StoreDriver;
 }
 
 const g = globalThis as unknown as {
   __llStoreEngine?: EngineHolder;
-  __llStore?: LegacyStoreState;
+  __llTestStore?: TestStoreHook;
 };
 
-const resolvePath = (file: string) => path.resolve(/* turbopackIgnore: true */ process.cwd(), file);
+/** The test driver hook, when the test bootstrap installed it (never in the app itself). */
+function testStore(): TestStoreHook | null {
+  const hook = g.__llTestStore;
+  return hook?.testRun === true ? hook : null;
+}
 
-/** Absolute path of the database file for the configured driver (PostgreSQL: the connection target without credentials). */
-export function databaseFile(driver: DriverKind = databaseEnv.driver): string {
-  if (driver === "postgres") return describeDatabaseUrl(databaseEnv.databaseUrl);
-  return resolvePath(driver === "sqlite" ? databaseEnv.sqlitePath : siteConfig.dataFile);
+/** Folder of the app's own files (STORAGE_DIR), absolute. */
+export function storageDir(): string {
+  return path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.storageDir);
+}
+
+/** Where backups (JSON exports) are written: `<STORAGE_DIR>/backups`. */
+export function backupsDir(): string {
+  return backupsDirIn(storageDir());
+}
+
+/** The database the store uses: the PostgreSQL connection target without credentials. */
+export function databaseTarget(): string {
+  return testStore()?.target() ?? describeDatabaseUrl(databaseEnv.databaseUrl);
 }
 
 /** Make sure every collection exists and settings have all keys (document objects are kept as they are). */
@@ -204,52 +221,21 @@ function toRawData(partial: Partial<Database>): RawData {
   return { collections, settings: partial.settings ?? null };
 }
 
-/** Contents of a running store that is being replaced (hot reload), for the SQLite import. */
-function legacySnapshot(previous: EngineHolder | undefined): (() => RawData | null) | undefined {
-  if (previous) {
-    const data = previous.engine.snapshot();
-    return data ? () => data : undefined;
-  }
-  const legacy = g.__llStore;
-  if (!legacy?.db) return undefined;
-  // Stop the old module's pending write: its data is imported below instead.
-  if (legacy.flushTimer) clearTimeout(legacy.flushTimer);
-  legacy.flushTimer = null;
-  legacy.dirty = false;
-  const db = legacy.db;
-  return () => toRawData(db);
-}
-
-function createDriver(kind: DriverKind, snapshot: (() => RawData | null) | undefined): StoreDriver {
-  if (kind === "json") return new JsonDriver(databaseFile("json"));
-  if (kind === "postgres") {
-    const sqliteFile = resolvePath(databaseEnv.sqlitePath);
-    return new PostgresDriver({
-      url: databaseEnv.databaseUrl,
-      collections: COLLECTIONS,
-      backupsDir: backupsDirFor(sqliteFile),
-      sqliteFile,
-      legacyJsonFile: resolvePath(siteConfig.dataFile),
-    });
-  }
-  return new SqliteDriver({
-    file: databaseFile("sqlite"),
-    collections: COLLECTIONS,
-    legacyJsonFile: resolvePath(siteConfig.dataFile),
-    legacySnapshot: snapshot,
-  });
+function createDriver(): StoreDriver {
+  const test = testStore();
+  if (test) return test.create({ collections: COLLECTIONS, backupsDir: backupsDir() });
+  return new PostgresDriver({ url: databaseEnv.databaseUrl, collections: COLLECTIONS, backupsDir: backupsDir() });
 }
 
 function engine(): StoreEngine {
-  const kind = databaseEnv.driver;
-  const file = databaseFile(kind);
+  const kind: DriverKind = testStore() ? "memory" : "postgres";
+  const file = databaseTarget();
   const current = g.__llStoreEngine;
   // A newer engine from another bundle wins over this (older) module's version.
   if (current && current.driver === kind && current.file === file && current.version >= ENGINE_VERSION) {
     current.engine.adoptCollections(COLLECTIONS);
     return current.engine;
   }
-  const snapshot = kind === "sqlite" ? legacySnapshot(current) : undefined;
   if (current) {
     try {
       void current.engine.close();
@@ -258,15 +244,12 @@ function engine(): StoreEngine {
     }
   }
   const created = new StoreEngine({
-    driver: createDriver(kind, snapshot),
+    driver: createDriver(),
     collections: COLLECTIONS,
     normalize,
     initialData: async () => toRawData(await buildInitialDatabase()),
     onOpen: (origin) => {
-      const label = kind === "sqlite" ? "SQLite" : kind === "postgres" ? "PostgreSQL" : "JSON";
-      if (origin === "imported-json") console.info(`[store] the JSON database was imported into ${label}.`);
-      if (origin === "imported-sqlite") console.info("[store] the SQLite database was imported into PostgreSQL.");
-      if (origin === "seeded") console.info(`[store] created a new ${label} database at ${file}.`);
+      if (origin === "seeded") console.info(`[store] filled the new database at ${file}.`);
     },
   });
   g.__llStoreEngine = { engine: created, version: ENGINE_VERSION, driver: kind, file };
@@ -423,7 +406,7 @@ export async function buildDemoData(): Promise<RawData> {
 }
 
 /**
- * Replace the database with fresh demo data (one transaction with SQLite).
+ * Replace the database with fresh demo data (one transaction).
  * No backup is taken: use `BackupManager.replaceWith(await buildDemoData(), …)`
  * to keep the current data as a safety backup.
  */
@@ -431,7 +414,7 @@ export async function resetDatabase(): Promise<void> {
   await engine().replaceAll(await buildDemoData(), "demo-reset");
 }
 
-/** The current contents in the db.json format (JSON export and "Download backup"). */
+/** The current contents as a JSON export ("Download backup"). */
 export async function exportDatabase(): Promise<string> {
   const store = engine();
   await store.getDb();

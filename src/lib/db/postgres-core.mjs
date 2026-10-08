@@ -3,7 +3,7 @@
  * (`src/lib/db/postgres.ts`) and the copy script
  * (`scripts/db-copy-to-postgres.mjs`).
  *
- * Plain JavaScript typed with JSDoc (like `sqlite-core.mjs`) so the script
+ * Plain JavaScript typed with JSDoc (like `data-core.mjs`) so the script
  * can import it without a build step. It never imports Prisma: every
  * function takes an executor (`PgExecutor`), which is a PrismaClient or the
  * client of an interactive transaction (`$queryRawUnsafe` /
@@ -34,8 +34,8 @@ import { PG_TABLES } from "./postgres-tables.mjs";
  * @property {(sql: string, ...values: unknown[]) => Promise<number>} $executeRawUnsafe
  */
 /** @typedef {{ table: string; columns: { key: string; column: string }[] }} TableSpec */
-/** @typedef {import("./sqlite-core.mjs").RawData} RawData */
-/** @typedef {import("./sqlite-core.mjs").ChangeSet} ChangeSet */
+/** @typedef {import("./data-core.mjs").RawData} RawData */
+/** @typedef {import("./data-core.mjs").ChangeSet} ChangeSet */
 /** @typedef {{ sql: string; params: unknown[] }} Statement */
 
 /** Rows per INSERT statement (one jsonb parameter each). */
@@ -64,7 +64,7 @@ export function quoteIdent(/** @type {string} */ name) {
  */
 export function tableFor(name, tables = PG_TABLES) {
   const spec = Object.hasOwn(tables, name) ? tables[name] : undefined;
-  if (!spec) throw new Error(`The PostgreSQL schema has no table for the collection "${name}". Run "npm run prisma:schema" and "npm run prisma:migrate".`);
+  if (!spec) throw new Error(`The PostgreSQL schema has no table for the collection "${name}". Run "npm run prisma:schema" and "npm run db:setup".`);
   return spec;
 }
 
@@ -168,8 +168,8 @@ export function batchPayload(/** @type {readonly { id: string; json: string }[]}
 
 /**
  * Upsert one batch of documents. Existing rows keep their position; new
- * rows are placed after every existing one, in batch order (like SQLite's
- * rowid). The extracted columns are recomputed from the new document.
+ * rows are placed after every existing one, in batch order (like an
+ * append to the array). The extracted columns are recomputed from the new document.
  *
  * @param {TableSpec} spec
  * @param {readonly { id: string; json: string }[]} rows  Distinct ids.
@@ -274,7 +274,7 @@ function docId(/** @type {unknown} */ doc) {
 
 /**
  * Statements that replace a whole table with `docs` (array order kept;
- * repeated ids keep their first copy, like the SQLite driver).
+ * repeated ids keep their first copy).
  *
  * @param {string} name
  * @param {readonly unknown[]} docs

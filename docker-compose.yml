@@ -1,7 +1,11 @@
 # LearnLoop on one server: the app plus Caddy for automatic HTTPS.
 #
-#   cp .env.example .env      # fill in APP_URL, APP_SECRET, DOMAIN, ACME_EMAIL, …
+#   cp .env.example .env      # fill in APP_URL, APP_SECRET, DATABASE_URL, DIRECT_URL, DOMAIN, ACME_EMAIL, …
 #   docker compose up -d --build
+#
+# The database is PostgreSQL (Supabase, see ENV-SETUP.md); the app applies
+# its migrations on every start. The `storage` volume keeps backups (JSON
+# exports) and locally stored uploads.
 #
 # Optional scheduler for the email/commerce/comms/media/webhook jobs (set
 # CRON_KEY in .env first; Admin -> Settings -> Email shows it):
@@ -26,8 +30,10 @@ services:
       # Behind exactly one reverse proxy (Caddy): the client IP is the last
       # X-Forwarded-For entry. 0 would make every per-IP rate limit shared.
       TRUST_PROXY_HOPS: "1"
-      DATA_FILE: storage/db.json
-      SQLITE_PATH: storage/lms.sqlite
+      # PostgreSQL (Supabase): the pooled URL for the app, the direct one for migrations.
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (see ENV-SETUP.md)}
+      DIRECT_URL: ${DIRECT_URL:-}
+      STORAGE_DIR: storage
       UPLOAD_DIR: storage/uploads
     volumes:
       - storage:/app/storage
@@ -79,15 +85,16 @@ services:
         target: /etc/crontabs/root
     command: ["crond", "-f", "-l", "8", "-c", "/etc/crontabs"]
 
-  # Optional PostgreSQL for DB_DRIVER=postgres when you do not use Supabase or
-  # another hosted database (DEPLOYMENT.md, section 15):
+  # Optional local PostgreSQL when you do not use Supabase or another hosted
+  # database (DEPLOYMENT.md, section 15):
   #
   #   docker compose --profile postgres up -d
   #
-  # then in .env: DB_DRIVER=postgres,
+  # with, in .env:
   #   DATABASE_URL=postgresql://learnloop:${POSTGRES_PASSWORD}@postgres:5432/learnloop
   #   DIRECT_URL=<the same URL>
-  # and run `npm run prisma:migrate` once (from the host, use localhost:5432).
+  # The app creates the tables on start. From the host (npm run db:to-postgres,
+  # db:backup, …) use localhost:5432 instead of postgres:5432.
   # Not published beyond 127.0.0.1; its data lives in the `postgres` volume.
   postgres:
     image: postgres:16-alpine

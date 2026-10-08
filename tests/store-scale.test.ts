@@ -7,29 +7,30 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { Database, Enrollment, LessonProgress, VideoWatch } from "@/lib/types";
 import { COLLECTIONS } from "@/lib/db/store";
 import { StoreEngine } from "@/lib/db/engine";
-import { SqliteDriver } from "@/lib/db/sqlite";
-import { createDatabaseFile, openDatabase, type RawData } from "@/lib/db/sqlite-core.mjs";
+import type { RawData } from "@/lib/db/driver";
+import { MemoryDatabase, MemoryDriver } from "./helpers/memory-driver";
 
 /**
- * data-sqlite: "handles thousands of students without slowing down".
+ * "Handles thousands of students without slowing down": the cost of the
+ * store engine itself (change tracking, coalescing, sweeps), on the
+ * in-memory test driver so no database server is needed.
  *
- * A school-sized SQLite file — 5,000 learners, 50 courses with 1,000
- * lessons, 50,000 enrollments, 100,000 lesson-progress rows and 100,000
- * video-progress rows (about 256,000 documents) — opened by the real engine
- * and driver, then:
+ * A school-sized database — 5,000 learners, 50 courses with 1,000
+ * 1,000 lessons, 50,000 enrollments, 100,000 lesson-progress rows and 100,000
+ * video-progress rows (about 256,000 documents) — opened by the real engine,
+ * then:
  *
- *  1. cold load: open, `PRAGMA quick_check`, migrations for every
- *     collection, reading every document and fingerprinting it;
+ *  1. cold load: reading every document and fingerprinting it;
  *  2. 1,000 sequential heartbeat-style mutations, each finding and changing
- *     one row and then written to disk on its own (candidates mode: exactly
- *     one document compared and one row upserted per mutation);
+ *     one row and then written on its own (candidates mode: exactly one
+ *     document compared and one row upserted per mutation);
  *  3. a burst of 1,000 concurrent heartbeats, coalesced into a few
  *     transactions;
  *  4. a full background sweep of every collection, which must leave the
  *     event loop free between short slices.
  *
- * The numbers are printed as test diagnostics and summarized in DEPLOYMENT.md
- * ("Sizing") and on /admin/settings/data. The bounds below are several
+ * The numbers are printed as test diagnostics. PostgreSQL adds a network
+ * round trip per write on top of them. The bounds below are several
  * times what a laptop measures, so a busy CI machine still passes while a
  * regression to whole-collection work per heartbeat fails.
  */
@@ -59,7 +60,7 @@ const BUDGET = {
 };
 
 let dir: string;
-let file: string;
+let database: MemoryDatabase;
 let engine: StoreEngine | null = null;
 let seeded: { data: RawData; seedMs: number; documents: number };
 const report: Record<string, string> = {};
@@ -248,7 +249,7 @@ function normalize(data: RawData): Database {
 }
 
 function openEngine(): StoreEngine {
-  const driver = new SqliteDriver({ file, collections: COLLECTIONS });
+  const driver = new MemoryDriver({ database, collections: COLLECTIONS, backupsDir: path.join(dir, "backups") });
   engine = new StoreEngine({
     driver,
     collections: COLLECTIONS,
@@ -263,15 +264,10 @@ function openEngine(): StoreEngine {
   return engine;
 }
 
-/** The stored JSON of one row, through a separate read-only connection (what a restart would load). */
+/** The stored JSON of one row (what a restart would load). */
 function storedDoc(collection: string, id: string): unknown {
-  const conn = openDatabase(file, { readOnly: true });
-  try {
-    const row = conn.prepare(`SELECT doc FROM "${collection}" WHERE id = ?`).get(id);
-    return row ? JSON.parse(String(row.doc)) : null;
-  } finally {
-    conn.close();
-  }
+  const json = database.tables.get(collection)?.get(id);
+  return json === undefined ? null : JSON.parse(json);
 }
 
 /** Heartbeat `i`: which existing row it updates (spread over the whole school). */
@@ -306,11 +302,11 @@ function heartbeat(db: Database, i: number, nowMs: number): string {
 }
 
 before(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-sqlite-scale-"));
-  file = path.join(dir, "lms.sqlite");
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-store-scale-"));
   const data = buildSchool();
   const started = performance.now();
-  createDatabaseFile(file, data, { collections: COLLECTIONS, source: "scale-test" });
+  database = new MemoryDatabase();
+  database.replace(data, COLLECTIONS, "scale-test");
   const documents = Object.values(data.collections).reduce((n, docs) => n + docs.length, 0);
   seeded = { data, seedMs: performance.now() - started, documents };
 });
@@ -321,14 +317,15 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe("SQLite store at school scale (5,000 learners, ~256,000 documents)", () => {
-  it("builds the school in one transaction", (ctx) => {
+describe("store at school scale (5,000 learners, ~256,000 documents)", () => {
+  it("builds the school in one write", (ctx) => {
     const { collections } = seeded.data;
     assert.equal(collections.users!.length, USERS);
     assert.equal(collections.enrollments!.length, USERS * ENROLLMENTS_PER_USER);
     assert.equal(collections.progress!.length + collections.videoWatches!.length, USERS * ENROLLMENTS_PER_USER * ROWS_PER_ENROLLMENT * 2);
-    const size = fs.statSync(file).size;
-    report.seed = `${seeded.documents.toLocaleString("en")} documents written in ${ms(seeded.seedMs)}, file ${(size / 1024 / 1024).toFixed(0)} MB`;
+    let size = 0;
+    for (const table of database.tables.values()) for (const json of table.values()) size += json.length;
+    report.seed = `${seeded.documents.toLocaleString("en")} documents written in ${ms(seeded.seedMs)}, ${(size / 1024 / 1024).toFixed(0)} MB of JSON`;
     ctx.diagnostic(report.seed);
     // The seed data is not needed any more: let it be collected before the timings.
     seeded.data = { collections: {}, settings: null };
@@ -384,7 +381,7 @@ describe("SQLite store at school scale (5,000 learners, ~256,000 documents)", ()
     const db = await e.getDb();
     for (const [id, collection] of [...touched].filter((_, n) => n % 50 === 0)) {
       const memory = (collection === "videoWatches" ? db.videoWatches : db.progress).find((d) => d.id === id);
-      assert.deepEqual(storedDoc(collection, id), JSON.parse(JSON.stringify(memory)), `${collection}/${id} is on disk`);
+      assert.deepEqual(storedDoc(collection, id), JSON.parse(JSON.stringify(memory)), `${collection}/${id} is stored`);
     }
 
     const p50 = percentile(latencies, 0.5);

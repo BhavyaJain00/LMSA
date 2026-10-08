@@ -65,7 +65,7 @@ export function describeBackupFailure(err: unknown, fallback: string): { error: 
   return { error: fallback, status: 500 };
 }
 
-const CONTENT_TYPES = { sqlite: "application/vnd.sqlite3", json: "application/json; charset=utf-8" } as const;
+const CONTENT_TYPES = { json: "application/json; charset=utf-8" } as const;
 
 /**
  * Stream a backup file as a download. `downloadName` must already be a safe

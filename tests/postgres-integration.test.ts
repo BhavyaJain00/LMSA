@@ -8,13 +8,16 @@ import type { Database } from "@/lib/types";
 import { StoreEngine } from "@/lib/db/engine";
 import { PostgresDriver, sharedPrismaClient } from "@/lib/db/postgres";
 import { countRows, readAllData, writeAllData, bumpWriteSeq, countMismatches, expectedCounts } from "@/lib/db/postgres-core.mjs";
-import { createDatabaseFile, type RawData } from "@/lib/db/sqlite-core.mjs";
+import type { RawData } from "@/lib/db/driver";
 import { BackupManager } from "@/lib/db/backup";
+import { readSourceDatabase } from "../scripts/lib/sqlite-source.mjs";
+import { replaceDatabase } from "../scripts/lib/pg.mjs";
 import { PG_SKIP, createTestSchema, dropTestSchemas } from "./helpers/postgres";
+import { createLegacySqlite } from "./helpers/legacy-sqlite";
 
 /**
- * Postgres phase 1 against a real PostgreSQL server: the driver through the
- * store engine. Runs only when TEST_DATABASE_URL is set (`npm run test:pg`,
+ * The PostgreSQL driver against a real PostgreSQL server, through the store
+ * engine. Runs only when TEST_DATABASE_URL is set (`npm run test:pg`,
  * see tests/helpers/postgres.ts); every case gets its own temporary schema.
  */
 
@@ -216,38 +219,32 @@ describe("postgres integration", { skip: PG_SKIP }, () => {
     assert.ok(ids(data.collections.courses!).includes("c2"));
   });
 
-  it("imports the legacy JSON database into an empty database and archives the file", async () => {
+  it("fills an empty database from initialData only: old SQLite/JSON files are never imported on open", async () => {
     const url = await freshDatabase();
-    const json = path.join(tmp, `db-${randomBytes(3).toString("hex")}.json`);
-    const data = sample();
-    fs.writeFileSync(json, JSON.stringify({ ...data.collections, settings: data.settings }));
-    const engine = engineFor(url, { driver: driverFor(url, { legacyJsonFile: json, sqliteFile: path.join(tmp, "missing.sqlite") }), initial: { collections: {}, settings: null } });
+    const engine = engineFor(url, { initial: { collections: { users: [{ id: "seed-admin", roles: ["admin"], enabled: true }] }, settings: null } });
     const db = await engine.getDb();
-    assert.equal(engine.getStats().origin, "imported-json");
-    assert.deepEqual(ids(rows(db, "users")), ["u1", "u2", "u3"]);
-    assert.equal(fs.existsSync(json), false);
-    assert.ok(fs.readdirSync(tmp).some((name) => name.startsWith(path.basename(json)) && name.includes(".migrated-")));
+    assert.equal(engine.getStats().origin, "seeded");
+    assert.deepEqual(ids(rows(db, "users")), ["seed-admin"]);
     const meta = (await sharedPrismaClient(url).then((c) => c.$queryRawUnsafe(`SELECT "value" FROM "meta" WHERE "key" = 'initialized_from'`))) as { value: string }[];
-    assert.match(meta[0]!.value, /^json:/);
+    assert.equal(meta[0]!.value, "seed");
   });
 
-  it("imports the SQLite database into an empty database without touching the file", async () => {
+  it("copies an old SQLite database the way db:to-postgres does, without touching the file", async () => {
     const url = await freshDatabase();
     const file = path.join(tmp, `lms-${randomBytes(3).toString("hex")}.sqlite`);
-    const data = sample();
-    (data.collections.users as Row[]).push({ id: "u1", name: "duplicate id: the first copy wins" });
-    createDatabaseFile(file, data, { collections: [...COLLECTIONS] });
-    const before = fs.statSync(file);
-    const engine = engineFor(url, { driver: driverFor(url, { sqliteFile: file }), initial: { collections: {}, settings: null } });
+    await createLegacySqlite(file, sample());
+    const before = fs.readFileSync(file);
+    const { data } = await readSourceDatabase(file);
+    const client = await sharedPrismaClient(url);
+    await replaceDatabase(client as never, data, `copy:${path.basename(file)}`);
+    const engine = engineFor(url, { initial: { collections: {}, settings: null } });
     const db = await engine.getDb();
-    assert.equal(engine.getStats().origin, "imported-sqlite");
+    assert.equal(engine.getStats().origin, "existing");
     assert.deepEqual(ids(rows(db, "users")), ["u1", "u2", "u3"]);
     assert.equal(rows(db, "users")[0]!.name, "Ada");
     assert.deepEqual(rows(db, "progress"), sample().collections.progress);
     assert.deepEqual((db.settings as unknown as { siteName: string }).siteName, "Loop");
-    const after = fs.statSync(file);
-    assert.equal(after.size, before.size);
-    assert.equal(after.mtimeMs, before.mtimeMs);
+    assert.ok(fs.readFileSync(file).equals(before), "the source file is unchanged");
   });
 
   it("copies everything in one transaction and verifies the counts (what db:to-postgres does)", async () => {
@@ -299,7 +296,7 @@ describe("postgres integration", { skip: PG_SKIP }, () => {
     const driver = driverFor(await createTestSchema({ migrate: false }));
     await assert.rejects(
       driver.open(async () => sample()),
-      /missing \d+ table\(s\).*npm run prisma:migrate/,
+      /missing \d+ table\(s\).*npm run db:setup/,
     );
   });
 });

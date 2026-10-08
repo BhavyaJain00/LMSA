@@ -19,8 +19,8 @@ let cachedSecret: string | null = null;
 /**
  * Application secret used to sign media URLs, encrypt 2FA secrets and sign
  * unsubscribe/calendar links. Uses APP_SECRET when set (required in
- * production); otherwise generates one and persists it next to the database
- * so it survives restarts in development.
+ * production); otherwise generates one and persists it in the storage folder
+ * (STORAGE_DIR) so it survives restarts in development.
  */
 export function getAppSecret(): string {
   if (cachedSecret) return cachedSecret;
@@ -33,7 +33,7 @@ export function getAppSecret(): string {
   if (process.env.NODE_ENV === "production") {
     throw new Error("APP_SECRET is not set. Add a long random value to your .env file (e.g. `openssl rand -hex 32`).");
   }
-  const file = path.resolve(/* turbopackIgnore: true */ process.cwd(), path.dirname(siteConfig.dataFile), ".app-secret");
+  const file = path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.storageDir, ".app-secret");
   try {
     cachedSecret = fs.readFileSync(file, "utf8").trim();
     if (cachedSecret.length >= 32) return cachedSecret;
@@ -135,22 +135,9 @@ export const aiEnv = {
   anthropicApiKey: read("ANTHROPIC_API_KEY"),
 };
 
-export type DatabaseDriver = "json" | "sqlite" | "postgres";
-
-/** DB_DRIVER: "json", "postgres" (also "postgresql"), anything else is the default "sqlite". */
-export function parseDatabaseDriver(value: string | undefined): DatabaseDriver {
-  const v = (value ?? "").trim().toLowerCase();
-  if (v === "json") return "json";
-  if (v === "postgres" || v === "postgresql") return "postgres";
-  return "sqlite";
-}
-
-/** Which database backend the store uses. */
+/** The PostgreSQL database (Supabase or any PostgreSQL 13+), the app's only database. */
 export const databaseEnv = {
-  driver: parseDatabaseDriver(read("DB_DRIVER")),
-  /** Relative to the project root, or absolute. With DB_DRIVER=postgres: imported into an empty database, and the backups folder sits next to it. */
-  sqlitePath: read("SQLITE_PATH") || "storage/lms.sqlite",
-  /** PostgreSQL connection for the app (Supabase: the pooled URL, port 6543, ?pgbouncer=true&connection_limit=…). */
+  /** Connection used by the app (Supabase: the pooled URL, port 6543, ?pgbouncer=true&connection_limit=…). */
   databaseUrl: read("DATABASE_URL"),
 };
 

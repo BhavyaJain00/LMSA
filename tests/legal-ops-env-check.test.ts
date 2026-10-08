@@ -5,11 +5,14 @@ import { checkEnvironment, isBuildPhase, runStartupChecks, type EnvCheckResult }
 /**
  * Round 3 legal-ops part 3: start-up configuration rules. Production refuses
  * to start without a strong APP_SECRET or an https APP_URL; development only
- * warns; `next build` skips the checks.
+ * warns; `next build` skips the checks. (DATABASE_URL, required everywhere,
+ * is covered by `postgres-config.test.ts`; every case here has one.)
  */
 
 const SECRET = "a".repeat(32);
+const DATABASE = { DATABASE_URL: "postgresql://app:pw@db.example.com:5432/postgres", DIRECT_URL: "postgresql://app:pw@db.example.com:5432/postgres" };
 const GOOD_PROD = {
+  ...DATABASE,
   APP_SECRET: SECRET,
   APP_URL: "https://learn.example.com",
   SEED_DEMO_DATA: "false",
@@ -21,7 +24,7 @@ const GOOD_PROD = {
 
 const keys = (issues: EnvCheckResult["errors"]) => issues.map((i) => i.key);
 const prod = (env: Record<string, string | undefined>) => checkEnvironment(env, { production: true });
-const dev = (env: Record<string, string | undefined>) => checkEnvironment(env, { production: false });
+const dev = (env: Record<string, string | undefined>) => checkEnvironment({ ...DATABASE, ...env }, { production: false });
 
 describe("env-check: production requirements", () => {
   it("passes a complete production configuration with no issues", () => {
@@ -135,7 +138,7 @@ describe("env-check: development", () => {
 
 describe("env-check: runStartupChecks", () => {
   const env = process.env as Record<string, string | undefined>;
-  const saved = { NODE_ENV: env.NODE_ENV, NEXT_PHASE: env.NEXT_PHASE, APP_SECRET: env.APP_SECRET, APP_URL: env.APP_URL };
+  const saved = { NODE_ENV: env.NODE_ENV, NEXT_PHASE: env.NEXT_PHASE, APP_SECRET: env.APP_SECRET, APP_URL: env.APP_URL, DATABASE_URL: env.DATABASE_URL, DIRECT_URL: env.DIRECT_URL };
   const originalWarn = console.warn;
 
   afterEach(() => {
@@ -178,6 +181,7 @@ describe("env-check: runStartupChecks", () => {
     env.NODE_ENV = "development";
     delete env.NEXT_PHASE;
     delete env.APP_SECRET;
+    Object.assign(env, DATABASE);
     const logged: string[] = [];
     console.warn = (...args: unknown[]) => void logged.push(args.join(" "));
     const result = runStartupChecks();

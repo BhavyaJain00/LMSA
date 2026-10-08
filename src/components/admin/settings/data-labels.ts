@@ -92,7 +92,7 @@ export function signedNumber(n: number): string {
 }
 
 /** File extensions accepted by "Restore from a file". */
-export const BACKUP_FILE_EXTENSIONS = [".sqlite", ".sqlite3", ".db", ".json"] as const;
+export const BACKUP_FILE_EXTENSIONS = [".json"] as const;
 
 export function isBackupFileName(name: string): boolean {
   const lower = name.toLowerCase();
@@ -111,7 +111,7 @@ export function isBackupFileName(name: string): boolean {
 export interface BackupRow {
   name: string;
   kind: BackupKindName;
-  format: "sqlite" | "json";
+  format: "json";
   createdAt: string;
   createdLabel: string;
   ageLabel: string;

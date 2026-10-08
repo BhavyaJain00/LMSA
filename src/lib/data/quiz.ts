@@ -566,13 +566,13 @@ async function readKeyFile(file: string): Promise<string | null> {
 
 /**
  * Signing key for attempt tokens: `QUIZ_ATTEMPT_SECRET` when set, otherwise a
- * random key persisted next to the database file so tokens survive restarts.
+ * random key persisted in the storage folder (STORAGE_DIR) so tokens survive restarts.
  */
 function attemptKey(): Promise<Buffer> {
   attemptGlobals.__llQuizAttemptKey ??= (async () => {
     const fromEnv = process.env.QUIZ_ATTEMPT_SECRET?.trim();
     if (fromEnv) return Buffer.from(fromEnv, "utf8");
-    const file = path.join(path.dirname(path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.dataFile)), ".quiz-attempt-key");
+    const file = path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.storageDir, ".quiz-attempt-key");
     const existing = await readKeyFile(file);
     if (existing) return Buffer.from(existing, "utf8");
     const fresh = randomBytes(32).toString("hex");

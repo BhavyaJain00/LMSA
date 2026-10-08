@@ -6,15 +6,16 @@ import path from "node:path";
 import type { Database } from "@/lib/types";
 import { ChangeTracker, changeSetSize, fingerprint, idOf, isEmptyChangeSet } from "@/lib/db/changes";
 import { StoreEngine, type EngineOptions } from "@/lib/db/engine";
-import { SqliteDriver } from "@/lib/db/sqlite";
 import type { ChangeSet, RawData } from "@/lib/db/driver";
-import { applyChanges, openDatabase, readAllData } from "@/lib/db/sqlite-core.mjs";
+import { MemoryDatabase, MemoryDriver } from "./helpers/memory-driver";
 
 /**
- * data-sqlite item 3: change tracking. Whatever a mutation does to the
- * in-memory database (in-place edits, push, splice, whole-array
- * replacement, settings) must reach SQLite, as one transaction per flush
- * that writes only the documents that differ.
+ * Change tracking. Whatever a mutation does to the in-memory database
+ * (in-place edits, push, splice, whole-array replacement, settings) must
+ * reach the storage, as one change set per flush that writes only the
+ * documents that differ. Runs on the in-memory test driver, which applies
+ * change sets the way PostgreSQL does (upserts keep their position, new
+ * rows go last, `order` renumbers); `npm run test:pg` covers PostgreSQL.
  */
 
 interface Doc {
@@ -35,7 +36,7 @@ let dir: string;
 const engines: StoreEngine[] = [];
 
 before(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-sqlite-tracking-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-store-tracking-"));
 });
 
 afterEach(() => {
@@ -46,10 +47,8 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-let counter = 0;
-function freshFile(): string {
-  counter++;
-  return path.join(dir, `case-${counter}`, "lms.sqlite");
+function freshDatabase(): MemoryDatabase {
+  return new MemoryDatabase();
 }
 
 function sample(): RawData {
@@ -79,26 +78,27 @@ function normalize(data: RawData): Database {
 
 interface Harness {
   engine: StoreEngine;
-  driver: SqliteDriver;
-  file: string;
+  driver: MemoryDriver;
+  database: MemoryDatabase;
   /** Change sets handed to the driver, one per transaction. */
   writes: ChangeSet[];
   db(): Promise<TestDb>;
   mutate<T>(fn: (db: TestDb) => T | Promise<T>): Promise<T>;
   /** Wait for the coalesced write scheduled by the last mutation. */
   settle(): Promise<void>;
-  /** What the SQLite file holds, read through a separate connection. */
+  /** What the storage holds. */
   stored(): TestDb;
-  /** Assert that the file holds exactly what is in memory. */
+  /** Assert that the storage holds exactly what is in memory. */
   assertInSync(message?: string): Promise<void>;
 }
 
 const FLUSH_MS = 10;
 
-function start(options: Partial<EngineOptions> & { file?: string; data?: RawData; collections?: readonly string[] } = {}): Harness {
-  const file = options.file ?? freshFile();
+function start(options: Partial<EngineOptions> & { database?: MemoryDatabase; data?: RawData; collections?: readonly string[] } = {}): Harness {
+  const database = options.database ?? freshDatabase();
   const collections = options.collections ?? COLLECTIONS;
-  const driver = new SqliteDriver({ file, collections });
+  // Synchronous, so a failed write and close() behave the same way on every run.
+  const driver = new MemoryDriver({ database, collections, backupsDir: path.join(dir, "backups"), asynchronous: false });
   const writes: ChangeSet[] = [];
   const persist = driver.persist.bind(driver);
   driver.persist = (data, changes) => {
@@ -117,19 +117,14 @@ function start(options: Partial<EngineOptions> & { file?: string; data?: RawData
   });
   engines.push(engine);
   const stored = (): TestDb => {
-    const conn = openDatabase(file, { readOnly: true });
-    try {
-      const data = readAllData(conn, collections);
-      return { ...(data.collections as unknown as Omit<TestDb, "settings">), settings: data.settings as Record<string, unknown> };
-    } finally {
-      conn.close();
-    }
+    const data = database.read(collections);
+    return { ...(data.collections as unknown as Omit<TestDb, "settings">), settings: data.settings as Record<string, unknown> };
   };
   const db = async () => (await engine.getDb()) as unknown as TestDb;
   return {
     engine,
     driver,
-    file,
+    database,
     writes,
     db,
     mutate: (fn) => engine.mutate((d) => fn(d as unknown as TestDb)),
@@ -296,30 +291,23 @@ describe("ChangeTracker", () => {
     assert.ok(isEmptyChangeSet(listed.changeSet));
   });
 
-  it("produces change sets SQLite applies as they are", () => {
+  it("produces change sets the storage applies as they are", () => {
     const { tracker, collections, users } = tracked();
-    const file = freshFile();
-    const conn = openDatabase(file);
-    try {
-      conn.exec("CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), doc TEXT NOT NULL, updated_at TEXT NOT NULL)");
-      conn.exec('CREATE TABLE "users" (id TEXT PRIMARY KEY NOT NULL, doc TEXT NOT NULL, updated_at TEXT NOT NULL)');
-      const everything = new ChangeTracker().diff(collections, [{ name: "users", mode: "full" }], { theme: "light" });
-      applyChanges(conn, everything.changeSet);
-      users[0]!.name = "Ada L.";
-      users.splice(1, 1);
-      applyChanges(conn, tracker.diff(collections, [{ name: "users", mode: "identity", candidates: [users[0]] }], { theme: "dark" }).changeSet);
-      assert.deepEqual(readAllData(conn, ["users"]), { collections: { users: JSON.parse(JSON.stringify(users)) }, settings: { theme: "dark" } });
-    } finally {
-      conn.close();
-    }
+    const database = freshDatabase();
+    const everything = new ChangeTracker().diff(collections, [{ name: "users", mode: "full" }], { theme: "light" });
+    database.apply(everything.changeSet);
+    users[0]!.name = "Ada L.";
+    users.splice(1, 1);
+    database.apply(tracker.diff(collections, [{ name: "users", mode: "identity", candidates: [users[0]] }], { theme: "dark" }).changeSet);
+    assert.deepEqual(database.read(["users"]), { collections: { users: JSON.parse(JSON.stringify(users)) }, settings: { theme: "dark" } });
   });
 });
 
 /* ------------------------------------------------------------------ */
-/* StoreEngine on SQLite: round trips                                  */
+/* StoreEngine: round trips                                             */
 /* ------------------------------------------------------------------ */
 
-describe("StoreEngine change tracking (SQLite)", () => {
+describe("StoreEngine change tracking ", () => {
   it("stores a pushed document and nothing else", async () => {
     const h = start();
     await h.mutate((db) => {
@@ -551,7 +539,7 @@ describe("StoreEngine change tracking (SQLite)", () => {
     assert.deepEqual(h.writes.at(-1)!.collections, [{ name: "users", upserts: [], deletes: ["middle"], order: ["first", "u0", "u1", "u2", "u3"] }]);
 
     h.engine.close();
-    const again = start({ file: h.file });
+    const again = start({ database: h.database });
     const db = await again.db();
     assert.equal(again.engine.getStats().origin, "existing");
     assert.deepEqual(ids(db.users), ["first", "u0", "u1", "u2", "u3"]);
@@ -677,7 +665,7 @@ describe("StoreEngine change tracking (SQLite)", () => {
     let failures = 0;
     h.driver.persist = () => {
       failures++;
-      throw Object.assign(new Error("database is locked"), { errcode: 5 });
+      throw new Error("Connection lost");
     };
     const errors: unknown[][] = [];
     const original = console.error;
@@ -692,7 +680,7 @@ describe("StoreEngine change tracking (SQLite)", () => {
       assert.equal(h.stored().users[0]!.name, "Ada", "nothing was written");
       const stats = h.engine.getStats();
       assert.equal(stats.pending, true);
-      assert.match(stats.lastError?.message ?? "", /locked by another process/);
+      assert.match(stats.lastError?.message ?? "", /save changes/);
       assert.equal(errors.length, 1);
     } finally {
       console.error = original;
@@ -710,7 +698,7 @@ describe("StoreEngine change tracking (SQLite)", () => {
 /* Edits the engine cannot see                                         */
 /* ------------------------------------------------------------------ */
 
-describe("StoreEngine safety nets (SQLite)", () => {
+describe("StoreEngine safety nets ", () => {
   function quiet<T>(fn: (warnings: string[]) => Promise<T>): Promise<T> {
     const warnings: string[] = [];
     const original = console.warn;
@@ -787,7 +775,6 @@ describe("StoreEngine safety nets (SQLite)", () => {
     const disk = h.stored();
     assert.deepEqual(ids(disk.users), ["u1", "u2", "u3", "u8"]);
     assert.equal(disk.courses[0]!.title, "Edited outside, never flushed");
-    assert.ok(!fs.existsSync(`${h.file}-wal`) || fs.statSync(`${h.file}-wal`).size === 0, "the WAL was folded into the main file");
   });
 
   it("warns about documents that cannot be stored (no id) and keeps storing the rest", async () => {
@@ -808,7 +795,7 @@ describe("StoreEngine safety nets (SQLite)", () => {
 /* What callers see                                                    */
 /* ------------------------------------------------------------------ */
 
-describe("StoreEngine collections (SQLite)", () => {
+describe("StoreEngine collections ", () => {
   it("hands out one stable array per collection, inside and outside mutations", async () => {
     const h = start();
     const db = await h.db();
@@ -896,24 +883,20 @@ describe("StoreEngine collections (SQLite)", () => {
     assert.deepEqual(seen, { name: "Unreported edit", courses: ["c1", "c2", "c3"], live: ["c1", "c2", "c3"] });
   });
 
-  it("reloads after another process wrote to the file, keeping its own unsaved edits", async () => {
+  it("reloads after another process wrote to the database, keeping its own unsaved edits", async () => {
     const h = start({ externalCheckMs: 0 });
     const db = await h.db();
     await h.mutate((d) => {
       d.users.find((u) => u.id === "u1")!.name = "Mine, not flushed yet";
     });
-    const other = openDatabase(h.file);
-    try {
-      applyChanges(other, {
-        collections: [
-          { name: "courses", upserts: [{ id: "c7", json: '{"id":"c7","title":"From outside"}' }], deletes: ["c1"] },
-          { name: "users", upserts: [{ id: "u2", json: '{"id":"u2","name":"Changed outside"}' }], deletes: [] },
-        ],
-        settings: null,
-      });
-    } finally {
-      other.close();
-    }
+    // Another app process writing to the same database.
+    h.database.apply({
+      collections: [
+        { name: "courses", upserts: [{ id: "c7", json: '{"id":"c7","title":"From outside"}' }], deletes: ["c1"] },
+        { name: "users", upserts: [{ id: "u2", json: '{"id":"u2","name":"Changed outside"}' }], deletes: [] },
+      ],
+      settings: null,
+    });
     const info = console.info;
     console.info = () => undefined;
     try {
@@ -939,11 +922,6 @@ describe("StoreEngine collections (SQLite)", () => {
       (d as unknown as Record<string, Doc[]>).badges!.push({ id: "b1", name: "First" });
     });
     await h.engine.flush();
-    const conn = openDatabase(h.file, { readOnly: true });
-    try {
-      assert.deepEqual(readAllData(conn, ["badges"]).collections.badges, [{ id: "b1", name: "First" }]);
-    } finally {
-      conn.close();
-    }
+    assert.deepEqual(h.database.read(["badges"]).collections.badges, [{ id: "b1", name: "First" }]);
   });
 });

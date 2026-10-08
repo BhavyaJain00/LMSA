@@ -148,7 +148,7 @@ class FakeAsyncDriver implements StoreDriver {
   }
 
   info(): StorageInfo {
-    return { driver: "postgres", file: "fake", sizeBytes: null, walBytes: null, modifiedAt: null, sqliteVersion: null, schemaVersion: null, meta: {} };
+    return { driver: "postgres", target: "fake", sizeBytes: null, modifiedAt: null, schemaVersion: null, meta: {} };
   }
 
   async close(): Promise<void> {

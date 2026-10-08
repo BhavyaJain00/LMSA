@@ -1,25 +1,24 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { rawDataToJson, readBackupData, readJsonFile, type ChangeSet, type RawData } from "./sqlite-core.mjs";
+import { rawDataToJson, type ChangeSet, type RawData } from "./data-core.mjs";
 import * as pg from "./postgres-core.mjs";
 import type { OpenOrigin, OpenResult, StorageInfo, StoreDriver } from "./driver";
 
 /**
- * PostgreSQL storage (Supabase or any PostgreSQL 13+) through Prisma,
- * selected with DB_DRIVER=postgres.
+ * PostgreSQL storage (Supabase or any PostgreSQL 13+) through Prisma: the
+ * app's only database.
  *
- * Phase 1 keeps the store's in-memory model: `open()` loads every table,
+ * The store keeps its in-memory model: `open()` loads every table,
  * `persist()` writes the change sets the engine computes, in one
  * transaction each. The SQL lives in `postgres-core.mjs`; the tables come
- * from `prisma/schema.prisma` (`npm run prisma:migrate`).
+ * from `prisma/schema.prisma` (`npm run db:setup`).
  *
  * Every call reaches the database over the network, so the driver is
  * `asynchronous`: the engine awaits it and runs writes, reload checks and
  * the last write on shutdown through its queue.
  *
- * `@prisma/client` is loaded on first use (a dynamic import), so SQLite
- * sites never load it and `next build` does not need DATABASE_URL.
+ * `@prisma/client` is loaded on first use (a dynamic import), so
+ * `next build` never connects and does not need DATABASE_URL.
  */
 
 /** The subset of a PrismaClient (or interactive-transaction client) the driver uses. */
@@ -39,10 +38,6 @@ export interface PostgresDriverOptions {
   collections: readonly string[];
   /** Folder for JSON backups (pg_dump is not available; Supabase keeps its own backups too). */
   backupsDir: string;
-  /** SQLite database imported when PostgreSQL is empty (SQLITE_PATH). */
-  sqliteFile?: string;
-  /** Legacy JSON database imported when PostgreSQL is empty and there is no SQLite file (DATA_FILE). */
-  legacyJsonFile?: string;
   /** A client to use instead of the shared PrismaClient (tests). */
   client?: PgClient;
   /** Longest a write transaction may run (default 60 s); bulk replaces get 15 minutes. */
@@ -76,7 +71,7 @@ async function createPrismaClient(url: string): Promise<PgClient> {
   try {
     mod = await import("@prisma/client");
   } catch (err) {
-    throw new Error(`DB_DRIVER=postgres needs the Prisma client: run "npm install" (it runs "prisma generate"). ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`The database needs the Prisma client: run "npm install" (it runs "prisma generate"). ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     return new mod.PrismaClient({ datasourceUrl: url, log: ["warn"] }) as unknown as PgClient;
@@ -122,7 +117,7 @@ export class PostgresDriver implements StoreDriver {
 
   private client(): Promise<PgClient> {
     if (this.options.client) return Promise.resolve(this.options.client);
-    if (!this.options.url) return Promise.reject(new Error("DB_DRIVER=postgres needs DATABASE_URL (see .env.example)."));
+    if (!this.options.url) return Promise.reject(new Error("DATABASE_URL is not set: the app needs a PostgreSQL database (see ENV-SETUP.md)."));
     return (this.clientPromise ??= sharedPrismaClient(this.options.url));
   }
 
@@ -133,10 +128,9 @@ export class PostgresDriver implements StoreDriver {
 
   /**
    * Check the schema, then read everything. An empty database is filled
-   * first, in one transaction: from the SQLite database (SQLITE_PATH) when
-   * there is one, else from the legacy JSON file (renamed to
-   * `<name>.migrated-<timestamp>` afterwards, never deleted), else from
-   * `initialData()` (demo seed or bootstrap admin).
+   * first, in one transaction, with `initialData()` (demo seed or bootstrap
+   * admin). Existing data from an older SQLite or JSON site is copied with
+   * `npm run db:to-postgres`, never automatically.
    */
   async open(initialData: () => Promise<RawData>): Promise<OpenResult> {
     try {
@@ -145,30 +139,13 @@ export class PostgresDriver implements StoreDriver {
       if (missing.length) {
         throw new Error(
           `The PostgreSQL database ${this.target} is missing ${missing.length} table(s) (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}). ` +
-            'Run "npm run prisma:migrate" (DATABASE_URL and DIRECT_URL must be set), then start the app again.',
+            'Run "npm run db:setup" (DATABASE_URL and DIRECT_URL must be set), then start the app again.',
         );
       }
-      if (await pg.isInitialized(client)) {
-        const data = await this.readEverything();
-        this.warnAboutNewerSqlite();
-        void this.refreshInfo();
-        return { data, origin: "existing" };
-      }
-
-      const source = this.readImportSource();
-      let origin: OpenOrigin = "seeded";
-      if (source) {
-        const result = await this.initializeWith(source.data, source.label);
-        if (result.written) {
-          origin = source.kind === "sqlite" ? "imported-sqlite" : "imported-json";
-          this.reportImport(source.data, source.label, result.duplicates, result.skipped);
-          if (source.kind === "json" && source.file) await this.archiveLegacyFile(source.file);
-        } else {
-          origin = "existing";
-        }
-      } else {
+      let origin: OpenOrigin = "existing";
+      if (!(await pg.isInitialized(client))) {
         const result = await this.initializeWith(await initialData(), "seed");
-        if (!result.written) origin = "existing";
+        if (result.written) origin = "seeded";
       }
       const data = await this.readEverything();
       void this.refreshInfo();
@@ -226,7 +203,7 @@ export class PostgresDriver implements StoreDriver {
     for (const name of names) {
       if (this.collections.includes(name)) continue;
       if (!known.has(name)) {
-        console.warn(`[db] the collection "${name}" has no PostgreSQL table yet: run "npm run prisma:schema" and "npm run prisma:migrate", then restart.`);
+        console.warn(`[db] the collection "${name}" has no PostgreSQL table yet: run "npm run prisma:schema" and "npm run db:setup", then restart.`);
         continue;
       }
       this.collections.push(name);
@@ -243,7 +220,7 @@ export class PostgresDriver implements StoreDriver {
       const client = await this.client();
       await client.$queryRawUnsafe("SELECT 1");
       const missing = await pg.missingTables(client, this.collections);
-      if (missing.length) messages.push(`Missing tables: ${missing.join(", ")}. Run "npm run prisma:migrate".`);
+      if (missing.length) messages.push(`Missing tables: ${missing.join(", ")}. Run "npm run db:setup".`);
       const present = this.collections.filter((name) => !missing.includes(pg.tableFor(name).table));
       await pg.countRows(client, present);
       if (mode === "full") {
@@ -273,11 +250,9 @@ export class PostgresDriver implements StoreDriver {
     const meta = cache?.meta ?? {};
     return {
       driver: "postgres",
-      file: this.target,
+      target: this.target,
       sizeBytes: cache?.sizeBytes ?? null,
-      walBytes: null,
       modifiedAt: this.lastWriteAt ?? meta.last_replaced_at ?? meta.initialized_at ?? null,
-      sqliteVersion: null,
       schemaVersion: cache?.schemaVersion ?? null,
       meta,
       serverVersion: cache?.serverVersion ?? null,
@@ -344,84 +319,5 @@ export class PostgresDriver implements StoreDriver {
       await pg.bumpWriteSeq(tx);
       return pg.writeAllData(tx, data, this.collections, { source, initialize: true, now });
     }, BULK_TIMEOUT_MS);
-  }
-
-  /** What an empty database is filled from: the SQLite database, else the legacy JSON file. */
-  private readImportSource(): { kind: "sqlite" | "json"; data: RawData; label: string; file: string | null } | null {
-    const sqlite = this.options.sqliteFile;
-    if (sqlite && fs.existsSync(/* turbopackIgnore: true */ sqlite)) {
-      try {
-        return { kind: "sqlite", data: readBackupData(sqlite).data, label: `sqlite:${path.basename(sqlite)}`, file: sqlite };
-      } catch (err) {
-        throw new Error(
-          `Could not import ${sqlite} into PostgreSQL: ${err instanceof Error ? err.message : String(err)}. Fix or move the file, or set DB_DRIVER=sqlite to keep using it.`,
-        );
-      }
-    }
-    const json = this.options.legacyJsonFile;
-    if (json && fs.existsSync(/* turbopackIgnore: true */ json)) {
-      try {
-        return { kind: "json", data: readJsonFile(json), label: `json:${path.basename(json)}`, file: json };
-      } catch (err) {
-        throw new Error(`Could not import ${json} into PostgreSQL: ${err instanceof Error ? err.message : String(err)}. Fix or move the file, or set DB_DRIVER=json to keep using it.`);
-      }
-    }
-    return null;
-  }
-
-  private reportImport(source: RawData, label: string, duplicates: Record<string, number>, skipped: string[]): void {
-    let documents = 0;
-    for (const [name, docs] of Object.entries(source.collections)) {
-      if (!this.collections.includes(name)) continue;
-      documents += docs.length - (duplicates[name] ?? 0);
-    }
-    console.info(`[db] imported ${documents} document(s) from ${label} into PostgreSQL (${this.target}).`);
-    const dropped = Object.entries(duplicates).map(([name, n]) => `${name} (${n})`);
-    if (dropped.length) {
-      console.warn(`[db] the import skipped documents whose id was already used by an earlier document in the same collection: ${dropped.join(", ")}.`);
-    }
-    if (skipped.length) console.warn(`[db] the import skipped collections this version of the app does not know: ${skipped.join(", ")}.`);
-  }
-
-  /** Rename the imported JSON file so it is not imported again (never deleted); the new name goes into `meta`. */
-  private async archiveLegacyFile(file: string): Promise<void> {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    let target = `${file}.migrated-${stamp}`;
-    for (let n = 2; fs.existsSync(/* turbopackIgnore: true */ target); n++) target = `${file}.migrated-${stamp}-${n}`;
-    try {
-      fs.renameSync(/* turbopackIgnore: true */ file, target);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-      console.warn(`[db] ${file} was imported but could not be renamed (${(err as Error).message}). It is ignored from now on because PostgreSQL holds the data; rename or move it yourself.`);
-      return;
-    }
-    console.info(`[db] the JSON file was kept as ${target}.`);
-    await this.transaction(async (tx) => {
-      await pg.run(tx, pg.setMetaStatement("legacy_json_archive", path.basename(target)));
-    });
-  }
-
-  /**
-   * The SQLite file is never read again once PostgreSQL holds the data. Say
-   * so when it was changed after it was copied (the site ran on SQLite
-   * again), since those changes are not in PostgreSQL.
-   */
-  private warnAboutNewerSqlite(): void {
-    const file = this.options.sqliteFile;
-    if (!file) return;
-    void (async () => {
-      try {
-        const meta = await pg.readMeta(await this.client());
-        const copiedAt = meta.last_replaced_at ?? meta.initialized_at;
-        if (!copiedAt || !fs.existsSync(/* turbopackIgnore: true */ file)) return;
-        if (fs.statSync(/* turbopackIgnore: true */ file).mtime.toISOString() > copiedAt) {
-          console.warn(
-            `[db] ${file} was changed after its data was copied to PostgreSQL; those changes are not used (DB_DRIVER=postgres). Copy it again with "npm run db:to-postgres -- --force" if they matter.`,
-          );
-        }
-      } catch {
-        // Only a hint.
-      }
-    })();
   }
 }

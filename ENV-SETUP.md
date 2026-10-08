@@ -14,12 +14,12 @@ This guide explains every key in `.env`: what it does, whether you need it, wher
 
 | Goal | Keys to fill in |
 |---|---|
-| Try it on your own computer | Nothing. The defaults work. |
+| Try it on your own computer | `DATABASE_URL`, `DIRECT_URL` (a free Supabase project, section 3). Everything else has working defaults. |
 | Go live on a real server | `APP_URL`, `APP_SECRET`, `SEED_DEMO_DATA=false`, `ADMIN_*`, `COOKIE_SECURE` |
-| Use Supabase / PostgreSQL | `DB_DRIVER`, `DATABASE_URL`, `DIRECT_URL` |
+| Connect the database (required) | `DATABASE_URL`, `DIRECT_URL` |
 | Send real emails | `MAIL_TRANSPORT=smtp`, `SMTP_*`, `MAIL_FROM` |
 | Take payments | `STRIPE_*` and/or `RAZORPAY_*` |
-| Store videos in the cloud | `STORAGE_DRIVER=s3`, `S3_*` |
+| Store uploads and videos in AWS S3 (recommended when live) | `STORAGE_DRIVER=s3`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` |
 | Convert videos to 1080p/720p/480p | Install ffmpeg; `FFMPEG_PATH`/`FFPROBE_PATH` only if needed |
 | Automatic captions | `TRANSCRIBE_*` |
 | AI tutor | `ANTHROPIC_API_KEY` |
@@ -73,16 +73,9 @@ Sign in with these, then change the password under **Settings → Security**. Af
 
 ## 3. Database
 
-### Option A: SQLite (default, nothing to set up)
-```
-DB_DRIVER=sqlite
-SQLITE_PATH=storage/lms.sqlite
-```
-The whole database is one file. Backups are made daily into `storage/backups/`.
+**This section is required.** The app keeps all its records (users, courses, progress, payments, settings) in **PostgreSQL**: a Supabase project, or any PostgreSQL 13 or newer. There is no other database. Without `DATABASE_URL` the app does not start, on your computer or on a server, and the error message points here.
 
-`DATA_FILE=storage/db.json` is the old JSON data file. It's only used once, to import old data, so leave it as it is.
-
-### Option B: Supabase (PostgreSQL)
+### Supabase (PostgreSQL)
 
 **Step 1: create the project**
 1. Go to **https://supabase.com** and sign up.
@@ -102,18 +95,34 @@ DIRECT_URL=postgresql://postgres.abcdefghijklmnop:YOUR-PASSWORD@aws-0-ap-south-1
 - `DIRECT_URL` uses port **5432**.
 - If your password contains special characters (`@ # / ? %`), either replace them with their URL codes (`@` → `%40`, `#` → `%23`, `/` → `%2F`) or choose a password made of letters and numbers only.
 
-**Step 3: create the tables and move your data** (in the `lms` folder)
+**Step 3: create the tables** (in the `lms` folder)
 ```
-npm run prisma:migrate     # creates the tables in Supabase
-npm run db:to-postgres     # copies your current data from SQLite into Supabase
+npm run db:setup           # creates or updates the tables (prisma migrate deploy)
 ```
-The copy refuses to run if Supabase already has data, and it never deletes the SQLite file.
+Run it again after every upgrade. The Docker image does this by itself on every start. `DIRECT_URL` must be set for this step.
 
-**Step 4: switch**
+**Step 4: start the app** (`npm run dev` on your computer). The first start fills the empty database with the demo content (`SEED_DEMO_DATA=true`) or just your admin account (`SEED_DEMO_DATA=false`).
+
+**Step 5 (only when moving an older site): copy your old data**
+Older versions kept the data in `storage/lms.sqlite` (or `storage/db.json`). Copy it into the new, empty database once:
 ```
-DB_DRIVER=postgres
+npm run db:setup                             # the tables must exist first
+npm run db:to-postgres -- --dry-run          # check first, write nothing
+npm run db:to-postgres                       # reads storage/lms.sqlite, else storage/db.json
+npm run db:to-postgres -- path/to/file       # or any old .sqlite file or JSON export
 ```
-Restart the app. To go back, set `DB_DRIVER=sqlite` again.
+The copy refuses to run if the database already has data (add `--force` to replace it), checks the record counts, and never changes or deletes the old file. Then start the app. Remove `DB_DRIVER`, `SQLITE_PATH` and `DATA_FILE` from `.env`: they are no longer used.
+
+**Backups.** The app writes a daily JSON export of the whole database into `storage/backups/` (inside `STORAGE_DIR`), which you can download and restore under **Admin → Settings → Backup & restore** or with `npm run db:backup` / `npm run db:restore`. Supabase's own daily backups (**Database → Backups**, kept 7 days; point-in-time recovery is a paid add-on) come with the **Pro** plan; the Free plan has none and also pauses a project after a week without activity, so a live school should use Pro. Either way, copy the app's backups off the server (DEPLOYMENT.md, section 6).
+
+### Without Supabase
+Any PostgreSQL 13 or newer works: set `DATABASE_URL` and `DIRECT_URL` to the same `postgresql://user:password@host:5432/database` URL. With Docker, the optional local database starts on the same server:
+```
+POSTGRES_PASSWORD=a-long-random-password
+DATABASE_URL=postgresql://learnloop:a-long-random-password@postgres:5432/learnloop
+DIRECT_URL=postgresql://learnloop:a-long-random-password@postgres:5432/learnloop
+```
+then `docker compose --profile postgres up -d --build`. For `npm run db:*` commands typed on the server itself, use `localhost:5432` instead of `postgres:5432`. You then look after this database's backups yourself (DEPLOYMENT.md, section 15).
 
 ---
 
@@ -121,34 +130,95 @@ Restart the app. To go back, set `DB_DRIVER=sqlite` again.
 
 | Key | What it does | Default |
 |---|---|---|
-| `UPLOAD_DIR` | Folder for uploads when stored locally | `storage/uploads` |
+| `STORAGE_DRIVER` | Where uploads are kept: `local` (the server's disk) or `s3` (an AWS S3 bucket, below) | `local` |
+| `UPLOAD_DIR` | Folder for uploads when stored locally (an absolute path on a server without Docker, see DEPLOYMENT.md section 3) | `storage/uploads` |
 | `MAX_VIDEO_UPLOAD_MB` | Largest video upload, in MB | `10240` (10 GB) |
 | `MAX_FILE_UPLOAD_MB` | Largest other file (PDF, image), in MB | `25` |
 
-### Cloud storage for videos (optional)
-Keep `STORAGE_DRIVER=local` to store files on the server. To use a bucket instead, set `STORAGE_DRIVER=s3` and fill these in:
+### Storing uploads in AWS S3 (recommended for a live site)
+On your computer, keep `STORAGE_DRIVER=local`: files go into `UPLOAD_DIR`. For the live site, store them in an **AWS S3** bucket, so videos do not fill up the server's disk. The browser never talks to the bucket: the app uploads the files to S3 and streams them back to students itself.
 
-| Key | Cloudflare R2 (recommended: no download fees) | AWS S3 |
-|---|---|---|
-| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | leave empty |
-| `S3_REGION` | `auto` | e.g. `ap-south-1` |
-| `S3_BUCKET` | your bucket name | your bucket name |
-| `S3_ACCESS_KEY_ID` | from the R2 API token | from the IAM user |
-| `S3_SECRET_ACCESS_KEY` | from the R2 API token | from the IAM user |
-| `S3_PUBLIC_BASE_URL` | optional public/CDN address for non-protected files | optional |
-| `S3_FORCE_PATH_STYLE` | leave empty | leave empty (`true` for MinIO) |
+**What AWS gives you for free (checked October 2026; AWS changes this from time to time, so check before you sign up)**
+- **Accounts created on or after 15 July 2025:** USD 100 in credits at sign-up, plus up to USD 100 more for completing activities in the console. You choose a plan when you sign up:
+  - **Free plan:** you are never charged, but the plan ends after **6 months or when the credits run out**, whichever comes first. The account is then closed and you lose access to your files. AWS keeps them for 90 days; upgrading to the Paid plan in that time reopens the account, otherwise everything is deleted. **For a live school, upgrade to the Paid plan before the 6 months end** (Billing and Cost Management → **Upgrade plan**); leftover credits carry over.
+  - **Paid plan:** the credits pay your bills first; after that (or once the credits expire, 12 months after you opened the account) you pay normal prices.
+- **Accounts created before 15 July 2025:** the older free tier gave 12 months from the day the account was opened, including **5 GB of S3 Standard storage** a month. That period has now ended for every such account, so they pay normal S3 prices.
+- **Everyone:** the first **100 GB a month of data sent out of AWS to the internet** is free.
 
-**Cloudflare R2 steps**
-1. Go to Cloudflare dashboard → **R2** → **Create bucket** (for example `learnloop-media`).
-2. Go to **R2 → Manage R2 API Tokens → Create API token**, with permission **Object Read & Write** for that bucket.
-3. Copy the **Access Key ID**, the **Secret Access Key** and the **endpoint** shown (`https://<account-id>.r2.cloudflarestorage.com`).
+Sources: https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html, https://aws.amazon.com/free/free-tier-faqs/, https://aws.amazon.com/free/legacy/free-tier-faqs, https://aws.amazon.com/s3/pricing/
 
-**AWS S3 steps**
-1. In the S3 console, create a bucket (block public access: on).
-2. In IAM, create a user with a policy allowing `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on that bucket.
-3. Under that user's **Security credentials**, create an **access key**.
+**Step 1: create the AWS account**
+1. Go to **https://aws.amazon.com/free** → **Create free account**, and choose the Free plan or the Paid plan (see above).
+2. Turn on two-step sign-in: account menu (top right) → **Security credentials** → **Assign MFA device**.
 
-Check the result in **Admin → Settings → Storage & video**, using **Test connection**.
+**Step 2: set a budget alert before anything else**
+1. In the search box at the top, open **Billing and Cost Management** → **Budgets** → **Create budget**.
+2. Choose **Use a template (simplified)** → **Monthly cost budget**.
+3. Name `learnloop-monthly`, budgeted amount `1` (USD), your email address → **Create budget**. AWS then emails you when the month's costs come close to $1, pass it, or are forecast to pass it.
+
+**Step 3: create the bucket**
+1. Open **S3**. In the region menu (top right) choose the region nearest your students, for India **Asia Pacific (Mumbai) ap-south-1**.
+2. **Create bucket** → **General purpose**, a unique lowercase name without dots, for example `yourschool-learnloop-media`.
+3. Keep **ACLs disabled**, keep **Block all public access** turned **on**, set **Bucket Versioning** to **Disable**, keep the default encryption → **Create bucket**.
+
+**Step 4: clean up interrupted uploads automatically**
+1. Open the bucket → **Management** → **Create lifecycle rule**, name `abort-incomplete-uploads`, **Apply to all objects in the bucket** (tick the confirmation).
+2. Tick **Delete expired object delete markers or incomplete multipart uploads** → **Delete incomplete multipart uploads**, number of days `1` → **Create rule**.
+
+Large videos are uploaded to S3 in parts; this rule removes parts left behind by a crash, which would otherwise be billed for ever.
+
+**Step 5: create a user that can only use this bucket**
+1. **IAM** → **Policies** → **Create policy** → **JSON**, paste this (your bucket name in both places), **Next**, name `learnloop-media-bucket`, **Create policy**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListTheBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::yourschool-learnloop-media"
+    },
+    {
+      "Sid": "ReadWriteFilesInTheBucket",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::yourschool-learnloop-media/*"
+    }
+  ]
+}
+```
+   These are exactly the permissions the app uses: upload, read, delete and list files, and cancel a failed large upload.
+2. **IAM** → **Users** → **Create user**, name `learnloop-app`, **no** console access → **Attach policies directly** → tick `learnloop-media-bucket` → **Create user**.
+3. Open the user → **Security credentials** → **Create access key** → **Application running outside AWS**. Copy the **Access key** and the **Secret access key** right away (the secret is shown only once) into your password manager.
+
+**Step 6: fill in `.env`, then restart the app**
+```
+STORAGE_DRIVER=s3
+S3_REGION=ap-south-1
+S3_BUCKET=yourschool-learnloop-media
+S3_ACCESS_KEY_ID=AKIA...
+S3_SECRET_ACCESS_KEY=...
+S3_ENDPOINT=
+S3_PUBLIC_BASE_URL=
+S3_FORCE_PATH_STYLE=
+```
+- `S3_ENDPOINT` stays **empty** for AWS.
+- `S3_REGION` must be the bucket's region (empty means `us-east-1`, and the test below then tells you the right value).
+- Leave `S3_PUBLIC_BASE_URL` empty: the bucket is private. It is only for a CDN such as CloudFront in front of the bucket (DEPLOYMENT.md, section 9).
+- You do **not** need CORS rules on the bucket, because the browser never loads files from it directly.
+
+**Step 7: test it**
+Open **Admin → Settings → Storage & video**. The **File storage** card shows Provider *Amazon S3*, your bucket and region. Click **Test connection**: it writes a small file, reads it back, reads it through a signed link and deletes it; all four steps should be green. *AccessDenied* means the bucket name in the policy does not match `S3_BUCKET`; *InvalidAccessKeyId* or *SignatureDoesNotMatch* means a key was copied wrongly. Files uploaded before the switch are listed under **Files still on this server**; they move to the bucket over time, or at once with **Move to bucket**.
+
+**What costs money**
+- **Storage:** each video is kept as uploaded plus one converted copy per quality chosen under **Qualities to produce** on the same page, so a video library grows fast. Choose fewer qualities to save space.
+- **Watching:** protected videos are streamed through your app server, so every view sends the video out of S3 to your server. That counts as data transfer out: free up to 100 GB a month, then charged per GB. An hour of HD (720p) video is at most about 1.3 GB.
+- Keep the $1 budget alert, and check **Billing and Cost Management → Free Tier** (and **Credits**) once a month.
+
+**Other S3-compatible services** (Cloudflare R2, Backblaze B2, MinIO) work too: set `S3_ENDPOINT` to the service's address (R2: `https://<account-id>.r2.cloudflarestorage.com` with `S3_REGION=auto`; MinIO: also `S3_FORCE_PATH_STYLE=true`) and use the keys the service gives you.
+
+More detail (CDN, cost notes): [DEPLOYMENT.md, section 9](DEPLOYMENT.md#9-object-storage-aws-s3-and-a-cdn).
 
 ---
 
@@ -258,7 +328,8 @@ Webhooks need a public `https` address, so they don't reach `localhost`. Purchas
 | `TRUST_PROXY_HOPS` | `1` when the app runs behind Caddy or nginx (as in the Docker setup); `0` otherwise |
 | `TZ` | Time zone for dates on certificates, e.g. `Asia/Kolkata` |
 | `SMTP_REQUIRE_TLS` | Leave unset (`true`). Set `false` only for a trusted internal mail relay without encryption |
-| `DB_AUTO_BACKUP` / `DB_BACKUP_KEEP` | Daily SQLite backup on/off, and how many to keep (default `true` / `14`) |
+| `DB_AUTO_BACKUP` / `DB_BACKUP_KEEP` | Daily JSON backup of the database on/off, and how many to keep (default `true` / `14`) |
+| `STORAGE_DIR` | Folder for backups and other app files (default `storage`) |
 | `UPLOAD_MIN_FREE_MB` / `UPLOAD_LEARNER_DAILY_MB` | Disk-space guard and daily upload limit per learner |
 | `IMAGE_HOSTS` | Extra image domains allowed for course covers, e.g. `cdn.example.com` |
 | `SEO_CANONICAL_HOST` | Host redirects: empty (default), `all` or `off` |
@@ -276,7 +347,9 @@ Webhooks need a public `https` address, so they don't reach `localhost`. Purchas
 - [ ] `LL_DEV_LOGIN` is empty or `0`.
 - [ ] `MAIL_TRANSPORT=smtp`, and a test email arrived.
 - [ ] Payment keys are **live** keys, and one real purchase and refund worked.
-- [ ] The database is backed up: SQLite backups are copied off the server, or Supabase backups are on.
+- [ ] `DATABASE_URL` and `DIRECT_URL` point at the live database, and `npm run db:setup` has run (Docker does it on start).
+- [ ] The database is backed up: Supabase Pro backups are on, and the app's JSON backups (`storage/backups/`) are copied off the server.
+- [ ] Uploads go to AWS S3 (`STORAGE_DRIVER=s3`), **Test connection** is green, the lifecycle rule and the $1 budget alert are set up.
 - [ ] `.env` is not in git and not shared.
 
 For the full server setup (Docker, HTTPS, scheduled jobs), see [DEPLOYMENT.md](DEPLOYMENT.md).

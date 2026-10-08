@@ -17,6 +17,7 @@
     "prisma:schema": "node scripts/prisma-generate-schema.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
+    "db:setup": "prisma migrate deploy",
     "db:to-postgres": "node scripts/db-copy-to-postgres.mjs"
   },
   "dependencies": {

@@ -1,8 +1,8 @@
 /**
  * Database fixtures for tests that go through the real store
  * (`src/lib/db/store.ts`). `tests/register.mjs` points the store at a fresh
- * temporary JSON file per test process, so tests can freely replace its
- * contents with `resetDb()`.
+ * in-memory database per test process (`helpers/memory-driver.ts`), so
+ * tests can freely replace its contents with `resetDb()`.
  */
 import type {
   Batch,
@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import { COLLECTIONS, flush, getDb, mutate } from "@/lib/db/store";
 import { defaultSettings } from "@/lib/db/defaults";
+import { currentTestDatabase } from "./memory-driver";
 
 type GroupPatch<T> = T extends unknown[] ? T : T extends object ? Partial<T> : T;
 
@@ -69,9 +70,18 @@ export async function resetDb(fixture: Fixture = {}): Promise<Database> {
   return getDb();
 }
 
-/** Write pending changes to the temporary file (call before inspecting it or ending a suite). */
+/** Write pending changes to the test database (call before inspecting it with `storedText()` or ending a suite). */
 export async function flushDb(): Promise<void> {
   await flush();
+}
+
+/** Everything the store has written to the test database, as text (every stored document and the settings). */
+export function storedText(): string {
+  const { database } = currentTestDatabase();
+  const parts: string[] = [];
+  for (const table of database.tables.values()) parts.push(...table.values());
+  if (database.settings) parts.push(database.settings);
+  return parts.join(" ");
 }
 
 /* ------------------------------------------------------------------ */

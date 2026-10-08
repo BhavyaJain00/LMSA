@@ -1,14 +1,13 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { checkEnvironment } from "@/lib/env-check";
-import { parseDatabaseDriver } from "@/lib/server-env";
+import { checkEnvironment, runStartupChecks } from "@/lib/env-check";
 import { PostgresDriver } from "@/lib/db/postgres";
-import { assertNotPostgres } from "../scripts/lib/cli.mjs";
 
 /**
- * Postgres phase 1: configuration. DB_DRIVER=postgres selects the driver,
- * DATABASE_URL is required with it (and checked), and the SQLite-only
- * command-line tools refuse to run against the wrong storage.
+ * PostgreSQL is the only database: DATABASE_URL is required in every
+ * environment (checked at startup, pointing to ENV-SETUP.md), its shape is
+ * checked, settings of the removed SQLite/JSON storage are reported, and
+ * the driver explains what is missing instead of connecting.
  */
 
 const BASE = { APP_SECRET: "x".repeat(40), APP_URL: "https://learn.example.com" };
@@ -17,33 +16,24 @@ const SUPABASE_DIRECT = "postgresql://postgres.abcd:secret@aws-0-eu-central-1.po
 
 const keys = (issues: { key: string }[]) => issues.map((i) => i.key);
 
-describe("postgres config: DB_DRIVER", () => {
-  it("accepts postgres and postgresql; anything else falls back to sqlite", () => {
-    assert.equal(parseDatabaseDriver("postgres"), "postgres");
-    assert.equal(parseDatabaseDriver(" PostgreSQL "), "postgres");
-    assert.equal(parseDatabaseDriver("json"), "json");
-    assert.equal(parseDatabaseDriver("sqlite"), "sqlite");
-    assert.equal(parseDatabaseDriver(""), "sqlite");
-    assert.equal(parseDatabaseDriver(undefined), "sqlite");
-    assert.equal(parseDatabaseDriver("mysql"), "sqlite");
-  });
-});
-
 describe("postgres config: startup checks", () => {
-  it("requires DATABASE_URL with DB_DRIVER=postgres, in production and development", () => {
+  it("requires DATABASE_URL in production and development, pointing to ENV-SETUP.md", () => {
     for (const production of [true, false]) {
-      const result = checkEnvironment({ ...BASE, DB_DRIVER: "postgres" }, { production });
-      assert.ok(keys(result.errors).includes("DATABASE_URL"), `production=${production}`);
+      const result = checkEnvironment(BASE, { production });
+      const issue = result.errors.find((e) => e.key === "DATABASE_URL");
+      assert.ok(issue, `production=${production}`);
+      assert.match(issue.message, /ENV-SETUP\.md/);
+      assert.match(issue.message, /npm run db:setup/);
     }
   });
 
   it("rejects a DATABASE_URL that is not a postgresql:// URL", () => {
-    const result = checkEnvironment({ ...BASE, DB_DRIVER: "postgres", DATABASE_URL: "mysql://u:p@host/db", DIRECT_URL: SUPABASE_DIRECT }, { production: true });
+    const result = checkEnvironment({ ...BASE, DATABASE_URL: "mysql://u:p@host/db", DIRECT_URL: SUPABASE_DIRECT }, { production: true });
     assert.match(result.errors.find((e) => e.key === "DATABASE_URL")?.message ?? "", /postgresql:\/\//);
   });
 
   it("accepts Supabase's pooled URL with pgbouncer=true and a DIRECT_URL", () => {
-    const result = checkEnvironment({ ...BASE, DB_DRIVER: "postgres", DATABASE_URL: SUPABASE_POOLED, DIRECT_URL: SUPABASE_DIRECT }, { production: true });
+    const result = checkEnvironment({ ...BASE, DATABASE_URL: SUPABASE_POOLED, DIRECT_URL: SUPABASE_DIRECT }, { production: true });
     assert.deepEqual(
       [...keys(result.errors), ...keys(result.warnings)].filter((k) => ["DATABASE_URL", "DIRECT_URL", "DB_DRIVER"].includes(k)),
       [],
@@ -51,43 +41,68 @@ describe("postgres config: startup checks", () => {
   });
 
   it("warns about the transaction pooler without pgbouncer=true, and about a missing DIRECT_URL", () => {
-    const result = checkEnvironment({ ...BASE, DB_DRIVER: "postgres", DATABASE_URL: SUPABASE_POOLED.replace("pgbouncer=true&", "") }, { production: false });
+    const result = checkEnvironment({ ...BASE, DATABASE_URL: SUPABASE_POOLED.replace("pgbouncer=true&", "") }, { production: false });
     assert.ok(keys(result.warnings).includes("DATABASE_URL"));
     assert.ok(keys(result.warnings).includes("DIRECT_URL"));
     assert.ok(!keys(result.errors).includes("DATABASE_URL"));
   });
 
   it("never echoes the password back", () => {
-    const result = checkEnvironment({ ...BASE, DB_DRIVER: "postgres", DATABASE_URL: SUPABASE_POOLED.replace("pgbouncer=true&", "") }, { production: true });
+    const result = checkEnvironment({ ...BASE, DATABASE_URL: SUPABASE_POOLED.replace("pgbouncer=true&", "") }, { production: true });
     for (const issue of [...result.errors, ...result.warnings]) assert.doesNotMatch(issue.message, /secret/);
   });
 
-  it("leaves SQLite and JSON sites alone, and flags an unknown driver", () => {
-    for (const driver of ["", "sqlite", "json"]) {
-      const result = checkEnvironment({ ...BASE, DB_DRIVER: driver }, { production: false });
-      assert.ok(!keys([...result.errors, ...result.warnings]).includes("DATABASE_URL"), driver);
-    }
-    const unknown = checkEnvironment({ ...BASE, DB_DRIVER: "mongo" }, { production: false });
-    assert.ok(keys(unknown.warnings).includes("DB_DRIVER"));
+  it("reports the settings of the removed SQLite/JSON storage as unused", () => {
+    const result = checkEnvironment({ ...BASE, DATABASE_URL: SUPABASE_POOLED, DIRECT_URL: SUPABASE_DIRECT, DB_DRIVER: "postgres", SQLITE_PATH: "storage/lms.sqlite", DATA_FILE: "storage/db.json" }, { production: false });
+    assert.deepEqual(keys(result.warnings).sort(), ["DATA_FILE", "DB_DRIVER", "SQLITE_PATH"]);
+    for (const warning of result.warnings) assert.match(warning.message, /no longer used.*db:to-postgres/);
+    assert.deepEqual(result.errors, []);
   });
 });
 
-describe("postgres config: tools and driver without a database", () => {
-  it("the SQLite backup/restore/export scripts refuse to run with DB_DRIVER=postgres", () => {
-    assert.throws(() => assertNotPostgres({ DB_DRIVER: "postgres" }), /data is in PostgreSQL/);
-    assert.throws(() => assertNotPostgres({ DB_DRIVER: "postgresql" }), /data is in PostgreSQL/);
-    assert.doesNotThrow(() => assertNotPostgres({ DB_DRIVER: "sqlite" }));
-    assert.doesNotThrow(() => assertNotPostgres({}));
+describe("postgres config: runStartupChecks", () => {
+  const env = process.env as Record<string, string | undefined>;
+  const saved = { NODE_ENV: env.NODE_ENV, NEXT_PHASE: env.NEXT_PHASE, DATABASE_URL: env.DATABASE_URL, APP_SECRET: env.APP_SECRET };
+  const originalWarn = console.warn;
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete env[k];
+      else env[k] = v;
+    }
+    console.warn = originalWarn;
   });
 
-  it("the driver says what is missing instead of connecting without DATABASE_URL, and hides credentials", async () => {
+  it("stops a development server without DATABASE_URL, with a clear message", () => {
+    env.NODE_ENV = "development";
+    delete env.NEXT_PHASE;
+    delete env.DATABASE_URL;
+    console.warn = () => undefined;
+    assert.throws(() => runStartupChecks(), (err: Error) => {
+      assert.match(err.message, /Refusing to start/);
+      assert.match(err.message, /DATABASE_URL is not set/);
+      assert.match(err.message, /ENV-SETUP\.md/);
+      return true;
+    });
+  });
+
+  it("does not check anything during next build, so the build needs no database", () => {
+    env.NODE_ENV = "production";
+    env.NEXT_PHASE = "phase-production-build";
+    delete env.DATABASE_URL;
+    assert.equal(runStartupChecks(), null);
+  });
+});
+
+describe("postgres config: the driver without a database", () => {
+  it("says what is missing instead of connecting without DATABASE_URL, and hides credentials", async () => {
     const empty = new PostgresDriver({ url: "", collections: ["users"], backupsDir: "unused" });
-    await assert.rejects(empty.open(async () => ({ collections: {}, settings: null })), /DATABASE_URL/);
+    await assert.rejects(empty.open(async () => ({ collections: {}, settings: null })), /DATABASE_URL is not set.*ENV-SETUP\.md/);
 
     const driver = new PostgresDriver({ url: SUPABASE_POOLED, collections: ["users"], backupsDir: "unused", client: unreachableClient() });
     const info = driver.info();
     assert.equal(info.driver, "postgres");
-    assert.equal(info.file, "postgresql://aws-0-eu-central-1.pooler.supabase.com:6543/postgres");
+    assert.equal(info.target, "postgresql://aws-0-eu-central-1.pooler.supabase.com:6543/postgres");
     assert.doesNotMatch(JSON.stringify(info), /secret/);
     assert.equal(driver.asynchronous, true);
     assert.equal(driver.incremental, true);

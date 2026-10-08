@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Settings } from "@/lib/types";
-import { COLLECTIONS, getDb } from "@/lib/db/store";
+import { COLLECTIONS, getDb, getStoreStats } from "@/lib/db/store";
 import { defaultSettings, mergeSettings } from "@/lib/db/defaults";
 import { buildSeedBlogPosts, buildSeedLegalPages, LEGAL_TEMPLATE_NOTICE } from "@/lib/db/seed-round3";
 import { buildSeedDatabase } from "@/lib/db/seed";
@@ -51,10 +51,10 @@ describe("round 3 collections", () => {
     for (const name of COLLECTIONS) assert.ok(Array.isArray(seed[name]), `${name} is an array`);
   });
 
-  it("uses the JSON driver under test (DB_DRIVER parsed from the environment)", async () => {
-    assert.equal(databaseEnv.driver, "json");
-    assert.ok(databaseEnv.sqlitePath.length > 0);
+  it("uses the in-memory test driver under test, never a real database", async () => {
+    assert.equal(databaseEnv.databaseUrl, "", "tests/register.mjs clears DATABASE_URL");
     assert.ok(await getDb());
+    assert.equal(getStoreStats()?.driver, "memory");
   });
 });
 

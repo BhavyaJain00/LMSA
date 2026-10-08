@@ -1,6 +1,5 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import type { AuthToken } from "@/lib/types";
 import {
@@ -16,7 +15,7 @@ import {
   tokenState,
 } from "@/lib/auth/tokens";
 import { getDb } from "@/lib/db/store";
-import { flushDb, makeUser, resetDb } from "../helpers/db";
+import { flushDb, makeUser, resetDb, storedText } from "../helpers/db";
 
 const DAY = 24 * 60 * 60 * 1000;
 const ada = makeUser({ id: "usr_ada" });
@@ -62,7 +61,7 @@ describe("issue / check / consume (store)", () => {
     assert.equal(AUTH_TOKEN_TTL_MS.email_verification, DAY);
     assert.equal(AUTH_TOKEN_TTL_MS.two_factor_login, 10 * 60 * 1000);
     await flushDb();
-    const file = await readFile(process.env.DATA_FILE!, "utf8");
+    const file = storedText();
     assert.ok(file.includes(record.tokenHash));
     assert.ok(!file.includes(token), "the raw token must never be persisted");
   });

@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { NextResponse } from "next/server";
 import { siteConfig } from "@/lib/config";
 import { databaseEnv, mediaEnv } from "@/lib/server-env";
-import { getStoreEngine } from "@/lib/db/store";
+import { getStoreEngine, storageDir } from "@/lib/db/store";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { publicHealthReport, type HealthCheck as Check, type HealthReport } from "./report";
 
@@ -38,25 +38,34 @@ async function timed(fn: () => Promise<string | undefined>): Promise<Check> {
     return { ok: true, ms: Math.round(performance.now() - started), ...(detail ? { detail } : {}) };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    return { ok: false, ms: Math.round(performance.now() - started), detail: code ? `failed (${code})` : "failed" };
+    const reason = err instanceof HealthProblem ? err.message : code;
+    return { ok: false, ms: Math.round(performance.now() - started), detail: reason ? `failed (${reason})` : "failed" };
   }
 }
 
-/** The store is loaded; a network database (PostgreSQL) must also answer right now. Admins see which driver runs. */
+/** A failed check whose message is safe to show to administrators (never a secret). */
+class HealthProblem extends Error {}
+
+/**
+ * The store is loaded and PostgreSQL answers right now. Admins see the
+ * server version (e.g. "PostgreSQL 16.4") and the database target without
+ * credentials.
+ */
 async function checkDatabase(): Promise<string | undefined> {
-  const engine = await getStoreEngine();
+  const engine = await getStoreEngine().catch((err: unknown) => {
+    throw databaseEnv.databaseUrl ? err : new HealthProblem("DATABASE_URL is not set");
+  });
   const db = await engine.getDb();
-  if (!db.settings || !Array.isArray(db.users)) throw new Error("database not loaded");
+  if (!db.settings || !Array.isArray(db.users)) throw new HealthProblem("database not loaded");
   if (engine.driver.ping) await engine.driver.ping();
-  return engine.driver.kind;
+  const info = engine.driver.info();
+  return [info.serverVersion || engine.driver.kind, info.target].filter(Boolean).join(", ");
 }
 
-/** Write and remove a probe file in the database and upload folders. */
+/** Write and remove a probe file in the storage folder (backups, SEO files) and the upload folder. */
 async function checkStorage(): Promise<string | undefined> {
   const root = process.cwd();
-  // SQLite file, JSON file, or (PostgreSQL) the folder of the JSON backups next to SQLITE_PATH.
-  const dataFile = databaseEnv.driver === "json" ? siteConfig.dataFile : databaseEnv.sqlitePath;
-  const dirs = Array.from(new Set([path.dirname(dataFile), siteConfig.uploadDir].map((d) => path.resolve(/* turbopackIgnore: true */ root, d))));
+  const dirs = Array.from(new Set([storageDir(), path.resolve(/* turbopackIgnore: true */ root, siteConfig.uploadDir)]));
   for (const dir of dirs) {
     await fs.mkdir(dir, { recursive: true });
     const probe = path.join(dir, `.health-${process.pid}-${Date.now()}`);

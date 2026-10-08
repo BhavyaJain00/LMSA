@@ -214,11 +214,12 @@ const nextConfig: NextConfig = {
   },
   poweredByHeader: false,
   // Never copy local data, secrets or tests into `.next/standalone` (and so into the
-  // Docker image): some server code reads files under storage/ by computed paths,
-  // which the build tracer would otherwise follow into backups and database files.
-  outputFileTracingExcludes: {
-    "*": ["storage/**", ".env", ".env.*", "tests/**", "coverage/**", "*.sqlite", "*.sqlite-*"],
-  },
+  // Docker image): some server code reads files under storage/ (backups, SEO files)
+  // by computed paths, which the build tracer would otherwise follow. The keys cover
+  // every route ("*", "/**") and the instrumentation hook, which is not a route.
+  outputFileTracingExcludes: Object.fromEntries(
+    ["*", "/**", "instrumentation", "/instrumentation"].map((key) => [key, ["storage/**", ".env", ".env.*", "tests/**", "coverage/**", "scripts/**"]]),
+  ),
   images: {
     // Only this site, object storage/CDN and IMAGE_HOSTS (see imageRemotePatterns).
     remotePatterns: imageRemotePatterns(),

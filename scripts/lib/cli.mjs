@@ -1,14 +1,14 @@
 /**
  * Shared by the database scripts (`db-backup.mjs`, `db-restore.mjs`,
- * `db-export-json.mjs`): argument parsing, the same configuration the app
- * reads (`.env`, DB_DRIVER, SQLITE_PATH, DATA_FILE) and plain-text output.
- * Node built-ins only.
+ * `db-export-json.mjs`, `db-copy-to-postgres.mjs`): argument parsing, the
+ * same configuration the app reads (`.env`: DATABASE_URL, STORAGE_DIR) and
+ * plain-text output. Node built-ins only.
  */
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { listBackupFiles, resolveStorageConfig } from "../../src/lib/db/sqlite-core.mjs";
+import { backupsDirIn, listBackupFiles } from "../../src/lib/db/data-core.mjs";
 
 /** The project root (the folder holding package.json), whatever the current directory is. */
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -69,16 +69,12 @@ export function parseArgs(argv, spec, aliases = {}) {
 
 /**
  * Read `.env.local` and `.env` from the project root the way the app does
- * (variables already set in the environment win), then resolve where the
- * data lives.
+ * (variables already set in the environment win), then resolve the
+ * database and the backups folder.
  *
- * With DB_DRIVER=postgres the data is not in these files, so the SQLite
- * scripts stop (unless `allowPostgres`, for the copy script that reads the
- * SQLite file on purpose).
- *
- * @param {{ allowPostgres?: boolean }} [options]
+ * @returns {{ databaseUrl: string; storageDir: string; backupsDir: string }}
  */
-export function loadStorageConfig(options = {}) {
+export function loadConfig() {
   for (const name of [".env.local", ".env"]) {
     const file = path.join(PROJECT_ROOT, name);
     if (!fs.existsSync(file)) continue;
@@ -88,23 +84,19 @@ export function loadStorageConfig(options = {}) {
       throw new Error(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (!options.allowPostgres) assertNotPostgres(process.env);
-  return resolveStorageConfig(process.env, PROJECT_ROOT);
+  return resolveConfig(process.env, PROJECT_ROOT);
 }
 
 /**
- * Stop the SQLite/JSON scripts when the site runs on PostgreSQL: they would
- * back up or restore a file the app no longer reads.
+ * Where the data lives, from the variables the app reads (DATABASE_URL,
+ * STORAGE_DIR), with relative paths resolved against `cwd`.
+ *
  * @param {Record<string, string | undefined>} env
+ * @param {string} cwd
  */
-export function assertNotPostgres(env) {
-  const driver = (env.DB_DRIVER ?? "").trim().toLowerCase();
-  if (driver === "postgres" || driver === "postgresql") {
-    throw new Error(
-      "DB_DRIVER=postgres: the data is in PostgreSQL, not in the SQLite file this command works on. " +
-        "Back up, download and restore from Admin → Settings → Backup & restore (JSON exports); your PostgreSQL host keeps its own backups too.",
-    );
-  }
+export function resolveConfig(env, cwd) {
+  const storageDir = path.resolve(cwd, (env.STORAGE_DIR ?? "").trim() || "storage");
+  return { databaseUrl: (env.DATABASE_URL ?? "").trim(), storageDir, backupsDir: backupsDirIn(storageDir) };
 }
 
 /** A path given on the command line, relative to where the command was run. */

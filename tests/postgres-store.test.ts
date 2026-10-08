@@ -1,24 +1,21 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { sharedPrismaClient } from "@/lib/db/postgres";
 import { countRows, readAllData } from "@/lib/db/postgres-core.mjs";
 import { PG_SKIP, createTestSchema, dropTestSchemas } from "./helpers/postgres";
 
 /**
- * Postgres phase 1: the app's own store (`src/lib/db/store.ts`) with
- * DB_DRIVER=postgres — the full demo seed goes into every table, the store
- * API reads and writes through it, and PostgreSQL ends up equal to memory.
- * Runs only with TEST_DATABASE_URL (see tests/helpers/postgres.ts).
+ * The app's own store (`src/lib/db/store.ts`) on PostgreSQL — the full demo
+ * seed goes into every table of an empty database, the store API reads and
+ * writes through it, and PostgreSQL ends up equal to memory. Runs only with
+ * TEST_DATABASE_URL (see tests/helpers/postgres.ts); this file switches the
+ * store from the in-memory test driver to the real PostgreSQL driver.
  */
 
 if (PG_SKIP) console.log(`# ${PG_SKIP}`);
 
 describe("postgres: the app's store on PostgreSQL", { skip: PG_SKIP }, () => {
   let url = "";
-  let tmp = "";
   let store: typeof import("@/lib/db/store");
   const original = { info: console.info, warn: console.warn };
 
@@ -26,12 +23,9 @@ describe("postgres: the app's store on PostgreSQL", { skip: PG_SKIP }, () => {
     console.info = () => undefined;
     console.warn = () => undefined;
     url = await createTestSchema();
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ll-pg-store-"));
-    // Set before the store and its configuration are loaded. No SQLite or JSON file: a new database is seeded.
-    process.env.DB_DRIVER = "postgres";
+    // Set before the store and its configuration are loaded; without the test hook the store uses PostgreSQL.
     process.env.DATABASE_URL = url;
-    process.env.SQLITE_PATH = path.join(tmp, "lms.sqlite");
-    process.env.DATA_FILE = path.join(tmp, "db.json");
+    delete (globalThis as { __llTestStore?: unknown }).__llTestStore;
     store = await import("@/lib/db/store");
   });
 
@@ -39,7 +33,6 @@ describe("postgres: the app's store on PostgreSQL", { skip: PG_SKIP }, () => {
     const engine = await store?.getStoreEngine().catch(() => null);
     await engine?.close();
     await dropTestSchemas();
-    fs.rmSync(tmp, { recursive: true, force: true });
     Object.assign(console, original);
   });
 

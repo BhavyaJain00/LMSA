@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Database } from "@/lib/types";
 import { ChangeTracker, changeSetSize, idOf, isEmptyChangeSet, type DiffMode, type DiffRequest, type PendingChanges, type StoredIdWalk } from "./changes";
-import { isBusyError, type RawData } from "./sqlite-core.mjs";
+import type { RawData } from "./data-core.mjs";
 import { after, type MaybePromise, type OpenOrigin, type StoreDriver } from "./driver";
 
 /**
@@ -12,7 +12,7 @@ import { after, type MaybePromise, type OpenOrigin, type StoreDriver } from "./d
  * (read-check-write inside one callback is atomic with respect to other
  * mutations) and schedules a coalesced write 150 ms later.
  *
- * With the SQLite driver only what changed is written, in one transaction
+ * Only what changed is written, in one transaction
  * per flush, and the cost of finding it is proportional to what the
  * mutation touched rather than to the size of the database:
  *
@@ -51,8 +51,9 @@ import { after, type MaybePromise, type OpenOrigin, type StoreDriver } from "./d
  *     Backups and restores use `settle()` instead, which does the same
  *     comparison in the sweep's short slices so requests keep being served.
  *
- * Another process writing to the same SQLite file (the `db:restore` script,
- * for instance) is noticed through `PRAGMA data_version`; the cache is then
+ * Another process writing to the same database (a second app instance or the
+ * `db:restore` script) is noticed through the driver (PostgreSQL: the
+ * `write_seq` counter); the cache is then
  * reloaded after this process's own pending edits are stored.
  */
 
@@ -426,8 +427,8 @@ export class StoreEngine {
    * Run the background comparison now, over `names` (default: the
    * collections handed out since the previous sweep), in the same small
    * slices as the scheduled one. Resolves with what it did, or null when a
-   * sweep is already running, the engine is closed or the driver writes
-   * whole files anyway.
+   * sweep is already running, the engine is closed or the driver is not
+   * incremental.
    */
   async sweepNow(names?: readonly string[]): Promise<SweepReport | null> {
     if (!this.tracker || this.closed) return null;
@@ -477,7 +478,7 @@ export class StoreEngine {
     this.stats.loadedDocuments = Object.values(stored.collections).reduce((n, docs) => n + docs.length, 0);
     // An asynchronous driver cannot write from an exit handler; its changes are written by the coalesced flush.
     if (this.driver.incremental && !this.driver.asynchronous && !this.exitHandler) {
-      // Last chance on shutdown: write what is outstanding and leave a complete database file.
+      // Last chance on shutdown: write what is outstanding and leave the storage complete.
       this.exitHandler = () => this.close("exit");
       process.on("exit", this.exitHandler);
     }
@@ -935,7 +936,7 @@ export class StoreEngine {
     });
   }
 
-  /** Write what was recorded (whole file for non-incremental drivers), whether or not the flush timer is due. */
+  /** Write what was recorded (everything for non-incremental drivers), whether or not the flush timer is due. */
   private async persistRecorded(): Promise<boolean> {
     if (!this.db || this.closed) return true;
     if (!this.tracker) {
@@ -1024,7 +1025,7 @@ export class StoreEngine {
     let pending: PendingChanges;
     let write: MaybePromise<void> = undefined;
     const failed = (err: unknown): null => {
-      this.recordError(isBusyError(err) ? "save changes (the database is locked by another process)" : `save changes (${reason})`, err);
+      this.recordError(`save changes (${reason})`, err);
       return null;
     };
     try {

@@ -5,44 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import type { Database } from "@/lib/types";
 import { StoreEngine } from "@/lib/db/engine";
-import { SqliteDriver } from "@/lib/db/sqlite";
-import { JsonDriver } from "@/lib/db/json-driver";
 import type { RawData } from "@/lib/db/driver";
 import { BackupError, BackupManager, cleanOriginalName } from "@/lib/db/backup";
-import {
-  backupFileName,
-  createDatabaseFile,
-  describeBackup,
-  listBackupFiles,
-  openDatabase,
-  parseBackupFileName,
-  rawDataToJson,
-  readAllData,
-  readBackupData,
-  resolveStorageConfig,
-} from "@/lib/db/sqlite-core.mjs";
+import { backupFileName, describeBackup, inspectBackupFile, listBackupFiles, parseBackupFileName, rawDataToJson, readBackupData } from "@/lib/db/data-core.mjs";
 import {
   BACKUP_RETENTION,
   automaticBackupState,
   automaticBackupsEnabled,
-  backupOffline,
   checkRestorable,
-  exportJsonOffline,
   getBackupEntry,
   nextLocalMidnight,
   publishBackup,
   removeStaleTempFiles,
   resolveBackupSource,
-  restoreOffline,
   retentionFor,
   tempBackupPath,
+  writeJsonBackup,
 } from "@/lib/db/backup-core.mjs";
+import { MemoryDatabase, MemoryDriver } from "./helpers/memory-driver";
 
 /**
- * data-sqlite items 5 and 7: backups and restore — retention, publishing,
- * restorability checks, the offline operations behind the CLI scripts, and
+ * Backups and restore: retention, publishing, restorability checks, and
  * `BackupManager` (create, daily backup, upload, preview, restore with a
- * safety backup and cache swap, export, delete) on a real SQLite engine.
+ * safety backup and cache swap, export, delete, demo reset) on a running
+ * store engine. Backups are JSON exports; the engine runs on the in-memory
+ * test driver (asynchronous, like PostgreSQL).
  */
 
 const COLLECTIONS = ["users", "courses", "enrollments"] as const;
@@ -53,13 +40,13 @@ const engines: StoreEngine[] = [];
 const original = { info: console.info, warn: console.warn };
 
 before(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-sqlite-backup-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-backup-"));
   console.info = () => undefined;
   console.warn = () => undefined;
 });
 
-afterEach(() => {
-  for (const engine of engines.splice(0)) engine.close();
+afterEach(async () => {
+  for (const engine of engines.splice(0)) await engine.close();
   delete process.env.DB_AUTO_BACKUP;
   delete process.env.DB_BACKUP_KEEP;
   const state = automaticBackupState();
@@ -104,9 +91,10 @@ function normalize(data: RawData): Database {
 
 type TestDb = { users: { id: string; name: string; roles: string[] }[]; courses: { id: string; title: string }[]; enrollments: { id: string }[] };
 
-function sqliteEngine(file: string, initial: RawData = sample()): StoreEngine {
+/** A running store on its own in-memory database; backups go to `<folder>/backups`. */
+function memoryEngine(database: MemoryDatabase = new MemoryDatabase(), initial: RawData = sample()): StoreEngine {
   const engine = new StoreEngine({
-    driver: new SqliteDriver({ file, collections: COLLECTIONS }),
+    driver: new MemoryDriver({ database, collections: COLLECTIONS, backupsDir: path.join(folder(), "backups") }),
     collections: COLLECTIONS,
     normalize,
     initialData: async () => initial,
@@ -116,19 +104,8 @@ function sqliteEngine(file: string, initial: RawData = sample()): StoreEngine {
   return engine;
 }
 
-function jsonEngine(file: string, initial: RawData = sample()): StoreEngine {
-  const engine = new StoreEngine({ driver: new JsonDriver(file), collections: COLLECTIONS, normalize, initialData: async () => initial, flushDelayMs: 5 });
-  engines.push(engine);
-  return engine;
-}
-
 function readFile(file: string): RawData {
-  const conn = openDatabase(file, { readOnly: true });
-  try {
-    return readAllData(conn);
-  } finally {
-    conn.close();
-  }
+  return readBackupData(file).data;
 }
 
 const ids = (docs: unknown[] | undefined) => (docs ?? []).map((doc) => (doc as { id: string }).id).sort();
@@ -176,14 +153,15 @@ describe("backup policy", () => {
 
   it("names backups per kind and parses only its own names", () => {
     const date = new Date(2026, 8, 30, 4, 5, 6);
-    assert.equal(backupFileName("auto", "sqlite", date), "lms-20260930-auto.sqlite");
-    assert.equal(backupFileName("manual", "json", date), "lms-20260930-040506-manual.json");
-    assert.equal(backupFileName("safety", "sqlite", date, 2), "lms-20260930-040506-safety-2.sqlite");
-    const parsed = parseBackupFileName("lms-20260930-040506-upload.sqlite");
+    assert.equal(backupFileName("auto", date), "lms-20260930-auto.json");
+    assert.equal(backupFileName("manual", date), "lms-20260930-040506-manual.json");
+    assert.equal(backupFileName("safety", date, 2), "lms-20260930-040506-safety-2.json");
+    const parsed = parseBackupFileName("lms-20260930-040506-upload.json");
     assert.equal(parsed?.kind, "upload");
-    assert.equal(parsed?.format, "sqlite");
+    assert.equal(parsed?.format, "json");
     assert.equal(parsed?.date.getHours(), 4);
-    for (const bad of ["../lms-20260930-auto.sqlite", "lms-20260930-auto.sqlite/x", "lms-20260930-auto.db", "db.json", "lms-2026-auto.sqlite", "lms-20260930-weekly.sqlite"]) {
+    // SQLite backups of older versions are not listed (they are copied with npm run db:to-postgres).
+    for (const bad of ["../lms-20260930-auto.json", "lms-20260930-auto.json/x", "lms-20260930-auto.sqlite", "db.json", "lms-2026-auto.json", "lms-20260930-weekly.json"]) {
       assert.equal(parseBackupFileName(bad), null, bad);
     }
   });
@@ -201,7 +179,7 @@ describe("backup policy", () => {
 describe("temporary files", () => {
   it("creates unlisted temp paths and removes only stale ones", () => {
     const backups = path.join(folder(), "backups");
-    const fresh = tempBackupPath(backups, "sqlite");
+    const fresh = tempBackupPath(backups, "json");
     const stale = tempBackupPath(backups, "part");
     fs.writeFileSync(fresh, "x");
     fs.writeFileSync(stale, "x");
@@ -224,14 +202,14 @@ describe("publishBackup", () => {
     const date = new Date(2026, 8, 30, 3);
     const first = tempBackupPath(backups, "json");
     fs.writeFileSync(first, rawDataToJson(sample()));
-    const a = publishBackup(first, backups, "auto", { format: "json", date, counts: { users: 2 } });
+    const a = publishBackup(first, backups, "auto", { date, counts: { users: 2 } });
     assert.equal(a.created, true);
     assert.equal(a.entry.name, "lms-20260930-auto.json");
     assert.equal(a.entry.manifest?.records, 2);
 
     const second = tempBackupPath(backups, "json");
     fs.writeFileSync(second, "{}");
-    const b = publishBackup(second, backups, "auto", { format: "json", date: new Date(2026, 8, 30, 22), counts: {} });
+    const b = publishBackup(second, backups, "auto", { date: new Date(2026, 8, 30, 22), counts: {} });
     assert.equal(b.created, false);
     assert.equal(b.entry.name, a.entry.name);
     assert.equal(fs.existsSync(second), false, "the losing temp file is removed");
@@ -244,7 +222,7 @@ describe("publishBackup", () => {
     const names = [0, 1, 2].map(() => {
       const tmp = tempBackupPath(backups, "json");
       fs.writeFileSync(tmp, "{}");
-      return publishBackup(tmp, backups, "manual", { format: "json", date, counts: {} }).entry.name;
+      return publishBackup(tmp, backups, "manual", { date, counts: {} }).entry.name;
     });
     assert.deepEqual(names, ["lms-20260930-090000-manual.json", "lms-20260930-090000-manual-1.json", "lms-20260930-090000-manual-2.json"]);
   });
@@ -255,7 +233,7 @@ describe("publishBackup", () => {
     fakeBackup(backups, "lms-20260101-000000-manual.json", new Date(2026, 0, 1));
     const tmp = tempBackupPath(backups, "json");
     fs.writeFileSync(tmp, "{}");
-    const result = publishBackup(tmp, backups, "auto", { format: "json", date: new Date(2026, 8, 16, 1), counts: {} });
+    const result = publishBackup(tmp, backups, "auto", { date: new Date(2026, 8, 16, 1), counts: {} });
     assert.deepEqual(result.pruned.sort(), ["lms-20260901-auto.json", "lms-20260902-auto.json"]);
     const left = listBackupFiles(backups);
     assert.equal(left.filter((b) => b.kind === "auto").length, 14);
@@ -268,7 +246,7 @@ describe("publishBackup", () => {
     for (let i = 0; i <= BACKUP_RETENTION.safety; i++) fakeBackup(backups, `lms-20260910-0000${String(i).padStart(2, "0")}-safety.json`, new Date(2026, 8, 10, 0, 0, i));
     const tmp = tempBackupPath(backups, "json");
     fs.writeFileSync(tmp, "{}");
-    const result = publishBackup(tmp, backups, "safety", { format: "json", date: new Date(2026, 8, 11), counts: {}, protect: ["lms-20260910-000000-safety.json"] });
+    const result = publishBackup(tmp, backups, "safety", { date: new Date(2026, 8, 11), counts: {}, protect: ["lms-20260910-000000-safety.json"] });
     assert.deepEqual(result.pruned, ["lms-20260910-000001-safety.json"]);
     assert.ok(getBackupEntry(backups, "lms-20260910-000000-safety.json"));
   });
@@ -298,160 +276,43 @@ describe("checkRestorable", () => {
   });
 });
 
-describe("offline backup, restore and export (CLI operations)", () => {
-  function sqliteConfig() {
-    const root = folder();
-    const config = resolveStorageConfig({ SQLITE_PATH: "data/lms.sqlite" }, root);
-    return { root, config };
-  }
-
-  it("resolves the storage configuration like the app", () => {
-    const root = folder();
-    const sqlite = resolveStorageConfig({}, root);
-    assert.equal(sqlite.driver, "sqlite");
-    assert.equal(sqlite.sqlitePath, path.join(root, "storage", "lms.sqlite"));
-    assert.equal(sqlite.backupsDir, path.join(root, "storage", "backups"));
-    const json = resolveStorageConfig({ DB_DRIVER: "JSON", DATA_FILE: "x/db.json" }, root);
-    assert.equal(json.driver, "json");
-    assert.equal(json.backupsDir, path.join(root, "x", "backups"));
-  });
-
-  it("backs up a SQLite database with VACUUM INTO and a manifest", () => {
-    const { config } = sqliteConfig();
-    assert.throws(() => backupOffline(config), /no database/);
-    createDatabaseFile(config.sqlitePath, sample(), { collections: COLLECTIONS });
-    const result = backupOffline(config, { reason: "Before upgrade", createdBy: "test" });
-    assert.equal(result.created, true);
-    assert.equal(result.records, 4);
-    assert.equal(result.entry?.kind, "manual");
-    assert.equal(result.entry?.manifest?.reason, "Before upgrade");
-    assert.deepEqual(result.entry?.manifest?.counts, { users: 2, courses: 1, enrollments: 1 });
-    assert.deepEqual(ids(readFile(result.file).collections.users), ["u1", "u2"]);
-
-    const auto1 = backupOffline(config, { kind: "auto" });
-    const auto2 = backupOffline(config, { kind: "auto" });
-    assert.equal(auto1.created, true);
-    assert.equal(auto2.created, false);
-    assert.equal(auto2.file, auto1.file);
-
-    const out = path.join(folder(), "copy.sqlite");
-    const copy = backupOffline(config, { out });
-    assert.equal(copy.file, out);
-    assert.equal(copy.entry, null);
-    assert.throws(() => backupOffline(config, { out }), /already exists/);
-  });
-
-  it("backs up the JSON driver's file as a JSON backup", () => {
-    const root = folder();
-    const config = resolveStorageConfig({ DB_DRIVER: "json", DATA_FILE: "db.json" }, root);
-    fs.writeFileSync(config.dataFile, rawDataToJson(sample()));
-    const result = backupOffline(config);
-    assert.equal(result.entry?.format, "json");
-    assert.equal(result.records, 4);
-    assert.deepEqual(readBackupData(result.file).data.settings, sample().settings);
-  });
-
-  it("restores into a healthy database in one transaction after a safety backup", () => {
-    const { root, config } = sqliteConfig();
-    createDatabaseFile(config.sqlitePath, sample(), { collections: COLLECTIONS });
-    const source = path.join(root, "export.json");
-    fs.writeFileSync(source, rawDataToJson(sample({ courses: [{ id: "c9", title: "Restored" }], enrollments: [] })));
-
-    const result = restoreOffline(config, source);
-    assert.equal(result.mode, "transaction");
-    assert.equal(result.records, 3);
-    assert.ok(result.safety, "a safety backup is written first");
-    assert.deepEqual(ids(readFile(result.safety.file).collections.courses), ["c1"]);
-    const live = readFile(config.sqlitePath);
-    assert.deepEqual(ids(live.collections.courses), ["c9"]);
-    assert.deepEqual(ids(live.collections.enrollments), []);
-  });
-
-  it("refuses a backup without administrators unless forced", () => {
-    const { root, config } = sqliteConfig();
-    createDatabaseFile(config.sqlitePath, sample(), { collections: COLLECTIONS });
-    const source = path.join(root, "no-admin.json");
-    fs.writeFileSync(source, rawDataToJson(sample({ users: [{ id: "u2", roles: ["student"] }] })));
-    assert.throws(() => restoreOffline(config, source), /no enabled administrator/);
-    assert.deepEqual(ids(readFile(config.sqlitePath).collections.users), ["u1", "u2"], "nothing changed");
-    const forced = restoreOffline(config, source, { force: true, safetyBackup: false });
-    assert.equal(forced.safety, null);
-    assert.ok(forced.warnings.some((w) => /administrator/.test(w)));
-    assert.deepEqual(ids(readFile(config.sqlitePath).collections.users), ["u2"]);
-  });
-
-  it("creates the database when it does not exist yet", () => {
-    const { root, config } = sqliteConfig();
-    const source = path.join(root, "backup.sqlite");
-    createDatabaseFile(source, sample(), { collections: COLLECTIONS });
-    const result = restoreOffline(config, source);
-    assert.equal(result.mode, "created");
-    assert.equal(result.safety, null);
-    assert.deepEqual(ids(readFile(config.sqlitePath).collections.users), ["u1", "u2"]);
-  });
-
-  it("moves a damaged database aside and rebuilds it from the backup", () => {
-    const { root, config } = sqliteConfig();
-    fs.mkdirSync(path.dirname(config.sqlitePath), { recursive: true });
-    fs.writeFileSync(config.sqlitePath, Buffer.alloc(8192, 0x5a));
-    const source = path.join(root, "backup.json");
-    fs.writeFileSync(source, rawDataToJson(sample()));
-    const result = restoreOffline(config, source);
-    assert.equal(result.mode, "replaced-damaged");
-    assert.equal(result.movedAside.length, 1);
-    assert.match(path.basename(result.movedAside[0]!), /^lms\.sqlite\.damaged-/);
-    assert.equal(fs.readFileSync(result.movedAside[0]!).length, 8192, "the damaged file is kept as it was");
-    assert.deepEqual(ids(readFile(config.sqlitePath).collections.courses), ["c1"]);
-  });
-
-  it("restores the JSON driver's file with a safety copy", () => {
-    const root = folder();
-    const config = resolveStorageConfig({ DB_DRIVER: "json", DATA_FILE: "db.json" }, root);
-    fs.writeFileSync(config.dataFile, rawDataToJson(sample()));
-    const source = path.join(root, "other.json");
-    fs.writeFileSync(source, rawDataToJson(sample({ courses: [] })));
-    const result = restoreOffline(config, source);
-    assert.equal(result.mode, "json");
-    assert.equal(result.safety?.format, "json");
-    assert.deepEqual(JSON.parse(fs.readFileSync(config.dataFile, "utf8")).courses, []);
-    assert.equal(JSON.parse(fs.readFileSync(result.safety!.file, "utf8")).courses.length, 1);
-  });
-
-  it("exports everything as JSON, to a file or into the backups folder", () => {
-    const { root, config } = sqliteConfig();
-    createDatabaseFile(config.sqlitePath, sample(), { collections: COLLECTIONS });
-    const out = path.join(root, "out", "export.json");
-    const toFile = exportJsonOffline(config, { out });
-    assert.equal(toFile.records, 4);
-    assert.deepEqual(JSON.parse(fs.readFileSync(out, "utf8")).settings, sample().settings);
-    assert.throws(() => exportJsonOffline(config, { out }), /EEXIST/);
-    const listed = exportJsonOffline(config);
-    assert.equal(listed.entry?.kind, "manual");
-    assert.equal(listed.entry?.manifest?.reason, "JSON export");
-  });
-
+describe("backup files on the command line", () => {
   it("finds a backup by 'latest', by name or by path", () => {
-    const { root, config } = sqliteConfig();
-    assert.throws(() => resolveBackupSource(config.backupsDir, "latest", root), /no backups/);
-    fakeBackup(config.backupsDir, "lms-20260901-auto.json", new Date(2026, 8, 1));
-    fakeBackup(config.backupsDir, "lms-20260902-120000-manual.json", new Date(2026, 8, 2, 12));
-    assert.equal(path.basename(resolveBackupSource(config.backupsDir, "latest", root)), "lms-20260902-120000-manual.json");
-    assert.equal(path.basename(resolveBackupSource(config.backupsDir, "lms-20260901-auto.json", root)), "lms-20260901-auto.json");
+    const root = folder();
+    const backupsDir = path.join(root, "backups");
+    assert.throws(() => resolveBackupSource(backupsDir, "latest", root), /no backups/);
+    fakeBackup(backupsDir, "lms-20260901-auto.json", new Date(2026, 8, 1));
+    fakeBackup(backupsDir, "lms-20260902-120000-manual.json", new Date(2026, 8, 2, 12));
+    assert.equal(path.basename(resolveBackupSource(backupsDir, "latest", root)), "lms-20260902-120000-manual.json");
+    assert.equal(path.basename(resolveBackupSource(backupsDir, "lms-20260901-auto.json", root)), "lms-20260901-auto.json");
     fs.writeFileSync(path.join(root, "mine.json"), "{}");
-    assert.equal(resolveBackupSource(config.backupsDir, "mine.json", root), path.join(root, "mine.json"));
-    assert.throws(() => resolveBackupSource(config.backupsDir, "nope.json", root), /Backup not found/);
+    assert.equal(resolveBackupSource(backupsDir, "mine.json", root), path.join(root, "mine.json"));
+    assert.throws(() => resolveBackupSource(backupsDir, "nope.json", root), /Backup not found/);
+  });
+
+  it("writeJsonBackup() writes an export with its manifest and applies the retention", () => {
+    const backupsDir = path.join(folder(), "backups");
+    const written = writeJsonBackup(backupsDir, "manual", sample(), { date: new Date(2026, 8, 30, 9), reason: "JSON export", createdBy: "db:export script" });
+    assert.equal(written.created, true);
+    assert.equal(written.entry.name, "lms-20260930-090000-manual.json");
+    assert.equal(written.records, 4);
+    assert.deepEqual(readFile(written.entry.file), sample());
+    assert.equal(written.entry.manifest?.reason, "JSON export");
+    assert.deepEqual(inspectBackupFile(written.entry.file).counts, { users: 2, courses: 1, enrollments: 1 });
+    assert.deepEqual(fs.readdirSync(backupsDir).filter((name) => name.startsWith(".tmp-")), [], "no temporary file is left");
+    assert.equal(listBackupFiles(backupsDir).length, 1);
   });
 });
 
-describe("BackupManager on a running SQLite store", () => {
+describe("BackupManager on a running store", () => {
   it("creates a manual backup of everything written so far", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const engine = sqliteEngine(file);
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database);
     const manager = new BackupManager(engine);
     await engine.mutate((db) => void (db as unknown as TestDb).courses.push({ id: "c2", title: "Fresh" }));
 
     const backup = await manager.create({ kind: "manual", reason: "Before import", createdBy: "Ada (ada@example.com)" });
-    assert.equal(manager.format, "sqlite");
+    assert.equal(manager.format, "json");
     assert.equal(backup.kind, "manual");
     assert.equal(backup.records, 5);
     assert.deepEqual(backup.counts, { users: 2, courses: 2, enrollments: 1 });
@@ -462,8 +323,7 @@ describe("BackupManager on a running SQLite store", () => {
   });
 
   it("runs the daily backup once per day and not at all when turned off", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const manager = new BackupManager(sqliteEngine(file));
+    const manager = new BackupManager(memoryEngine());
     const today = new Date(2026, 8, 30, 8);
 
     process.env.DB_AUTO_BACKUP = "off";
@@ -472,17 +332,17 @@ describe("BackupManager on a running SQLite store", () => {
 
     delete process.env.DB_AUTO_BACKUP;
     const [first, concurrent] = await Promise.all([manager.runAutomatic(today), manager.runAutomatic(today)]);
-    assert.equal(first?.name, "lms-20260930-auto.sqlite");
+    assert.equal(first?.name, "lms-20260930-auto.json");
     assert.equal(concurrent?.name, first?.name, "concurrent calls share one run");
     assert.equal(await manager.runAutomatic(new Date(2026, 8, 30, 23)), null, "today's backup exists");
     assert.ok(automaticBackupState().lastRunAt);
     const next = await manager.runAutomatic(new Date(2026, 9, 1, 0, 5));
-    assert.equal(next?.name, "lms-20261001-auto.sqlite");
+    assert.equal(next?.name, "lms-20261001-auto.json");
   });
 
   it("previews a restore with counts side by side", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const engine = sqliteEngine(file);
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database);
     const manager = new BackupManager(engine);
     const backup = await manager.create({ kind: "manual" });
     await engine.mutate((db) => void (db as unknown as TestDb).enrollments.splice(0));
@@ -492,12 +352,12 @@ describe("BackupManager on a running SQLite store", () => {
     assert.equal(preview.backupRecords, 4);
     assert.equal(preview.currentRecords, 3);
     assert.deepEqual(preview.errors, []);
-    await assert.rejects(manager.preview("lms-20200101-auto.sqlite"), (err: unknown) => err instanceof BackupError && err.code === "not-found");
+    await assert.rejects(manager.preview("lms-20200101-auto.json"), (err: unknown) => err instanceof BackupError && err.code === "not-found");
   });
 
   it("restores a backup: safety backup first, storage replaced, cache swapped in place", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const engine = sqliteEngine(file);
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database);
     const manager = new BackupManager(engine);
     const db = (await engine.getDb()) as unknown as TestDb;
     const backup = await manager.create({ kind: "manual" });
@@ -524,27 +384,27 @@ describe("BackupManager on a running SQLite store", () => {
     assert.deepEqual(ids(safety.collections.courses), ["c1", "c2"]);
 
     // Storage: the restored data, also after a restart.
-    engine.close();
+    await engine.close();
     engines.splice(engines.indexOf(engine), 1);
-    assert.deepEqual(ids(readFile(file).collections.courses), ["c1"]);
-    const reopened = (await sqliteEngine(file).getDb()) as unknown as TestDb;
+    assert.deepEqual(ids(database.read(COLLECTIONS).collections.courses), ["c1"]);
+    const reopened = (await memoryEngine(database).getDb()) as unknown as TestDb;
     assert.equal(reopened.users.find((u) => u.id === "u1")?.name, "Ada");
   });
 
   it("keeps writing normally after a restore", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const engine = sqliteEngine(file);
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database);
     const manager = new BackupManager(engine);
     const backup = await manager.create({ kind: "manual" });
     await manager.restore(backup.name);
     await engine.mutate((db) => void (db as unknown as TestDb).courses.push({ id: "c3", title: "After restore" }));
     await engine.flush();
-    assert.deepEqual(ids(readFile(file).collections.courses), ["c1", "c3"]);
+    assert.deepEqual(ids(database.read(COLLECTIONS).collections.courses), ["c1", "c3"]);
   });
 
   it("refuses to restore a backup that would lock everyone out, changing nothing", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const engine = sqliteEngine(file);
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database);
     const manager = new BackupManager(engine);
     const upload = await manager.receiveUpload(streamOf(rawDataToJson(sample({ users: [{ id: "u9", roles: ["student"], enabled: true }] }))), { originalName: "students.json" });
     await assert.rejects(manager.restore(upload.name), (err: unknown) => err instanceof BackupError && err.code === "invalid" && /administrator/.test(err.message));
@@ -553,20 +413,13 @@ describe("BackupManager on a running SQLite store", () => {
   });
 
   it("stores uploaded backups after validating them", async () => {
-    const file = path.join(folder(), "lms.sqlite");
-    const manager = new BackupManager(sqliteEngine(file));
+    const manager = new BackupManager(memoryEngine());
 
     const json = await manager.receiveUpload(streamOf(rawDataToJson(sample())), { originalName: "C:\\Users\\ada\\Downloads\\site<1>.json", createdBy: "Ada" });
     assert.equal(json.kind, "upload");
     assert.equal(json.format, "json");
     assert.equal(json.records, 4);
     assert.equal(json.originalName, "site 1 .json");
-
-    const sqliteSource = path.join(folder(), "upload.sqlite");
-    createDatabaseFile(sqliteSource, sample(), { collections: COLLECTIONS });
-    const sqlite = await manager.receiveUpload(streamOf(fs.readFileSync(sqliteSource)), { originalName: "upload.sqlite" });
-    assert.equal(sqlite.format, "sqlite");
-    assert.ok(sqlite.name.endsWith(".sqlite"));
 
     await assert.rejects(manager.receiveUpload(streamOf("hello, not a backup")), (err: unknown) => err instanceof BackupError && err.code === "invalid");
     await assert.rejects(manager.receiveUpload(streamOf('{"users":[{"name":"no id"}]}')), (err: unknown) => err instanceof BackupError && err.code === "invalid" && /no id/.test(err.message));
@@ -575,41 +428,36 @@ describe("BackupManager on a running SQLite store", () => {
 
     const leftovers = fs.readdirSync(manager.dir).filter((name) => name.startsWith(".tmp-"));
     assert.deepEqual(leftovers, [], "rejected uploads leave no temporary files");
-    assert.equal(manager.list().length, 2);
+    assert.equal(manager.list().length, 1);
   });
 
-  it("rejects SQLite files that were not made by this app", async () => {
-    const manager = new BackupManager(sqliteEngine(path.join(folder(), "lms.sqlite")));
-    const foreign = path.join(folder(), "foreign.sqlite");
-    const conn = openDatabase(foreign);
-    conn.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)");
-    conn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    conn.exec("PRAGMA journal_mode = DELETE");
-    conn.close();
-    await assert.rejects(manager.receiveUpload(streamOf(fs.readFileSync(foreign))), (err: unknown) => err instanceof BackupError && /not created by this app/.test(err.message));
+  it("rejects SQLite files and points to the copy script", async () => {
+    const manager = new BackupManager(memoryEngine());
+    const sqliteHeader = Buffer.concat([Buffer.from("SQLite format 3\u0000", "latin1"), Buffer.alloc(100)]);
+    await assert.rejects(manager.receiveUpload(streamOf(sqliteHeader), { originalName: "lms.sqlite" }), (err: unknown) => err instanceof BackupError && err.code === "invalid" && /db:to-postgres/.test(err.message));
+    assert.deepEqual(manager.list(), []);
   });
 
-  it("exports the live data in either format", async () => {
-    const manager = new BackupManager(sqliteEngine(path.join(folder(), "lms.sqlite")));
-    const json = await manager.exportTo("json");
+  it("exports the live data as JSON", async () => {
+    const manager = new BackupManager(memoryEngine());
+    const json = await manager.exportTo();
     assert.deepEqual(ids(JSON.parse(fs.readFileSync(json.file, "utf8")).users), ["u1", "u2"]);
+    assert.deepEqual(ids(readFile(json.file).collections.enrollments), ["e1"]);
     assert.equal(json.sizeBytes, fs.statSync(json.file).size);
-    const sqlite = await manager.exportTo("sqlite");
-    assert.deepEqual(ids(readFile(sqlite.file).collections.enrollments), ["e1"]);
     assert.deepEqual(manager.list(), [], "exports are not listed as backups");
   });
 
   it("deletes backups by name and ignores anything else", async () => {
-    const manager = new BackupManager(sqliteEngine(path.join(folder(), "lms.sqlite")));
+    const manager = new BackupManager(memoryEngine());
     const a = await manager.create({ kind: "manual" });
     const b = await manager.create({ kind: "manual" });
-    assert.deepEqual(manager.delete([a.name, a.name, "../lms.sqlite", "lms-20200101-auto.sqlite"]), [a.name]);
+    assert.deepEqual(manager.delete([a.name, a.name, "../lms.json", "lms-20200101-auto.json"]), [a.name]);
     assert.deepEqual(manager.list().map((x) => x.name), [b.name]);
     assert.equal(fs.existsSync(path.join(manager.dir, `${a.name}.manifest.json`)), false);
   });
 
   it("reports integrity and an overview for the admin page", async () => {
-    const engine = sqliteEngine(path.join(folder(), "lms.sqlite"));
+    const engine = memoryEngine();
     const manager = new BackupManager(engine);
     await manager.create({ kind: "auto", date: new Date(2026, 8, 30) });
     const quick = await manager.checkIntegrity("quick");
@@ -618,7 +466,7 @@ describe("BackupManager on a running SQLite store", () => {
     assert.equal((await manager.checkIntegrity("full")).mode, "full");
 
     const overview = await manager.overview();
-    assert.equal(overview.info.driver, "sqlite");
+    assert.equal(overview.info.driver, "memory");
     assert.equal(overview.records, 4);
     assert.deepEqual(overview.counts, { users: 2, courses: 1, enrollments: 1 });
     assert.equal(overview.backups.length, 1);
@@ -629,24 +477,92 @@ describe("BackupManager on a running SQLite store", () => {
   });
 });
 
-describe("BackupManager on the JSON driver", () => {
-  it("backs up, exports a SQLite file and restores", async () => {
-    const file = path.join(folder(), "db.json");
-    const engine = jsonEngine(file);
+/* ------------------------------------------------------------------ */
+/* Settling and the demo reset                                         */
+/* ------------------------------------------------------------------ */
+
+function fixSample(): RawData {
+  const data = sample();
+  return { ...data, collections: { users: data.collections.users!, courses: [{ id: "c1", title: "Intro" }], enrollments: [] } };
+}
+
+function demo(): RawData {
+  return {
+    collections: { users: [{ id: "demo-admin", email: "admin@example.com", name: "Demo", roles: ["admin"], enabled: true }], courses: [{ id: "demo-course", title: "Demo" }] },
+    settings: { brand: { name: "Demo Academy" } },
+  };
+}
+
+type Row = { id: string; title?: string; name?: string };
+const idsInOrder = (rows: readonly unknown[] | undefined) => ((rows ?? []) as Row[]).map((r) => r.id);
+
+describe("backups settle the storage in slices", () => {
+  it("create() and exportTo() do not use the one-pass flush(), and still capture unreported edits", async () => {
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database, fixSample());
     const manager = new BackupManager(engine);
+    const db = (await engine.getDb()) as unknown as { courses: Row[] };
+    engine.flush = async () => {
+      throw new Error("flush() must not be used for snapshots");
+    };
+    db.courses[0]!.title = "Edited outside mutate()";
     const backup = await manager.create({ kind: "manual" });
-    assert.equal(backup.format, "json");
-    assert.equal(backup.records, 4);
+    assert.equal((readFile(path.join(manager.dir, backup.name)).collections.courses as Row[])[0]!.title, "Edited outside mutate()");
+    const exported = await manager.exportTo();
+    assert.deepEqual(idsInOrder(readFile(exported.file).collections.courses), ["c1"]);
+    fs.rmSync(exported.file, { force: true });
+  });
 
-    const sqlite = await manager.exportTo("sqlite");
-    assert.deepEqual(ids(readFile(sqlite.file).collections.users), ["u1", "u2"]);
-
-    await engine.mutate((db) => void (db as unknown as TestDb).courses.splice(0));
-    await engine.flush();
+  it("restore() (exclusive) does not use the one-pass flush(), and its safety backup holds unreported edits", async () => {
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database, fixSample());
+    const manager = new BackupManager(engine);
+    const db = (await engine.getDb()) as unknown as { courses: Row[] };
+    const backup = await manager.create({ kind: "manual" });
+    engine.flush = async () => {
+      throw new Error("flush() must not be used for restores");
+    };
+    db.courses[0]!.title = "Edited outside mutate() before the restore";
     const result = await manager.restore(backup.name);
-    assert.equal(result.safety.format, "json");
-    assert.deepEqual(ids(((await engine.getDb()) as unknown as TestDb).courses), ["c1"]);
-    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).courses.length, 1);
+    const safety = readFile(path.join(manager.dir, result.safety.name)).collections.courses as Row[];
+    assert.equal(safety[0]!.title, "Edited outside mutate() before the restore");
+    assert.equal(((await engine.getDb()) as unknown as { courses: Row[] }).courses[0]!.title, "Intro");
+  });
+});
+
+describe("replaceWith() (demo data reset)", () => {
+  it("takes the safety backup and replaces the data in one exclusive step", async () => {
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database, fixSample());
+    const manager = new BackupManager(engine);
+    await engine.getDb();
+    const replaced = manager.replaceWith(demo(), { source: "demo-reset", reason: "Before reloading the demo data", createdBy: "Ada" });
+    // Saved while the reset is under way: it must end up in the safety backup or in the live data, never in neither.
+    const during = engine.mutate((db) => void (db as unknown as { courses: Row[] }).courses.push({ id: "c-during", title: "Saved during the reset" }));
+    const safety = await replaced;
+    await during;
+    assert.equal(safety.kind, "safety");
+    assert.equal(safety.reason, "Before reloading the demo data");
+    const saved = idsInOrder(readFile(path.join(manager.dir, safety.name)).collections.courses);
+    const live = idsInOrder(((await engine.getDb()) as unknown as { courses: Row[] }).courses);
+    assert.ok(saved.includes("c-during") || live.includes("c-during"), `kept somewhere (backup: ${saved}, live: ${live})`);
+    assert.ok(saved.includes("c1"), "the safety backup holds the previous data");
+    assert.ok(live.includes("demo-course"), "the demo data is live");
+    assert.ok(!live.includes("c1"));
+    // Storage matches the cache.
+    await engine.flush();
+    assert.deepEqual(idsInOrder(database.read(COLLECTIONS).collections.courses), live);
+  });
+
+  it("changes nothing when the safety backup cannot be written", async () => {
+    const database = new MemoryDatabase();
+    const engine = memoryEngine(database, fixSample());
+    const manager = new BackupManager(engine);
+    await engine.getDb();
+    // A file where the backups folder should be: the snapshot cannot be written.
+    fs.writeFileSync(manager.dir, "not a folder");
+    await assert.rejects(manager.replaceWith(demo(), { source: "demo-reset", reason: "Before reloading the demo data" }));
+    assert.deepEqual(idsInOrder(((await engine.getDb()) as unknown as { courses: Row[] }).courses), ["c1"]);
   });
 });
 

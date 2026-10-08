@@ -19,11 +19,11 @@ function decodeFileName(value: string | null): string | null {
 
 /**
  * POST /api/admin/backup/upload — store a backup file so it can be
- * restored. The request body is the file itself (`.sqlite` made by this
- * app, or a JSON export); `X-File-Name` carries its URL-encoded name.
+ * restored. The request body is the file itself (a JSON export made by
+ * this app); `X-File-Name` carries its URL-encoded name.
  *
- * The body is streamed to disk (never buffered), checked (SQLite integrity
- * check, schema version, JSON shape) and listed as an "uploaded" backup.
+ * The body is streamed to disk (never buffered), checked (JSON shape, every
+ * document has an id) and listed as an "uploaded" backup.
  * Nothing is restored here: the administrator reviews the contents and
  * confirms on the data page. A route handler is used because Server Action
  * bodies are capped at 1 MB.

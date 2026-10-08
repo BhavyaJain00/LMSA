@@ -87,7 +87,7 @@ function PreviewBody({ preview }: { preview: RestorePreview }) {
         <div>
           <dt className="text-xs text-ink-muted">{t("backups.file")}</dt>
           <dd className="text-ink">
-            {backup.format === "sqlite" ? "SQLite" : "JSON"}, {formatBytes(backup.sizeBytes)}
+            JSON, {formatBytes(backup.sizeBytes)}
           </dd>
         </div>
       </dl>

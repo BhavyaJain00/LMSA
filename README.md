@@ -21,8 +21,8 @@
 - Drip content and prerequisites, installable PWA with offline page, calendar (`.ics`) feeds, gamification (points, badges, streaks, leaderboard).
 
 **Round 3: market-ready**
-- **Data:** SQLite database (built-in `node:sqlite`) with automatic daily backups, restore and JSON export; optionally PostgreSQL / Supabase through Prisma (`DB_DRIVER=postgres`, see [DEPLOYMENT.md](DEPLOYMENT.md#15-using-supabase--postgresql)).
-- **Media:** resumable chunked uploads up to 10 GB, local or S3/R2 storage, HLS conversion queue, adaptive-bitrate player, transcripts and automatic captions.
+- **Data:** PostgreSQL (Supabase) through Prisma, with automatic daily JSON backups, restore and export (see [ENV-SETUP.md](ENV-SETUP.md), section 3).
+- **Media:** resumable chunked uploads up to 10 GB, local disk (development) or AWS S3 / S3-compatible storage (production), HLS conversion queue, adaptive-bitrate player, transcripts and automatic captions.
 - **Commerce:** membership plans and subscriptions, bundles, installments, gifts, upsells, taxes/VAT invoices and currencies, abandoned-checkout reminders.
 - **Growth:** affiliates, teams (seat purchases and invitations), instructor marketplace with revenue split and earnings, analytics.
 - **Communication:** direct messages with moderation, broadcasts, email sequences, open/click tracking, segments, leads (double opt-in).
@@ -36,16 +36,30 @@
 
 ## Quick start
 
-Requires Node.js 24 (the database uses the built-in `node:sqlite` module). ffmpeg is optional in development: without it videos play as MP4.
+Requires Node.js 24 and a PostgreSQL database: the app has no other database and does not start without one. A free [Supabase](https://supabase.com) project is enough for development. ffmpeg is optional in development: without it videos play as MP4.
 
-```sh
-npm install
-cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
-# set APP_SECRET in .env to 32+ random characters, e.g. `openssl rand -hex 32`
-npm run dev
-```
+1. **Create a Supabase project** (choose a database password and the region nearest you), then click **Connect** and copy the two connection strings. [ENV-SETUP.md, section 3](ENV-SETUP.md#3-database) shows each click.
+2. **Install and configure:**
 
-Open `http://localhost:3000`. On first start the database (`storage/lms.sqlite`) is created and, with `SEED_DEMO_DATA=true`, filled with demo content.
+   ```sh
+   npm install
+   cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
+   ```
+
+   In `.env`, set `DATABASE_URL` (the pooled connection, port 6543, ending in `?pgbouncer=true&connection_limit=5`) and `DIRECT_URL` (port 5432). `APP_SECRET` may stay empty in development (one is generated); on a live site it must be 32+ random characters, e.g. `openssl rand -hex 32`.
+3. **Create the tables:**
+
+   ```sh
+   npm run db:setup          # prisma migrate deploy
+   ```
+
+4. **Start:**
+
+   ```sh
+   npm run dev
+   ```
+
+Open `http://localhost:3000`. On first start the empty database is filled with demo content (`SEED_DEMO_DATA=true`, the default in `.env.example`) or just your admin account (`ADMIN_*`). Uploads are stored on your disk (`storage/uploads`) until you set up S3.
 
 ### Demo accounts
 
@@ -97,7 +111,7 @@ src/
   components/   ui/ kit, player/ (HLS engine and controls), layout/, and one folder per feature area
   i18n/         interface languages (no library): config, negotiation, formatter, messages/<locale>/<namespace>.ts
   lib/
-    db/         store API, SQLite, PostgreSQL (Prisma) and JSON drivers, migrations, backups, seed data
+    db/         store API, PostgreSQL (Prisma) driver, backups (JSON exports), seed data
     actions/    Server Actions ("use server"), one file per area
     services/   shared domain logic (progress, enrollment, notifications, badges, points, drip, ...)
     data/       read models (courses, users)
@@ -106,7 +120,7 @@ src/
   proxy.ts      request proxy (Next.js 16's replacement for middleware)
 ```
 
-- **Store and SQLite.** All data access goes through `src/lib/db/store.ts` (`getDb`, `all`, `findById`, `filter`, `insert`, `update`, `remove`, `mutate`, `getSettings`). The whole database is held in memory; the SQLite driver (`node:sqlite`, one table of JSON documents per collection) writes only the changed records, one transaction per mutation. `mutate()` runs callbacks one at a time, so read-check-write logic is race-free. Migrations run at start-up. Entity types live in `src/lib/types.ts`.
+- **Store and PostgreSQL.** All data access goes through `src/lib/db/store.ts` (`getDb`, `all`, `findById`, `filter`, `insert`, `update`, `remove`, `mutate`, `getSettings`). The whole database is held in memory; the PostgreSQL driver (Prisma, one table of JSON documents per collection) writes only the changed records, one transaction per flush. `mutate()` runs callbacks one at a time, so read-check-write logic is race-free. Migrations are applied with `npm run db:setup`. Entity types live in `src/lib/types.ts`.
 - **Services.** Cross-cutting rules (completing a lesson, issuing certificates, enrolling, notifying, awarding points and badges) live in `src/lib/services` and the feature folders, so pages, actions, the REST API and webhooks share one implementation.
 - **Event bus.** Core flows `emit()` domain events (`payment.paid`, `payment.refunded`, `enrollment.created`, `user.registered`, `lead.created`, `lesson.completed`, `course.completed`, `certificate.issued`, `subscription.changed`) after the change is saved. Areas react with `on()` in `src/lib/<area>/handlers.ts`. Handlers run after the mutation, and their errors are logged but never reach the caller.
 - **i18n.** Server code uses `getT(namespace)` and `getFormatter()` from `@/i18n/server`; client components use `useT` and `useFormatter` under an `I18nProvider`. See [src/i18n/README.md](src/i18n/README.md).
@@ -118,18 +132,18 @@ src/
 | --- | --- |
 | `npm run dev` | Development server on port 3000 |
 | `npm run build` / `npm start` | Production build (standalone output) and server |
-| `npm test` | Node's built-in test runner over `tests/**/*.test.ts` against a throwaway database (never touches `storage/` or `.env`) |
+| `npm test` | Node's built-in test runner over `tests/**/*.test.ts` on an in-memory test store: no PostgreSQL needed, never touches `storage/`, `.env` or your database |
 | `npm run test:watch` | Tests in watch mode |
 | `npx eslint src tests` | Lint |
 | `npx tsc --noEmit` | Type check |
-| `npm run db:backup` | Back up the database (`-- --list` lists backups) |
-| `npm run db:restore -- <backup>` | Restore a backup (takes a safety backup first) |
-| `npm run db:export` | Export the database as JSON |
+| `npm run db:setup` | Create or update the PostgreSQL tables (`prisma migrate deploy`, needs `DIRECT_URL`) |
+| `npm run db:backup` | Back up the database as a JSON export (`-- --list` lists backups) |
+| `npm run db:restore -- <backup>` | Restore a JSON export (a database with data needs `--force`; takes a safety backup first) |
+| `npm run db:export` | Export the database as JSON to a file or standard output |
 | `npm run test:pg` | PostgreSQL tests; the integration part needs `TEST_DATABASE_URL` (a throwaway server) |
 | `npm run prisma:schema` | Regenerate `prisma/schema.prisma` (and a migration) after adding a collection |
-| `npm run prisma:migrate` | Create or update the PostgreSQL tables (`prisma migrate deploy`, needs `DIRECT_URL`) |
-| `npm run db:to-postgres` | Copy the SQLite database or a JSON export into an empty PostgreSQL database |
+| `npm run db:to-postgres` | Copy an older version's SQLite database or a JSON export into an empty PostgreSQL database |
 
 ## Going live
 
-Read [DEPLOYMENT.md](DEPLOYMENT.md): Docker + Caddy with automatic HTTPS, environment variables, cron jobs, backups, payments webhooks, SMTP, S3/R2, ffmpeg, upgrades and a pre-launch checklist. In short: set `APP_URL` (https) and `APP_SECRET`, set `SEED_DEMO_DATA=false` with your own admin, configure SMTP and a payment gateway, schedule the cron URLs, and test a backup restore before launch.
+Read [DEPLOYMENT.md](DEPLOYMENT.md): Docker + Caddy with automatic HTTPS, the Supabase database (or a local PostgreSQL in Docker), environment variables, cron jobs, backups, payments webhooks, SMTP, AWS S3 for uploads (with the free-tier notes), ffmpeg, upgrades and a pre-launch checklist. In short: point `DATABASE_URL`/`DIRECT_URL` at the live database, set `APP_URL` (https) and `APP_SECRET`, set `SEED_DEMO_DATA=false` with your own admin, store uploads in S3, configure SMTP and a payment gateway, schedule the cron URLs, and test a backup restore before launch.

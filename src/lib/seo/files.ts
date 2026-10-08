@@ -4,7 +4,7 @@ import { siteConfig } from "@/lib/config";
 import type { RedirectRule } from "./redirects";
 
 /**
- * Small JSON files the SEO layer keeps next to the database (`storage/seo/`):
+ * Small JSON files the SEO layer keeps in the storage folder (`<STORAGE_DIR>/seo/`, default `storage/seo/`):
  *  - `redirects.json`: the slug-redirect rules, read by the proxy on every
  *    request (cached in memory, re-read only when the file's mtime changes),
  *  - `content-index.json`: the last content snapshot used to detect slug
@@ -14,8 +14,7 @@ import type { RedirectRule } from "./redirects";
  */
 
 export function seoStorageDir(): string {
-  const dataFile = path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.dataFile);
-  return path.join(/* turbopackIgnore: true */ path.dirname(dataFile), "seo");
+  return path.resolve(/* turbopackIgnore: true */ process.cwd(), siteConfig.storageDir, "seo");
 }
 
 export const REDIRECTS_FILE = "redirects.json";

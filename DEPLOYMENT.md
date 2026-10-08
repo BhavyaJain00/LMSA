@@ -1,6 +1,8 @@
 # Deploying LearnLoop
 
-LearnLoop is a single Next.js server with an embedded SQLite database (or, optionally, PostgreSQL such as Supabase: see [section 15](#15-using-supabase--postgresql)). Everything it stores (database, uploads, video renditions, backups) lives in one data folder: the `/app/storage` volume with Docker, or a folder outside the project such as `/opt/learnloop/storage` without Docker (see section 3 for why it must be outside). A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
+LearnLoop is a single Next.js server that keeps its records in **PostgreSQL**, normally a [Supabase](https://supabase.com) project (any PostgreSQL 13 or newer works; [section 15](#15-the-database-supabase-or-your-own-postgresql) also shows a local PostgreSQL in Docker for people without Supabase). There is no other database: the server refuses to start without `DATABASE_URL`. Next to the database the app needs one data folder for files: database backups (JSON exports), the SEO files and, unless you use object storage, the uploaded files and video renditions. That folder is the `/app/storage` volume with Docker, or a folder outside the project such as `/opt/learnloop/storage` without Docker (see section 3 for why it must be outside). For production, the owner's choice for uploads is an **AWS S3** bucket ([section 9](#9-object-storage-aws-s3-and-a-cdn)); the server's own disk stays the default for development.
+
+A small VPS (2 vCPU, 4 GB RAM, 40 GB disk) runs a school with thousands of learners; video conversion is the only CPU-heavy job.
 
 Contents:
 
@@ -12,13 +14,13 @@ Contents:
 6. [Backups and restores (with an off-site copy)](#6-backups-and-restores)
 7. [Payments: Stripe and Razorpay webhooks](#7-payments-stripe-and-razorpay-webhooks)
 8. [Email (SMTP providers)](#8-email-smtp-providers)
-9. [Object storage (S3 / Cloudflare R2) and a CDN](#9-object-storage-s3--r2-and-a-cdn)
+9. [Object storage (AWS S3) and a CDN](#9-object-storage-aws-s3-and-a-cdn)
 10. [ffmpeg](#10-ffmpeg)
 11. [Monitoring: health check and error log](#11-monitoring-health-check-and-error-log)
 12. [Upgrading](#12-upgrading)
 13. [Search engines: Search Console and the sitemap](#13-search-engines-search-console-and-the-sitemap)
 14. [Pre-launch checklist](#14-pre-launch-checklist)
-15. [Using Supabase / PostgreSQL](#15-using-supabase--postgresql)
+15. [The database: Supabase or your own PostgreSQL](#15-the-database-supabase-or-your-own-postgresql)
 
 ---
 
@@ -26,42 +28,48 @@ Contents:
 
 - A domain (or sub-domain such as `learn.example.com`) whose DNS `A`/`AAAA` record points at the server.
 - Ports 80 and 443 open to the internet (Caddy needs both to obtain and renew certificates).
+- **A PostgreSQL database**: a Supabase project (free to start; choose the region closest to your app server and students, for India **Mumbai / ap-south-1**), or the local PostgreSQL container from `docker-compose.yml`. [Section 15](#15-the-database-supabase-or-your-own-postgresql) shows both.
 - **Docker route:** Docker Engine 24+ with the Compose plugin (v2.23+ for the optional cron service).
-- **Without Docker:** Node.js 24 (the database uses the built-in `node:sqlite` module), ffmpeg, and a reverse proxy for HTTPS (Caddy or nginx).
+- **Without Docker:** Node.js 24, ffmpeg, and a reverse proxy for HTTPS (Caddy or nginx).
+- **For uploads in production (recommended):** an AWS account with an S3 bucket, see [section 9](#9-object-storage-aws-s3-and-a-cdn).
 
 ### Sizing
 
-The app keeps every record in memory and writes only the records a request changed, one small SQLite transaction at a time. Run **one** app process per database (no cluster mode or second replica on the same `storage/` folder) and scale up with a larger server rather than more processes.
+The app loads every record into memory when it starts and afterwards writes only the records a request changed, one small PostgreSQL transaction at a time. Run **one** app process per database (no cluster mode, no second replica and no serverless instance on the same database) and scale up with a larger server rather than more processes.
 
-`tests/data-sqlite-scale.test.ts` checks this at school scale on every `npm test`: 5,000 learners, 50 courses with 1,000 lessons, 50,000 enrollments, 100,000 lesson-progress and 100,000 video-progress records, which is about 256,000 records in a 93 MB database file. Measured on an 8-core desktop with Node 24.11:
+`tests/store-scale.test.ts` checks the store itself at school scale on every `npm test`, on an in-memory test database (no network): 5,000 learners, 50 courses with 1,000 lessons, 50,000 enrollments, 100,000 lesson-progress and 100,000 video-progress records, which is about 256,000 records (59 MB as JSON). Measured on an 8-core desktop with Node 24:
 
 | What | Measured | Test fails above |
 | --- | --- | --- |
-| Cold start: `PRAGMA quick_check`, migrations, load all 256,300 records | 2.0 s, about 330 MB of memory afterwards | 20 s |
-| 1,000 sequential heartbeat-style `mutate()` calls, each saved in its own transaction (one record compared, one row written) | p50 1.2 ms, **p95 2.2 ms**, p99 3.3 ms (about 25 ms p95 while the rest of the suite runs in parallel) | p95 60 ms |
-| 1,000 concurrent heartbeats on 400 records | saved in 1 transaction of 400 rows, 1.2 s in total | more than 3 transactions |
-| Background sweep of all 256,300 records (looks for edits made outside `mutate()`) | 96 slices, 0.8 s of work, longest slice 9.3 ms; repeats every 16 s at this size | slice over 50 ms |
+| Cold start: load all 256,300 records | 1.6 s, about 300 MB of memory afterwards | 20 s |
+| 1,000 sequential heartbeat-style `mutate()` calls, each saved in its own transaction (one record compared, one row written) | p50 1.6 ms, **p95 4.2 ms**, p99 5.7 ms | p95 60 ms |
+| 1,000 concurrent heartbeats on 400 records | saved in 1 transaction of 400 rows | more than 3 transactions |
+| Background sweep of all 256,300 records (looks for edits made outside `mutate()`) | about 140 slices, 1.2 s of work, longest slice 13 ms | slice over 50 ms |
 
-The figures print as test diagnostics (`node --test tests/data-sqlite-scale.test.ts`), so you can measure your own server. Saving cost depends on what changed, not on how big the school is. Memory grows with the number of records: allow about 1.5 GB of RAM per million records, plus the operating system and ffmpeg. A 2 vCPU / 4 GB server handles a school of this size with room to spare.
+The figures are printed as test diagnostics in the `npm test` output, so you can measure your own server. With PostgreSQL every save adds a network round trip to the database, which is why the database region should be close to the app server. Saving cost depends on what changed, not on how big the school is. Memory grows with the number of records: allow about 1.5 GB of RAM per million records, plus the operating system and ffmpeg. A 2 vCPU / 4 GB server handles a school of this size with room to spare.
+
+Database size: the Supabase Free plan allows a 500 MB database (Pro: 8 GB included). A school of the size above fits easily; uploads and videos never go into the database.
 
 ## 2. VPS with Docker and Caddy (recommended)
 
-The repository contains a multi-stage `Dockerfile` (Node 24 slim, ffmpeg, non-root user, health check), `docker-compose.yml` (the app plus Caddy with automatic HTTPS) and a `Caddyfile`.
+The repository contains a multi-stage `Dockerfile` (Node 24 slim, ffmpeg, non-root user, health check), `docker-compose.yml` (the app plus Caddy with automatic HTTPS) and a `Caddyfile`. On every start the container first runs `prisma migrate deploy` (the same as `npm run db:setup`) through `scripts/docker-entrypoint.sh`, so the database tables are created on the first start and updated after every upgrade.
 
-1. **Install Docker** (Ubuntu/Debian):
+1. **Create the database.** Make a Supabase project and copy its two connection strings, `DATABASE_URL` and `DIRECT_URL` ([section 15](#15-the-database-supabase-or-your-own-postgresql), or ENV-SETUP.md section 3). Without Supabase, see "A local PostgreSQL in Docker" in section 15.
+
+2. **Install Docker** (Ubuntu/Debian):
 
    ```sh
    curl -fsSL https://get.docker.com | sh
    sudo usermod -aG docker "$USER"   # log out and back in
    ```
 
-2. **Get the code** onto the server:
+3. **Get the code** onto the server:
 
    ```sh
    git clone <your repository URL> learnloop && cd learnloop
    ```
 
-3. **Create `.env`** from the example and fill in at least these values:
+4. **Create `.env`** from the example and fill in at least these values:
 
    ```sh
    cp .env.example .env
@@ -71,6 +79,8 @@ The repository contains a multi-stage `Dockerfile` (Node 24 slim, ffmpeg, non-ro
    ```ini
    APP_URL=https://learn.example.com
    APP_SECRET=<64 hex characters>
+   DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=5
+   DIRECT_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
    DOMAIN=learn.example.com          # used by Caddy
    ACME_EMAIL=you@example.com        # certificate expiry notices
    SEED_DEMO_DATA=false
@@ -81,20 +91,20 @@ The repository contains a multi-stage `Dockerfile` (Node 24 slim, ffmpeg, non-ro
    SMTP_HOST=...                     # see section 8
    ```
 
-   `docker-compose.yml` sets `NODE_ENV=production`, `TRUST_PROXY_HOPS=1` and the storage paths for you.
+   `docker-compose.yml` sets `NODE_ENV=production`, `TRUST_PROXY_HOPS=1`, `STORAGE_DIR` and `UPLOAD_DIR` for you, and stops with "Set DATABASE_URL in .env" when `DATABASE_URL` is missing. Add the `STORAGE_DRIVER=s3` and `S3_*` lines from [section 9](#9-object-storage-aws-s3-and-a-cdn) now or later.
 
-4. **Start it:**
+5. **Start it:**
 
    ```sh
    docker compose up -d --build
-   docker compose logs -f app       # wait for "Ready"
+   docker compose logs -f app       # "[entrypoint] applying database migrations", then "Ready"
    ```
 
-   Caddy requests a certificate the first time someone opens `https://learn.example.com` (usually within seconds). If the app refuses to start, the log lists the missing settings (see [section 4](#4-environment-variables)).
+   Caddy requests a certificate the first time someone opens `https://learn.example.com` (usually within seconds). The first request fills the empty database with your administrator account (`SEED_DEMO_DATA=false`). If the app refuses to start, the log lists the missing settings (see [section 4](#4-environment-variables)).
 
-5. **Sign in** with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, change the password, turn on two-factor authentication, then work through the [pre-launch checklist](#14-pre-launch-checklist).
+6. **Sign in** with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, change the password, turn on two-factor authentication, then work through the [pre-launch checklist](#14-pre-launch-checklist).
 
-6. **Turn on the scheduler**: copy the cron key from *Admin → Settings → Email*, add `CRON_KEY=<key>` to `.env`, then:
+7. **Turn on the scheduler**: copy the cron key from *Admin → Settings → Email*, add `CRON_KEY=<key>` to `.env`, then:
 
    ```sh
    docker compose --profile cron up -d
@@ -108,9 +118,11 @@ Useful commands:
 | Logs | `docker compose logs -f app` / `docker compose logs -f caddy` |
 | Restart | `docker compose restart app` |
 | Shell in the container | `docker compose exec app sh` |
-| Manual backup | `docker compose exec app node scripts/db-backup.mjs` |
+| Manual backup (JSON export) | `docker compose exec app node scripts/db-backup.mjs` |
 
-All data is in the `learnloop_storage` volume (`docker volume inspect learnloop_storage` shows where it is on disk). Never run `docker compose down -v`: `-v` deletes the volumes, including the database.
+The records are in PostgreSQL. The `learnloop_storage` volume (`docker volume inspect learnloop_storage` shows where it is on disk) holds the backups, the SEO files and, without S3, the uploads. Never run `docker compose down -v`: `-v` deletes the volumes, including those files (and, with the local `postgres` profile, the database itself).
+
+To run the migrations yourself instead of on every start, set `MIGRATE_ON_START=false` in `.env` and run `npm run db:setup` from a checkout of the same version before you start the new image.
 
 ### Reverse proxy and client IPs
 
@@ -132,26 +144,28 @@ curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs ffmpeg
 
 sudo useradd --system --create-home --home-dir /opt/learnloop learnloop
-# The data folder lives OUTSIDE the project (see "Where the data lives" below).
+# The data folder lives OUTSIDE the project (see "Where the files live" below).
 sudo -u learnloop mkdir -p /opt/learnloop/storage
 sudo -u learnloop git clone <your repository URL> /opt/learnloop/app
 cd /opt/learnloop/app
-sudo -u learnloop cp .env.example .env   # fill it in (section 4), with TRUST_PROXY_HOPS=1 and the data paths below
+sudo -u learnloop cp .env.example .env   # fill it in (section 4): DATABASE_URL, DIRECT_URL, TRUST_PROXY_HOPS=1 and the paths below
 sudo -u learnloop npm ci
+sudo -u learnloop npm run db:setup       # creates the tables in PostgreSQL (prisma migrate deploy)
 sudo -u learnloop npm run build
 # The standalone server needs the static files next to it:
 sudo -u learnloop cp -r public .next/standalone/ && sudo -u learnloop cp -r .next/static .next/standalone/.next/
 ```
 
-**Where the data lives.** Add these lines to `.env` (absolute paths):
+`npm run build` does not touch the database, so it also works on a machine without `DATABASE_URL`; `npm run db:setup` needs both `DATABASE_URL` and `DIRECT_URL`.
+
+**Where the files live.** Add these lines to `.env` (absolute paths):
 
 ```sh
-SQLITE_PATH=/opt/learnloop/storage/lms.sqlite
-DATA_FILE=/opt/learnloop/storage/db.json
+STORAGE_DIR=/opt/learnloop/storage
 UPLOAD_DIR=/opt/learnloop/storage/uploads
 ```
 
-The standalone server (`.next/standalone/server.js`) changes into its own folder when it starts, so the default relative paths (`storage/…`) would put the database, uploads and backups inside `.next/standalone/`, and the next `npm run build` deletes that folder with everything in it. In production the server therefore refuses to start from `.next/standalone` while any of these three paths is relative. Backups (`/opt/learnloop/storage/backups/`), the SEO files (`/opt/learnloop/storage/seo/`) and the app's other small files follow the database into the same folder, and the `npm run db:*` scripts read the same `.env`, so they work on the same data.
+The standalone server (`.next/standalone/server.js`) changes into its own folder when it starts, so the default relative paths (`storage`, `storage/uploads`) would put the backups and uploads inside `.next/standalone/`, and the next `npm run build` deletes that folder with everything in it. In production the server therefore refuses to start from `.next/standalone` while `STORAGE_DIR` or `UPLOAD_DIR` is relative. Backups (`/opt/learnloop/storage/backups/`), the SEO files (`/opt/learnloop/storage/seo/`) and the app's other small files go into `STORAGE_DIR`, and the `npm run db:*` scripts read the same `.env`, so they use the same database and backups folder.
 
 `/etc/systemd/system/learnloop.service`:
 
@@ -163,8 +177,8 @@ Wants=network-online.target
 
 [Service]
 User=learnloop
-# server.js changes into its own folder anyway; the data is NOT here but in the
-# absolute SQLITE_PATH / DATA_FILE / UPLOAD_DIR from .env (/opt/learnloop/storage).
+# server.js changes into its own folder anyway; the files are NOT here but in the
+# absolute STORAGE_DIR / UPLOAD_DIR from .env (/opt/learnloop/storage).
 WorkingDirectory=/opt/learnloop/app/.next/standalone
 EnvironmentFile=/opt/learnloop/app/.env
 Environment=NODE_ENV=production PORT=3000 HOSTNAME=127.0.0.1
@@ -203,22 +217,22 @@ With nginx instead, set `client_max_body_size 0;` (large video uploads), `proxy_
 
 ```sh
 npm install -g pm2
-npm ci && npm run build
+npm ci && npm run db:setup && npm run build
 # copy public/ and .next/static/ next to the standalone server as shown above
 pm2 start .next/standalone/server.js --name learnloop --time
 pm2 save
 pm2 startup        # Linux: prints the command that starts pm2 at boot
 ```
 
-As with systemd, keep the data outside the project and give the server absolute paths (see "Where the data lives" above): `SQLITE_PATH=/opt/learnloop/storage/lms.sqlite`, `DATA_FILE=/opt/learnloop/storage/db.json`, `UPLOAD_DIR=/opt/learnloop/storage/uploads`, or on Windows for example `SQLITE_PATH=D:\learnloop-data\lms.sqlite`, `DATA_FILE=D:\learnloop-data\db.json`, `UPLOAD_DIR=D:\learnloop-data\uploads`. The server refuses to start with relative paths, because they would resolve inside `.next\standalone`, which every build deletes.
+As with systemd, keep the files outside the project and give the server absolute paths (see "Where the files live" above): `STORAGE_DIR=/opt/learnloop/storage` and `UPLOAD_DIR=/opt/learnloop/storage/uploads`, or on Windows for example `STORAGE_DIR=D:\learnloop-data` and `UPLOAD_DIR=D:\learnloop-data\uploads`. The server refuses to start with relative paths, because they would resolve inside `.next\standalone`, which every build deletes.
 
-pm2 does not read `.env` by itself for the standalone server: export the variables in the shell first, or use an `ecosystem.config.cjs` with an `env` block (`NODE_ENV: "production"`, `APP_URL`, `APP_SECRET`, the three data paths, …). On Windows, start pm2 at boot with `pm2-installer` or the Task Scheduler (`pm2 resurrect` at log-on), install ffmpeg with `winget install Gyan.FFmpeg`, and put Caddy for Windows (`caddy run` as a service via `sc.exe` or NSSM) in front for HTTPS.
+pm2 does not read `.env` by itself for the standalone server: export the variables in the shell first, or use an `ecosystem.config.cjs` with an `env` block (`NODE_ENV: "production"`, `APP_URL`, `APP_SECRET`, `DATABASE_URL`, `DIRECT_URL`, the two paths, …). On Windows, start pm2 at boot with `pm2-installer` or the Task Scheduler (`pm2 resurrect` at log-on), install ffmpeg with `winget install Gyan.FFmpeg`, and put Caddy for Windows (`caddy run` as a service via `sc.exe` or NSSM) in front for HTTPS.
 
-**Installed earlier with relative paths?** Your data may be in `.next/standalone/storage/`. Before the next build: stop the app, move that folder's contents to the new data folder (`mv .next/standalone/storage/* /opt/learnloop/storage/`), set the three absolute paths in `.env`, then build and start again.
+**Installed earlier with relative paths?** Your files may be in `.next/standalone/storage/`. Before the next build: stop the app, move that folder's contents to the new data folder (`mv .next/standalone/storage/* /opt/learnloop/storage/`), set the two absolute paths in `.env`, then build and start again. If that folder holds an `lms.sqlite` or `db.json` from an older version, copy its records into PostgreSQL with `npm run db:to-postgres` (section 15).
 
 ## 4. Environment variables
 
-The server checks its configuration at start-up (`src/lib/env-check.ts`). In production it **refuses to start** when `APP_SECRET` is missing or shorter than 32 characters, when `APP_URL` is not `https://` (except on localhost), or when a half-configured integration would fail (SMTP without a host, Razorpay without its secret, S3 without its keys). Warnings are printed to the log and shown at the top of *Admin → Error log*. The checks never run during `next build`, so build machines do not need secrets.
+The server checks its configuration at start-up (`src/lib/env-check.ts`). In every environment, including development, it **refuses to start** without `DATABASE_URL`. In production it also **refuses to start** when `APP_SECRET` is missing or shorter than 32 characters, when `APP_URL` is not `https://` (except on localhost), or when a half-configured integration would fail (SMTP without a host, Razorpay without its secret, S3 without its keys). Warnings are printed to the log and shown at the top of *Admin → Error log*. The checks never run during `next build`, so build machines do not need secrets.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -232,13 +246,12 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `SMTP_REQUIRE_TLS` | no (default `true`) | Refuses to send over an unencrypted connection to a remote server. Set `false` only for a trusted relay without TLS: password-reset links would travel in clear text. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | with Stripe | See [section 7](#7-payments-stripe-and-razorpay-webhooks). |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | with Razorpay | See section 7. |
-| `STORAGE_DRIVER`, `S3_*` | no | Object storage, see [section 9](#9-object-storage-s3--r2-and-a-cdn). |
-| `DB_DRIVER` | no | `sqlite` (default), `postgres` (PostgreSQL / Supabase, see [section 15](#15-using-supabase--postgresql)). `json` is for development only. |
-| `DATABASE_URL`, `DIRECT_URL` | with `postgres` | The app's connection (Supabase: transaction pooler, port 6543, `?pgbouncer=true&connection_limit=5`) and the one `npm run prisma:migrate` uses (session pooler or direct, port 5432). The server refuses to start with `DB_DRIVER=postgres` and no `DATABASE_URL`. |
+| `STORAGE_DRIVER`, `S3_*` | production: recommended | `local` (default: files in `UPLOAD_DIR`) or `s3` (AWS S3 bucket: `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`; `S3_ENDPOINT` empty for AWS; optional `S3_PUBLIC_BASE_URL`, `S3_FORCE_PATH_STYLE`). See [section 9](#9-object-storage-aws-s3-and-a-cdn). |
+| `DATABASE_URL`, `DIRECT_URL` | **yes** | PostgreSQL is the only database. The app's connection (Supabase: transaction pooler, port 6543, `?pgbouncer=true&connection_limit=5`) and the one `npm run db:setup` (`prisma migrate deploy`) uses (session pooler or direct, port 5432). The server refuses to start without `DATABASE_URL`, in every environment (see ENV-SETUP.md, section 3, and [section 15](#15-the-database-supabase-or-your-own-postgresql)). Older settings for a file database are no longer used: the server warns when it still finds them. |
 | `TEST_DATABASE_URL` | tests only | A throwaway PostgreSQL for `npm run test:pg`; never a real site's database. |
-| `SQLITE_PATH`, `DATA_FILE`, `UPLOAD_DIR` | without Docker | Defaults `storage/lms.sqlite`, `storage/db.json` (one-time import source; its folder also holds `seo/`), `storage/uploads`. Docker: keep the defaults (`docker-compose.yml` sets them). Without Docker: **absolute** paths outside the project, see section 3; a production server started from `.next/standalone` refuses relative ones. |
+| `STORAGE_DIR`, `UPLOAD_DIR` | without Docker | Defaults `storage` (backups as JSON exports in `backups/`, SEO files in `seo/`) and `storage/uploads`. Docker: keep the defaults (`docker-compose.yml` sets them). Without Docker: **absolute** paths outside the project, see section 3; a production server started from `.next/standalone` refuses relative ones. |
 | `IMAGE_HOSTS` | no | Extra HTTPS hosts the image optimizer (`/_next/image`) may fetch from, comma-separated (`cdn.example.com,*.example.org`). `APP_URL`, `S3_PUBLIC_BASE_URL` and the S3 bucket are always allowed; every other host is refused so the optimizer cannot be used as an open proxy. Read at build time. |
-| `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP` | no | Daily automatic backup on/off (default `true`) and how many daily backups to keep (default 14, 1–3650). |
+| `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP` | no | Daily automatic backup (a JSON export of the database into `STORAGE_DIR/backups`) on/off (default `true`) and how many daily backups to keep (default 14, 1–3650). |
 | `MAX_VIDEO_UPLOAD_MB`, `MAX_FILE_UPLOAD_MB` | no | Upload limits in MB (defaults 10240, i.e. 10 GB, and 25). Video uploads are chunked and resumable, so files over 5 GB work; a reverse proxy only needs to accept one chunk per request. |
 | `UPLOAD_MIN_FREE_MB`, `UPLOAD_LEARNER_DAILY_MB` | no | Refuse uploads when the disk has less free space than this (default 1024), and the daily upload allowance of a learner account (default 500). |
 | `SESSION_DAYS`, `SESSION_COOKIE_NAME`, `COOKIE_SECURE` | no | Sign-in session length (30), cookie name, HTTPS-only cookie (on by default in production). |
@@ -250,6 +263,7 @@ The server checks its configuration at start-up (`src/lib/env-check.ts`). In pro
 | `TZ` | no | Server time zone, used for dates printed on certificates (e.g. `Asia/Kolkata`). |
 | `APP_VERSION` | no | Shown by `/api/health` (the Docker build passes it through). |
 | `DOMAIN`, `ACME_EMAIL`, `CRON_KEY`, `POSTGRES_PASSWORD` | Docker only | Read by `docker-compose.yml` for Caddy, the cron service and the optional `postgres` service, not by the app. |
+| `MIGRATE_ON_START` | Docker only | `false` stops the container from running `prisma migrate deploy` before the server starts (default: it runs on every start). |
 
 Development only, ignored in production: `LL_DEV_LOGIN` (test sign-in route; the server warns when it is set, so remove it), `WEBHOOKS_ALLOW_PRIVATE_NETWORK` (outgoing webhooks to localhost) and `DEBUG` (stack traces from the `npm run db:*` scripts). `.env.example` lists every variable with a one-line comment.
 
@@ -280,17 +294,20 @@ On Windows use the Task Scheduler with `curl.exe` and the same URLs. Changing `A
 
 ## 6. Backups and restores
 
-> With `DB_DRIVER=postgres` the backups described here are JSON exports and the `db:backup`/`db:restore`/`db:export` scripts refuse to run; see [section 15](#15-using-supabase--postgresql).
+There are two kinds of database backups, and a live site should use both:
 
-The app makes an automatic backup on the first request of each day and keeps the newest 14 (*Admin → Settings → Backup & restore* lists them, makes manual backups and downloads them). Backups are SQLite snapshots in the `backups/` folder next to the database (`/app/storage/backups/` in Docker, `/opt/learnloop/storage/backups/` in the section 3 layout), taken safely while the app runs.
+- **Supabase's own backups** of the PostgreSQL database (*Database → Backups* in the Supabase dashboard). On the Pro plan they are made daily and kept for 7 days, and point-in-time recovery is a paid add-on. The Free plan does not include automatic backups, so on that plan the app's own backups below are your only copy. With your own PostgreSQL server (section 15) you look after its backups yourself (for example `pg_dump` against `DIRECT_URL`).
+- **The app's backups**: JSON exports of every record and the settings. The app makes one automatically on the first request of each day and keeps the newest 14 (`DB_AUTO_BACKUP`, `DB_BACKUP_KEEP`); *Admin → Settings → Backup & restore* (`/admin/settings/data`) lists them, makes manual backups, downloads them, accepts an uploaded JSON export and restores any of them. They are written to the `backups/` folder inside `STORAGE_DIR` (`/app/storage/backups/` in Docker, `/opt/learnloop/storage/backups/` in the section 3 layout), safely while the app runs. `npm run db:backup` makes the same export from the command line.
 
-The data folder must be writable by the app and persisted together with the database: besides the database and uploads it holds `seo/` (the IndexNow key and generated SEO files) and `backups/`.
+The data folder (`STORAGE_DIR`) must be writable by the app and survive restarts and redeploys: besides `backups/` it holds `seo/` (the IndexNow key and generated SEO files) and, with local storage, the uploads.
 
-**Uploads are not inside the database backup.** Back up the whole data folder (the `learnloop_storage` volume, or `/opt/learnloop/storage`), or use object storage (section 9) for uploads.
+**Uploads are not inside the database backup.** With AWS S3 (section 9) the files are in the bucket; otherwise back up the uploads folder (`UPLOAD_DIR`) together with the backups.
+
+The exports contain password hashes, sessions and payment records: keep downloaded copies somewhere safe.
 
 ### Nightly backup with an off-site copy
 
-A backup on the same disk does not survive a lost server. Copy it elsewhere every night, for example with [rclone](https://rclone.org) to S3, R2, Backblaze B2 or Google Drive:
+A backup on the app server's disk does not survive a lost server. Copy it elsewhere every night, for example with [rclone](https://rclone.org) to S3, Backblaze B2 or Google Drive (use a different bucket from the uploads bucket):
 
 ```sh
 # /etc/cron.d/learnloop-backup  (Docker)
@@ -299,21 +316,23 @@ A backup on the same disk does not survive a lost server. Copy it elsewhere ever
      sync /data remote:learnloop-backups/storage --exclude "hls/**"
 ```
 
-Without Docker (data in `/opt/learnloop/storage`, section 3): `cd /opt/learnloop/app && node scripts/db-backup.mjs --auto && rclone sync /opt/learnloop/storage remote:learnloop-backups/storage --exclude "hls/**"`. Check once that the folder you copy really holds `lms.sqlite` and `backups/`. Keep at least 30 days of copies (enable bucket versioning or lifecycle rules) and encrypt them (`rclone crypt`): they contain personal data.
+Without Docker (files in `/opt/learnloop/storage`, section 3): `cd /opt/learnloop/app && npm run db:backup -- --auto && rclone sync /opt/learnloop/storage remote:learnloop-backups/storage --exclude "hls/**"`. `--auto` makes today's automatic backup only when it does not exist yet, so it is safe to run from cron even on busy days. Check once that the folder you copy really holds `backups/` with `.json` files. Keep at least 30 days of copies (enable bucket versioning or lifecycle rules) and encrypt them (`rclone crypt`): they contain personal data.
 
 ### Restoring
 
-Test a restore before launch and then a few times a year:
+Test a restore before launch and then a few times a year. The easiest way is *Admin → Settings → Backup & restore*: choose a backup (or upload a JSON export) and restore it. From the command line:
 
 ```sh
 docker compose exec app node scripts/db-backup.mjs --list          # what is there
 docker compose stop app
 docker compose run --rm --no-deps app node scripts/db-restore.mjs latest --dry-run
-docker compose run --rm --no-deps app node scripts/db-restore.mjs <backup name or path> --yes
+docker compose run --rm --no-deps app node scripts/db-restore.mjs <backup name or path> --force --yes
 docker compose start app
 ```
 
-A restore first saves the current data as a "safety" backup, so it can itself be undone. Without Docker the same commands are `npm run db:backup -- --list` and `npm run db:restore -- <backup>`. To move to a new server, copy the whole data folder (with the app stopped) and the same `.env` (the same `APP_SECRET`, or 2FA and signed links stop working).
+A restore replaces everything in the database (`DATABASE_URL`) in one transaction and checks the record counts before it commits. A database that already holds data, which is always the case on a live site, is only replaced with `--force`; the current data is then first saved as a "safety" backup, so the restore can itself be undone. Without Docker the same commands are `npm run db:backup -- --list` and `npm run db:restore -- <backup> --force`. To restore a Supabase backup instead, use *Database → Backups* in the Supabase dashboard and restart the app afterwards.
+
+To move to a new server, point the new server at the same database (the same `DATABASE_URL` and `DIRECT_URL`), copy the data folder (backups, and the uploads when they are not in S3) and use the same `.env` (the same `APP_SECRET`, or 2FA and signed links stop working).
 
 ## 7. Payments: Stripe and Razorpay webhooks
 
@@ -360,27 +379,131 @@ MAIL_FROM="Acme Academy <no-reply@acme.example>"
 
 Many VPS providers block outgoing port 25; ports 587 and 465 are usually open (some ask you to request it).
 
-## 9. Object storage (S3 / R2) and a CDN
+## 9. Object storage (AWS S3) and a CDN
 
-By default uploads are stored on the server's disk. For large video libraries use S3-compatible storage; protected lesson videos keep working because the app signs every request.
+By default uploads are stored on the server's disk (`STORAGE_DRIVER=local`, folder `UPLOAD_DIR`), which is right for development. For a live school the chosen storage is an **AWS S3** bucket: videos and their converted versions grow quickly, and a bucket does not fill up the server's disk. Cloudflare R2, Backblaze B2, MinIO and other S3-compatible services also work (set `S3_ENDPOINT`, see the end of this section), but AWS S3 is the documented path.
+
+**How the app uses the bucket.** The browser never talks to the bucket. Uploads go from the browser to the app, which sends them on to S3 (large files in parts). Videos, images and documents are read from S3 by the app and passed on to the viewer; protected lesson videos keep working because the app checks and signs every request. The only signed links to the bucket itself are used by the server: by ffmpeg to read a video while converting it, and by **Test connection**.
+
+### AWS Free Tier: what it covers (checked October 2026)
+
+AWS changed its free tier on **15 July 2025**. Which rules apply depends on when your AWS account was created:
+
+- **Accounts created on or after 15 July 2025** get USD 100 in credits at sign-up and can earn up to USD 100 more by completing activities in the console. At sign-up you choose a plan:
+  - **Free plan**: you are never charged, but only some services are available, and the plan ends after **6 months or when the credits are used up, whichever comes first**. The account is then closed: you lose access to the bucket and the files in it. AWS keeps the data for 90 days; upgrading to the Paid plan within those 90 days reopens the account, otherwise AWS deletes the account and everything in it. A live school must therefore **upgrade to the Paid plan before the 6 months end** (Billing and Cost Management → **Upgrade plan**); leftover credits carry over.
+  - **Paid plan**: all services; the credits pay the bills first, and anything beyond the credits (or after they expire, 12 months after the account was created) is charged at normal pay-as-you-go prices.
+- **Accounts created before 15 July 2025** have the older ("legacy") free tier: 12 months from the day the account was opened, including **5 GB of S3 Standard storage** per month (AWS's older terms also listed 20,000 GET and 2,000 PUT requests per month). After the 12 months you pay normal pay-as-you-go prices. Since every such account is older than 15 July 2025, this 12-month period has already ended for all of them, so these accounts now pay normal S3 prices.
+- **For everyone**: the first **100 GB of data transfer out to the internet each month** is free, added up across all AWS services and regions.
+
+Sources: [AWS Free Tier plans](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html), [AWS Free Tier FAQs](https://aws.amazon.com/free/free-tier-faqs/), [Legacy Free Tier FAQs](https://aws.amazon.com/free/legacy/free-tier-faqs), [S3 pricing](https://aws.amazon.com/s3/pricing/). AWS changes these terms from time to time: check the pages before you sign up.
+
+### Setting up AWS S3, step by step
+
+**Step 1: create the AWS account.** Go to [aws.amazon.com/free](https://aws.amazon.com/free) → **Create free account**, and choose the **Free plan** or the **Paid plan** (see above). A card is needed either way. Then, signed in as the account owner ("root user"), open the account menu (your name, top right) → **Security credentials** → **Assign MFA device** and add an authenticator app. Use the root user only for billing and account settings.
+
+**Step 2: set a budget alert first ($1 a month).** Before creating anything that can cost money:
+
+1. In the search box at the top of the console, open **Billing and Cost Management** → **Budgets** → **Create budget**.
+2. Choose **Use a template (simplified)** → **Monthly cost budget**.
+3. Name it `learnloop-monthly`, set the **budgeted amount** to `1` (USD) and enter your email address.
+4. **Create budget.** AWS emails you when the month's costs reach the alert thresholds of the template (part of the amount, the full amount, and when the forecast says you will go over).
+
+Also look at **Billing and Cost Management → Free Tier** (and **Credits**) once a month: it shows what you have used, the credits left and, on the Free plan, when the plan ends.
+
+**Step 3: create the bucket.**
+
+1. Open **S3** and pick the region nearest your students in the region menu at the top right, for example **Asia Pacific (Mumbai) ap-south-1** for India. Use the same region as your Supabase project and app server where you can.
+2. **Create bucket**: type **General purpose**, a name that is unique across all of AWS, lowercase, with hyphens and without dots, for example `yourschool-learnloop-media`.
+3. **Object Ownership**: **ACLs disabled** (the default).
+4. **Block Public Access settings for this bucket**: keep **Block all public access** turned **on**. The app reads every file with its own keys, so nothing needs to be public.
+5. **Bucket Versioning**: **Disable** (versioning would keep paying for every deleted or replaced video).
+6. **Default encryption**: keep the default (SSE-S3).
+7. **Create bucket.**
+
+**Step 4: add a lifecycle rule for interrupted uploads.** Large uploads go to S3 in parts. The app cancels a failed upload itself, but parts left behind by a crash or a restart stay in the bucket and are billed until they are removed.
+
+1. Open the bucket → **Management** tab → **Create lifecycle rule**.
+2. Name: `abort-incomplete-uploads`. Scope: **Apply to all objects in the bucket** (tick the confirmation).
+3. Under **Lifecycle rule actions** tick **Delete expired object delete markers or incomplete multipart uploads**, then **Delete incomplete multipart uploads**, and enter `1` (1 to 3 days is fine) as the number of days.
+4. **Create rule.**
+
+**Step 5: create an IAM user that can use only this bucket.**
+
+1. Open **IAM** → **Policies** → **Create policy** → the **JSON** tab, and paste this, with your bucket name in both places:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "ListTheBucket",
+         "Effect": "Allow",
+         "Action": "s3:ListBucket",
+         "Resource": "arn:aws:s3:::yourschool-learnloop-media"
+       },
+       {
+         "Sid": "ReadWriteFilesInTheBucket",
+         "Effect": "Allow",
+         "Action": [
+           "s3:GetObject",
+           "s3:PutObject",
+           "s3:DeleteObject",
+           "s3:AbortMultipartUpload"
+         ],
+         "Resource": "arn:aws:s3:::yourschool-learnloop-media/*"
+       }
+     ]
+   }
+   ```
+
+   **Next**, name it `learnloop-media-bucket`, **Create policy**.
+
+   What each permission is for (these are exactly the operations in `src/lib/storage/s3.ts`): `s3:PutObject` uploads files, including the parts of large uploads and finishing them; `s3:GetObject` reads files and their size (playback, downloads, conversions, the signed link in the connection test); `s3:DeleteObject` removes files, one at a time or in batches (deleted lessons, unused renditions, the connection test); `s3:AbortMultipartUpload` cancels a failed large upload; `s3:ListBucket` lists the files of a folder before deleting it (and lets S3 answer "not found" instead of "access denied" for a missing file). The app never lists the parts of an upload, so `s3:ListMultipartUploadParts` is not needed.
+2. **IAM** → **Users** → **Create user**, name `learnloop-app`. Do **not** give it access to the AWS console. **Next** → **Attach policies directly** → tick `learnloop-media-bucket` → **Next** → **Create user**.
+3. Open the user → **Security credentials** → **Create access key** → choose **Application running outside AWS** → **Create access key**. Copy the **Access key** and the **Secret access key** now: AWS shows the secret only once. Keep them in your password manager, never in git or a chat.
+
+**Step 6: put the values in `.env`** and restart the app (`docker compose up -d`, or `sudo systemctl restart learnloop`):
 
 ```ini
 STORAGE_DRIVER=s3
-S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com   # empty for AWS S3
-S3_REGION=auto                                               # e.g. eu-central-1 for AWS
-S3_BUCKET=learnloop-media
-S3_ACCESS_KEY_ID=...
+S3_REGION=ap-south-1
+S3_BUCKET=yourschool-learnloop-media
+S3_ACCESS_KEY_ID=AKIA...
 S3_SECRET_ACCESS_KEY=...
-S3_PUBLIC_BASE_URL=https://media.example.com                 # optional CDN / public bucket domain
-S3_FORCE_PATH_STYLE=false                                    # true for MinIO
+S3_ENDPOINT=
+S3_PUBLIC_BASE_URL=
+S3_FORCE_PATH_STYLE=
 ```
 
-- **Cloudflare R2**: create a bucket and an API token with *Object Read & Write*, then connect a custom domain to the bucket for `S3_PUBLIC_BASE_URL` (Cloudflare caches it). No egress fees, which matters for video.
-- **AWS S3 + CloudFront**: keep the bucket private, give CloudFront access through Origin Access Control, and use the CloudFront domain as `S3_PUBLIC_BASE_URL`.
-- Allow `GET` and `HEAD` from your `APP_URL` origin in the bucket's (and the CDN's) CORS rules, and expose the `Content-Range`, `Content-Length` and `Accept-Ranges` headers. Video players request byte ranges, and when `S3_PUBLIC_BASE_URL` is set, unprotected HLS playlists and segments are redirected there and fetched by the player's streaming engine with `fetch()`, so a missing CORS rule stops those videos from playing.
-- Add a bucket lifecycle rule that **aborts incomplete multipart uploads after 1 day**. Large uploads are sent to the bucket in parts; a part upload interrupted by a crash or a cancelled upload otherwise keeps (billed) storage forever.
-- `S3_PUBLIC_BASE_URL` must be `https://` or browsers block the media.
-- Existing local files are moved to the bucket by `/api/cron/media` in the background.
+- `S3_ENDPOINT` stays **empty** for AWS: the app then uses `s3.<region>.amazonaws.com`.
+- Always set `S3_REGION` to the bucket's region. Empty (or `auto`) means `us-east-1` for AWS, and a bucket in Mumbai then answers with an error that names the right value ("Set S3_REGION=ap-south-1").
+- Leave `S3_PUBLIC_BASE_URL` empty with a private bucket (see "A CDN" below).
+- In production the server refuses to start when `STORAGE_DRIVER=s3` is set but `S3_BUCKET`, `S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` is missing.
+
+**Step 7: test it.** Sign in as an administrator and open *Admin → Settings → Storage & video* (`/admin/settings/storage`). The **File storage** card should show Provider *Amazon S3*, your bucket and region, the access key (shortened), Secret key *Set* and Public URL *None: every file is served through this server*. Click **Test connection**: it writes a small file, reads it back, fetches it through a signed link and deletes it, and each of the four steps should be green. Typical errors: *AccessDenied* (the bucket name in the policy does not match `S3_BUCKET`), *InvalidAccessKeyId* or *SignatureDoesNotMatch* (a key was copied wrongly), or a message naming the bucket's real region (fix `S3_REGION`).
+
+**Step 8: move files uploaded earlier.** Files that were uploaded before the bucket was set up are listed on the same page under **Files still on this server**. `/api/cron/media` moves them to the bucket over time; **Move to bucket** moves a batch at once.
+
+**CORS is not needed** in this setup, because the browser never loads anything from the bucket directly. You only need CORS rules if you add a CDN (below).
+
+### Costs to watch
+
+- **Storage grows fast with video.** Every lesson video is kept as uploaded, and the conversion adds one copy per quality chosen under *Admin → Settings → Storage & video → Qualities to produce* (only qualities at or below the uploaded resolution are made). A library therefore takes noticeably more space than the files you uploaded. Fewer qualities means less storage. S3 Standard storage is charged per GB per month; see the [S3 pricing page](https://aws.amazon.com/s3/pricing/) for your region.
+- **Watching videos is mostly data transfer out of S3.** Protected videos (and, without a CDN, every file) are streamed through the app server: each time a student watches, the video leaves S3 towards your server, and AWS counts that as data transfer out to the internet when the server is not inside AWS. The first 100 GB a month are free, then it is charged per GB. As a rough guide, the HD (720p) version is limited to about 2.8 Mbit/s, so an hour of watching moves at most about 1.3 GB. Your server's provider also counts the same traffic towards the server's bandwidth.
+- **Requests** (uploads, reads, deletes) are charged per thousand; for a school they are small next to storage and transfer.
+- Keep the $1 budget alert. When it fires, look at **Billing and Cost Management → Bills** to see which item grew, and raise the budget to what you expect to pay.
+
+### A CDN (optional)
+
+`S3_PUBLIC_BASE_URL` (or the CDN base URL in *Admin → Settings → Storage & video*) sends files that are **not** protected (images, documents, and videos when *Admin → Settings → Video → Protect uploaded videos* is off) straight from that address with a redirect, which saves the app server's bandwidth. With a private AWS bucket, this needs **CloudFront**: give CloudFront access to the bucket through Origin Access Control and use the CloudFront domain as `S3_PUBLIC_BASE_URL`. Never point it at the private bucket's own address: the redirected files would fail with "access denied". Then:
+
+- `S3_PUBLIC_BASE_URL` must be `https://`, or browsers block the media.
+- Allow `GET` and `HEAD` from your `APP_URL` origin in the CDN's (and bucket's) CORS rules, and expose the `Content-Range`, `Content-Length` and `Accept-Ranges` headers. Unprotected HLS playlists and segments are then fetched from the CDN by the player with `fetch()`, so a missing CORS rule stops those videos from playing.
+- CloudFront has its own pricing and free allowance; add it to your budget.
+
+### Other S3-compatible services
+
+Set `S3_ENDPOINT` to the service's address and `S3_REGION` as the service says: for **Cloudflare R2** `S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com` and `S3_REGION=auto`, with an R2 API token with *Object Read & Write* for the bucket (R2 charges no egress fees); for **MinIO** also `S3_FORCE_PATH_STYLE=true`. Add the same lifecycle rule for incomplete multipart uploads where the service supports it.
 
 Put the whole site behind a CDN (for example Cloudflare's proxy) only with `TRUST_PROXY_HOPS` increased by one, and do not cache HTML (`/_next/static/*` and `/images/*` are safe to cache; Next sends long-lived headers for them).
 
@@ -404,13 +527,15 @@ Check with `ffmpeg -version`. Conversion is CPU-bound; on a 2-vCPU server a one-
 
 ## 12. Upgrading
 
-1. Make a backup (*Admin → Settings → Backup & restore*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`; without Docker, `cd /opt/learnloop/app && npm run db:backup -- --note "before upgrade"`, which writes to the backups folder next to the absolute `SQLITE_PATH`).
+1. Make a backup (*Admin → Settings → Backup & restore*, or `docker compose exec app node scripts/db-backup.mjs --note "before upgrade"`; without Docker, `cd /opt/learnloop/app && npm run db:backup -- --note "before upgrade"`, which writes a JSON export into the `backups/` folder of `STORAGE_DIR`). With Supabase on a paid plan its daily backup is a second safety net.
 2. Get the new code: `git pull`.
 3. Rebuild and restart:
-   - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space).
-   - systemd/pm2: `npm ci && npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`. The build replaces `.next/` completely, which is why the data must live outside it (section 3); if `.next/standalone/storage/` exists, move it out first as described there.
-4. SQLite database changes are applied automatically when the server starts. With `DB_DRIVER=postgres`, run `npm run prisma:migrate` before restarting (section 15); the server refuses to start while tables are missing. Check `/api/health` and *Admin → Error log*.
+   - Docker: `docker compose up -d --build` (set `APP_VERSION` in `.env` to tag the image; `docker image prune` afterwards frees space). The container applies new database migrations (`prisma migrate deploy`) before the server starts.
+   - systemd/pm2: `npm ci`, then `npm run db:setup` (applies new database migrations), then `npm run build`, copy `public/` and `.next/static/` into `.next/standalone/` again, then `sudo systemctl restart learnloop` or `pm2 restart learnloop`. The build replaces `.next/` completely, which is why the files must live outside it (section 3); if `.next/standalone/storage/` exists, move it out first as described there.
+4. Check `/api/health` and *Admin → Error log*.
 5. Run **Recalculate points** once after upgrading: *Admin → Settings → Points & leaderboard* (`/admin/settings/gamification`) → **Recalculate points from history** → **Recalculate**. It rescores existing lessons, quizzes and certificates with the current rules, so points and leaderboards stay correct when a release changed gamification. It is safe to run again.
+
+**Upgrading from a version that used SQLite or `db.json`:** follow "Moving an existing site from an older version" in [section 15](#15-the-database-supabase-or-your-own-postgresql) before starting the new version.
 
 **Service worker version.** Whenever `public/sw.js` changes, bump its `VERSION` constant (for example `1.0.1` → `1.0.2`) in the same release. Installed apps only pick up a new service worker, and drop old cached pages, when that value changes.
 
@@ -426,10 +551,12 @@ Do this once the site is live on its final `https://` address (canonical URLs an
 ## 14. Pre-launch checklist
 
 - [ ] Legal pages (privacy policy, terms, refund policy, cookie policy) reviewed with a lawyer, edited and published (*Admin → Settings → Legal pages*; the "Template" banner disappears once edited). Cookie banner enabled if you use analytics or marketing pixels.
-- [ ] `APP_SECRET` set to a long random value and stored somewhere safe (a password manager), together with the rest of `.env`.
+- [ ] `APP_SECRET` set to a long random value and stored somewhere safe (a password manager), together with the rest of `.env` (including the database password and the S3 keys).
 - [ ] `APP_URL` is the final `https://` address; `TRUST_PROXY_HOPS` matches the number of proxies.
+- [ ] `DATABASE_URL` and `DIRECT_URL` point at the live database (Supabase in the region near your students, on a plan with backups), and *Admin → Settings → Backup & restore* shows *PostgreSQL*.
 - [ ] `SEED_DEMO_DATA=false`, and the demo accounts and demo content removed: start from a fresh database, or in *Admin → Members* search for `learnloop.test` and delete or disable every demo account (`admin`, `maya`, `daniel`, `priya`, `alex`, `sofia`, `liam`, `emma`), whose password `password123` is public.
 - [ ] Administrator password changed and two-factor authentication turned on for every administrator.
+- [ ] Uploads: `STORAGE_DRIVER=s3` with the AWS bucket (section 9), **Test connection** green in *Admin → Settings → Storage & video*, the lifecycle rule for incomplete uploads added, and the $1 AWS budget alert set up. On the AWS Free plan: a reminder to upgrade to the Paid plan before the 6 months end.
 - [ ] Test purchase made with live keys (and refunded); the order, receipt email and enrolment all appeared; Stripe/Razorpay webhooks show successful deliveries.
 - [ ] Test email sent from *Admin → Settings → Email* and received (check the spam folder and SPF/DKIM results); password reset tried end to end.
 - [ ] Backup restore tested on a copy (section 6), and the nightly off-site copy is running.
@@ -439,45 +566,69 @@ Do this once the site is live on its final `https://` address (canonical URLs an
 - [ ] Google Search Console property verified, `https://learn.example.com/sitemap.xml` submitted, and the site checked in the URL inspection tool (section 13).
 - [ ] Ran **Recalculate points** once if you upgraded an existing database (section 12).
 
-## 15. Using Supabase / PostgreSQL
+## 15. The database: Supabase or your own PostgreSQL
 
-SQLite on the app server's disk stays the default and needs nothing else. Set `DB_DRIVER=postgres` to keep the records in PostgreSQL instead, for example a [Supabase](https://supabase.com) project (any PostgreSQL 13 or newer works). The app works exactly the same: it still loads every record into memory at start-up and writes only what changed, one transaction per save, so it still runs as **one** server process (no second replica or serverless instance on the same database). Uploads, video renditions and backups remain files in the data folder (or object storage, section 9).
+PostgreSQL is the app's only database, reached through Prisma. The app loads every record into memory at start-up and writes only what changed, one transaction per save, so it runs as **one** server process (no second replica or serverless instance on the same database). Uploads, video renditions and backups are files, not database rows (data folder or S3, sections 6 and 9).
 
-**1. Create the database.** In Supabase create a project and note the database password. Under *Project Settings → Database → Connection string* (or the **Connect** button) copy two URLs:
+The schema is generated from the store's collections (`npm run prisma:schema`, see `prisma/schema.prisma`): one table per collection with the record as `jsonb`, its position, and indexed `user_id`/`course_id`/`lesson_id`/`slug`/`email` columns where the record has them. The migrations are in `prisma/migrations`.
 
-- the **transaction pooler** URL (port **6543**) for the app: add `?pgbouncer=true&connection_limit=5` (Prisma needs `pgbouncer=true` behind this pooler);
-- the **session pooler** URL (port **5432**) or the direct connection for schema changes.
+### Supabase (recommended)
+
+**1. Create the project.** At [supabase.com](https://supabase.com) click **New project**, choose a name, a **database password** (save it in your password manager) and the region closest to your app server and students (for India **Mumbai / ap-south-1**).
+
+**2. Copy the two connection strings.** Click **Connect** at the top of the project (or *Project Settings → Database → Connection string*) and copy:
+
+- the **transaction pooler** URL (port **6543**) as `DATABASE_URL`, for the app, with `?pgbouncer=true&connection_limit=5` at the end (Prisma needs `pgbouncer=true` behind this pooler);
+- the **session pooler** URL (port **5432**) or the direct connection as `DIRECT_URL`, for creating and updating the tables.
 
 ```sh
-DB_DRIVER=postgres
 DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=5
 DIRECT_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
 ```
 
-A self-hosted PostgreSQL without a pooler uses the same URL for both (`postgresql://user:password@host:5432/learnloop`). Without a hosted database, `docker compose --profile postgres up -d` starts PostgreSQL 16 next to the app (user and database `learnloop`, password `POSTGRES_PASSWORD` from `.env`, port 5432 on 127.0.0.1 only; inside Compose the host name is `postgres`, see `docker-compose.yml`).
+Replace `<password>` with the database password; characters such as `@ # / ? %` must be written as URL codes (`@` → `%40`, `#` → `%23`, `/` → `%2F`).
 
-**2. Create the tables** from a checkout of the app (`npm install` also runs `prisma generate`), with `DATABASE_URL` and `DIRECT_URL` set in `.env` or the shell:
-
-```sh
-npm run prisma:migrate          # prisma migrate deploy: applies prisma/migrations
-```
-
-Run it again after every upgrade that ships a new migration (section 12). The schema is generated from the store's collections (`npm run prisma:schema`, see `prisma/schema.prisma`): one table per collection with the document as `jsonb`, its array position, and indexed `user_id`/`course_id`/`lesson_id`/`slug`/`email` columns where the record has them.
-
-**3. Copy the data.** Either let the app do it on first start (an empty PostgreSQL database is filled from `SQLITE_PATH` when that file exists, else from `DATA_FILE`, else with the starting data), or copy it yourself, with the app stopped, and check the result:
+**3. Create the tables.** With Docker nothing is needed: the container runs `prisma migrate deploy` on every start. Without Docker, from the app folder (`npm ci` also runs `prisma generate`), with both URLs in `.env`:
 
 ```sh
-npm run db:to-postgres -- --dry-run            # what would be copied
-npm run db:to-postgres                         # storage/lms.sqlite (SQLITE_PATH) → DATABASE_URL
-npm run db:to-postgres -- export.json          # or a JSON export / .sqlite backup
+npm run db:setup          # prisma migrate deploy: applies prisma/migrations
 ```
 
-The copy runs in one transaction, compares the number of records per collection before it commits, and refuses a database that already holds data unless you add `--force`. The SQLite file is only read, never changed or deleted.
+Run it again after every upgrade (section 12). Without the tables the app cannot open the database: pages fail and the log says which tables are missing and to run `npm run db:setup`.
 
-**4. Switch.** Set `DB_DRIVER=postgres` and `DATABASE_URL` (Docker: in `.env`) and restart. *Admin → Settings → Backup & restore* shows *PostgreSQL*, the server version and the database size; `/api/health` checks the connection on every probe.
+**4. Start the app.** The first start fills an empty database: with your administrator (`ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`) when `SEED_DEMO_DATA=false`, or with the demo courses and accounts when it is `true`. *Admin → Settings → Backup & restore* then shows *PostgreSQL*, the server version, the database (without user name and password) and its size; `/api/health` checks the connection on every probe.
 
-**Backups.** Supabase backs the database up daily (point-in-time recovery on paid plans) under *Database → Backups*. The app's own backups (daily automatic, manual, before every restore) are JSON exports of all records in the backups folder next to `SQLITE_PATH`; download them from the admin page or copy that folder off the server as in section 6. Restores from the admin page work as with SQLite (a JSON export or a `.sqlite` backup replaces everything in one transaction). `pg_dump` against `DIRECT_URL` works too, but is not needed by the app.
+**Supabase plans.** The Free plan has a 500 MB database, no automatic backups, and pauses a project after a week without activity; a live school should be on the Pro plan (daily backups kept 7 days, 8 GB database disk included). Check [supabase.com/pricing](https://supabase.com/pricing) for the current terms. Whatever the plan, keep the app's JSON backups and copy them off the server (section 6).
 
-**Rolling back to SQLite.** Download a JSON export (*Backup & restore → Download → JSON*), stop the app, set `DB_DRIVER=sqlite`, run `npm run db:restore -- <export.json>` (it creates the SQLite database from the export, or replaces an old `lms.sqlite` after saving it as a safety backup; without this step the app would reopen the old SQLite data) and start the app. The PostgreSQL data is left as it was, so you can switch back again with `npm run db:to-postgres -- --force`.
+### A local PostgreSQL in Docker (without Supabase)
 
-**Notes.** The app logs a warning when `DATABASE_URL` uses port 6543 without `pgbouncer=true`, or when `DIRECT_URL` is missing. PostgreSQL cannot store the NUL character (`\u0000`) in text, so it is saved as `U+FFFD`, and `jsonb` does not keep the order of keys inside a record (the app never relies on it). Integration tests run against a throwaway server: `TEST_DATABASE_URL=postgresql://postgres:test@localhost:54329/postgres npm run test:pg` (each run uses temporary `test_*` schemas and drops them).
+`docker-compose.yml` has an optional PostgreSQL 16 service for people who do not want a hosted database. It runs on the same server, listens on 127.0.0.1:5432 only, and keeps its data in the `postgres` volume.
+
+1. Add to `.env` (choose a long password):
+
+   ```sh
+   POSTGRES_PASSWORD=<a long random password>
+   DATABASE_URL=postgresql://learnloop:<the same password>@postgres:5432/learnloop
+   DIRECT_URL=postgresql://learnloop:<the same password>@postgres:5432/learnloop
+   ```
+
+   Inside Compose the host name is `postgres`. For `npm run db:*` commands run on the server itself (outside the containers), use `localhost:5432` instead.
+2. Start it together with the app: `docker compose --profile postgres up -d --build` (add `--profile cron` for the scheduler). The app creates the tables on start.
+3. Back it up yourself: the app's daily JSON exports (section 6) plus, if you like, `docker compose exec postgres pg_dump -U learnloop learnloop > learnloop.sql`. Copy both off the server. Never run `docker compose down -v`: it deletes the `postgres` volume with the database.
+
+Any other PostgreSQL 13 or newer works too: set `DATABASE_URL` and `DIRECT_URL` to the same `postgresql://user:password@host:5432/database` URL when there is no pooler.
+
+### Moving an existing site from an older version
+
+Older versions kept the records in a SQLite file (`storage/lms.sqlite`) or a JSON file (`storage/db.json`). They are no longer read by the app; copy them into PostgreSQL once, with the old app stopped:
+
+```sh
+npm run db:setup                               # create the tables first
+npm run db:to-postgres -- --dry-run            # check the source and the target, write nothing
+npm run db:to-postgres                         # storage/lms.sqlite, else storage/db.json, else the newest storage/db.json.migrated-*
+npm run db:to-postgres -- path/to/old.sqlite   # or any other old .sqlite file, .sqlite backup or JSON export
+```
+
+The copy runs in one transaction, compares the number of records per collection before it commits, and refuses a database that already holds data unless you add `--force`. The old file is only read, never changed or deleted. Then remove `DB_DRIVER`, `SQLITE_PATH` and `DATA_FILE` from `.env` (the server warns that they are no longer used), set `STORAGE_DIR` if your files were in another folder, and start the new version.
+
+**Notes.** The app logs a warning when `DATABASE_URL` uses port 6543 without `pgbouncer=true`, or when `DIRECT_URL` is missing. PostgreSQL cannot store the NUL character (`\u0000`) in text, so it is saved as `U+FFFD`, and `jsonb` does not keep the order of keys inside a record (the app never relies on it). `npm test` needs no database (it uses an in-memory test store); the PostgreSQL integration tests run against a throwaway server: `TEST_DATABASE_URL=postgresql://postgres:test@localhost:54329/postgres npm run test:pg` (each run uses temporary `test_*` schemas and drops them; never point it at a real site's database).

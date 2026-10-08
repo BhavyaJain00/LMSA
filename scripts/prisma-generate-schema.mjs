@@ -19,7 +19,7 @@
  *
  * Adding a collection: add its type to `Database`, its name to
  * `COLLECTIONS`, run `npm run prisma:schema -- --name add_<collection>`,
- * commit the three outputs and run `npm run prisma:migrate` on deploy.
+ * commit the three outputs and run `npm run db:setup` on deploy.
  */
 import fs from "node:fs";
 import os from "node:os";

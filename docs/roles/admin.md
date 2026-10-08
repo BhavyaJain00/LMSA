@@ -2,7 +2,7 @@
 
 This is the manual for the people who run a LearnLoop site: **administrators** (role `admin`) and **moderators** (role `moderator`). It explains how to install and set up the platform, manage members, configure every settings page, take payments, run marketing and email, keep the system healthy and go live.
 
-> **Status.** Features from rounds 1 and 2 were tested page by page in a browser. Round 3 features (marked **(Round 3)** in this handbook: the SQLite database, membership plans, bundles, installments, gifts, upsells, taxes and currencies, abandoned checkouts, teams, affiliates, the instructor marketplace, analytics, direct messages, the AI tutor, the blog, leads, broadcasts and sequences, the developer API and webhooks, data requests and more) are **built and covered by automated tests; not yet tried in a browser.**
+> **Status.** Features from rounds 1 and 2 were tested page by page in a browser. Round 3 features (marked **(Round 3)** in this handbook: the PostgreSQL (Supabase) database, membership plans, bundles, installments, gifts, upsells, taxes and currencies, abandoned checkouts, teams, affiliates, the instructor marketplace, analytics, direct messages, the AI tutor, the blog, leads, broadcasts and sequences, the developer API and webhooks, data requests and more) are **built and covered by automated tests; not yet tried in a browser.**
 
 **Other handbooks.** Building courses, batches, programs, quizzes, assignments, grading and certificates is in the [Instructor handbook](instructor.md); evaluations and certificates in the [Evaluator handbook](evaluator.md); what learners see in the [Student handbook](student.md). This handbook links there instead of repeating those tasks. Admins and moderators can do everything described in those handbooks, for every course and batch.
 
@@ -299,7 +299,7 @@ This chapter is for moderators, and for admins deciding whether to give someone 
 
 ## 6. Install and start the platform
 
-**What it is.** LearnLoop is one Next.js web application with its own database (SQLite, built into Node.js). There is no separate database server. You run it on your computer to try it out, or on a server for real use (chapter 55).
+**What it is.** LearnLoop is one Next.js web application that keeps its records in a **PostgreSQL** database, normally a free or paid [Supabase](https://supabase.com) project (Supabase runs the database server for you). There is no other database: the app does not start without one. You run the app on your computer to try it out, or on a server for real use (chapter 55, and [DEPLOYMENT.md](../../DEPLOYMENT.md)).
 
 **Who does it.** The site owner or a developer with access to the project folder (`C:/Users/pc/Desktop/ll/lms` on the owner's machine).
 
@@ -309,7 +309,8 @@ This chapter is for moderators, and for admins deciding whether to give someone 
 
 | You need | Why | Notes |
 |---|---|---|
-| **Node.js 22.13 or newer** (Node.js 24 recommended) | The app runs on Node.js and the database uses Node's built-in `node:sqlite` | Older versions stop with "SQLite storage needs Node.js 22.13 or newer". Check with `node --version`. The Docker image uses Node 24. |
+| **Node.js 24** | The app runs on Node.js | Check with `node --version`. The Docker image uses Node 24. |
+| **A PostgreSQL database** | Every record is stored there | A Supabase project (ENV-SETUP.md, section 3). Without Supabase, any PostgreSQL 13 or newer, for example the local one in `docker-compose.yml`. |
 | npm | Installs the packages | Comes with Node.js |
 | A modern browser | To use the site | Chrome, Edge, Firefox or Safari |
 | ffmpeg and ffprobe (optional) | Converts uploaded videos to adaptive streaming and makes thumbnails | Without them, videos play as uploaded. Set `FFMPEG_PATH` / `FFPROBE_PATH` if they are not on your PATH. |
@@ -321,10 +322,12 @@ This chapter is for moderators, and for admins deciding whether to give someone 
 3. Create your settings file from the template:
    - Git Bash, macOS, Linux: `cp .env.example .env`
    - Windows Command Prompt or PowerShell: `copy .env.example .env`
-4. Decide between the demo site and an empty site (chapter 7). For a first try, leave `.env` as it is: you get the demo site.
-5. Start the development server: `npm run dev`. On the very first start the terminal also shows `[store] created a new SQLite database at …`.
-6. Open `http://localhost:3000`, click **Log in** and sign in as `admin@learnloop.test` with `password123` (demo site) or with your own `ADMIN_EMAIL` and `ADMIN_PASSWORD` (empty site).
-7. Stop the server with `Ctrl + C`. Your data stays in the `storage/` folder.
+4. Connect the database: create a Supabase project, click **Connect**, and paste the two connection strings into `.env` as `DATABASE_URL` (port 6543, ending in `?pgbouncer=true&connection_limit=5`) and `DIRECT_URL` (port 5432). [ENV-SETUP.md](../../ENV-SETUP.md), section 3, shows each click.
+5. Create the tables: `npm run db:setup` (again after every code update).
+6. Decide between the demo site and an empty site (chapter 7). For a first try, leave the other values as they are: you get the demo site.
+7. Start the development server: `npm run dev`. On the very first start the terminal also shows `[store] filled the new database at …`. Without `DATABASE_URL` the server stops with a message that points to ENV-SETUP.md.
+8. Open `http://localhost:3000`, click **Log in** and sign in as `admin@learnloop.test` with `password123` (demo site) or with your own `ADMIN_EMAIL` and `ADMIN_PASSWORD` (empty site).
+9. Stop the server with `Ctrl + C`. Your records stay in the database; uploads and backups stay in the `storage/` folder.
 
 ### Useful commands
 
@@ -332,26 +335,28 @@ This chapter is for moderators, and for admins deciding whether to give someone 
 |---|---|
 | `npm run dev` | Development server that reloads when code changes |
 | `npm run build`, then `npm run start` | Production build and server (needed to try the installable app; requires `APP_SECRET` and an `https://` `APP_URL` unless the address is local) |
-| `npm run db:backup` | Makes a database backup now (chapter 38) |
-| `npm run db:restore -- <backup>` | Restores a backup (stop the app first when you can) |
+| `npm run db:setup` | Creates or updates the database tables (after every code update) |
+| `npm run db:backup` | Makes a database backup now, as a JSON export (chapter 38) |
+| `npm run db:restore -- <backup> --force` | Restores a backup over a database that holds data (a safety backup is made first) |
 | `npm run db:export` | Exports the whole database as JSON |
+| `npm run db:to-postgres` | Copies an older version's `storage/lms.sqlite` or `storage/db.json` into an empty PostgreSQL database (once, when upgrading) |
 | `npm test`, `npm run lint` | Automated tests and code style checks (for developers) |
 
 ### Where your data lives
 
-Everything the platform stores is in the `storage/` folder (never committed to Git):
+The records (members, courses, progress, orders, settings) are in the PostgreSQL database named by `DATABASE_URL`. Files are in the `storage/` folder (`STORAGE_DIR`, never committed to Git):
 
 | Path | Contents |
 |---|---|
-| `storage/lms.sqlite` (plus `-wal` and `-shm`) | The database: members, courses, progress, orders, settings. Change with `SQLITE_PATH`. |
-| `storage/uploads/` | Uploaded images, documents, videos and their converted versions. Change with `UPLOAD_DIR`, or use S3 (chapter 23). |
-| `storage/backups/` | Automatic daily backups (the newest 14 are kept) and backups you make. |
+| `storage/uploads/` | Uploaded images, documents, videos and their converted versions. Change with `UPLOAD_DIR`, or store them in an AWS S3 bucket (chapter 23), the usual choice for a live site. |
+| `storage/backups/` | Database backups as JSON exports: the automatic daily ones (the newest 14 are kept) and the ones you make. |
 | `storage/.app-secret` | The generated development secret (only when `APP_SECRET` is empty). |
 | `storage/.quiz-attempt-key` | The generated quiz-attempt signing key (only when `QUIZ_ATTEMPT_SECRET` is empty). |
 | `storage/seo/` | SEO files such as the IndexNow key and redirects. |
-| `storage/db.json` | The old JSON database. If it exists when a new SQLite database is created, it is imported once and renamed to `db.json.migrated-<timestamp>`. |
 
-**Good to know.** Only one app process may use the database at a time. If you see "… is locked by another process", stop the other server or script first. Keep `storage/` on a local disk (not a network share).
+Older versions kept the records in `storage/lms.sqlite` or `storage/db.json`. The app no longer reads them; copy them into PostgreSQL once with `npm run db:to-postgres` (ENV-SETUP.md, section 3).
+
+**Good to know.** Run only one app server per database: the app keeps the records in memory, so two servers on the same database would overwrite each other's changes. Keep `storage/` on a disk that survives restarts.
 
 ### Emails while you try things out
 
@@ -366,6 +371,7 @@ With the default `MAIL_TRANSPORT=log` nothing is delivered. Every email is store
 | Variable | Default | What to do |
 |---|---|---|
 | `APP_URL` | `http://localhost:3000` | The public address without a trailing slash. Used in emails, payment callbacks, calendar feeds, the sitemap and cron URLs. |
+| `DATABASE_URL`, `DIRECT_URL` | empty | **Required.** The two connection strings of your Supabase project (chapter 6). |
 | `APP_SECRET` | empty | A random value of at least 32 characters (`openssl rand -hex 32`). Empty is fine in development (one is generated in `storage/.app-secret`). **Required in production.** Never change it later (chapter 57 explains what breaks). |
 | `SEED_DEMO_DATA` | `true` | `true`: a new database is filled with the demo school. `false`: a new database is empty except for one admin account. |
 | `ADMIN_NAME` | `Administrator` | Name of that first admin (only with `SEED_DEMO_DATA=false`). |
@@ -373,7 +379,7 @@ With the default `MAIL_TRANSPORT=log` nothing is delivered. Every email is store
 | `ADMIN_PASSWORD` | empty | Password of the first admin, at least 8 characters. **Required** with `SEED_DEMO_DATA=false`. Change it after the first sign-in. |
 | `MAIL_TRANSPORT` | `log` | Keep `log` while testing; `smtp` for real email (chapter 29). |
 
-> **Important.** `SEED_DEMO_DATA` and the `ADMIN_…` values are read only when the database is created. Changing them later does nothing to an existing database. To start over, see chapter 8.
+> **Important.** `SEED_DEMO_DATA` and the `ADMIN_…` values are read only while the database is empty. Changing them later does nothing to a database that already holds data. To start over, see chapter 8.
 
 ### Demo data on: the demo school
 
@@ -389,7 +395,7 @@ With `SEED_DEMO_DATA=true` (the default) a new database contains eight members o
    ADMIN_EMAIL=you@example.com
    ADMIN_PASSWORD=a-long-password-1
    ```
-3. Make sure no database exists yet: move `storage/lms.sqlite`, `storage/lms.sqlite-wal` and `storage/lms.sqlite-shm` out of `storage/`, and make sure there is no `storage/db.json` (it would be imported instead).
+3. Make sure `DATABASE_URL` points at an **empty** database: for example create a new Supabase project for it, put its two connection strings in `.env` and run `npm run db:setup`.
 4. Run `npm run dev` and sign in with that email and password.
 
 What you get: one enabled account with every staff role (Admin, Moderator, Course creator, Evaluator), default settings (brand name "LearnLoop", contact email `support@example.com`, manual payments, every feature on except the AI tutor and the instructor marketplace), no courses and no other members. The username is the part of the email before `@`.
@@ -412,13 +418,13 @@ If `ADMIN_EMAIL` or `ADMIN_PASSWORD` is missing, the server stops with: "SEED_DE
 
 **What it is.** How to get rid of the demo school, either to start your real site or to reset a test copy.
 
-**Who can do it.** Admins (in the browser) or whoever runs the server (files).
+**Who can do it.** Admins (in the browser) or whoever runs the server (database and `.env`).
 
 ### Option A: start from a fresh, empty database (recommended)
 
 1. Stop the server.
 2. Set `SEED_DEMO_DATA=false`, `ADMIN_NAME`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` (chapter 7).
-3. Move `storage/lms.sqlite`, `storage/lms.sqlite-wal` and `storage/lms.sqlite-shm` out of `storage/` (keep them somewhere in case you need them). Make sure there is no `storage/db.json`.
+3. Point `DATABASE_URL` and `DIRECT_URL` at a new, empty database (for example a new Supabase project; keep the old one until you are sure you no longer need it) and run `npm run db:setup`.
 4. Optionally empty `storage/uploads/` (demo uploads) and `storage/backups/` (backups of the demo database).
 5. Start the server. The new database contains only your admin.
 
@@ -888,7 +894,7 @@ The list shows **Category**, **Slug** and **Used by** ("Not used yet" or the num
 
 ## 23. Storage & video: uploads, S3, ffmpeg and captions
 
-**What it is.** Where uploaded files are kept (this server or an S3-compatible bucket), conversion of lesson videos to adaptive streaming (HLS), automatic captions, the conversion queue and the media housekeeping job. (Round 3)
+**What it is.** Where uploaded files are kept (this server, or an AWS S3 bucket on a live site), conversion of lesson videos to adaptive streaming (HLS), automatic captions, the conversion queue and the media housekeeping job. (Round 3)
 
 **Where.** `/admin/settings/storage` (System configuration → **Storage & video**).
 
@@ -898,15 +904,15 @@ The cards at the top show **Storage**, **Adaptive streaming** (videos that alrea
 
 Local storage shows **Driver** (Local disk), **Folder**, **Used** and **Free space**. A bucket shows **Provider**, **Bucket**, **Endpoint**, **Region**, **Access key**, **Secret key** (Set or Missing) and **Public URL**. **Test connection** writes a small file, reads it back (and through a signed link on S3), then deletes it.
 
-**Move uploads to AWS S3, Cloudflare R2, Backblaze B2 or MinIO.**
+**Move uploads to AWS S3** (the recommended storage for a live site; Cloudflare R2, Backblaze B2 and MinIO also work).
 
-1. Create a bucket and an access key with read/write rights.
-2. In `.env` set `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, and as needed `S3_ENDPOINT` (empty for AWS; R2 `https://<account id>.r2.cloudflarestorage.com`; B2 `https://s3.<region>.backblazeb2.com`; MinIO `http://localhost:9000`), `S3_REGION`, `S3_FORCE_PATH_STYLE=true` (MinIO) and `S3_PUBLIC_BASE_URL` (an `https://` CDN for unprotected files).
+1. Set up AWS by following [ENV-SETUP.md](../../ENV-SETUP.md), section 4: the AWS account and its free-tier rules, a $1 budget alert, a private bucket in the region nearest your students (for example `ap-south-1`, Mumbai), a lifecycle rule that removes interrupted uploads, and an IAM user whose policy allows only that bucket, with its access key.
+2. In `.env` set `STORAGE_DRIVER=s3`, `S3_REGION` (the bucket's region), `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`, and leave `S3_ENDPOINT`, `S3_PUBLIC_BASE_URL` and `S3_FORCE_PATH_STYLE` empty. (Other services: `S3_ENDPOINT` is R2 `https://<account id>.r2.cloudflarestorage.com`, B2 `https://s3.<region>.backblazeb2.com` or MinIO `http://localhost:9000`, with `S3_FORCE_PATH_STYLE=true` for MinIO.)
 3. Restart and open this page. A message such as "STORAGE_DRIVER is s3, but … is missing" means a value is missing; files stay local until it is fixed.
 4. Click **Test connection**.
 5. Under **Files still on this server**, click **Move to bucket** and confirm. Up to 500 files are copied, checked and removed locally per run; links keep working. The media job (chapter 54) also moves them over time.
 
-DEPLOYMENT.md section 9 adds bucket advice: allow `GET` and `HEAD` from your `APP_URL` in CORS and expose `Content-Range`, `Content-Length` and `Accept-Ranges`; add a lifecycle rule that aborts incomplete multipart uploads after 1 day.
+The browser never talks to the bucket: the app uploads files to it and streams them back, so a private bucket needs **no CORS rules**. CORS is only needed if you add a CDN (see **Delivery** below and DEPLOYMENT.md section 9). Costs: protected videos are streamed through the app server, so every view is data sent out of S3 (free up to 100 GB a month, then charged per GB), and storage grows quickly because each video is kept with its converted qualities. DEPLOYMENT.md section 9 has the details.
 
 ### Delivery
 

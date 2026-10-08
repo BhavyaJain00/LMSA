@@ -14,10 +14,9 @@ function stamp(date: Date = new Date()): string {
 }
 
 /**
- * GET /api/admin/backup?format=json|sqlite — download the live data as it
- * is right now, without keeping a copy on the server: a JSON export (the
- * default; the db.json format) or a compacted SQLite file. Both can be
- * restored from the admin data page or with `npm run db:restore`.
+ * GET /api/admin/backup — download the live data as it is right now, as a
+ * JSON export of the whole database, without keeping a copy on the server.
+ * It can be restored from the admin data page or with `npm run db:restore`.
  *
  * Admin only. The file contains password hashes, sessions and payment
  * details.
@@ -27,10 +26,10 @@ export async function GET(req: NextRequest) {
   const access = await authorizeBackupAdmin("download");
   if (!access.ok) return NextResponse.json({ ok: false, error: access.error }, { status: access.status, headers: NO_STORE });
 
-  const format = req.nextUrl.searchParams.get("format") === "sqlite" ? "sqlite" : "json";
+  const format = "json";
   try {
     const manager = await getBackupManager();
-    const { file, sizeBytes } = await manager.exportTo(format);
+    const { file, sizeBytes } = await manager.exportTo();
     await audit(access.user, "backup.download", { type: "settings", id: "data" }, { source: "live data", format, bytes: sizeBytes });
     return backupFileResponse(file, { downloadName: `learnloop-backup-${stamp()}.${format}`, format, sizeBytes, removeAfter: true });
   } catch (err) {

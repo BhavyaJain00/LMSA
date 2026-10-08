@@ -1,5 +1,5 @@
 import { hash } from "node:crypto";
-import type { ChangeSet, CollectionChanges } from "./sqlite-core.mjs";
+import type { ChangeSet, CollectionChanges } from "./data-core.mjs";
 
 /**
  * Change detection for incremental persistence.

@@ -2,18 +2,14 @@ import "server-only";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import type { StoreEngine, EngineStats } from "./engine";
 import type { StorageInfo } from "./driver";
 import { getStoreEngine } from "./store";
 import {
-  BUSY_TIMEOUT_MS,
   backupFileName,
   countDocuments,
-  createDatabaseFile,
   deleteBackupFile,
   inspectBackupFile,
-  isBusyError,
   listBackupFiles,
   rawDataToJson,
   readBackupData,
@@ -21,7 +17,7 @@ import {
   type BackupFormat,
   type BackupKind,
   type RawData,
-} from "./sqlite-core.mjs";
+} from "./data-core.mjs";
 import {
   automaticBackupState,
   automaticBackupsEnabled,
@@ -36,20 +32,22 @@ import {
 /**
  * Backups and restore for the running app.
  *
- *  - Snapshots: `VACUUM INTO` for SQLite (a consistent, compacted copy taken
- *    while the app keeps serving requests; it runs on a worker thread so a
- *    large database does not stall the event loop), a JSON copy for the JSON
- *    driver. Every backup gets a manifest with its row counts.
+ *  - Backups are JSON exports of the whole database (every collection and
+ *    the settings), written from the in-memory state after every pending
+ *    change has reached PostgreSQL. Every backup gets a manifest with its
+ *    row counts. Supabase keeps its own database backups as well on paid plans (daily;
+ *    point-in-time recovery on paid plans).
  *  - Daily automatic backup: `runScheduledBackup()` is started by the store
  *    on the first request of each local day; the day's file name is unique,
  *    so restarts and hot reloads never make a second one. The newest 14 are
  *    kept (DB_BACKUP_KEEP), safety backups 10, uploads 5, manual backups
  *    until deleted.
  *  - Restore: the backup is validated, the current data is saved as a
- *    "safety" backup, then everything is replaced in one SQLite transaction
- *    and the in-memory cache is swapped — all while no other mutation runs.
+ *    "safety" backup, then everything is replaced in one PostgreSQL
+ *    transaction and the in-memory cache is swapped — all while no other
+ *    mutation runs.
  *
- * The offline equivalents live in `backup-core.mjs` and `scripts/db-*.mjs`.
+ * The command-line equivalents are `scripts/db-*.mjs` (`npm run db:backup`, `db:restore`).
  */
 
 export type { BackupFormat, BackupKind };
@@ -132,56 +130,6 @@ export const MAX_BACKUP_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 
 const MAX_ORIGINAL_NAME = 120;
 
-/**
- * Source of the snapshot worker. Evaluated as CommonJS in a worker thread,
- * so it cannot share modules with the app: it only opens its own read-only
- * connection and runs `VACUUM INTO`. The ExperimentalWarning that loading
- * `node:sqlite` prints is dropped in the worker exactly as in `loadSqlite()`.
- */
-const SNAPSHOT_WORKER = `
-const { parentPort, workerData } = require("node:worker_threads");
-const emitWarning = process.emitWarning;
-process.emitWarning = function (warning, ...rest) {
-  const message = typeof warning === "string" ? warning : (warning && warning.message) || "";
-  if (/\\bSQLite\\b/.test(message)) return;
-  return emitWarning.call(process, warning, ...rest);
-};
-const { DatabaseSync } = require("node:sqlite");
-process.emitWarning = emitWarning;
-const db = new DatabaseSync(workerData.file, { readOnly: true });
-try {
-  db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
-  db.prepare("VACUUM INTO ?").run(workerData.target);
-} finally {
-  db.close();
-}
-parentPort.postMessage("done");
-`;
-
-/** Thrown when worker threads cannot be used at all (the snapshot then runs on the main thread). */
-class WorkerUnavailableError extends Error {}
-
-function vacuumOnWorker(file: string, target: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let worker: Worker;
-    try {
-      worker = new Worker(SNAPSHOT_WORKER, { eval: true, workerData: { file, target, busyTimeoutMs: BUSY_TIMEOUT_MS } });
-    } catch (err) {
-      reject(new WorkerUnavailableError(err instanceof Error ? err.message : String(err)));
-      return;
-    }
-    let finished = false;
-    worker.once("message", () => {
-      finished = true;
-      resolve();
-    });
-    worker.once("error", reject);
-    worker.once("exit", (code) => {
-      if (!finished) reject(new Error(`The backup worker stopped before it finished (exit code ${code}).`));
-    });
-  });
-}
-
 function toInfo(entry: BackupEntry): BackupInfo {
   const manifest = entry.manifest;
   const info: BackupInfo = {
@@ -213,12 +161,9 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Errors administrators can act on keep their message; SQLite lock errors get an explanation. */
+/** Errors administrators can act on keep their message; file system errors get an explanation. */
 function explain(err: unknown, action: string): BackupError {
   if (err instanceof BackupError) return err;
-  if (isBusyError(err) || (err instanceof Error && err.name === "DatabaseLockedError")) {
-    return new BackupError("busy", `Could not ${action}: the database is locked by another process. Wait a moment and try again.`);
-  }
   const code = (err as NodeJS.ErrnoException | null)?.code;
   if (code === "ENOSPC") return new BackupError("failed", `Could not ${action}: the disk is full.`);
   if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
@@ -235,9 +180,9 @@ export class BackupManager {
     return this.engine.driver.backupsDir;
   }
 
-  /** Format of the snapshots this storage produces. */
+  /** Format of the backups (JSON exports). */
   get format(): BackupFormat {
-    return this.engine.driver.kind === "sqlite" ? "sqlite" : "json";
+    return "json";
   }
 
   /** Every backup in the folder, newest first. */
@@ -267,7 +212,7 @@ export class BackupManager {
     if (!automaticBackupsEnabled()) return null;
     const state = automaticBackupState();
     if (state.running) return state.running as Promise<BackupInfo | null>;
-    if (fs.existsSync(path.join(this.dir, backupFileName("auto", this.format, now)))) return null;
+    if (fs.existsSync(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ this.dir, backupFileName("auto", now)))) return null;
     const run = (async () => {
       try {
         const info = await this.create({ kind: "auto", date: now, reason: "Daily automatic backup" });
@@ -302,36 +247,26 @@ export class BackupManager {
   }
 
   /**
-   * Write the current data to a temporary file for a direct download, in
-   * either format whatever the storage driver. The caller streams the file
-   * and removes it afterwards.
+   * Write the current data as a JSON export to a temporary file for a
+   * direct download. The caller streams the file and removes it afterwards.
    */
-  async exportTo(format: BackupFormat): Promise<{ file: string; sizeBytes: number }> {
+  async exportTo(): Promise<{ file: string; sizeBytes: number }> {
     await this.engine.getDb();
-    // Only the SQLite snapshot reads the storage; the other exports are written from memory.
-    if (format === "sqlite" && this.engine.driver.kind === "sqlite") await this.engine.settle();
     removeStaleTempFiles(this.dir);
-    const tmp = tempBackupPath(this.dir, format);
+    const tmp = tempBackupPath(this.dir, "json");
     try {
-      if (format === "json") {
-        await fsp.writeFile(tmp, rawDataToJson(this.engine.snapshot()!), { encoding: "utf8", flag: "wx" });
-      } else if (this.engine.driver.kind === "sqlite") {
-        await this.snapshot(tmp);
-      } else {
-        createDatabaseFile(tmp, this.engine.snapshot()!, { collections: this.engine.collectionNames(), source: "export" });
-      }
-      return { file: tmp, sizeBytes: (await fsp.stat(tmp)).size };
+      await fsp.writeFile(/* turbopackIgnore: true */ tmp, rawDataToJson(this.engine.snapshot()!), { encoding: "utf8", flag: "wx" });
+      return { file: tmp, sizeBytes: (await fsp.stat(/* turbopackIgnore: true */ tmp)).size };
     } catch (err) {
-      fs.rmSync(tmp, { force: true });
+      fs.rmSync(/* turbopackIgnore: true */ tmp, { force: true });
       throw explain(err, "export the database");
     }
   }
 
   /**
-   * Store an uploaded backup file (.sqlite or JSON export) after checking
-   * that it really is one: SQLite files must pass the integrity check and
-   * come from this app; JSON must parse into collections of documents with
-   * ids. Nothing is restored yet.
+   * Store an uploaded backup file (a JSON export) after checking that it
+   * really is one: it must parse into collections of documents with ids.
+   * Nothing is restored yet.
    */
   async receiveUpload(
     body: ReadableStream<Uint8Array>,
@@ -342,7 +277,7 @@ export class BackupManager {
     const tmp = tempBackupPath(this.dir, "part");
     try {
       let size = 0;
-      const handle = await fsp.open(tmp, "wx");
+      const handle = await fsp.open(/* turbopackIgnore: true */ tmp, "wx");
       const reader = body.getReader();
       try {
         for (;;) {
@@ -367,7 +302,6 @@ export class BackupManager {
         throw new BackupError("invalid", messageOf(err));
       }
       const { entry } = publishBackup(tmp, this.dir, "upload", {
-        format: summary.format,
         counts: summary.counts,
         schemaVersion: summary.schemaVersion,
         createdBy: options.createdBy,
@@ -376,7 +310,7 @@ export class BackupManager {
       });
       return toInfo(entry);
     } catch (err) {
-      fs.rmSync(tmp, { force: true });
+      fs.rmSync(/* turbopackIgnore: true */ tmp, { force: true });
       throw explain(err, "store the uploaded backup");
     }
   }
@@ -405,8 +339,8 @@ export class BackupManager {
    *
    * Runs with the store to itself: pending changes are written, the current
    * data is saved as a safety backup, then the driver replaces everything
-   * atomically (one transaction for SQLite, a rename for JSON) and the cache
-   * is swapped. If any step fails the live data is untouched.
+   * atomically (one PostgreSQL transaction) and the cache is swapped. If any
+   * step fails the live data is untouched.
    */
   async restore(name: string, options: { createdBy?: string } = {}): Promise<RestoreResult> {
     const entry = this.require(name);
@@ -450,8 +384,9 @@ export class BackupManager {
   }
 
   /**
-   * `PRAGMA quick_check` (or the thorough `integrity_check`) on the live
-   * SQLite database; for PostgreSQL a connectivity check plus row counts.
+   * Quick: the database answers, every table exists and its rows can be
+   * counted. Full: also that every row's id and indexed columns match its
+   * document.
    */
   async checkIntegrity(mode: "quick" | "full"): Promise<IntegrityReport> {
     const started = performance.now();
@@ -498,45 +433,24 @@ export class BackupManager {
     }
   }
 
-  /** Snapshot the storage as it is on disk into `target` (which must not exist). */
-  private async snapshot(target: string): Promise<void> {
-    const driver = this.engine.driver;
-    if (driver.kind === "sqlite") {
-      try {
-        await vacuumOnWorker(driver.info().file, target);
-        return;
-      } catch (err) {
-        // No worker threads here, or the worker could not do it (it has its own connection and
-        // module loading): take the snapshot on this thread instead. A real problem (disk full,
-        // locked file) fails again there and is reported.
-        if (!(err instanceof WorkerUnavailableError)) console.warn(`[backup] the snapshot worker failed (${messageOf(err)}); retrying on the main thread.`);
-        fs.rmSync(target, { force: true });
-      }
-    }
-    await driver.backupTo(target, this.engine.snapshot()!);
-  }
-
-  /** Snapshot into a temporary file and publish it as a backup of `kind`. */
+  /** Write the current data (settled by the caller) as a JSON backup of `kind`. */
   private async write(options: { kind: BackupKind; reason?: string; createdBy?: string; date?: Date; protect?: readonly string[] }): Promise<BackupInfo> {
     removeStaleTempFiles(this.dir);
-    const format = this.format;
-    const tmp = tempBackupPath(this.dir, format);
+    const tmp = tempBackupPath(this.dir, "json");
     try {
-      await this.snapshot(tmp);
-      // JSON snapshots are written from memory, so the counts are known; SQLite's are read back from the copy.
-      const summary = format === "json" ? { ...countDocuments(this.engine.snapshot()!), schemaVersion: null } : inspectBackupFile(tmp, { integrity: false });
+      const data = this.engine.snapshot()!;
+      await this.engine.driver.backupTo(tmp, data);
       const { entry } = publishBackup(tmp, this.dir, options.kind, {
-        format,
         date: options.date,
         reason: options.reason,
         createdBy: options.createdBy,
-        counts: summary.counts,
-        schemaVersion: summary.schemaVersion,
+        counts: countDocuments(data).counts,
+        schemaVersion: null,
         protect: options.protect,
       });
       return toInfo(entry);
     } catch (err) {
-      fs.rmSync(tmp, { force: true });
+      fs.rmSync(/* turbopackIgnore: true */ tmp, { force: true });
       throw explain(err, "create the backup");
     }
   }

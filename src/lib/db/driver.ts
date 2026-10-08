@@ -1,14 +1,15 @@
-import type { ChangeSet, RawData } from "./sqlite-core.mjs";
+import type { ChangeSet, RawData } from "./data-core.mjs";
 
 export type { ChangeSet, RawData };
 
-export type DriverKind = "json" | "sqlite" | "postgres";
+/** `postgres` is the app's database; `memory` exists only in test runs (`tests/helpers/memory-driver.ts`). */
+export type DriverKind = "postgres" | "memory";
 
 /** A value, or a promise of it (asynchronous drivers return promises where synchronous ones do not). */
 export type MaybePromise<T> = T | Promise<T>;
 
-/** How a storage file came to hold its data on first open. */
-export type OpenOrigin = "existing" | "imported-json" | "imported-sqlite" | "seeded";
+/** Whether the database already held data on first open, or was just seeded. */
+export type OpenOrigin = "existing" | "seeded";
 
 export interface OpenResult {
   data: RawData;
@@ -18,51 +19,43 @@ export interface OpenResult {
 /** Everything the admin data page shows about the storage. */
 export interface StorageInfo {
   driver: DriverKind;
-  /** Main file (db.json or the .sqlite file); for PostgreSQL the connection target without credentials. */
-  file: string;
-  /** Size of the main file plus SQLite's -wal/-shm companions (PostgreSQL: the tables and their indexes). */
+  /** The connection target without credentials (host, port, database, schema). */
+  target: string;
+  /** Size of the tables and their indexes. */
   sizeBytes: number | null;
-  walBytes: number | null;
   modifiedAt: string | null;
-  sqliteVersion: string | null;
+  /** Applied schema migrations. */
   schemaVersion: number | null;
   meta: Record<string, string>;
-  /** Database server version (PostgreSQL only), e.g. "PostgreSQL 16.4". */
+  /** Database server version, e.g. "PostgreSQL 16.4". */
   serverVersion?: string | null;
 }
 
 /**
- * One storage backend for the store (see `engine.ts`). Every driver loads
- * the whole database into memory; they differ in how changes reach storage:
+ * One storage backend for the store (see `engine.ts`). The driver loads the
+ * whole database into memory and `persist()` applies the change sets the
+ * engine computes (per-document upserts and deletes in one transaction).
  *
- *  - `json`: `persist()` rewrites the whole file (the original behaviour);
- *  - `sqlite`: `persist()` applies a change set (per-document upserts and
- *    deletes in one transaction), synchronously;
- *  - `postgres`: `persist()` applies a change set in one transaction over
- *    the network, so it (and the other storage calls) return promises
- *    (`asynchronous`). The engine then runs every write and reload through
- *    its queue so they never overlap.
+ * PostgreSQL is reached over the network, so its storage calls return
+ * promises (`asynchronous`); the engine then runs every write and reload
+ * through its queue so they never overlap. The engine also supports
+ * synchronous drivers (the in-memory test driver can be either).
  */
 export interface StoreDriver {
   readonly kind: DriverKind;
-  /** True when `persist()` consumes change sets. */
+  /** True when `persist()` consumes change sets (every current driver). */
   readonly incremental: boolean;
   /**
    * True when the storage calls (`persist`, `hasExternalChanges`, `reload`,
-   * `checkIntegrity`, `close`) return promises. Synchronous drivers keep
-   * their synchronous behaviour (the SQLite driver writes its last changes
-   * from a `process.on("exit")` handler).
+   * `checkIntegrity`, `close`) return promises. A synchronous driver writes
+   * its last changes from a `process.on("exit")` handler.
    */
   readonly asynchronous?: boolean;
-  /** Folder for backups of this storage. */
+  /** Folder for backups (JSON exports). */
   readonly backupsDir: string;
-  /**
-   * Open the storage and read everything. When it is empty the driver
-   * imports the legacy JSON file (sqlite), the SQLite file or JSON file
-   * (postgres) or stores `initialData()`.
-   */
+  /** Open the storage and read everything. When it is empty the driver stores `initialData()` first. */
   open(initialData: () => Promise<RawData>): Promise<OpenResult>;
-  /** Store changes. `changes` is null for the JSON driver (it writes `data` whole). */
+  /** Store changes (`changes` is null only for drivers that are not `incremental`: they write `data` whole). */
   persist(data: RawData, changes: ChangeSet | null): MaybePromise<void>;
   /** Replace everything with `data` atomically. */
   replaceAll(data: RawData, source: string): MaybePromise<void>;
@@ -70,16 +63,13 @@ export interface StoreDriver {
   hasExternalChanges(): MaybePromise<boolean>;
   /** Read everything again (after an external change). */
   reload(): MaybePromise<RawData>;
-  /**
-   * Write a consistent copy to `target` (which must not exist). `data` is the
-   * in-memory state, used by drivers that cannot copy the file itself.
-   */
+  /** Write a JSON export of `data` (the settled in-memory state) to `target`, which must not exist. */
   backupTo(target: string, data: RawData): MaybePromise<void>;
   /** Create storage for collections added while running (development hot reload). */
   addCollections?(names: readonly string[]): void;
   /** Integrity check of the live storage. */
   checkIntegrity(mode: "quick" | "full"): MaybePromise<{ ok: boolean; messages: string[] }>;
-  /** Cheap connectivity check (network databases; used by /api/health). */
+  /** Cheap connectivity check (used by /api/health). */
   ping?(): Promise<void>;
   info(): StorageInfo;
   close(): MaybePromise<void>;

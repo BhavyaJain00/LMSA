@@ -1,45 +1,30 @@
 /**
- * Backup and restore on files, shared by the running app
- * (`src/lib/db/backup.ts`) and the offline CLI scripts (`scripts/db-*.mjs`):
- * retention, temporary files, publishing a finished snapshot under its
- * final name, checking that a backup can be restored, and the offline
- * backup / restore / JSON export themselves.
+ * Backup files, shared by the running app (`src/lib/db/backup.ts`) and the
+ * CLI scripts (`scripts/db-*.mjs`): retention, temporary files, publishing
+ * a finished JSON export under its final name and checking that a backup
+ * can be restored.
  *
- * Plain JavaScript typed with JSDoc (like `sqlite-core.mjs`) so the scripts
+ * Plain JavaScript typed with JSDoc (like `data-core.mjs`) so the scripts
  * can import it without a build step. Node built-ins only.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
-  backupFileName,
-  checkIntegrity,
   countDocuments,
-  createDatabaseFile,
   deleteBackupFile,
   describeBackup,
   freeBackupPath,
-  inspectBackupFile,
-  isBusyError,
-  isCorruptionError,
   listBackupFiles,
-  migrate,
-  openDatabase,
   parseBackupFileName,
   pruneBackups,
   rawDataToJson,
-  readAllData,
-  readBackupData,
-  readJsonFile,
-  vacuumInto,
-  writeAllData,
-} from "./sqlite-core.mjs";
+} from "./data-core.mjs";
 
-/** @typedef {import("./sqlite-core.mjs").BackupKind} BackupKind */
-/** @typedef {import("./sqlite-core.mjs").BackupFormat} BackupFormat */
-/** @typedef {import("./sqlite-core.mjs").BackupEntry} BackupEntry */
-/** @typedef {import("./sqlite-core.mjs").RawData} RawData */
-/** @typedef {ReturnType<typeof import("./sqlite-core.mjs").resolveStorageConfig>} StorageConfig */
+/** @typedef {import("./data-core.mjs").BackupKind} BackupKind */
+/** @typedef {import("./data-core.mjs").BackupFormat} BackupFormat */
+/** @typedef {import("./data-core.mjs").BackupEntry} BackupEntry */
+/** @typedef {import("./data-core.mjs").RawData} RawData */
 
 /* ------------------------------------------------------------------ */
 /* Policy                                                              */
@@ -104,7 +89,7 @@ export function nextLocalMidnight(/** @type {number} */ now) {
 /* Temporary files                                                     */
 /* ------------------------------------------------------------------ */
 
-const TEMP_FILE = /^\.tmp-\d+-[0-9a-f]{12}\.(?:sqlite|json|part)(?:-journal|-wal|-shm)?$/;
+const TEMP_FILE = /^\.tmp-\d+-[0-9a-f]{12}\.(?:json|part)$/;
 const STALE_TEMP_MS = 6 * 60 * 60 * 1000;
 
 /**
@@ -114,11 +99,11 @@ const STALE_TEMP_MS = 6 * 60 * 60 * 1000;
  * `removeStaleTempFiles`.
  *
  * @param {string} dir
- * @param {"sqlite" | "json" | "part"} extension
+ * @param {"json" | "part"} extension
  */
 export function tempBackupPath(dir, extension) {
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `.tmp-${process.pid}-${randomBytes(6).toString("hex")}.${extension}`);
+  fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true });
+  return path.join(/* turbopackIgnore: true */ dir, `.tmp-${process.pid}-${randomBytes(6).toString("hex")}.${extension}`);
 }
 
 /**
@@ -131,7 +116,7 @@ export function removeStaleTempFiles(/** @type {string} */ dir, maxAgeMs = STALE
   /** @type {string[]} */
   let names;
   try {
-    names = fs.readdirSync(dir);
+    names = fs.readdirSync(/* turbopackIgnore: true */ dir);
   } catch {
     return [];
   }
@@ -139,10 +124,10 @@ export function removeStaleTempFiles(/** @type {string} */ dir, maxAgeMs = STALE
   const removed = [];
   for (const name of names) {
     if (!TEMP_FILE.test(name)) continue;
-    const file = path.join(dir, name);
+    const file = path.join(/* turbopackIgnore: true */ dir, name);
     try {
-      if (now - fs.statSync(file).mtimeMs < maxAgeMs) continue;
-      fs.rmSync(file, { force: true });
+      if (now - fs.statSync(/* turbopackIgnore: true */ file).mtimeMs < maxAgeMs) continue;
+      fs.rmSync(/* turbopackIgnore: true */ file, { force: true });
       removed.push(name);
     } catch {
       // In use or already gone: try again next time.
@@ -180,7 +165,6 @@ export function getBackupEntry(dir, name) {
  * @param {string} dir
  * @param {BackupKind} kind
  * @param {object} info
- * @param {BackupFormat} info.format
  * @param {Date} [info.date]
  * @param {string} [info.reason]
  * @param {string} [info.createdBy]
@@ -192,13 +176,13 @@ export function getBackupEntry(dir, name) {
  */
 export function publishBackup(tmp, dir, kind, info) {
   const date = info.date ?? new Date();
-  const target = freeBackupPath(dir, kind, info.format, date);
-  if (kind === "auto" && fs.existsSync(target)) {
-    fs.rmSync(tmp, { force: true });
+  const target = freeBackupPath(dir, kind, date);
+  if (kind === "auto" && fs.existsSync(/* turbopackIgnore: true */ target)) {
+    fs.rmSync(/* turbopackIgnore: true */ tmp, { force: true });
     const existing = getBackupEntry(dir, path.basename(target));
     if (existing) return { entry: existing, created: false, pruned: [] };
   }
-  fs.renameSync(tmp, target);
+  fs.renameSync(/* turbopackIgnore: true */ tmp, target);
   try {
     describeBackup(target, {
       kind,
@@ -236,9 +220,9 @@ export function resolveBackupSource(backupsDir, arg, cwd) {
     if (!newest) throw new Error(`There are no backups in ${backupsDir}.`);
     return newest.file;
   }
-  const direct = path.resolve(cwd, arg);
+  const direct = path.resolve(/* turbopackIgnore: true */ cwd, arg);
   try {
-    if (fs.statSync(direct).isFile()) return direct;
+    if (fs.statSync(/* turbopackIgnore: true */ direct).isFile()) return direct;
   } catch {
     // Not a path: maybe a backup name.
   }
@@ -303,308 +287,30 @@ function listNames(/** @type {string[]} */ names, max = 4) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Offline operations (CLI scripts)                                    */
+/* Writing a backup                                                    */
 /* ------------------------------------------------------------------ */
 
-/** A timestamp that is safe in file names: 2026-09-30T04-57-18-654Z. */
-function fileStamp(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, "-");
-}
-
-/** "stop the app" hint for rename/unlink failures caused by an open file. */
-function inUse(/** @type {unknown} */ err) {
-  const code = /** @type {NodeJS.ErrnoException} */ (err)?.code;
-  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
-}
-
 /**
- * State of the live SQLite file before a restore.
+ * Write `data` as a JSON export into the backups folder (through a
+ * temporary file, so an unfinished export is never listed) and apply the
+ * retention of `kind`.
  *
- * @param {string} file
- * @returns {{ state: "missing" | "healthy" | "damaged"; messages: string[] }}
+ * @param {string} dir
+ * @param {BackupKind} kind
+ * @param {RawData} data
+ * @param {{ date?: Date; reason?: string; createdBy?: string; originalName?: string; protect?: readonly string[]; pretty?: boolean }} [info]
+ * @returns {{ entry: BackupEntry; created: boolean; pruned: string[]; records: number; counts: Record<string, number> }}
  */
-export function probeDatabase(file) {
-  if (!fs.existsSync(file)) return { state: "missing", messages: [] };
-  let conn;
-  try {
-    conn = openDatabase(file);
-    const integrity = checkIntegrity(conn);
-    return integrity.ok ? { state: "healthy", messages: [] } : { state: "damaged", messages: integrity.messages };
-  } catch (err) {
-    if (isCorruptionError(err)) return { state: "damaged", messages: [err instanceof Error ? err.message : String(err)] };
-    if (isBusyError(err)) throw new Error(`${file} is locked by another process. Wait for it to finish (or stop the app) and try again.`);
-    throw err;
-  } finally {
-    conn?.close();
-  }
-}
-
-/**
- * Move `from` to `to`, which must not exist. A rename when both are on the
- * same filesystem; otherwise (EXDEV: another drive, a network share, a
- * mounted volume) a copy that refuses to overwrite, then the source is
- * removed. A failed copy leaves no partial target behind.
- *
- * @param {string} from
- * @param {string} to
- */
-export function moveFile(from, to) {
-  try {
-    fs.renameSync(from, to);
-    return;
-  } catch (err) {
-    if (/** @type {NodeJS.ErrnoException} */ (err)?.code !== "EXDEV") throw err;
-  }
-  try {
-    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
-  } catch (err) {
-    // EEXIST: the target is someone else's file; anything else may have left a partial copy.
-    if (/** @type {NodeJS.ErrnoException} */ (err)?.code !== "EEXIST") fs.rmSync(to, { force: true });
-    throw err;
-  }
-  fs.rmSync(from, { force: true });
-}
-
-/**
- * Back up the configured database without the app: `VACUUM INTO` for
- * SQLite (safe while the app is running), a validated copy for the JSON
- * driver. With `out` the snapshot is written to that path instead of the
- * backups folder.
- *
- * @param {StorageConfig} config
- * @param {{ kind?: BackupKind; out?: string; reason?: string; createdBy?: string; date?: Date }} [options]
- * @returns {{ file: string; entry: BackupEntry | null; created: boolean; pruned: string[]; records: number; counts: Record<string, number> }}
- */
-export function backupOffline(config, options = {}) {
-  const kind = options.kind ?? "manual";
-  const date = options.date ?? new Date();
-  const format = config.driver === "json" ? "json" : "sqlite";
-  const dir = config.backupsDir;
-  if (options.out && fs.existsSync(options.out)) throw new Error(`${options.out} already exists.`);
-
-  if (kind === "auto" && !options.out) {
-    const todays = getBackupEntry(dir, backupFileName("auto", format, date));
-    if (todays) {
-      const counts = todays.manifest?.counts ?? {};
-      return { file: todays.file, entry: todays, created: false, pruned: [], records: todays.manifest?.records ?? 0, counts };
-    }
-  }
-
+export function writeJsonBackup(dir, kind, data, info = {}) {
   removeStaleTempFiles(dir);
-  const tmp = tempBackupPath(dir, format);
-  try {
-    /** @type {{ counts: Record<string, number>; records: number; schemaVersion: number | null }} */
-    let summary;
-    if (config.driver === "json") {
-      if (!fs.existsSync(config.dataFile)) throw new Error(`There is no database at ${config.dataFile} yet.`);
-      summary = { ...countDocuments(readJsonFile(config.dataFile)), schemaVersion: null };
-      fs.copyFileSync(config.dataFile, tmp, fs.constants.COPYFILE_EXCL);
-    } else {
-      const probe = probeDatabase(config.sqlitePath);
-      if (probe.state === "missing") throw new Error(`There is no database at ${config.sqlitePath} yet.`);
-      if (probe.state === "damaged") {
-        throw new Error(`${config.sqlitePath} failed its integrity check (${probe.messages.slice(0, 3).join("; ")}). A copy of it would be damaged too: restore a backup instead.`);
-      }
-      const conn = openDatabase(config.sqlitePath);
-      try {
-        vacuumInto(conn, tmp);
-      } finally {
-        conn.close();
-      }
-      summary = inspectBackupFile(tmp, { integrity: false });
-    }
-
-    if (options.out) {
-      fs.mkdirSync(path.dirname(options.out), { recursive: true });
-      moveFile(tmp, options.out);
-      return { file: options.out, entry: null, created: true, pruned: [], records: summary.records, counts: summary.counts };
-    }
-    const published = publishBackup(tmp, dir, kind, {
-      format,
-      date,
-      reason: options.reason,
-      createdBy: options.createdBy,
-      counts: summary.counts,
-      schemaVersion: summary.schemaVersion,
-    });
-    return { file: published.entry.file, entry: published.entry, created: published.created, pruned: published.pruned, records: summary.records, counts: summary.counts };
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-/**
- * Replace the configured database with the contents of a backup file
- * (.sqlite or JSON export), without the app.
- *
- *  - A healthy SQLite database is first copied to a "safety" backup, then
- *    replaced in ONE transaction: a crash leaves either the old or the new
- *    contents, and a running app notices the change and reloads.
- *  - A damaged SQLite database cannot be copied or written: its files are
- *    moved aside as `<name>.damaged-<timestamp>` (never deleted) and a new
- *    file is built next to it and renamed into place. The app must be
- *    stopped for this.
- *  - The JSON driver's file is copied to a safety backup and replaced with
- *    a rename. A running app keeps its own copy in memory: restart it.
- *
- * @param {StorageConfig} config
- * @param {string} sourceFile
- * @param {{ safetyBackup?: boolean; force?: boolean }} [options]
- * @returns {{
- *   mode: "transaction" | "replaced-damaged" | "created" | "json";
- *   format: BackupFormat;
- *   records: number;
- *   counts: Record<string, number>;
- *   safety: BackupEntry | null;
- *   movedAside: string[];
- *   warnings: string[];
- * }}
- */
-export function restoreOffline(config, sourceFile, options = {}) {
-  const { format, data } = readBackupData(sourceFile);
-  const check = checkRestorable(data);
-  if (check.errors.length && !options.force) throw new Error(check.errors.join(" "));
-  const warnings = [...(options.force ? check.errors : []), ...check.warnings];
-  const label = path.basename(sourceFile);
-  const source = `restore:${label}`;
   const { counts, records } = countDocuments(data);
-  const dir = config.backupsDir;
-  const wantSafety = options.safetyBackup !== false;
-  // The file being restored must survive the retention applied to the safety backup.
-  const protect = path.dirname(path.resolve(sourceFile)) === path.resolve(dir) ? [label] : [];
-  /** @type {BackupEntry | null} */
-  let safety = null;
-  /** @type {string[]} */
-  const movedAside = [];
-
-  if (config.driver === "json") {
-    const target = config.dataFile;
-    if (wantSafety && fs.existsSync(target)) {
-      const tmp = tempBackupPath(dir, "json");
-      fs.copyFileSync(target, tmp, fs.constants.COPYFILE_EXCL);
-      /** @type {Record<string, number>} */
-      let current = {};
-      try {
-        current = countDocuments(readJsonFile(target)).counts;
-      } catch {
-        warnings.push(`${target} could not be read as a database; it was kept as a safety backup anyway.`);
-      }
-      safety = publishBackup(tmp, dir, "safety", { format: "json", reason: `Before restoring ${label}`, counts: current, schemaVersion: null, protect }).entry;
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tmpTarget = `${target}.restore-${process.pid}.tmp`;
-    fs.writeFileSync(tmpTarget, rawDataToJson(data), "utf8");
-    fs.renameSync(tmpTarget, target);
-    return { mode: "json", format, records, counts, safety, movedAside, warnings };
-  }
-
-  const target = config.sqlitePath;
-  const probe = probeDatabase(target);
-
-  if (probe.state === "healthy") {
-    const conn = openDatabase(target);
-    try {
-      if (wantSafety) {
-        const tmp = tempBackupPath(dir, "sqlite");
-        try {
-          vacuumInto(conn, tmp);
-          const summary = inspectBackupFile(tmp, { integrity: false });
-          safety = publishBackup(tmp, dir, "safety", {
-            format: "sqlite",
-            reason: `Before restoring ${label}`,
-            counts: summary.counts,
-            schemaVersion: summary.schemaVersion,
-            protect,
-          }).entry;
-        } catch (err) {
-          fs.rmSync(tmp, { force: true });
-          throw err;
-        }
-      }
-      migrate(conn, Object.keys(data.collections));
-      writeAllData(conn, data, { source });
-    } catch (err) {
-      if (isBusyError(err)) throw new Error(`${target} is locked by another process. Wait for it to finish (or stop the app) and try again.`);
-      throw err;
-    } finally {
-      conn.close();
-    }
-    return { mode: "transaction", format, records, counts, safety, movedAside, warnings };
-  }
-
-  // Missing or damaged: build the new database next to the target, then swap it in.
-  const tmpTarget = `${target}.restore-${process.pid}.tmp`;
-  fs.rmSync(tmpTarget, { force: true });
+  const tmp = tempBackupPath(dir, "json");
   try {
-    createDatabaseFile(tmpTarget, data, { source });
-    if (probe.state === "damaged") {
-      const stamp = fileStamp();
-      for (const suffix of ["", "-wal", "-shm"]) {
-        const from = `${target}${suffix}`;
-        if (!fs.existsSync(/* turbopackIgnore: true */ from)) continue;
-        const to = `${target}.damaged-${stamp}${suffix}`;
-        try {
-          fs.renameSync(from, to);
-        } catch (err) {
-          if (inUse(err)) throw new Error(`${from} is in use. Stop the app, then run the restore again.`);
-          throw err;
-        }
-        movedAside.push(to);
-      }
-    }
-    fs.renameSync(tmpTarget, target);
+    fs.writeFileSync(/* turbopackIgnore: true */ tmp, rawDataToJson(data, info.pretty !== false), { encoding: "utf8", flag: "wx" });
+    const published = publishBackup(tmp, dir, kind, { ...info, counts, schemaVersion: null });
+    return { ...published, records, counts };
   } catch (err) {
-    fs.rmSync(tmpTarget, { force: true });
+    fs.rmSync(/* turbopackIgnore: true */ tmp, { force: true });
     throw err;
-  }
-  return { mode: probe.state === "damaged" ? "replaced-damaged" : "created", format, records, counts, safety, movedAside, warnings };
-}
-
-/**
- * Write the configured database as a db.json-style document: to `out`
- * (which must not exist), or into the backups folder as a manual JSON
- * backup that the admin page lists and can restore.
- *
- * @param {StorageConfig} config
- * @param {{ out?: string; pretty?: boolean; date?: Date }} [options]
- * @returns {{ file: string; entry: BackupEntry | null; records: number; counts: Record<string, number> }}
- */
-export function exportJsonOffline(config, options = {}) {
-  const data = readLiveData(config);
-  const json = rawDataToJson(data, options.pretty !== false);
-  const { counts, records } = countDocuments(data);
-  if (options.out) {
-    fs.mkdirSync(path.dirname(options.out), { recursive: true });
-    fs.writeFileSync(options.out, json, { encoding: "utf8", flag: "wx" });
-    return { file: options.out, entry: null, records, counts };
-  }
-  const tmp = tempBackupPath(config.backupsDir, "json");
-  try {
-    fs.writeFileSync(tmp, json, { encoding: "utf8", flag: "wx" });
-    const { entry } = publishBackup(tmp, config.backupsDir, "manual", { format: "json", date: options.date, reason: "JSON export", counts, schemaVersion: null });
-    return { file: entry.file, entry, records, counts };
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-/** Everything in the configured database, read without the app. */
-export function readLiveData(/** @type {StorageConfig} */ config) {
-  if (config.driver === "json") {
-    if (!fs.existsSync(config.dataFile)) throw new Error(`There is no database at ${config.dataFile} yet.`);
-    return readJsonFile(config.dataFile);
-  }
-  if (!fs.existsSync(config.sqlitePath)) throw new Error(`There is no database at ${config.sqlitePath} yet.`);
-  let conn;
-  try {
-    conn = openDatabase(config.sqlitePath);
-    return readAllData(conn);
-  } catch (err) {
-    if (isCorruptionError(err)) throw new Error(`${config.sqlitePath} is damaged and cannot be read. Restore a backup with "npm run db:restore -- latest".`);
-    throw err;
-  } finally {
-    conn?.close();
   }
 }

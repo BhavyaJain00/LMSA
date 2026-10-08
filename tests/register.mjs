@@ -3,32 +3,29 @@
  * script in package.json). Runs in the test runner and in every test file's
  * process before any test code:
  *
- *  1. Points the app at a throwaway environment: a fresh temporary JSON
- *     database (an empty `{}` document, so nothing is seeded unless a test
- *     asks for it), a temporary upload directory, a fixed APP_SECRET, the
- *     "log" mail transport and no payment-gateway credentials. The real
- *     `storage/db.json` and `.env` are never read or written.
+ *  1. Points the app at a throwaway environment: the in-memory store driver
+ *     (`tests/helpers/memory-driver.ts`; the database starts empty, so
+ *     nothing is seeded unless a test asks for it), a temporary storage
+ *     folder (backups, SEO files) and upload directory, a fixed APP_SECRET,
+ *     the "log" mail transport and no payment-gateway credentials. No
+ *     PostgreSQL server is needed, DATABASE_URL is cleared, and the real
+ *     `storage/` and `.env` are never read or written.
  *  2. Registers the resolve hooks in `tests/loader.mjs` (`@/` alias,
  *     extensionless imports, Next.js stubs).
  *
  * The temporary directory belongs to this process and is removed on exit.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const dir = mkdtempSync(path.join(tmpdir(), "ll-test-"));
-const dataFile = path.join(dir, "db.json");
-writeFileSync(dataFile, "{}\n", "utf8");
 mkdirSync(path.join(dir, "uploads"), { recursive: true });
 
 const env = {
   NODE_ENV: "test",
-  DATA_FILE: dataFile,
-  DB_DRIVER: "json",
-  // Never the real storage/lms.sqlite, even for a test that opts into SQLite.
-  SQLITE_PATH: path.join(dir, "lms.sqlite"),
+  STORAGE_DIR: dir,
   STORAGE_DRIVER: "local",
   UPLOAD_DIR: path.join(dir, "uploads"),
   APP_URL: "http://localhost:3000",
@@ -39,6 +36,9 @@ const env = {
 };
 Object.assign(process.env, env);
 for (const name of [
+  // Never a real database: the store runs on the in-memory test driver.
+  "DATABASE_URL",
+  "DIRECT_URL",
   "SMTP_HOST",
   "SMTP_PORT",
   "SMTP_USER",
@@ -78,3 +78,7 @@ process.once("exit", () => {
 });
 
 register("./loader.mjs", import.meta.url);
+
+// The store's test database (honoured by src/lib/db/store.ts only when NODE_ENV is "test").
+const { installMemoryStore } = await import("./helpers/memory-driver.ts");
+installMemoryStore();

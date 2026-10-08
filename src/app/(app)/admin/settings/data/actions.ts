@@ -127,7 +127,7 @@ export async function restoreBackupAction(_prev: ActionResult | null, formData: 
   redirect("/login");
 }
 
-/** Run SQLite's integrity check on the live database (`mode`: quick or full). */
+/** Check the live PostgreSQL database (`mode`: quick or full). */
 export async function checkIntegrityAction(_prev: ActionResult<IntegrityReport> | null, formData: FormData): Promise<ActionResult<IntegrityReport>> {
   const access = await authorizeBackupAdmin("inspect");
   if (!access.ok) return { ok: false, error: access.error };

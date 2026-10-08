@@ -8,7 +8,7 @@ import { makeCourseTree, makeEnrollment, makeUser, resetDb } from "./helpers/db"
 
 /**
  * A detached deep copy of the database. structuredClone() cannot copy the
- * SQLite driver's proxied collections, while a JSON round trip works on both drivers.
+ * store's tracking Proxies (its collections), while a JSON round trip can.
  */
 const plainCopy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 

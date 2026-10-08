@@ -5,12 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import type { Database } from "@/lib/types";
 import { StoreEngine, type EngineOptions } from "@/lib/db/engine";
-import { SqliteDriver } from "@/lib/db/sqlite";
 import type { ChangeSet, RawData } from "@/lib/db/driver";
-import { openDatabase, readAllData } from "@/lib/db/sqlite-core.mjs";
+import { MemoryDatabase, MemoryDriver } from "./helpers/memory-driver";
 
 /**
- * Review fix (data-sqlite, round 3): deleting documents costs what was
+ * Deleting documents costs what was
  * deleted, not the size of the collection. `splice`/`pop`/`shift`/shorter
  * `length`, `removeWhere()` and the `db.x = db.x.filter(keep)` idiom record
  * the removed documents and the write deletes their ids without serializing
@@ -19,7 +18,7 @@ import { openDatabase, readAllData } from "@/lib/db/sqlite-core.mjs";
  * equal to memory, including the order of the rows.
  *
  * Also: `settle()` (used by backups and restores) compares the database in
- * short slices instead of one long pass.
+ * short slices instead of one long pass. Runs on the in-memory test driver.
  */
 
 interface Doc {
@@ -38,11 +37,10 @@ const FLUSH_MS = 10;
 const BIG = 5000;
 
 let dir: string;
-let counter = 0;
 const engines: StoreEngine[] = [];
 
 before(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-sqlite-removals-"));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ll-store-removals-"));
 });
 
 afterEach(() => {
@@ -75,10 +73,9 @@ function normalize(data: RawData): Database {
   return db as unknown as Database;
 }
 
-function start(options: Partial<EngineOptions> & { file?: string; data?: RawData } = {}) {
-  counter++;
-  const file = options.file ?? path.join(dir, `case-${counter}`, "lms.sqlite");
-  const driver = new SqliteDriver({ file, collections: COLLECTIONS });
+function start(options: Partial<EngineOptions> & { database?: MemoryDatabase; data?: RawData } = {}) {
+  const database = options.database ?? new MemoryDatabase();
+  const driver = new MemoryDriver({ database, collections: COLLECTIONS, backupsDir: path.join(dir, "backups"), asynchronous: false });
   const writes: ChangeSet[] = [];
   const persist = driver.persist.bind(driver);
   driver.persist = (data, changes) => {
@@ -96,18 +93,13 @@ function start(options: Partial<EngineOptions> & { file?: string; data?: RawData
   });
   engines.push(engine);
   const stored = (): TestDb => {
-    const conn = openDatabase(file, { readOnly: true });
-    try {
-      const data = readAllData(conn, COLLECTIONS);
-      return { ...(data.collections as unknown as Omit<TestDb, "settings">), settings: data.settings as Record<string, unknown> };
-    } finally {
-      conn.close();
-    }
+    const data = database.read(COLLECTIONS);
+    return { ...(data.collections as unknown as Omit<TestDb, "settings">), settings: data.settings as Record<string, unknown> };
   };
   return {
     engine,
     driver,
-    file,
+    database,
     writes,
     db: async () => (await engine.getDb()) as unknown as TestDb,
     mutate: <T>(fn: (db: TestDb) => T | Promise<T>) => engine.mutate((d) => fn(d as unknown as TestDb)),
@@ -336,7 +328,7 @@ describe("ambiguous removals fall back to a full membership check", () => {
     let failures = 0;
     h.driver.persist = () => {
       failures++;
-      throw Object.assign(new Error("database is locked"), { errcode: 5 });
+      throw new Error("Connection lost");
     };
     const original = console.error;
     console.error = () => undefined;
@@ -371,7 +363,7 @@ describe("ambiguous removals fall back to a full membership check", () => {
     const expected = ids((await h.db()).sessions);
     h.engine.close();
     engines.splice(engines.indexOf(h.engine), 1);
-    const again = start({ file: h.file });
+    const again = start({ database: h.database });
     assert.deepEqual(ids((await again.db()).sessions), expected);
   });
 });

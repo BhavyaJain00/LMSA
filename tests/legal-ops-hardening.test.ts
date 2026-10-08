@@ -283,7 +283,17 @@ describe("/api/health: public answer hides operator details", () => {
 /* ------------------------------------------------------------------ */
 
 describe("env-check: standalone servers must keep data outside the build output", () => {
-  const base = { APP_SECRET: "x".repeat(40), APP_URL: "https://learn.example.com", SEED_DEMO_DATA: "false", TRUST_PROXY_HOPS: "1", MAIL_TRANSPORT: "smtp", SMTP_HOST: "smtp.example.com", MAIL_FROM: "a@b.c" };
+  const base = {
+    APP_SECRET: "x".repeat(40),
+    APP_URL: "https://learn.example.com",
+    DATABASE_URL: "postgresql://app:pw@db.example.com:5432/postgres",
+    DIRECT_URL: "postgresql://app:pw@db.example.com:5432/postgres",
+    SEED_DEMO_DATA: "false",
+    TRUST_PROXY_HOPS: "1",
+    MAIL_TRANSPORT: "smtp",
+    SMTP_HOST: "smtp.example.com",
+    MAIL_FROM: "a@b.c",
+  };
   const standalone = "/opt/learnloop/app/.next/standalone";
 
   it("recognizes the standalone folder on Linux and Windows", () => {
@@ -294,21 +304,19 @@ describe("env-check: standalone servers must keep data outside the build output"
     assert.equal(isInsideBuildOutput("/opt/standalone"), false);
   });
 
-  it("refuses relative (and default) data paths when running from .next/standalone", () => {
+  it("refuses relative (and default) file paths when running from .next/standalone", () => {
     const result = checkEnvironment(base, { production: true, cwd: standalone });
-    assert.deepEqual(result.errors.map((e) => e.key).sort(), ["DATA_FILE", "SQLITE_PATH", "UPLOAD_DIR"]);
-    const partial = checkEnvironment({ ...base, SQLITE_PATH: "/var/lib/ll/lms.sqlite", DATA_FILE: "storage/db.json", UPLOAD_DIR: "D:\\data\\uploads" }, { production: true, cwd: standalone });
-    assert.deepEqual(partial.errors.map((e) => e.key), ["DATA_FILE"]);
+    assert.deepEqual(result.errors.map((e) => e.key).sort(), ["STORAGE_DIR", "UPLOAD_DIR"]);
+    const partial = checkEnvironment({ ...base, STORAGE_DIR: "storage", UPLOAD_DIR: "D:\\data\\uploads" }, { production: true, cwd: standalone });
+    assert.deepEqual(partial.errors.map((e) => e.key), ["STORAGE_DIR"]);
   });
 
-  it("accepts absolute paths, ignores SQLITE_PATH for the JSON driver, and leaves Docker and development alone", () => {
-    const absolute = { ...base, SQLITE_PATH: "/var/lib/ll/lms.sqlite", DATA_FILE: "/var/lib/ll/db.json", UPLOAD_DIR: "/var/lib/ll/uploads" };
+  it("accepts absolute paths, and leaves Docker and development alone", () => {
+    const absolute = { ...base, STORAGE_DIR: "/var/lib/ll", UPLOAD_DIR: "/var/lib/ll/uploads" };
     assert.deepEqual(checkEnvironment(absolute, { production: true, cwd: standalone }).errors, []);
-    const json = checkEnvironment({ ...absolute, DB_DRIVER: "json", SQLITE_PATH: "" }, { production: true, cwd: standalone });
-    assert.ok(!json.errors.some((e) => e.key === "SQLITE_PATH"));
     assert.deepEqual(checkEnvironment(base, { production: true, cwd: "/app" }).errors, []);
     assert.deepEqual(checkEnvironment(base, { production: true }).errors, []);
-    assert.ok(!checkEnvironment(base, { production: false, cwd: standalone }).errors.some((e) => e.key === "SQLITE_PATH"));
+    assert.deepEqual(checkEnvironment(base, { production: false, cwd: standalone }).errors, []);
   });
 });
 
@@ -359,8 +367,10 @@ describe("next.config: security headers and image hosts", () => {
   });
 
   it("keeps local data, secrets and tests out of the standalone trace", () => {
-    const excludes = nextConfig.outputFileTracingExcludes?.["*"] ?? [];
-    for (const pattern of ["storage/**", ".env", ".env.*", "tests/**"]) assert.ok(excludes.includes(pattern), pattern);
+    for (const key of ["*", "/**", "instrumentation", "/instrumentation"]) {
+      const excludes = nextConfig.outputFileTracingExcludes?.[key] ?? [];
+      for (const pattern of ["storage/**", ".env", ".env.*", "tests/**"]) assert.ok(excludes.includes(pattern), `${key}: ${pattern}`);
+    }
   });
 
   it("the image optimizer only fetches from configured hosts", () => {

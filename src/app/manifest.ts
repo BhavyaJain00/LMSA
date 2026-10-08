@@ -6,7 +6,12 @@ import { shortAppName } from "@/components/pwa/pwa-provider";
  * Web app manifest (served at /manifest.webmanifest). With Settings →
  * Installable app turned off the manifest stays valid but uses
  * `display: "browser"`, so browsers no longer offer installation.
+ *
+ * Rendered per request: it reflects the current settings, and `next build`
+ * never reads the database (it has no DATABASE_URL).
  */
+export const dynamic = "force-dynamic";
+
 export default async function manifest(): Promise<MetadataRoute.Manifest> {
   const settings = await getSettings();
   const { brand, features, pwa } = settings;

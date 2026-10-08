@@ -191,7 +191,7 @@ describe("export rules for growth-era records", () => {
   };
 
   beforeEach(async () => {
-    db = structuredClone(await resetDb(growthFixture()));
+    db = JSON.parse(JSON.stringify(await resetDb(growthFixture()))) as Database;
   });
 
   it("uses each section key once and never exports a secret field", () => {
@@ -247,7 +247,7 @@ describe("export rules for growth-era records", () => {
 describe("erasure rules for growth-era records", () => {
   let db: Database;
   beforeEach(async () => {
-    db = structuredClone(await resetDb(growthFixture()));
+    db = JSON.parse(JSON.stringify(await resetDb(growthFixture()))) as Database;
     eraseAccountInDb(db, ada.id, { now: new Date(FIXED_NOW), username: "deleted-abc123" });
   });
 
@@ -328,7 +328,7 @@ describe("erasure rules for growth-era records", () => {
   });
 
   it("reports what it removed and anonymized", async () => {
-    const fresh = structuredClone(await resetDb(growthFixture()));
+    const fresh = JSON.parse(JSON.stringify(await resetDb(growthFixture()))) as Database;
     const summary = eraseAccountInDb(fresh, ada.id, { now: new Date(FIXED_NOW), username: "deleted-abc123" })!;
     assert.equal(summary.removed.aiMessages, 2);
     assert.equal(summary.removed.checkoutSessions, 2);

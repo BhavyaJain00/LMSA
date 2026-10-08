@@ -2,14 +2,16 @@
  * Startup configuration checks, run from `register()` in
  * `src/instrumentation.ts` and shown to administrators on the error log page.
  *
- * In production a missing or short APP_SECRET, or an APP_URL that is not
- * HTTPS, stops the server from starting: media signing, 2FA encryption,
- * unsubscribe and calendar links all depend on the secret, and cookies,
- * emails, payment callbacks and canonical URLs on the URL. So does a
- * standalone server (`node .next/standalone/server.js`, which changes into
- * its own folder) whose data paths are relative: the database and uploads
- * would live inside the build output, which the next `next build` deletes.
- * Everything else is a warning. Checks never run during `next build`.
+ * A missing or malformed DATABASE_URL stops the server in every
+ * environment: everything lives in PostgreSQL (see ENV-SETUP.md). In
+ * production a missing or short APP_SECRET, or an APP_URL that is not
+ * HTTPS, stops it too: media signing, 2FA encryption, unsubscribe and
+ * calendar links all depend on the secret, and cookies, emails, payment
+ * callbacks and canonical URLs on the URL. So does a standalone server
+ * (`node .next/standalone/server.js`, which changes into its own folder)
+ * whose file paths are relative: uploads and backups would live inside the
+ * build output, which the next `next build` deletes. Everything else is a
+ * warning. Checks never run during `next build`.
  *
  * Pure apart from `runStartupChecks` (which only logs or throws), so the
  * rules are unit tested directly. Values are never echoed back.
@@ -55,13 +57,18 @@ export function isInsideBuildOutput(cwd: string): boolean {
   return /[\\/]\.next[\\/]standalone(?:[\\/]|$)/.test(cwd);
 }
 
-/** Data-path variables that must be absolute for a standalone server, with their defaults. */
-const DATA_PATH_DEFAULTS: { key: string; fallback: string; when?: (env: Env) => boolean }[] = [
-  { key: "SQLITE_PATH", fallback: "storage/lms.sqlite", when: (env) => value(env, "DB_DRIVER").toLowerCase() !== "json" },
-  // Also decides where the app secret file, storage/seo and (JSON driver) backups live.
-  { key: "DATA_FILE", fallback: "storage/db.json" },
+/** File-path variables that must be absolute for a standalone server, with their defaults. */
+const DATA_PATH_DEFAULTS: { key: string; fallback: string }[] = [
+  // Backups (JSON exports), SEO files and the development secrets live here.
+  { key: "STORAGE_DIR", fallback: "storage" },
   { key: "UPLOAD_DIR", fallback: "storage/uploads" },
 ];
+
+/** Settings of the removed SQLite/JSON storage: reported so a stale .env is noticed. */
+const REMOVED_DATABASE_KEYS = ["DB_DRIVER", "SQLITE_PATH", "DATA_FILE"];
+
+/** Where the database settings are explained (in every message about them). */
+export const DATABASE_SETUP_DOC = 'ENV-SETUP.md, section 3 "Database"';
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1" || hostname.endsWith(".localhost");
@@ -87,7 +94,7 @@ export function checkEnvironment(env: Env, options: { production: boolean; cwd?:
       "APP_SECRET",
       production
         ? "APP_SECRET is not set. Generate one with `openssl rand -hex 32` and add it to the environment."
-        : "APP_SECRET is not set; a development secret is generated and stored next to the database.",
+        : "APP_SECRET is not set; a development secret is generated and stored in the storage folder.",
     );
   } else if (secret.length < MIN_SECRET_LENGTH) {
     required("APP_SECRET", `APP_SECRET must be at least ${MIN_SECRET_LENGTH} characters long (it signs media URLs and encrypts 2FA secrets).`);
@@ -130,21 +137,19 @@ export function checkEnvironment(env: Env, options: { production: boolean; cwd?:
       warn("SEED_DEMO_DATA", "SEED_DEMO_DATA is not false: a new database starts with demo accounts whose passwords are public. Set SEED_DEMO_DATA=false and remove demo accounts before launch.");
     }
     if (value(env, "LL_DEV_LOGIN")) warn("LL_DEV_LOGIN", "LL_DEV_LOGIN is ignored in production; remove it from the environment.");
-    if (value(env, "DB_DRIVER").toLowerCase() === "json") warn("DB_DRIVER", "DB_DRIVER=json rewrites the whole database file on every change. Use the default SQLite driver in production.");
   }
 
-  // Database driver.
+  // Database (required in every environment).
   checkDatabase(env, { fail, warn });
 
   // Data inside the build output is deleted by the next `next build`.
   if (production && options.cwd && isInsideBuildOutput(options.cwd)) {
     for (const spec of DATA_PATH_DEFAULTS) {
-      if (spec.when && !spec.when(env)) continue;
       const configured = value(env, spec.key) || spec.fallback;
       if (isAbsolutePath(configured)) continue;
       fail(
         spec.key,
-        `${spec.key} is a relative path and the server runs from .next/standalone, so the data would be stored inside the build output and deleted by the next \`npm run build\`. Set SQLITE_PATH, DATA_FILE and UPLOAD_DIR to absolute paths outside the project folder (see DEPLOYMENT.md, "Without Docker").`,
+        `${spec.key} is a relative path and the server runs from .next/standalone, so the files would be stored inside the build output and deleted by the next \`npm run build\`. Set STORAGE_DIR and UPLOAD_DIR to absolute paths outside the project folder (see DEPLOYMENT.md, "Without Docker").`,
       );
     }
   }
@@ -196,19 +201,25 @@ export function checkEnvironment(env: Env, options: { production: boolean; cwd?:
   return { production, errors, warnings };
 }
 
-const DB_DRIVERS = ["sqlite", "json", "postgres", "postgresql"];
-
-/** DB_DRIVER and, for PostgreSQL, DATABASE_URL / DIRECT_URL. */
+/**
+ * DATABASE_URL (required: the app has no other database) and DIRECT_URL
+ * (used by `npm run db:setup`). Every problem names ENV-SETUP.md.
+ */
 function checkDatabase(env: Env, report: { fail: (key: string, message: string) => void; warn: (key: string, message: string) => void }): void {
-  const driver = value(env, "DB_DRIVER").toLowerCase();
-  if (driver && !DB_DRIVERS.includes(driver)) {
-    report.warn("DB_DRIVER", "DB_DRIVER must be sqlite, json or postgres; the default SQLite driver is used.");
-    return;
+  for (const key of REMOVED_DATABASE_KEYS) {
+    if (value(env, key)) {
+      report.warn(
+        key,
+        `${key} is no longer used: the app stores everything in PostgreSQL (DATABASE_URL). Remove it from the environment; copy data from an old SQLite or JSON database with \`npm run db:to-postgres\`.`,
+      );
+    }
   }
-  if (driver !== "postgres" && driver !== "postgresql") return;
   const raw = value(env, "DATABASE_URL");
   if (!raw) {
-    report.fail("DATABASE_URL", "DB_DRIVER=postgres needs DATABASE_URL (Supabase: Project Settings → Database → Connection string, the pooled URL on port 6543).");
+    report.fail(
+      "DATABASE_URL",
+      `DATABASE_URL is not set. The app stores everything in PostgreSQL (Supabase): add DATABASE_URL and DIRECT_URL to the environment, then run \`npm run db:setup\` (see ${DATABASE_SETUP_DOC}).`,
+    );
     return;
   }
   let url: URL | null = null;
@@ -218,17 +229,23 @@ function checkDatabase(env: Env, report: { fail: (key: string, message: string) 
     url = null;
   }
   if (!url || (url.protocol !== "postgresql:" && url.protocol !== "postgres:")) {
-    report.fail("DATABASE_URL", "DATABASE_URL must be a postgresql:// connection string.");
+    report.fail("DATABASE_URL", `DATABASE_URL must be a postgresql:// connection string (see ${DATABASE_SETUP_DOC}).`);
     return;
   }
   // Supabase's transaction pooler (port 6543) does not support prepared statements: Prisma must be told.
   if (url.port === "6543" && url.searchParams.get("pgbouncer") !== "true") {
-    report.warn("DATABASE_URL", "DATABASE_URL uses the transaction pooler (port 6543) without ?pgbouncer=true; add it (and connection_limit=1…5) or queries fail.");
+    report.warn("DATABASE_URL", `DATABASE_URL uses the transaction pooler (port 6543) without ?pgbouncer=true; add it (and connection_limit=1…5) or queries fail (see ${DATABASE_SETUP_DOC}).`);
   }
   if (!value(env, "DIRECT_URL")) {
-    report.warn("DIRECT_URL", "DIRECT_URL is not set; `npm run prisma:migrate` needs it (Supabase: the direct or session-pooler connection on port 5432). It may equal DATABASE_URL without a pooler.");
+    report.warn(
+      "DIRECT_URL",
+      `DIRECT_URL is not set; \`npm run db:setup\` needs it to create the tables (Supabase: the direct or session-pooler connection on port 5432). It may equal DATABASE_URL without a pooler (see ${DATABASE_SETUP_DOC}).`,
+    );
   }
 }
+
+/** Errors that stop the server in every environment, not only in production. */
+const ALWAYS_FATAL = new Set(["DATABASE_URL"]);
 
 /** True while `next build` runs (checks are skipped: build machines rarely have runtime secrets). */
 export function isBuildPhase(env: Env = process.env): boolean {
@@ -243,19 +260,23 @@ export function getStartupCheckResult(): EnvCheckResult {
 }
 
 /**
- * Run the checks: log warnings, and in production throw (stopping the
- * server) when a required setting is missing. Skipped during `next build`.
+ * Run the checks: log warnings, and throw (stopping the server) when a
+ * required setting is missing: DATABASE_URL in every environment, the rest
+ * in production. Skipped during `next build`.
  */
 export function runStartupChecks(): EnvCheckResult | null {
   if (isBuildPhase()) return null;
   const result = checkEnvironment(process.env, { production: process.env.NODE_ENV === "production", cwd: process.cwd() });
   g.__llEnvCheck = result;
   for (const issue of result.warnings) console.warn(`[config] ${issue.key}: ${issue.message}`);
-  if (result.errors.length) {
-    const lines = result.errors.map((e) => `  - ${e.key}: ${e.message}`).join("\n");
-    if (result.production) {
-      throw new Error(`Refusing to start: fix these settings in the environment (see DEPLOYMENT.md).\n${lines}`);
-    }
+  const fatal = result.production ? result.errors : result.errors.filter((e) => ALWAYS_FATAL.has(e.key));
+  if (fatal.length) {
+    const lines = fatal.map((e) => `  - ${e.key}: ${e.message}`).join("\n");
+    throw new Error(`Refusing to start: fix these settings in the environment (see ENV-SETUP.md and DEPLOYMENT.md).\n${lines}`);
+  }
+  const later = result.errors.filter((e) => !fatal.includes(e));
+  if (later.length) {
+    const lines = later.map((e) => `  - ${e.key}: ${e.message}`).join("\n");
     console.warn(`[config] These settings are required in production:\n${lines}`);
   }
   return result;

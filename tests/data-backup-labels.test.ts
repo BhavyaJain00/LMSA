@@ -13,12 +13,12 @@ import {
   type BackupKindName,
 } from "@/components/admin/settings/data-labels";
 
-/** data-sqlite item 5: the pure helpers behind the backups list and the restore dialog. */
+/** The pure helpers behind the backups list and the restore dialog. */
 
 const rows = [
-  { name: "lms-20260930-auto.sqlite", kind: "auto" as BackupKindName },
-  { name: "lms-20260929-101500-manual.sqlite", kind: "manual" as BackupKindName, reason: "Before importing members", createdBy: "Ada (ada@example.com)" },
-  { name: "lms-20260929-101700-safety.sqlite", kind: "safety" as BackupKindName, reason: "Before restoring lms-20260920-auto.sqlite" },
+  { name: "lms-20260930-auto.json", kind: "auto" as BackupKindName },
+  { name: "lms-20260929-101500-manual.json", kind: "manual" as BackupKindName, reason: "Before importing members", createdBy: "Ada (ada@example.com)" },
+  { name: "lms-20260929-101700-safety.json", kind: "safety" as BackupKindName, reason: "Before restoring lms-20260920-auto.json" },
   { name: "lms-20260928-090000-upload.json", kind: "upload" as BackupKindName, originalName: "Export from staging.json" },
 ];
 
@@ -88,13 +88,13 @@ describe("restore preview helpers", () => {
 
 describe("upload checks", () => {
   it("accepts backup extensions only, within the size limit", () => {
-    assert.equal(isBackupFileName("Backup.SQLITE"), true);
+    assert.equal(isBackupFileName("Backup.JSON"), true);
     assert.equal(isBackupFileName("export.json"), true);
-    assert.equal(isBackupFileName("site.db"), true);
+    assert.equal(isBackupFileName("lms.sqlite"), false, "SQLite files are copied with npm run db:to-postgres, not restored here");
     assert.equal(isBackupFileName("photo.png"), false);
     assert.match(uploadProblem({ name: "photo.png", size: 10 }, 1024) ?? "", /Choose a backup file/);
     assert.match(uploadProblem({ name: "a.json", size: 0 }, 1024) ?? "", /empty/);
-    assert.match(uploadProblem({ name: "a.sqlite", size: 3 * 1024 * 1024 }, 2 * 1024 * 1024) ?? "", /larger than the 2 MB limit/);
-    assert.equal(uploadProblem({ name: "a.sqlite", size: 100 }, 1024), null);
+    assert.match(uploadProblem({ name: "a.json", size: 3 * 1024 * 1024 }, 2 * 1024 * 1024) ?? "", /larger than the 2 MB limit/);
+    assert.equal(uploadProblem({ name: "a.json", size: 100 }, 1024), null);
   });
 });

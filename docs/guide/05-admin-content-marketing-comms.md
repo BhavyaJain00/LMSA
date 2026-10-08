@@ -390,9 +390,9 @@ The **File storage** section is read-only: it reflects `.env`. With local storag
 
 Click **Test connection** to write a small file, read it back (and download it through a signed link when using S3), then delete it. Each step shows a tick and its time.
 
-**To move uploads to AWS S3, Cloudflare R2, Backblaze B2 or MinIO:**
+**To move uploads to AWS S3** (the recommended storage for a live site; Cloudflare R2, Backblaze B2 and MinIO also work):
 
-1. Create a bucket and an access key with read/write rights at your provider.
+1. Create a private bucket and an access key limited to that bucket. For AWS, [ENV-SETUP.md](../../ENV-SETUP.md), section 4, has every step (free-tier rules, a $1 budget alert, the bucket, a lifecycle rule for interrupted uploads and the exact IAM policy).
 2. Open `.env` and set:
 
    | Variable | Value |
@@ -401,9 +401,9 @@ Click **Test connection** to write a small file, read it back (and download it t
    | `S3_BUCKET` | your bucket name |
    | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the access key |
    | `S3_ENDPOINT` | empty for AWS; Cloudflare R2: `https://<account id>.r2.cloudflarestorage.com`; Backblaze B2: `https://s3.<region>.backblazeb2.com`; MinIO: `http://localhost:9000` |
-   | `S3_REGION` | optional; inferred from the endpoint when empty (e.g. `eu-central-1` for AWS; `auto` for R2) |
+   | `S3_REGION` | the bucket's region, e.g. `ap-south-1` for AWS (always set it for AWS: when empty it is inferred from the endpoint and falls back to `us-east-1`); `auto` for R2 |
    | `S3_FORCE_PATH_STYLE` | `true` for MinIO (usually) |
-   | `S3_PUBLIC_BASE_URL` | optional `https://` CDN or public-bucket origin for files that are not protected. Its CORS rules must allow GET from `APP_URL` |
+   | `S3_PUBLIC_BASE_URL` | leave empty with a private bucket (every file is then served through the app, and the bucket needs no CORS rules). Only for an `https://` CDN in front of the bucket, for files that are not protected; its CORS rules must then allow GET from `APP_URL` |
 
 3. Restart the app and open **Storage & video**. If something is missing you see "STORAGE_DRIVER is s3, but … is missing"; files stay on this server until it is fixed.
 4. Click **Test connection**.

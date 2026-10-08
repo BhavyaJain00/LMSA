@@ -2,7 +2,7 @@
 
 This chapter is the front door of the manual. It explains what the platform can do, how to run it on your own computer, how signing in works, which roles exist and what each one may do, and where every page lives.
 
-> **Status.** Rounds 1 and 2 were tested page by page in a browser. Round 3 features (marked "Round 3" in the overview below: the SQLite database, membership plans, bundles, gifts, teams, affiliates, the instructor marketplace, direct messages, the AI tutor, rubrics and peer review, the blog, the interface languages, the developer API and more) are **built and covered by automated tests; not yet tried in a browser.**
+> **Status.** Rounds 1 and 2 were tested page by page in a browser. Round 3 features (marked "Round 3" in the overview below: the PostgreSQL (Supabase) database, membership plans, bundles, gifts, teams, affiliates, the instructor marketplace, direct messages, the AI tutor, rubrics and peer review, the blog, the interface languages, the developer API and more) are **built and covered by automated tests; not yet tried in a browser.**
 
 Other chapters:
 
@@ -89,7 +89,7 @@ Course editor (chapters, lessons, content blocks, video upload with conversion t
 
 - **People and money ([04](04-admin-people-and-money.md)):** members (add, import from CSV, roles, enable or disable), teams, instructor marketplace and payouts, affiliates, payment gateways, transactions, coupons, plans, bundles, installments, gifts, taxes and currencies, upsells, revenue analytics.
 - **Content, marketing and communication ([05](05-admin-content-marketing-comms.md)):** general and brand settings, feature switches, learning rules, categories, badges, points, the sidebar, legal pages and the cookie banner, SEO (sitemaps, redirects, indexing, tracking pixels), the blog, lead capture (`/free`), email settings, the email outbox, broadcasts and automated email sequences.
-- **System and developers ([06](06-admin-system-and-developers.md)):** backups and restore, reload demo data, audit log, error log, login activity, security rules, storage (local or S3), video processing (ffmpeg), automatic captions, AI tutor settings, the installable app, the REST API and webhooks (`/developers`), and going live ([DEPLOYMENT.md](../../DEPLOYMENT.md)).
+- **System and developers ([06](06-admin-system-and-developers.md)):** backups and restore, reload demo data, audit log, error log, login activity, security rules, storage (local disk or AWS S3), video processing (ffmpeg), automatic captions, AI tutor settings, the installable app, the REST API and webhooks (`/developers`), and going live ([DEPLOYMENT.md](../../DEPLOYMENT.md)).
 
 ### Switching features on and off
 
@@ -126,12 +126,13 @@ When a feature is off, its menu links disappear and its pages answer "not found"
 
 | You need | Why | Notes |
 |---|---|---|
-| **Node.js 22.13 or newer** (Node.js 24 recommended) | The app runs on Node.js, and the database uses Node's built-in `node:sqlite` module | The code stops with "SQLite storage needs Node.js 22.13 or newer" on older versions. `package.json` has no `engines` field, so npm will not warn you; check with `node --version`. The Docker image and `DEPLOYMENT.md` use Node.js 24. |
+| **Node.js 24** | The app and its tests run on Node.js | `package.json` has no `engines` field, so npm will not warn you about an older version; check with `node --version`. The Docker image and `DEPLOYMENT.md` use Node.js 24. |
+| **A PostgreSQL database** | Every record (members, courses, progress, orders, settings) is stored there | A free [Supabase](https://supabase.com) project is enough. The app does not start without it. [ENV-SETUP.md](../../ENV-SETUP.md), section 3, shows each click. |
 | npm | Installs the packages | Comes with Node.js |
 | A modern browser | To use the site | Chrome, Edge, Firefox or Safari |
 | ffmpeg and ffprobe (optional) | Converts uploaded videos to adaptive streaming (1080p/720p/480p) and makes thumbnails | Without them, videos play as the uploaded file. Set `FFMPEG_PATH` / `FFPROBE_PATH` if they are not on your PATH. |
 
-Nothing else is needed: there is no separate database server to install.
+You do not install a database server yourself: Supabase runs it for you. (Without Supabase, any PostgreSQL 13 or newer works, see [DEPLOYMENT.md](../../DEPLOYMENT.md), section 15.)
 
 ### 2.2 First start, step by step
 
@@ -147,18 +148,23 @@ Nothing else is needed: there is no separate database server to install.
    copy .env.example .env      # Windows Command Prompt or PowerShell
    ```
    `.env` holds secrets and server options. It is never committed to Git (`.gitignore` excludes it).
-4. **Check the few values that matter** (section 2.3). For a first local try you can leave everything as it is.
-5. **Start the development server:**
+4. **Connect the database.** Create a Supabase project, click **Connect**, and paste the two connection strings into `.env` as `DATABASE_URL` (port 6543, ending in `?pgbouncer=true&connection_limit=5`) and `DIRECT_URL` (port 5432). The other values (section 2.3) can stay as they are for a first local try.
+5. **Create the tables:**
+   ```sh
+   npm run db:setup
+   ```
+   This runs `prisma migrate deploy`. Run it again after every code update.
+6. **Start the development server:**
    ```sh
    npm run dev
    ```
-   Wait until the terminal says the server is ready. On the very first start you also see `[store] created a new SQLite database at …`.
-6. **Open the site** at `http://localhost:3000`. As a guest you see the landing page. Click **Log in** (top right) and use a demo account from section 5, for example `admin@learnloop.test` with password `password123`.
-7. **Stop the server** with `Ctrl + C` in the terminal. Your data stays in the `storage/` folder.
+   Wait until the terminal says the server is ready. On the very first start you also see `[store] filled the new database at …`. If `DATABASE_URL` is missing, the server stops with a message that points to ENV-SETUP.md.
+7. **Open the site** at `http://localhost:3000`. As a guest you see the landing page. Click **Log in** (top right) and use a demo account from section 5, for example `admin@learnloop.test` with password `password123`.
+8. **Stop the server** with `Ctrl + C` in the terminal. Your records stay in the database; uploaded files and backups stay in the `storage/` folder.
 
 ### 2.3 The settings that matter locally
 
-All values are optional in development. These are the ones worth knowing:
+In development only `DATABASE_URL` and `DIRECT_URL` are required. These are the values worth knowing:
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -171,12 +177,14 @@ All values are optional in development. These are the ones worth knowing:
 | `MAIL_TRANSPORT` | `log` | `log` keeps emails in the outbox without sending them (ideal locally). `smtp` sends real email (needs `SMTP_HOST` etc.). |
 | `LL_DEV_LOGIN` | empty | Set to `1` to enable the development sign-in shortcut for automated tests (section 3.9). Ignored in production. |
 | `SESSION_DAYS` | `30` | How long you stay signed in. |
-| `DB_DRIVER` | `sqlite` | `json` stores everything in one JSON file instead (development only). |
+| `DATABASE_URL` | empty | **Required.** The PostgreSQL connection the app uses (Supabase: the transaction pooler, port 6543, with `?pgbouncer=true&connection_limit=5`). |
+| `DIRECT_URL` | empty | The connection `npm run db:setup` uses to create the tables (Supabase: port 5432). |
+| `STORAGE_DIR` | `storage` | Folder for backups, the SEO files and the generated development secret. |
 | `UPLOAD_DIR` | `storage/uploads` | Where uploaded files go. |
 
 The full list (storage, S3, video, captions, AI, email, payments, proxies) is in `.env.example` and explained in [06 Admin part 3](06-admin-system-and-developers.md) and [DEPLOYMENT.md](../../DEPLOYMENT.md).
 
-> **Good to know.** The database is created only once. `SEED_DEMO_DATA` and the `ADMIN_…` values are read when there is no database yet; changing them later has no effect on an existing database. To start over, see section 2.6.
+> **Good to know.** The database is filled only once. `SEED_DEMO_DATA` and the `ADMIN_…` values are read when the database is still empty; changing them later has no effect on a database that already holds data. To start over, see section 2.6.
 
 ### 2.4 Starting with an empty site and your own admin
 
@@ -188,25 +196,25 @@ The full list (storage, S3, video, captions, AI, email, payments, proxies) is in
    ADMIN_EMAIL=you@example.com
    ADMIN_PASSWORD=a-long-password-1
    ```
-3. Make sure no database exists yet (move `storage/lms.sqlite`, `storage/lms.sqlite-wal` and `storage/lms.sqlite-shm` aside, and make sure there is no `storage/db.json`, which would be imported instead).
+3. Make sure `DATABASE_URL` points at an **empty** database: for example create a new Supabase project for it, put its two connection strings in `.env` and run `npm run db:setup`.
 4. Run `npm run dev` and sign in with that email and password.
 
 The first admin receives every staff role (Admin, Moderator, Course creator and Evaluator). Their username is the part of the email before the `@`. If `ADMIN_EMAIL` or `ADMIN_PASSWORD` is missing, the app stops with: "SEED_DEMO_DATA=false requires ADMIN_EMAIL and ADMIN_PASSWORD in your .env file to create the first admin account."
 
 ### 2.5 Where your data is stored
 
-Everything the platform stores lives in the `storage/` folder of the project. The folder is excluded from Git, so it is never pushed to GitHub. Back it up if it matters to you.
+The records (members, courses, progress, orders, settings, everything) live in the PostgreSQL database named by `DATABASE_URL`. Files live in the `storage/` folder of the project (`STORAGE_DIR`). The folder is excluded from Git, so it is never pushed to GitHub. Back it up if it matters to you.
 
 | Path | Contents |
 |---|---|
-| `storage/lms.sqlite` (plus `-wal` and `-shm` files) | The database: members, courses, progress, orders, settings, everything. Change the location with `SQLITE_PATH`. |
-| `storage/uploads/` | Uploaded files: images, documents, videos and their converted versions. Change with `UPLOAD_DIR`, or use S3-compatible storage (`STORAGE_DRIVER=s3`). |
-| `storage/backups/` | Automatic daily database backups (the newest 14 are kept; `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP`) and backups you make in **Admin → Settings → Backup & restore**. |
+| `storage/uploads/` | Uploaded files: images, documents, videos and their converted versions. Change with `UPLOAD_DIR`, or store them in an AWS S3 bucket (`STORAGE_DRIVER=s3`, the usual choice for a live site). |
+| `storage/backups/` | Database backups as JSON exports: the automatic daily ones (the newest 14 are kept; `DB_AUTO_BACKUP`, `DB_BACKUP_KEEP`) and the ones you make in **Admin → Settings → Backup & restore**. |
 | `storage/.app-secret` | The generated development secret (only when `APP_SECRET` is empty). |
 | `storage/seo/` | Files used by the SEO features (for example IndexNow). |
-| `storage/db.json` | The old JSON database. If it exists when a new SQLite database is created, it is imported once and renamed to `db.json.migrated-<timestamp>`. With `DB_DRIVER=json` it is the live database. |
 
-Only one app process may use the database at a time. If you see "is locked by another process", stop the other server or backup script first.
+Older versions kept the records in `storage/lms.sqlite` or `storage/db.json`. The app no longer reads them; copy them into PostgreSQL once with `npm run db:to-postgres` (see [ENV-SETUP.md](../../ENV-SETUP.md), section 3).
+
+Run only one app server per database at a time: the app keeps the records in memory, so two servers on the same database would overwrite each other's changes.
 
 ### 2.6 Resetting to the demo data
 
@@ -220,19 +228,20 @@ There are three ways.
 
 What happens: your current data is first saved as a safety backup (you can restore it from the backup list on the same page), then every record (members, courses, progress, payments and settings) is replaced with the original demo content, and everyone is signed out. If your admin account also exists in the demo data, you stay signed in and see "Demo data reloaded. Your previous data is kept as …". Otherwise you are sent to the log-in page with "Demo data reloaded. Sign in with a demo account (password: password123)." If the site was started with `SEED_DEMO_DATA=false`, the card warns you that the admin account from your `.env` file will be gone.
 
-**B. Start from a fresh database file.**
+**B. Start from a fresh, empty database.**
 
 1. Stop the server.
-2. Move or delete `storage/lms.sqlite`, `storage/lms.sqlite-wal` and `storage/lms.sqlite-shm` (and make sure there is no `storage/db.json`).
-3. Start the server again. A new database is built from `SEED_DEMO_DATA` (demo site or empty site with your admin).
+2. Point `DATABASE_URL` and `DIRECT_URL` at an empty database (for example a new Supabase project) and run `npm run db:setup`.
+3. Start the server again. The empty database is filled from `SEED_DEMO_DATA` (demo site or empty site with your admin).
 
 **C. Restore a backup** (to go back to an earlier state rather than the demo):
 
 ```sh
-npm run db:restore -- "storage/backups/<backup file>"
+npm run db:restore -- latest --dry-run                      # shows what would change
+npm run db:restore -- "storage/backups/<backup file>" --force
 ```
 
-Stop the app first. The damaged or replaced file is kept next to the database as `<name>.damaged-<timestamp>`. Related commands: `npm run db:backup` (make a backup now) and `npm run db:export` (export the database as JSON). Restoring from the admin page is described in [06 Admin part 3](06-admin-system-and-developers.md).
+A database that already holds data is only replaced with `--force`; its current data is first saved as a "safety" backup, so the restore can be undone. Related commands: `npm run db:backup` (make a backup now) and `npm run db:export` (export the database as JSON). Restoring from the admin page is described in [06 Admin part 3](06-admin-system-and-developers.md).
 
 ### 2.7 Other useful commands
 
@@ -240,9 +249,11 @@ Stop the app first. The damaged or replaced file is kept next to the database as
 |---|---|
 | `npm run dev` | Development server with automatic reload when code changes |
 | `npm run build` then `npm run start` | Production build and server. Needed to try the installable app and offline page. Production requires `APP_SECRET` (and an `https://` `APP_URL` unless it is a local address). |
-| `npm test` | Runs the automated tests |
+| `npm test` | Runs the automated tests (they use an in-memory test database, never yours) |
 | `npm run lint` | Checks the code style |
+| `npm run db:setup` | Creates or updates the database tables (after every code update) |
 | `npm run db:backup` / `db:restore` / `db:export` | Database backup, restore and JSON export |
+| `npm run db:to-postgres` | Copies an older version's `storage/lms.sqlite` or `storage/db.json` into an empty PostgreSQL database |
 
 ### 2.8 Emails while developing
 
@@ -262,7 +273,7 @@ To send real email, set `MAIL_TRANSPORT=smtp` and the `SMTP_…` values (see [05
 | Anthropic API key | AI tutor | `ANTHROPIC_API_KEY` or **Admin → Settings → AI tutor** |
 | SMTP server | Real email | `MAIL_TRANSPORT=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` |
 | Stripe / Razorpay | Online card payments | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`; **Admin → Settings → Payments** |
-| S3-compatible storage | Uploads in the cloud | `STORAGE_DRIVER=s3` and the `S3_…` values |
+| AWS S3 (or another S3-compatible service) | Uploads in the cloud, recommended for a live site | `STORAGE_DRIVER=s3`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (step by step in [ENV-SETUP.md](../../ENV-SETUP.md), section 4); check with **Test connection** in **Admin → Settings → Storage & video** |
 
 ---
 

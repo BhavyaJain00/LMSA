@@ -30,7 +30,7 @@ function parseResponse(text: string): { ok: true; backup: BackupInfo } | { ok: f
 }
 
 /**
- * "Restore from a file": sends a `.sqlite` backup or JSON export to the
+ * "Restore from a file": sends a JSON export made by this site to the
  * server as the raw request body (streamed to disk there), with progress and
  * cancel. Nothing is restored by the upload: `onUploaded` opens the restore
  * confirmation for the stored file.
@@ -130,7 +130,7 @@ export function BackupUpload({ maxBytes, onUploaded, disabled }: { maxBytes: num
             <p className="text-sm font-medium text-ink">{t("backups.upload.title")}</p>
             <p className="mt-0.5 text-xs text-ink-muted">
               {t.rich("backups.upload.hint", {
-                ext: ".sqlite",
+                ext: ".json",
                 size: formatBytes(maxBytes),
                 mono: (chunks) => (
                   <span dir="ltr" className="font-mono">

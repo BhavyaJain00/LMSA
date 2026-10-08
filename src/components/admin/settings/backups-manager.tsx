@@ -103,7 +103,7 @@ function RowActions({ row, onRestore, onDetails, onDelete }: RowActionsProps) {
  * restore or delete stored backups (filter by kind, search, pages, bulk
  * delete).
  */
-export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { backups: BackupRow[]; storageFormat: "sqlite" | "json"; maxUploadBytes: number }) {
+export function BackupsManager({ backups, maxUploadBytes }: { backups: BackupRow[]; maxUploadBytes: number }) {
   const t = useT("admin");
   const tc = useT("common");
   const f = useFormatter();
@@ -195,31 +195,9 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
         <Button leftIcon={<Icon.Plus className="size-4" />} onClick={() => setCreateOpen(true)}>
           {t("backups.createNow")}
         </Button>
-        <Dropdown
-          align="start"
-          className="max-sm:block"
-          trigger={
-            <span className={buttonClasses({ variant: "outline", className: "max-sm:w-full" })}>
-              <Icon.Download className="size-4" />
-              {t("backups.downloadCurrent")}
-              <Icon.ChevronDown className="size-4 text-ink-muted" />
-            </span>
-          }
-          items={[
-            {
-              label: t("backups.download.sqlite"),
-              description: t("backups.download.sqliteHint"),
-              icon: <Icon.Database />,
-              onClick: () => startDownload("/api/admin/backup?format=sqlite"),
-            },
-            {
-              label: t("backups.download.json"),
-              description: t("backups.download.jsonHint"),
-              icon: <Icon.FileText />,
-              onClick: () => startDownload("/api/admin/backup?format=json"),
-            },
-          ]}
-        />
+        <Button variant="outline" className="max-sm:w-full" leftIcon={<Icon.Download className="size-4" />} onClick={() => startDownload("/api/admin/backup")}>
+          {t("backups.downloadCurrent")}
+        </Button>
       </div>
 
       <BackupUpload maxBytes={maxUploadBytes} onUploaded={onUploaded} />
@@ -448,7 +426,7 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
         }
       >
         <form id="create-backup-form" onSubmit={create.onSubmit} noValidate className="space-y-3">
-          <p className="text-sm text-ink-muted">{t("backups.create.description", { format: storageFormat })}</p>
+          <p className="text-sm text-ink-muted">{t("backups.create.description")}</p>
           <Field label={t("backups.create.note")} htmlFor="backup-note" hint={t("backups.create.noteHint")}>
             <Input id="backup-note" name="note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={MAX_NOTE_LENGTH} autoComplete="off" />
           </Field>
@@ -517,7 +495,7 @@ export function BackupsManager({ backups, storageFormat, maxUploadBytes }: { bac
               <div>
                 <dt className="text-xs text-ink-muted">{t("backups.file")}</dt>
                 <dd className="mt-0.5 text-ink">
-                  {details.format === "sqlite" ? "SQLite" : "JSON"}, {formatBytes(details.sizeBytes)}
+                  JSON, {formatBytes(details.sizeBytes)}
                   {details.schemaVersion !== null && details.schemaVersion > 0 && <span className="text-ink-muted"> · {t("backups.details.schema", { version: details.schemaVersion })}</span>}
                 </dd>
               </div>
