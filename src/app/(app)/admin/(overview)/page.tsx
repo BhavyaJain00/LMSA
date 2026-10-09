@@ -3,20 +3,17 @@ import { getSettings } from "@/lib/db/store";
 import { getAdminOverview } from "@/lib/data/dashboard";
 import { runAutomaticPaymentReminders } from "@/lib/data/commerce";
 import { ButtonLink } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icons";
-import { DashboardBatchCard, DashboardCourseCard } from "@/components/dashboard/cards";
-import { EvaluationCard } from "@/components/dashboard/evaluation-card";
-import { LiveClassCard } from "@/components/dashboard/live-class-card";
-import { DashboardSection } from "@/components/dashboard/section";
+import { PageContainer } from "@/components/ui/page";
 import {
-  ActivityFeed,
-  KpiCard,
-  QuickLinksGrid,
-  RecentEnrollmentsTable,
-  RecentSignupsList,
-  type QuickLink,
+  AttentionList,
+  EventList,
+  OverviewSection,
+  RecentEnrollmentsList,
+  StatTile,
+  type AttentionItem,
 } from "@/components/dashboard/admin/overview-blocks";
+import { OverviewEventRow, type OverviewEvent } from "@/components/dashboard/admin/coming-up-row";
 import type { Metadata } from "next";
 import { getFormatter, getT } from "@/i18n/server";
 import type { Formatters } from "@/i18n/formatters";
@@ -26,6 +23,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: t("pages.overview.metaTitle") };
 }
 
+/** Rows shown in "Coming up" and "Recent enrollments". */
+const COMING_UP_MAX = 3;
+const RECENT_MAX = 5;
+
 function money(f: Formatters, cents: number, currency: string): string {
   try {
     return f.number(cents / 100, { style: "currency", currency, maximumFractionDigits: cents % 100 === 0 ? 0 : 2 });
@@ -34,11 +35,15 @@ function money(f: Formatters, cents: number, currency: string): string {
   }
 }
 
+function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name;
+}
+
 export default async function AdminOverviewPage() {
   const user = await requireRole(["course_creator", "moderator", "batch_evaluator"], "/admin");
   // Daily payment reminders (no scheduler): idempotent, at most once per unpaid order per day.
   if (isAdmin(user)) await runAutomaticPaymentReminders();
-  const [settings, data, t, fmt] = await Promise.all([getSettings(), getAdminOverview(user), getT("admin"), getFormatter()]);
+  const [settings, data, t, ta, fmt] = await Promise.all([getSettings(), getAdminOverview(user), getT("admin"), getT("account"), getFormatter()]);
   const formatNumber = (n: number) => fmt.number(n);
   const liveCount = data.upcomingCounts.liveClasses;
   const evalCount = data.upcomingCounts.evaluations;
@@ -51,236 +56,190 @@ export default async function AdminOverviewPage() {
           ? t("pages.overview.subtitle.evaluations", { evaluations: evalCount })
           : t("pages.overview.subtitle.none");
   const f = settings.features;
+  const admin = isAdmin(user);
   const moderator = isModerator(user);
   const creator = hasRole(user, "course_creator", "moderator");
-  const evaluator = hasRole(user, "batch_evaluator", "moderator");
   const k = data.kpis;
-  const pendingGrading = k.pendingAssignments + k.pendingQuizzes;
+  const scheduleHref = `/user/${user.username}/schedule`;
 
-  const links: QuickLink[] = [];
-  if (creator && f.courses) {
-    links.push({ label: t("pages.overview.links.courses.label"), description: t("pages.overview.links.courses.description"), href: "/admin/courses", icon: "Book", count: data.counts.courses });
-  }
-  if (f.batches) {
-    links.push({ label: t("pages.overview.links.batches.label"), description: t("pages.overview.links.batches.description"), href: "/admin/batches", icon: "Users", count: data.counts.batches });
-  }
-  if (moderator && f.programs) {
-    links.push({ label: t("pages.overview.links.programs.label"), description: t("pages.overview.links.programs.description"), href: "/admin/programs", icon: "Layers", count: data.counts.programs });
-  }
-  if (creator) {
-    links.push({ label: t("pages.overview.links.quizzes.label"), description: t("pages.overview.links.quizzes.description"), href: "/admin/quizzes", icon: "ListChecks", count: data.counts.quizzes });
-    links.push({ label: t("pages.overview.links.questions.label"), description: t("pages.overview.links.questions.description"), href: "/admin/questions", icon: "Question", count: data.counts.questions });
-  }
-  links.push({ label: t("pages.overview.links.assignments.label"), description: t("pages.overview.links.assignments.description"), href: "/admin/assignments", icon: "ClipboardList", count: data.counts.assignments });
-  links.push({
-    label: t("pages.overview.links.gradingQueue.label"),
-    description: t("pages.overview.links.gradingQueue.description"),
-    href: "/admin/assignments/submissions?status=not_graded",
-    icon: "Inbox",
-    count: k.pendingAssignments,
-    highlight: k.pendingAssignments > 0,
-  });
-  if (creator) {
-    links.push({
-      label: t("pages.overview.links.quizSubmissions.label"),
-      description: t("pages.overview.links.quizSubmissions.description"),
-      href: "/admin/quizzes/submissions",
-      icon: "Target",
+  /* Needs your attention: every pending count the overview computes (rows with zero are hidden). */
+  const attention: AttentionItem[] = [
+    {
+      key: "assignments",
+      icon: "ClipboardList",
+      count: k.pendingAssignments,
+      label: t("pages.overview.attention.assignments"),
+      description: t("pages.overview.links.gradingQueue.description"),
+      href: "/admin/assignments/submissions?status=not_graded",
+    },
+    {
+      key: "quizzes",
+      icon: "ListChecks",
       count: k.pendingQuizzes,
-      highlight: k.pendingQuizzes > 0,
-    });
-  }
-  if (creator && f.programmingExercises) {
-    links.push({ label: t("pages.overview.links.exercises.label"), description: t("pages.overview.links.exercises.description"), href: "/admin/exercises", icon: "Code", count: data.counts.exercises });
-  }
-  if (evaluator && f.certifications) {
-    links.push({ label: t("pages.overview.links.certificates.label"), description: t("pages.overview.links.certificates.description"), href: "/admin/certificates", icon: "Certificate", count: data.counts.certificates });
-  }
-  if (moderator && f.jobs) {
-    links.push({ label: t("pages.overview.links.jobs.label"), description: t("pages.overview.links.jobs.description"), href: "/admin/jobs", icon: "Briefcase", count: data.counts.jobs });
-  }
-  if (moderator) {
-    links.push({ label: t("pages.overview.links.members.label"), description: t("pages.overview.links.members.description"), href: "/admin/members", icon: "UserPlus", count: data.counts.members });
-  }
-  if (creator && f.statistics) {
-    links.push({ label: t("pages.overview.links.statistics.label"), description: t("pages.overview.links.statistics.description"), href: "/statistics", icon: "BarChart" });
-  }
-  if (isAdmin(user)) {
-    links.push({ label: t("pages.overview.links.transactions.label"), description: t("pages.overview.links.transactions.description"), href: "/admin/settings/transactions", icon: "Receipt" });
-    links.push({ label: t("pages.overview.links.coupons.label"), description: t("pages.overview.links.coupons.description"), href: "/admin/settings/coupons", icon: "Ticket" });
-    links.push({ label: t("pages.overview.links.settings.label"), description: t("pages.overview.links.settings.description"), href: "/admin/settings", icon: "Settings" });
-  }
+      label: t("pages.overview.attention.quizzes"),
+      description: t("pages.overview.links.quizSubmissions.description"),
+      // Quiz submission review is limited to course creators and moderators.
+      href: creator ? "/admin/quizzes/submissions" : undefined,
+    },
+    {
+      key: "review",
+      icon: "ShieldCheck",
+      count: k.underReview,
+      label: moderator ? t("pages.overview.attention.reviewModerator") : t("pages.overview.attention.reviewMine"),
+      description: moderator ? t("pages.overview.attention.reviewModeratorHint") : t("pages.overview.kpi.waitingModerator"),
+      href: moderator ? "/admin/courses?tab=under_review" : undefined,
+    },
+  ];
 
-  const showEmptyState = data.createdCourses.length === 0 && data.upcomingBatches.length === 0;
+  /* Coming up: the next live classes and evaluations, soonest first. */
+  const events: OverviewEvent[] = [
+    ...data.liveClasses.map((c): OverviewEvent => {
+      // startUrl is only present for viewers allowed to start the meeting.
+      const startHref = c.startUrl || c.joinUrl;
+      return {
+        kind: "live",
+        id: c.id,
+        title: c.title,
+        meta: t("pages.overview.comingUp.liveMeta", { batch: c.batch.title }),
+        href: `/batches/${c.batch.slug}?tab=classes#class-${c.id}`,
+        startsAt: c.startsAt,
+        endsAt: c.endsAt,
+        timezone: c.timezone,
+        action: c.canStart && startHref ? { href: startHref, kind: "start" } : c.joinUrl ? { href: c.joinUrl, kind: "join" } : undefined,
+      };
+    }),
+    ...data.evaluations.map(
+      (e): OverviewEvent => ({
+        kind: "evaluation",
+        id: e.id,
+        title: e.courseTitle,
+        meta: e.member ? t("pages.overview.comingUp.evaluationWith", { name: e.member.name }) : t("pages.overview.comingUp.evaluation"),
+        href: scheduleHref,
+        startsAt: e.startsAt,
+        endsAt: e.endsAt,
+        timezone: e.timezone,
+        action: e.meetingLink ? { href: e.meetingLink, kind: "joinCall" } : undefined,
+      }),
+    ),
+  ]
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())
+    .slice(0, COMING_UP_MAX);
+  const comingUpLink =
+    data.liveClasses.length > 0
+      ? { href: "/admin/batches", label: t("pages.overview.sections.manageBatches") }
+      : { href: scheduleHref, label: t("pages.overview.sections.mySchedule") };
 
   return (
-    <div className="animate-fade-in space-y-10">
-      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <PageContainer className="animate-fade-in space-y-10">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-ink">
-            {t("pages.overview.greeting", { name: user.name })} <span aria-hidden="true">👋</span>
-          </h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-ink">{t("pages.overview.greeting", { name: firstName(user.name) })}</h1>
           <p className="mt-1 text-base text-ink-muted">{subtitle}</p>
-          {data.scope === "mine" && (
-            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-xs text-ink-muted">
-              <Icon.Info className="size-3.5" /> {t("pages.overview.scopeMine")}
-            </p>
-          )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {creator && f.statistics && (
-            <ButtonLink href="/statistics" variant="outline" leftIcon={<Icon.BarChart className="size-4" />}>
-              {t("pages.overview.links.statistics.label")}
-            </ButtonLink>
-          )}
-          {creator && f.courses && (
-            <ButtonLink href="/admin/courses/new" leftIcon={<Icon.Plus className="size-4" />}>
-              {t("pages.overview.createCourse")}
-            </ButtonLink>
-          )}
-        </div>
+        {creator && (f.statistics || f.courses) && (
+          <div className="flex flex-wrap gap-2">
+            {creator && f.statistics && (
+              <ButtonLink href="/statistics" variant="secondary" leftIcon={<Icon.BarChart className="size-4" />}>
+                {t("pages.overview.links.statistics.label")}
+              </ButtonLink>
+            )}
+            {creator && f.courses && (
+              <ButtonLink href="/admin/courses/new" leftIcon={<Icon.Plus className="size-4" />}>
+                {t("pages.overview.createCourse")}
+              </ButtonLink>
+            )}
+          </div>
+        )}
       </header>
 
-      <section aria-label={t("pages.overview.kpi.label")} className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          href={creator ? "/admin/courses" : undefined}
-          label={t("pages.overview.kpi.courses")}
-          value={formatNumber(k.courses)}
-          hint={t("pages.overview.kpi.coursesHint", { published: k.published, drafts: k.courses - k.published })}
-          icon={<Icon.Book className="size-4" />}
-        />
-        <KpiCard
-          label={t("pages.overview.kpi.learners")}
-          value={formatNumber(k.learners)}
-          hint={data.scope === "site" ? t("pages.overview.kpi.newSignups", { count: k.newSignupsThisWeek }) : t("pages.overview.kpi.learnersMine")}
-          icon={<Icon.Users className="size-4" />}
-        />
-        <KpiCard
-          label={t("pages.overview.kpi.enrollmentsWeek")}
-          value={formatNumber(k.enrollmentsThisWeek)}
-          icon={<Icon.UserPlus className="size-4" />}
-          trend={k.enrollmentTrend !== null ? { value: k.enrollmentTrend, label: t("pages.overview.kpi.vsLastWeek", { count: k.enrollmentsLastWeek }) } : undefined}
-          hint={k.enrollmentTrend === null ? t("pages.overview.kpi.noEnrollments") : undefined}
-        />
-        <KpiCard
-          label={t("pages.overview.kpi.completions")}
-          value={formatNumber(k.completions)}
-          hint={t("pages.overview.kpi.completionRate", { rate: fmt.percent(k.completionRate) })}
-          icon={<Icon.Trophy className="size-4" />}
-        />
-        {f.courses && (
-          <KpiCard
-            href={isAdmin(user) ? "/admin/settings/transactions" : undefined}
-            label={t("pages.overview.kpi.revenue")}
-            value={money(fmt, k.revenueThisMonth, k.revenueCurrency)}
-            icon={<Icon.CreditCard className="size-4" />}
-            trend={k.revenueTrend !== null ? { value: k.revenueTrend, label: t("pages.overview.kpi.vsLastMonth") } : undefined}
-            hint={k.revenueTrend === null ? t("pages.overview.kpi.payments", { count: k.paymentsThisMonth }) : undefined}
+      <section aria-label={t("pages.overview.kpi.label")} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile
+            label={t("pages.overview.kpi.learners")}
+            value={formatNumber(k.learners)}
+            hint={data.scope === "site" ? t("pages.overview.kpi.newSignups", { count: k.newSignupsThisWeek }) : t("pages.overview.kpi.learnersMine")}
           />
+          <StatTile
+            label={t("pages.overview.kpi.enrollmentsWeek")}
+            value={formatNumber(k.enrollmentsThisWeek)}
+            trend={k.enrollmentTrend !== null ? { value: k.enrollmentTrend, label: t("pages.overview.kpi.vsLastWeek", { count: k.enrollmentsLastWeek }) } : undefined}
+            hint={k.enrollmentTrend === null ? t("pages.overview.kpi.noEnrollments") : undefined}
+          />
+          <StatTile
+            label={t("pages.overview.kpi.completions")}
+            value={formatNumber(k.completions)}
+            hint={t("pages.overview.kpi.completionRate", { rate: fmt.percent(k.completionRate) })}
+          />
+          {admin && f.courses ? (
+            <StatTile
+              href="/admin/settings/transactions"
+              label={t("pages.overview.kpi.revenue")}
+              value={money(fmt, k.revenueThisMonth, k.revenueCurrency)}
+              trend={k.revenueTrend !== null ? { value: k.revenueTrend, label: t("pages.overview.kpi.vsLastMonth") } : undefined}
+              hint={k.revenueTrend === null ? t("pages.overview.kpi.payments", { count: k.paymentsThisMonth }) : undefined}
+            />
+          ) : (
+            <StatTile
+              href={creator ? "/admin/courses" : undefined}
+              label={t("pages.overview.kpi.published")}
+              value={formatNumber(k.published)}
+              hint={
+                k.courses
+                  ? t("pages.overview.kpi.liveShare", { rate: fmt.percent(Math.round((k.published / k.courses) * 100)) })
+                  : t("pages.overview.kpi.noCourses")
+              }
+            />
+          )}
+        </div>
+        {data.scope === "mine" && (
+          <p className="flex items-center gap-1.5 text-meta text-ink-faint">
+            <Icon.Info className="size-4 shrink-0" aria-hidden="true" />
+            {t("pages.overview.scopeMine")}
+          </p>
         )}
-        <KpiCard
-          href={
-            k.pendingAssignments
-              ? "/admin/assignments/submissions?status=not_graded"
-              : k.pendingQuizzes && creator
-                ? "/admin/quizzes/submissions"
-                : undefined
-          }
-          label={t("pages.overview.kpi.pendingGrading")}
-          value={formatNumber(pendingGrading)}
-          hint={t("pages.overview.kpi.pendingHint", { assignments: k.pendingAssignments, quizzes: k.pendingQuizzes })}
-          icon={<Icon.ClipboardList className="size-4" />}
-        />
-        <KpiCard
-          href={moderator ? "/admin/courses?tab=under_review" : undefined}
-          label={t("pages.overview.kpi.underReview")}
-          value={formatNumber(k.underReview)}
-          hint={k.underReview ? t("pages.overview.kpi.waitingModerator") : t("pages.overview.kpi.nothingWaiting")}
-          icon={<Icon.ShieldCheck className="size-4" />}
-        />
-        <KpiCard
-          label={t("pages.overview.kpi.published")}
-          value={formatNumber(k.published)}
-          hint={k.courses ? t("pages.overview.kpi.liveShare", { rate: fmt.percent(Math.round((k.published / k.courses) * 100)) }) : t("pages.overview.kpi.noCourses")}
-          icon={<Icon.Globe className="size-4" />}
-        />
       </section>
 
-      <DashboardSection title={t("pages.overview.sections.quickLinks")} id="quick-links">
-        <QuickLinksGrid links={links} />
-      </DashboardSection>
+      <OverviewSection id="attention" title={t("pages.overview.attention.title")} description={t("pages.overview.attention.description")}>
+        <AttentionList items={attention} />
+      </OverviewSection>
 
-      {data.evaluations.length > 0 && (
-        <DashboardSection title={t("pages.overview.sections.evaluations")} id="evaluations" href={`/user/${user.username}/schedule`} linkLabel={t("pages.overview.sections.mySchedule")}>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {data.evaluations.map((e) => (
-              <EvaluationCard key={e.id} evaluation={e} variant="evaluator" scheduleHref={`/user/${user.username}/schedule`} />
-            ))}
-          </div>
-        </DashboardSection>
-      )}
-
-      {data.liveClasses.length > 0 && (
-        <DashboardSection title={t("pages.overview.sections.liveClasses")} id="live-classes" href="/admin/batches" linkLabel={t("pages.overview.sections.manageBatches")}>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {data.liveClasses.map((c) => (
-              <LiveClassCard key={c.id} liveClass={c} />
-            ))}
-          </div>
-        </DashboardSection>
-      )}
-
-      <div className="grid gap-8 xl:grid-cols-3">
-        <DashboardSection title={t("pages.overview.sections.recentEnrollments")} id="recent-enrollments" className="xl:col-span-2">
-          <RecentEnrollmentsTable rows={data.recentEnrollments} />
-        </DashboardSection>
-        <DashboardSection
-          title={data.scope === "site" ? t("pages.overview.sections.recentSignups") : t("pages.overview.sections.newestLearners")}
-          id="recent-signups"
-          href={moderator ? "/admin/members" : undefined}
-          linkLabel={t("pages.overview.sections.allMembers")}
+      {events.length > 0 && (
+        <OverviewSection
+          id="coming-up"
+          title={t("pages.overview.comingUp.title")}
+          description={t("pages.overview.comingUp.description")}
+          href={comingUpLink.href}
+          linkLabel={comingUpLink.label}
         >
-          <RecentSignupsList users={data.recentSignups} showEmail={moderator} />
-        </DashboardSection>
-      </div>
-
-      <DashboardSection title={t("pages.overview.sections.activity")} id="activity">
-        <ActivityFeed items={data.activity} />
-      </DashboardSection>
-
-      {showEmptyState ? (
-        <Card className="flex flex-col items-center px-6 py-14 text-center">
-          <Icon.GraduationCap className="size-10 text-ink-faint" />
-          <h2 className="mt-3 text-lg font-semibold text-ink">{t("pages.overview.empty.title")}</h2>
-          <p className="mt-1 max-w-md text-sm text-ink-muted">{t("pages.overview.empty.description")}</p>
-          {creator && (
-            <ButtonLink href="/admin/courses/new" className="mt-5" leftIcon={<Icon.Plus className="size-4" />}>
-              {t("pages.overview.createCourse")}
-            </ButtonLink>
-          )}
-        </Card>
-      ) : (
-        <>
-          {data.createdCourses.length > 0 && (
-            <DashboardSection title={t("pages.overview.sections.coursesCreated")} id="courses-created" href="/admin/courses">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {data.createdCourses.map((c) => (
-                  <DashboardCourseCard key={c.id} course={c} />
-                ))}
-              </div>
-            </DashboardSection>
-          )}
-          {data.upcomingBatches.length > 0 && (
-            <DashboardSection title={t("pages.overview.sections.upcomingBatches")} id="upcoming-batches" href="/admin/batches">
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {data.upcomingBatches.map((b) => (
-                  <DashboardBatchCard key={b.id} batch={b} />
-                ))}
-              </div>
-            </DashboardSection>
-          )}
-        </>
+          <EventList>
+            {events.map((event) => (
+              <OverviewEventRow key={`${event.kind}:${event.id}`} event={event} />
+            ))}
+          </EventList>
+        </OverviewSection>
       )}
-    </div>
+
+      <OverviewSection
+        id="recent-enrollments"
+        title={t("pages.overview.sections.recentEnrollments")}
+        description={t("pages.overview.recent.description")}
+        href={moderator ? "/admin/members" : undefined}
+        linkLabel={t("pages.overview.sections.allMembers")}
+      >
+        <RecentEnrollmentsList
+          rows={data.recentEnrollments.slice(0, RECENT_MAX)}
+          empty={
+            creator && k.courses === 0 ? (
+              <>
+                <span className="block font-semibold text-ink">{t("pages.overview.empty.title")}</span>
+                <span className="mt-0.5 block text-sm">{t("pages.overview.empty.description")}</span>
+              </>
+            ) : (
+              ta("dashboard.admin.noEnrollments")
+            )
+          }
+        />
+      </OverviewSection>
+    </PageContainer>
   );
 }

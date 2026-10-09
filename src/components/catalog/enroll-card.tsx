@@ -25,9 +25,7 @@ import { toPlanView, type InstallmentPlanView } from "@/lib/commerce/installment
 import { InstallmentNotice, orderPath } from "@/components/commerce/installment-plan-card";
 import { GiveGiftLink } from "@/components/commerce/give-gift-link";
 import { ClaimCertificateButton, EnrollButton, LeaveCourseButton } from "./enroll-actions";
-import { enrolledTier } from "./format";
-import { isPaidCourse, PriceTag } from "./price-tag";
-import { PrerequisiteList } from "./prerequisite-list";
+import { coursePriceLabel, isPaidCourse } from "./price-tag";
 
 export interface EnrollCardEnrollment {
   progress: number;
@@ -39,6 +37,7 @@ export interface EnrollCardEnrollment {
   viaBatch: boolean;
 }
 
+/** What the course contains (shown on the course page's "Course content" line). */
 export interface CourseIncludes {
   enrolledCount: number;
   lessonCount: number;
@@ -75,57 +74,105 @@ export interface EnrollCardProps {
   /** A paid payment exists for this course but the enrollment is missing. */
   alreadyPaid: boolean;
   batches: { slug: string; title: string; startDate: string }[];
-  includes: CourseIncludes;
   certificationsEnabled: boolean;
   /** The AI tutor's full page for this course, when the viewer may use it. */
   askAiHref?: string | null;
+  /** Anchor of the page's prerequisites card (linked from the "complete prerequisites" state). */
+  prerequisitesAnchor?: string;
   className?: string;
 }
 
-function IncludeRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+const secondaryLink = "inline-flex items-center gap-1.5 font-medium text-accent hover:underline";
+
+/** One small line under the main button: an icon (accent for links, quiet for information) and its content. */
+function SecondaryItem({ icon, children, tone = "accent" }: { icon: ReactNode; children: ReactNode; tone?: "accent" | "muted" }) {
   return (
-    <li className="flex items-center gap-2.5 text-sm text-ink-muted">
-      <span className="text-ink-faint [&>svg]:size-4">{icon}</span>
-      <span>{children}</span>
+    <li className="flex items-start gap-1.5 text-sm text-ink-muted">
+      <span className={cn("mt-0.5 shrink-0 [&>svg]:size-4", tone === "accent" ? "text-accent" : "text-ink-faint")} aria-hidden="true">
+        {icon}
+      </span>
+      <span className="min-w-0">{children}</span>
     </li>
   );
 }
 
-async function CertificateLinks({ props }: { props: EnrollCardProps }) {
+/**
+ * The certificate line: what the course awards (with a link to the certification page) for visitors and staff,
+ * and the learner's next certificate step once enrolled (view, get certified, buy the evaluation, or finish
+ * the lessons). Claiming a free certificate is a button and is rendered above the list instead.
+ */
+async function CertificateItem({ props }: { props: EnrollCardProps }) {
   const { course, enrollment, certificate, certificationsEnabled, manager } = props;
-  if (!enrollment || !certificationsEnabled || manager) return null;
+  if (!certificationsEnabled) return null;
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
-  if (certificate) {
-    return (
-      <ButtonLink href={`/certificates/${certificate.code}`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-        {t("enroll.viewCertificate")}
-      </ButtonLink>
-    );
-  }
-  if (course.paidCertificate) {
-    if (enrollment.purchasedCertificate) {
+  const details = (
+    <Link href={`/courses/${course.slug}/certification`} className="font-medium text-accent hover:underline">
+      {t("enroll.certificateDetails")}
+    </Link>
+  );
+  const withDetails = (main: ReactNode) => (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5">
+      {main}
+      <span aria-hidden="true">·</span>
+      {details}
+    </span>
+  );
+
+  if (enrollment && !manager) {
+    if (certificate) {
       return (
-        <ButtonLink href={`/courses/${course.slug}/certification`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-          {t("enroll.getCertified")}
-        </ButtonLink>
+        <SecondaryItem icon={<Icon.GraduationCap />}>
+          {withDetails(
+            <Link href={`/certificates/${certificate.code}`} className={secondaryLink}>
+              {t("enroll.viewCertificate")}
+            </Link>,
+          )}
+        </SecondaryItem>
       );
     }
-    return (
-      <ButtonLink href={`/billing/certificate/${course.id}`} variant="outline" className="w-full" leftIcon={<Icon.GraduationCap className="size-4" />}>
-        {t("enroll.getCertifiedFor", { price: f.price(course.certificatePrice, course.currency) })}
-      </ButtonLink>
-    );
+    if (course.paidCertificate) {
+      if (enrollment.purchasedCertificate) {
+        return (
+          <SecondaryItem icon={<Icon.GraduationCap />}>
+            <Link href={`/courses/${course.slug}/certification`} className={secondaryLink}>
+              {t("enroll.getCertified")}
+            </Link>
+          </SecondaryItem>
+        );
+      }
+      return (
+        <SecondaryItem icon={<Icon.GraduationCap />}>
+          {withDetails(
+            <Link href={`/billing/certificate/${course.id}`} className={secondaryLink}>
+              {t("enroll.getCertifiedFor", { price: f.price(course.certificatePrice, course.currency) })}
+            </Link>,
+          )}
+        </SecondaryItem>
+      );
+    }
+    if (course.enableCertification) {
+      // Completed: the claim button above the list replaces this line.
+      if (enrollment.completed) return null;
+      return (
+        <SecondaryItem icon={<Icon.Award />} tone="muted">
+          {withDetails(<span>{t("enroll.finishForCertificate")}</span>)}
+        </SecondaryItem>
+      );
+    }
+    return null;
   }
-  if (course.enableCertification) {
-    if (enrollment.completed) return <ClaimCertificateButton slug={course.slug} />;
-    return (
-      <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-        <Icon.Award className="mt-px size-4 shrink-0 text-ink-faint" aria-hidden="true" />
-        {t("enroll.finishForCertificate")}
-      </p>
-    );
-  }
-  return null;
+
+  if (!course.enableCertification && !course.paidCertificate) return null;
+  const label = course.paidCertificate
+    ? course.certificatePrice > 0
+      ? t("enroll.certificateEvaluationPrice", { price: f.price(course.certificatePrice, course.currency) })
+      : t("enroll.includes.certificateEvaluation")
+    : t("enroll.includes.certificateCompletion");
+  return (
+    <SecondaryItem icon={<Icon.Award />} tone="muted">
+      {withDetails(<span>{label}</span>)}
+    </SecondaryItem>
+  );
 }
 
 /** Viewer-specific state the card resolves itself (prerequisites, scheduled content). */
@@ -226,48 +273,6 @@ async function NextUnlockNote({ drip }: { drip: DripOverview | null }) {
   );
 }
 
-async function PrerequisitesBlock({ status, loggedIn, manager }: { status: PrerequisiteStatus; loggedIn: boolean; manager: boolean }) {
-  if (!status.items.length) return null;
-  const t = await getT("public");
-  const allDone = loggedIn && !status.missing.length;
-  const description = manager
-    ? t("enroll.prerequisites.manager")
-    : !loggedIn
-      ? t("enroll.prerequisites.guest")
-      : allDone
-        ? t("enroll.prerequisites.allDone")
-        : status.blocking
-          ? t("enroll.prerequisites.blocking", { count: status.missing.length })
-          : t("enroll.prerequisites.recommended");
-  return (
-    <section aria-labelledby="prerequisites-heading" className="space-y-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="prerequisites-heading" className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-          <Icon.ListChecks className="size-4 text-ink-faint" aria-hidden="true" />
-          {t("enroll.prerequisites.title")}
-        </h2>
-        {loggedIn && !manager && (
-          <Badge tone={allDone ? "success" : "warning"} size="xs">
-            {t("enroll.prerequisites.done", { done: status.items.length - status.missing.length, total: status.items.length })}
-          </Badge>
-        )}
-      </div>
-      <p className="text-xs text-ink-muted">{description}</p>
-      <PrerequisiteList items={status.items} compact />
-    </section>
-  );
-}
-
-/** Opens the course's AI tutor (full page). */
-async function AskAiLink({ href }: { href: string }) {
-  const t = await getT("public");
-  return (
-    <ButtonLink href={href} variant="outline" className="w-full" leftIcon={<Icon.Sparkles className="size-4" />}>
-      {t("enroll.askAi")}
-    </ButtonLink>
-  );
-}
-
 async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: CardExtras }) {
   const { course, manager, enrollment, nextLesson, firstLessonHref, alreadyPaid, batches } = props;
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
@@ -283,7 +288,6 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
             {enrollment ? t("enroll.continueLearning") : t("enroll.viewLessons")}
           </ButtonLink>
         )}
-        {props.askAiHref && <AskAiLink href={props.askAiHref} />}
         <p className="text-center text-xs text-ink-muted">{t("enroll.managerNote")}</p>
       </div>
     );
@@ -336,11 +340,15 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
   if (enrollment) {
     const started = enrollment.completedLessons > 0 || enrollment.progress > 0;
     const label = enrollment.completed ? t("enroll.reviewCourse") : started ? t("enroll.continueLearning") : t("enroll.startLearning");
+    const percent = Math.round(Math.max(0, Math.min(100, enrollment.progress)));
     return (
-      <div className="space-y-3">
+      <div className="space-y-4">
         <div>
-          <ProgressBar value={enrollment.progress} size="sm" tone={enrollment.completed ? "success" : "accent"} label={t("enroll.yourProgress")} showLabel />
-          <p className="mt-1.5 text-xs text-ink-muted">{t("enroll.lessonsCompleted", { done: enrollment.completedLessons, total: enrollment.totalLessons })}</p>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="text-3xl font-extrabold tracking-tight tabular-nums text-ink">{t("enroll.progressPercent", { percent })}</p>
+            <p className="text-meta text-ink-faint">{t("enroll.lessonsCompleted", { done: enrollment.completedLessons, total: enrollment.totalLessons })}</p>
+          </div>
+          <ProgressBar value={percent} size="md" tone={enrollment.completed ? "success" : "accent"} label={t("enroll.yourProgress")} className="mt-3" />
         </div>
         {nextLesson ? (
           <div>
@@ -348,7 +356,7 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
               {label}
             </ButtonLink>
             {!enrollment.completed && (
-              <p className="mt-1.5 truncate text-center text-xs text-ink-muted" title={nextLesson.title}>
+              <p className="mt-2 truncate text-center text-xs text-ink-muted" title={nextLesson.title}>
                 {t("enroll.upNext", { title: nextLesson.title })}
               </p>
             )}
@@ -358,7 +366,7 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
             <Button size="lg" className="w-full" disabled leftIcon={<Icon.Clock className="size-4" />}>
               {t("enroll.nextLessonScheduled")}
             </Button>
-            <p className="mt-1.5 text-center text-xs text-ink-muted">
+            <p className="mt-2 text-center text-xs text-ink-muted">
               <span className="font-medium text-ink">{extras.drip.nextUnlock.title}</span> · <UnlockLabel at={extras.drip.nextUnlock.unlocksAt} />
             </p>
           </div>
@@ -368,7 +376,6 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
           </Button>
         )}
         {nextLesson && !enrollment.completed && <NextUnlockNote drip={extras.drip} />}
-        {props.askAiHref && <AskAiLink href={props.askAiHref} />}
         {extras.paymentPlan && <InstallmentNotice plan={extras.paymentPlan} compact />}
         {extras.paymentPlan?.status === "on_track" && extras.paymentPlan.next?.dueAt && (
           <p className="text-center text-xs text-ink-muted">
@@ -417,7 +424,17 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
         <Button size="lg" className="w-full" disabled leftIcon={<Icon.Lock className="size-4" />}>
           {isPaidCourse(course) ? t("enroll.prerequisites.toBuy") : t("enroll.prerequisites.toEnroll")}
         </Button>
-        <p className="text-center text-xs text-ink-muted">{t("enroll.prerequisites.finishFirst", { count: extras.prerequisites.missing.length })}</p>
+        <p className="text-center text-xs text-ink-muted">
+          {t("enroll.prerequisites.finishFirst", { count: extras.prerequisites.missing.length })}
+          {props.prerequisitesAnchor && (
+            <>
+              {" "}
+              <a href={`#${props.prerequisitesAnchor}`} className="font-medium text-accent hover:underline">
+                {t("enroll.seePrerequisites")}
+              </a>
+            </>
+          )}
+        </p>
       </div>
     );
   }
@@ -441,20 +458,18 @@ async function PrimaryCta({ props, extras }: { props: EnrollCardProps; extras: C
 }
 
 /**
- * Sticky call-to-action card on the course page: price, the primary action
- * for the viewer's state (enroll / buy / continue / coming soon / batch only
- * / prerequisites pending / edit), prerequisite courses with the viewer's
- * status, the next scheduled (drip) lesson, certificate links and the
- * "This course includes" list.
+ * The enroll card at the top of the course page: the price in large type (or, for learners, their progress), ONE
+ * full-width primary action for the viewer's state (enroll / buy / continue / coming soon / batch only /
+ * prerequisites pending / edit), the paid-course offers under it, and a short list of secondary links (the
+ * certificate, the AI tutor, giving the course as a gift, leaving the course) where they apply.
  *
- * A Server Component: it resolves the viewer's prerequisite and drip status
- * itself so every page rendering the card gets them.
+ * A Server Component: it resolves the viewer's prerequisite, drip, membership and installment status itself.
+ * The prerequisite courses themselves are listed in a card further down the page (`prerequisitesAnchor`).
  */
 export async function EnrollCard(listedProps: EnrollCardProps) {
-  const { enrollment, includes, manager, certificationsEnabled, className } = listedProps;
+  const { enrollment, manager, className } = listedProps;
   const listedCourse = listedProps.course;
   const showPrice = !enrollment && !manager;
-  const certificate = certificationsEnabled && (listedCourse.enableCertification || listedCourse.paidCertificate);
 
   const [viewer, db, t, f] = await Promise.all([getCurrentUser(), getDb(), getT("public"), getFormatter()]);
   // Commerce (round 3): the course price in the visitor's currency (as checkout charges it) when the
@@ -489,85 +504,68 @@ export async function EnrollCard(listedProps: EnrollCardProps) {
     membershipLapsed: !!enrollment && access?.blocked === "membership_lapsed",
     planOffer: offerPlan ? { name: offerPlan.name, priceLabel: `${formatPrice(offerPlan.price, offerPlan.currency, undefined, f.locale)}${intervalSuffix(offerPlan.interval)}` } : null,
   };
-  const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
   // Commerce (round 3): gifts. Anyone may buy a paid course on sale for someone else.
   const giftable = !manager && db.settings.growth.giftsEnabled && isPaidCourse(course) && course.published && !course.upcoming && !course.disableSelfLearning;
+  // The AI tutor link sits with the secondary links for staff and for learners whose access is not paused.
+  const accessPaused = extras.membershipLapsed || extras.planLocked;
+  const ctaPaused = extras.membershipLapsed || (extras.planLocked && !!extras.paymentPlan);
+  const askAiHref = listedProps.askAiHref && (manager || (enrollment && !ctaPaused)) ? listedProps.askAiHref : null;
+  const claimCertificate =
+    !!enrollment && !manager && listedProps.certificationsEnabled && !listedProps.certificate && !listedCourse.paidCertificate && listedCourse.enableCertification && enrollment.completed;
+  const certificateItem = await CertificateItem({ props: listedProps });
+  const leave = !!enrollment?.canLeave && !manager;
+  const hasSecondary = !!certificateItem || !!askAiHref || giftable || leave;
 
   return (
-    <Card className={cn("overflow-hidden", className)}>
-      <div className="space-y-4 p-5">
-        {showPrice && (
-          <div className="flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">{course.upcoming ? t("enroll.launchingSoon") : t("enroll.price")}</p>
-              <PriceTag course={course} size="xl" className="mt-0.5 block" />
-            </div>
-            {course.paidCertificate && certificationsEnabled && course.certificatePrice > 0 && (
-              <Badge tone="neutral" size="sm">
-                {t("enroll.certificatePrice", { price: f.price(course.certificatePrice, listedCourse.currency) })}
-              </Badge>
-            )}
-          </div>
-        )}
-        {enrollment && !manager && (
-          <div className="flex items-center gap-2">
-            <Badge tone={extras.membershipLapsed || extras.planLocked ? "warning" : enrollment.completed ? "success" : "accent"} dot>
-              {extras.membershipLapsed || extras.planLocked ? t("enroll.accessPaused") : enrollment.completed ? t("card.completed") : t("enroll.enrolled")}
-            </Badge>
-            {enrollment.viaBatch && <span className="text-xs text-ink-muted">{t("enroll.viaBatch")}</span>}
-          </div>
-        )}
+    <Card className={cn("p-4 sm:p-6", className)}>
+      {showPrice && (
+        <div className="mb-5">
+          {course.upcoming && <p className="text-meta font-semibold text-ink-faint">{t("enroll.launchingSoon")}</p>}
+          <p className="text-4xl font-extrabold tracking-tight tabular-nums text-ink">
+            <span className="sr-only">{t("enroll.price")}: </span>
+            {coursePriceLabel(course, t("catalog.free"), f.locale)}
+          </p>
+        </div>
+      )}
+      {enrollment && !manager && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Badge tone={accessPaused ? "warning" : enrollment.completed ? "success" : "accent"} dot>
+            {accessPaused ? t("enroll.accessPaused") : enrollment.completed ? t("card.completed") : t("enroll.enrolled")}
+          </Badge>
+          {enrollment.viaBatch && <span className="text-xs text-ink-muted">{t("enroll.viaBatch")}</span>}
+        </div>
+      )}
 
-        <PrimaryCta props={props} extras={extras} />
-        {showPrerequisites && (
-          <div className="border-t border-border pt-4">
-            <PrerequisitesBlock status={prerequisites} loggedIn={extras.loggedIn} manager={manager} />
-          </div>
-        )}
-        <CertificateLinks props={listedProps} />
-        {giftable && (
-          <div className="flex justify-center">
-            <GiveGiftLink type="course" id={course.id} />
-          </div>
-        )}
+      <PrimaryCta props={props} extras={extras} />
 
-        {enrollment?.canLeave && !manager && (
-          <div className="flex justify-center">
-            <LeaveCourseButton slug={course.slug} courseTitle={course.title} />
-          </div>
-        )}
-      </div>
+      {claimCertificate && (
+        <div className="mt-3">
+          <ClaimCertificateButton slug={listedCourse.slug} />
+        </div>
+      )}
 
-      <div className="border-t border-border bg-surface-2/40 p-5">
-        <p className="text-sm font-semibold text-ink">{t("enroll.includes.title")}</p>
-        <ul className="mt-3 space-y-2.5">
-          {includes.enrolledCount > 0 && <IncludeRow icon={<Icon.Users />}>{t("enroll.includes.enrolled", { amount: enrolledTier(includes.enrolledCount) })}</IncludeRow>}
-          {includes.hasVideo && (
-            <IncludeRow icon={<Icon.Monitor />}>
-              {includes.videoSeconds > 0 ? t("enroll.includes.video", { duration: f.duration(includes.videoSeconds) }) : t("enroll.includes.videoPlain")}
-            </IncludeRow>
+      {hasSecondary && (
+        <ul className="mt-5 space-y-2.5 border-t border-border pt-4">
+          {certificateItem}
+          {askAiHref && (
+            <SecondaryItem icon={<Icon.Sparkles />}>
+              <Link href={askAiHref} className={secondaryLink}>
+                {t("enroll.askAi")}
+              </Link>
+            </SecondaryItem>
           )}
-          {includes.lessonCount > 0 && (
-            <IncludeRow icon={<Icon.BookOpen />}>
-              {includes.totalDurationSeconds > 0
-                ? t("enroll.includes.lessonsTotal", { count: includes.lessonCount, duration: f.duration(includes.totalDurationSeconds) })
-                : t("enroll.includes.lessons", { count: includes.lessonCount })}
-            </IncludeRow>
+          {giftable && (
+            <li>
+              <GiveGiftLink type="course" id={course.id} />
+            </li>
           )}
-          {includes.quizCount > 0 && <IncludeRow icon={<Icon.Question />}>{t("enroll.includes.quizzes", { count: includes.quizCount })}</IncludeRow>}
-          {includes.assignmentCount > 0 && (
-            <IncludeRow icon={<Icon.ClipboardList />}>{t("enroll.includes.assignments", { count: includes.assignmentCount })}</IncludeRow>
+          {leave && (
+            <li className="pt-1">
+              <LeaveCourseButton slug={course.slug} courseTitle={course.title} />
+            </li>
           )}
-          {includes.exerciseCount > 0 && <IncludeRow icon={<Icon.Code />}>{t("enroll.includes.exercises", { count: includes.exerciseCount })}</IncludeRow>}
-          {includes.previewCount > 0 && !enrollment && !manager && (
-            <IncludeRow icon={<Icon.Eye />}>{t("enroll.includes.previews", { count: includes.previewCount })}</IncludeRow>
-          )}
-          {certificate && (
-            <IncludeRow icon={<Icon.Award />}>{course.paidCertificate ? t("enroll.includes.certificateEvaluation") : t("enroll.includes.certificateCompletion")}</IncludeRow>
-          )}
-          {includes.lessonCount === 0 && <IncludeRow icon={<Icon.Clock />}>{t("enroll.includes.preparing")}</IncludeRow>}
         </ul>
-      </div>
+      )}
     </Card>
   );
 }

@@ -60,8 +60,11 @@ function Row({ href, icon, label, value, external }: { href: string; icon: React
 
 /** Hub group for a navigation section. Compares the stable section key: section titles are translated. */
 function groupTitle(key: NavSection["key"]): string {
-  return key === "manage" ? "Manage" : key === "links" ? "More" : "Pages";
+  return key === "you" ? "You" : key === "manage" ? "Manage" : key === "links" ? "More" : "Explore";
 }
+
+/** Personal things first, then staff tools, then the public pages. */
+const GROUP_ORDER: NavSection["key"][] = ["you", "manage", "main", "links"];
 
 /**
  * Phone-first account hub: profile summary, every destination from the
@@ -91,12 +94,14 @@ export default async function YouPage() {
   const sections = buildNavigation(user, settings, { ...navContextFor(db, user.id), messages: countUnreadMessages(db, user.id) }, shell);
   // Destinations already on the phone tab bar are not repeated under "Pages".
   const skip = new Set(["/notifications", `/user/${user.username}`, ...buildMobileTabs(user, settings).map((t) => t.href)]);
-  const pageGroups = sections
+  const pageGroups = GROUP_ORDER.map((key) => sections.find((s) => s.key === key))
+    .filter((section): section is NavSection => !!section)
     .map((section) => ({
+      key: section.key,
       title: groupTitle(section.key),
       items: section.items.filter((i) => !skip.has(i.href)),
     }))
-    .filter((g) => g.items.length > 0);
+    .filter((g) => g.items.length > 0 || (g.key === "you" && settings.features.notifications));
 
   return (
     <div className="mx-auto max-w-lg animate-fade-in space-y-8">
@@ -121,6 +126,9 @@ export default async function YouPage() {
 
       {pageGroups.map((group, gi) => (
         <Group key={`${group.title}-${gi}`} title={group.title}>
+          {group.key === "you" && settings.features.notifications && (
+            <Row href="/notifications" icon={<Icon.Bell />} label="Notifications" value={unread > 0 ? unread : undefined} />
+          )}
           {group.items.map((item) => {
             const IconCmp = Icon[item.icon] ?? Icon.Dot;
             const external = /^https?:\/\//.test(item.href) || item.href.startsWith("mailto:");
@@ -139,7 +147,6 @@ export default async function YouPage() {
       ))}
 
       <Group title="Account">
-        {settings.features.notifications && <Row href="/notifications" icon={<Icon.Bell />} label="Notifications" value={unread > 0 ? unread : undefined} />}
         <li>
           <SearchRow className={rowClass} />
         </li>

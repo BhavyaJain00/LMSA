@@ -30,6 +30,9 @@ import { formatDate, formatDateTime } from "@/lib/utils";
 import { purchaseEventParams } from "@/lib/seo/tracking";
 import { TrackEvent } from "@/components/seo/track-event";
 import { isTaxInclusive } from "@/lib/commerce/tax";
+import { ManualPaymentPanel } from "@/components/commerce/payment-methods";
+import { PaymentReferenceForm } from "@/components/commerce/payment-reference-form";
+import { upiPayUrl } from "@/lib/payments/methods";
 
 export const metadata = { title: "Order" };
 
@@ -315,8 +318,17 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
     heading = "Order placed — awaiting confirmation";
     message = (
       <>
-        Complete your payment of <strong className="text-ink">{money(toCollect, payment.currency)}</strong> and include your order ID{" "}
-        <span className="font-mono font-semibold text-ink">{payment.orderId}</span> as the reference.{" "}
+        {payment.buyerReference ? (
+          <>
+            We received your payment reference <span className="font-mono font-semibold text-ink">{payment.buyerReference}</span> for{" "}
+            <strong className="text-ink">{money(toCollect, payment.currency)}</strong>.{" "}
+          </>
+        ) : (
+          <>
+            Pay <strong className="text-ink">{money(toCollect, payment.currency)}</strong> to the account below with your order ID{" "}
+            <span className="font-mono font-semibold text-ink">{payment.orderId}</span> as the reference, then add your transaction reference.{" "}
+          </>
+        )}
         {payment.itemType === "plan"
           ? trialRunning && membership
             ? `Your free trial is already running until ${formatDate(membership.currentPeriodEnd)}; the membership continues once an administrator confirms the payment.`
@@ -454,14 +466,23 @@ export default async function OrderPage(props: PageProps<"/billing/success/[orde
               </div>
             </div>
             {payment.status === "pending" && !online && !bump && (
-              <div className="mt-6 rounded-xl border border-border bg-surface-2 p-4 text-sm">
+              <div className="mt-6 space-y-4 text-sm">
+                <ManualPaymentPanel
+                  details={settings.commerce.manualPayment}
+                  amountLabel={money(toCollect, payment.currency)}
+                  upiUrl={payment.currency.toUpperCase() === "INR" ? upiPayUrl(settings.commerce.manualPayment, toCollect, payment.orderId) : null}
+                  reference={payment.orderId}
+                  context="order"
+                >
+                  {own && payment.gateway === "manual" && <PaymentReferenceForm orderId={payment.orderId} current={payment.buyerReference} />}
+                </ManualPaymentPanel>
                 <p className="font-medium text-ink">How to pay</p>
-                <ol className="mt-2 list-decimal space-y-1 pl-5 text-ink-muted">
+                <ol className="mt-2 list-decimal space-y-1 ps-5 text-ink-muted">
                   <li>
-                    Transfer <strong className="text-ink">{money(toCollect, payment.currency)}</strong> using the payment details shared by our team.
+                    Transfer <strong className="text-ink">{money(toCollect, payment.currency)}</strong> to the account above (bank transfer or UPI).
                   </li>
                   <li>
-                    Use <span className="font-mono text-ink">{payment.orderId}</span> as the payment reference.
+                    Use <span className="font-mono text-ink">{payment.orderId}</span> as the payment reference, then enter your transaction / UTR reference above.
                   </li>
                   <li>
                     {payment.itemType === "plan"

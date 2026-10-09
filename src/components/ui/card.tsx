@@ -72,24 +72,32 @@ export function StatCard({
   );
 }
 
+/**
+ * Page title block: the only `<h1>` renderer on app pages (`text-title`).
+ * Optional eyebrow and breadcrumbs above, description below, actions at the
+ * end (they wrap under the title on phones).
+ */
 export function PageHeader({
   title,
   description,
   actions,
   breadcrumbs,
+  eyebrow,
   className,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   breadcrumbs?: ReactNode;
+  eyebrow?: ReactNode;
   className?: string;
 }) {
   return (
     <div className={cn("mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between", className)}>
       <div className="min-w-0">
         {breadcrumbs}
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">{title}</h1>
+        {eyebrow && <Eyebrow className="mb-1">{eyebrow}</Eyebrow>}
+        <h1 className="text-title text-balance text-ink">{title}</h1>
         {description && <p className="mt-1 max-w-2xl text-sm text-ink-muted">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -97,11 +105,40 @@ export function PageHeader({
   );
 }
 
-export function SectionTitle({ children, actions, className }: { children: ReactNode; actions?: ReactNode; className?: string }) {
+/** Section heading: the `<h2>` renderer for page sections (`text-heading`), with optional description and actions. */
+export function SectionTitle({
+  children,
+  actions,
+  description,
+  id,
+  className,
+}: {
+  children: ReactNode;
+  actions?: ReactNode;
+  description?: ReactNode;
+  /** Id of the `<h2>`, for `aria-labelledby` on the section. */
+  id?: string;
+  className?: string;
+}) {
   return (
-    <div className={cn("mb-3 flex items-center justify-between gap-3", className)}>
-      <h2 className="text-lg font-semibold tracking-tight text-ink">{children}</h2>
-      {actions}
+    <div className={cn("mb-3 flex items-center justify-between gap-3", description && "items-end", className)}>
+      <div className="min-w-0">
+        <h2 id={id} className="text-heading text-ink">
+          {children}
+        </h2>
+        {description && <p className="mt-0.5 text-sm text-ink-muted">{description}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>
+  );
+}
+
+/**
+ * Small label above a heading ("FEATURED", "TAUGHT BY"). One style for the
+ * whole app: accent by default, `muted` on busy backgrounds. Not a heading.
+ */
+export function Eyebrow({ children, tone = "accent", className }: { children: ReactNode; tone?: "accent" | "muted"; className?: string }) {
+  return (
+    <p className={cn("text-micro font-semibold tracking-wider uppercase", tone === "accent" ? "text-accent" : "text-ink-muted", className)}>{children}</p>
   );
 }

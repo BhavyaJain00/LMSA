@@ -60,7 +60,7 @@ function StatusIcon({ lesson, tracking }: { lesson: OutlineLessonItem; tracking:
     const scheduled = lockOf(lesson)?.reason === "drip";
     return (
       <span className="flex shrink-0 text-ink-faint" title={lockTitle(lesson, t)}>
-        {scheduled ? <Icon.Clock className="size-4" /> : <Icon.Lock className="size-4" />}
+        {scheduled ? <Icon.Clock className="size-[18px]" /> : <Icon.Lock className="size-[18px]" />}
         <span className="sr-only">{scheduled ? t("learn.status.scheduled") : t("learn.status.locked")}</span>
       </span>
     );
@@ -69,7 +69,7 @@ function StatusIcon({ lesson, tracking }: { lesson: OutlineLessonItem; tracking:
   if (lesson.status === "complete") {
     return (
       <span className="flex shrink-0 text-success" title={t("learn.completed")}>
-        <Icon.CheckCircleFilled className="size-4" />
+        <Icon.CheckCircleFilled className="size-[18px]" />
         <span className="sr-only">{t("learn.completed")}</span>
       </span>
     );
@@ -77,14 +77,14 @@ function StatusIcon({ lesson, tracking }: { lesson: OutlineLessonItem; tracking:
   if (lesson.status === "partial") {
     return (
       <span className="flex shrink-0 text-warning" title={t("learn.status.inProgress")}>
-        <CircleHalfIcon className="size-4" />
+        <CircleHalfIcon className="size-[18px]" />
         <span className="sr-only">{t("learn.status.inProgress")}</span>
       </span>
     );
   }
   return (
     <span className="flex shrink-0 text-ink-faint" title={t("learn.status.notStarted")}>
-      <Icon.Circle className="size-4" />
+      <Icon.Circle className="size-[18px]" />
       <span className="sr-only">{t("learn.status.notStarted")}</span>
     </span>
   );
@@ -152,7 +152,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
   }
 
   return (
-    <div ref={listRef} className={cn("space-y-1 p-2", className)}>
+    <div ref={listRef} className={cn("space-y-1 px-3 py-3", className)}>
       {outline.map((chapter) => {
         const isOpen = open.has(chapter.id);
         const done = chapter.lessons.filter((l) => l.status === "complete").length;
@@ -165,20 +165,20 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
               onClick={() => toggle(chapter.id)}
               aria-expanded={isOpen}
               aria-controls={panelId}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-surface-2"
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition-colors hover:bg-surface-2"
             >
-              <Icon.ChevronDown className={cn("size-4 shrink-0 text-ink-faint transition-transform duration-200", !isOpen && "-rotate-90 rtl:rotate-90")} />
               <span className="min-w-0 flex-1">
-                <span className="block text-[11px] font-medium uppercase tracking-wider text-ink-faint">{t("learn.meta.chapter", { number: chapter.number })}</span>
+                <span className="block text-micro text-ink-faint">{t("learn.meta.chapter", { number: chapter.number })}</span>
                 <span className="block truncate text-sm font-semibold text-ink">{chapter.title}</span>
                 {chapterUnlock && <UnlockLabel at={chapterUnlock} icon className="mt-0.5 text-[11px] font-medium text-accent" />}
               </span>
-              <span className="shrink-0 text-xs tabular-nums text-ink-muted">
+              <span className="shrink-0 text-micro tabular-nums text-ink-faint">
                 {tracking ? `${done}/${chapter.lessons.length}` : t("learn.outline.lessons", { count: chapter.lessons.length })}
               </span>
+              <Icon.ChevronDown className={cn("size-4 shrink-0 text-ink-faint transition-transform duration-200", isOpen && "rotate-180")} />
             </button>
             {isOpen && (
-              <ul id={panelId} className="mt-0.5 space-y-0.5 pb-1">
+              <ul id={panelId} className="mb-2 mt-0.5 space-y-0.5">
                 {chapter.lessons.map((lesson) => {
                   const current = lesson.id === currentLessonId;
                   const kind = KIND_META[lesson.kind];
@@ -186,17 +186,22 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                   const lock = lockOf(lesson);
                   const inner = (
                     <>
-                      <span className={cn("flex shrink-0", current ? "text-accent" : "text-ink-faint")} title={kindLabel}>
+                      <span className={cn("mt-px flex shrink-0", current ? "text-accent" : "text-ink-faint")} title={kindLabel}>
                         {kind.icon({ className: "size-4" })}
                         <span className="sr-only">{kindLabel}:</span>
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className={cn("line-clamp-2 text-sm", current ? "font-medium text-ink" : "text-ink-muted")}>{lesson.title}</span>
-                        <span className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-faint">
+                        <span className={cn("line-clamp-2 text-sm leading-snug", current ? "font-semibold text-ink" : "text-ink")}>{lesson.title}</span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-faint">
                           <span className="tabular-nums">
                             {lesson.chapterNumber}.{lesson.lessonNumber}
                           </span>
-                          {lesson.durationSeconds > 0 && <span>{f.duration(lesson.durationSeconds)}</span>}
+                          {lesson.durationSeconds > 0 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span>{f.duration(lesson.durationSeconds)}</span>
+                            </>
+                          )}
                           {showPreview && lesson.preview && <span className="rounded bg-info/12 px-1 font-medium text-info">{t("learn.outline.preview")}</span>}
                         </span>
                         {lock?.reason === "drip" && lock.unlocksAt && !chapterUnlock && (
@@ -206,10 +211,7 @@ export function CourseOutlineNav({ outline, currentLessonId, tracking, showPrevi
                       <StatusIcon lesson={lesson} tracking={tracking} />
                     </>
                   );
-                  const rowClass = cn(
-                    "relative flex items-start gap-2.5 rounded-lg py-2 ps-9 pe-2.5 transition-colors",
-                    current && "bg-surface-2 before:absolute before:inset-y-2 before:inset-s-0 before:w-0.5 before:rounded-full before:bg-accent",
-                  );
+                  const rowClass = cn("relative flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors", current && "bg-accent/12 ring-1 ring-inset ring-accent/30");
                   return (
                     <li key={lesson.id}>
                       {lesson.locked ? (

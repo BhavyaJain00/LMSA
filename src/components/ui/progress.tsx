@@ -1,6 +1,15 @@
+import type { ReactNode } from "react";
 import { clamp, cn } from "@/lib/utils";
 import { ProgressTrack } from "./progress-track";
+import { progressBarParts } from "./progress-model";
 
+/**
+ * Horizontal progress bar.
+ *
+ * - `label` is the accessible name of the bar (read by screen readers, never shown).
+ * - `caption` is visible text above the bar.
+ * - `showLabel` prints the percentage (and, without a `caption`, the `label` next to it).
+ */
 export function ProgressBar({
   value,
   className,
@@ -8,6 +17,7 @@ export function ProgressBar({
   tone = "accent",
   showLabel = false,
   label,
+  caption,
 }: {
   value: number;
   className?: string;
@@ -15,11 +25,12 @@ export function ProgressBar({
   tone?: "accent" | "success" | "warning" | "danger" | "white";
   showLabel?: boolean;
   label?: string;
+  caption?: ReactNode;
 }) {
-  const v = clamp(Math.round(value), 0, 100);
+  const parts = progressBarParts({ value, label, caption, showLabel });
   const heights = { xs: "h-1", sm: "h-1.5", md: "h-2", lg: "h-3" };
   const colors = {
-    accent: "bg-accent",
+    accent: "bg-accent-ink",
     success: "bg-success",
     warning: "bg-warning",
     danger: "bg-danger",
@@ -27,15 +38,15 @@ export function ProgressBar({
   };
   return (
     <div className={cn("w-full", className)}>
-      {(showLabel || label) && (
-        <div className="mb-1 flex items-center justify-between text-xs text-ink-muted">
-          <span>{label}</span>
-          {showLabel && <span className="font-medium text-ink">{v}%</span>}
+      {parts.showHeader && (
+        <div className="mb-1 flex items-center justify-between gap-2 text-xs text-ink-muted" aria-hidden={caption === undefined ? true : undefined}>
+          {parts.showCaption ? <span className="min-w-0 truncate">{caption ?? label}</span> : <span />}
+          {parts.showValue && <span className="font-medium text-ink tabular-nums">{parts.percent}%</span>}
         </div>
       )}
       <ProgressTrack
-        value={v}
-        label={label}
+        value={parts.percent}
+        label={parts.ariaLabel}
         trackClassName={cn("w-full overflow-hidden rounded-full bg-surface-3", heights[size])}
         fillClassName={cn("h-full rounded-full transition-[width] duration-500", colors[tone])}
       />
@@ -55,14 +66,14 @@ export function ProgressRing({
   size?: number;
   stroke?: number;
   className?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
   tone?: "accent" | "success" | "white";
 }) {
   const v = clamp(value, 0, 100);
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const offset = c - (v / 100) * c;
-  const color = tone === "success" ? "var(--success)" : tone === "white" ? "#fff" : "var(--accent)";
+  const color = tone === "success" ? "var(--success)" : tone === "white" ? "#fff" : "var(--accent-ink)";
   return (
     <div className={cn("relative inline-flex items-center justify-center", className)} style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90" aria-hidden="true">

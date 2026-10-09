@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
@@ -134,10 +134,10 @@ function LessonRow({
     </>
   );
 
-  const base = "group/row flex min-h-10 items-center gap-3 rounded-lg px-3 py-2 text-sm";
+  const base = "group/row flex min-h-11 items-center gap-3 rounded-lg px-2.5 py-2 text-sm sm:px-3";
   if (interactive) {
     return (
-      <Link href={lesson.href!} className={cn(base, "text-ink transition-colors hover:bg-surface-2", highlight && "bg-accent/5 ring-1 ring-inset ring-accent/20")}>
+      <Link href={lesson.href!} className={cn(base, "text-ink transition-colors hover:bg-surface-2", highlight && "bg-accent/10 ring-1 ring-inset ring-accent/25")}>
         {content}
       </Link>
     );
@@ -150,16 +150,18 @@ function LessonRow({
 }
 
 /**
- * Read-only curriculum accordion for the course page: chapters expand to
- * list their lessons with a content-type icon, duration, preview badge,
- * lock state, (for enrolled learners) completion ticks, and the release
- * schedule of scheduled (drip) content in the viewer's local time.
+ * Read-only curriculum accordion for the course page: each chapter is a rounded box whose header shows a number
+ * badge, the title, "N lessons · duration" and a chevron; it expands to list its lessons with a content-type
+ * icon, duration, preview badge, lock state, (for enrolled learners) completion ticks, and the release schedule
+ * of scheduled (drip) content in the viewer's local time. `header` (the section title) is laid out next to the
+ * "Expand all" toggle.
  */
 export function CourseOutlineAccordion({
   chapters,
   mode,
   defaultOpenIds,
   nextLessonId,
+  header,
 }: {
   chapters: ScheduledOutlineChapterView[];
   mode: OutlineMode;
@@ -167,6 +169,8 @@ export function CourseOutlineAccordion({
   defaultOpenIds?: string[];
   /** Lesson highlighted as "Up next" for enrolled learners. */
   nextLessonId?: string | null;
+  /** Section title rendered on the left of the "Expand all" toggle. */
+  header?: ReactNode;
 }) {
   const t = useT("public");
   const f = useFormatter();
@@ -188,72 +192,84 @@ export function CourseOutlineAccordion({
       return next;
     });
 
+  const toggleAll =
+    chapters.length > 1 ? (
+      <button
+        type="button"
+        onClick={() => setOpen(allOpen ? new Set() : new Set(chapters.map((c) => c.id)))}
+        className="tap-target inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-meta font-semibold text-accent hover:bg-accent/10"
+      >
+        {allOpen ? <Icon.ChevronUp className="size-3.5" aria-hidden="true" /> : <Icon.ChevronDown className="size-3.5" aria-hidden="true" />}
+        {allOpen ? t("outline.collapseAll") : t("outline.expandAll")}
+      </button>
+    ) : null;
+
   return (
     <div>
-      {chapters.length > 1 && (
-        <div className="mb-2 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setOpen(allOpen ? new Set() : new Set(chapters.map((c) => c.id)))}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-accent/10"
-          >
-            {allOpen ? <Icon.ChevronUp className="size-3.5" aria-hidden="true" /> : <Icon.ChevronDown className="size-3.5" aria-hidden="true" />}
-            {allOpen ? t("outline.collapseAll") : t("outline.expandAll")}
-          </button>
+      {(header || toggleAll) && (
+        <div className={cn("mb-4 flex flex-wrap items-start gap-x-4 gap-y-2", header ? "justify-between" : "justify-end")}>
+          {header && <div className="min-w-0">{header}</div>}
+          {toggleAll}
         </div>
       )}
-      <ol className="divide-y divide-border overflow-hidden rounded-card border border-border bg-surface-1">
+      <ol className="space-y-3">
         {chapters.map((chapter) => {
           const isOpen = open.has(chapter.id);
           const panelId = `${baseId}-panel-${chapter.id}`;
           const complete = mode === "enrolled" && chapter.lessons.length > 0 && chapter.completedCount === chapter.lessons.length;
+          const chapterMeta =
+            chapter.durationSeconds > 0
+              ? t("course.hero.lessonsWithDuration", { count: chapter.lessons.length, duration: f.duration(chapter.durationSeconds) })
+              : t("catalog.lessonCount", { count: chapter.lessons.length });
           return (
-            <li key={chapter.id}>
+            <li key={chapter.id} className={cn("overflow-hidden rounded-xl border", isOpen ? "border-border-strong" : "border-border")}>
               <h3>
                 <button
                   type="button"
                   aria-expanded={isOpen}
                   aria-controls={panelId}
                   onClick={() => toggle(chapter.id)}
-                  className="flex w-full items-center gap-3 bg-surface-1 px-4 py-3.5 text-start transition-colors hover:bg-surface-2"
+                  className="flex w-full items-center gap-3 bg-surface-2/50 px-3 py-3 text-start transition-colors hover:bg-surface-2 sm:px-4"
                 >
-                  <Icon.ChevronRight
+                  <span
                     className={cn(
-                      "size-4 shrink-0 text-ink-muted transition-transform duration-200 motion-reduce:transition-none",
-                      // Closed: points toward the inline end (flipped in RTL). Open: points down in both directions.
-                      isOpen ? "rotate-90" : "rtl:rotate-180",
+                      "flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold tabular-nums",
+                      complete ? "bg-success/15 text-success" : "bg-accent text-accent-fg",
                     )}
                     aria-hidden="true"
-                  />
+                  >
+                    {complete ? <Icon.Check className="size-4" /> : chapter.number}
+                  </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-ink sm:text-base">
-                      <span className="text-ink-faint">{chapter.number}.</span> {chapter.title}
+                    <span className="block truncate text-sm font-bold text-ink sm:text-base">
+                      <span className="sr-only">{chapter.number}. </span>
+                      {chapter.title}
                     </span>
+                    <span className="mt-0.5 block text-meta text-ink-faint sm:hidden">{chapterMeta}</span>
                     {chapter.unlocksAt && <UnlockLabel at={chapter.unlocksAt} icon className="mt-0.5 text-xs font-medium text-accent" />}
                   </span>
-                  <span className="flex shrink-0 items-center gap-2 text-xs text-ink-muted">
+                  <span className="flex shrink-0 items-center gap-2 text-meta text-ink-faint">
                     {mode === "manager" && chapter.ruleLabel && <RuleBadge label={chapter.ruleLabel} rule={chapter.rule} subject="chapter" />}
                     {mode === "enrolled" && chapter.lessons.length > 0 && (
-                      <span className={cn("tabular-nums", complete && "font-medium text-success")}>
+                      <span className={cn("tabular-nums", complete ? "font-semibold text-success" : "text-ink-muted")}>
                         <span aria-hidden="true">
                           {chapter.completedCount}/{chapter.lessons.length}
                         </span>
                         <span className="sr-only">{t("outline.chapterCompleted", { done: chapter.completedCount, total: chapter.lessons.length })}</span>
                       </span>
                     )}
-                    <span className="hidden sm:inline">
-                      {chapter.durationSeconds > 0
-                        ? t("course.hero.lessonsWithDuration", { count: chapter.lessons.length, duration: f.duration(chapter.durationSeconds) })
-                        : t("catalog.lessonCount", { count: chapter.lessons.length })}
-                    </span>
-                    {complete && <Icon.CheckCircleFilled className="size-4 text-success" aria-hidden="true" />}
+                    <span className="hidden sm:inline">{chapterMeta}</span>
+                    <Icon.ChevronDown
+                      className={cn("size-4 text-ink-muted transition-transform duration-200 motion-reduce:transition-none", isOpen && "rotate-180")}
+                      aria-hidden="true"
+                    />
                   </span>
                 </button>
               </h3>
-              <div id={panelId} hidden={!isOpen} className="border-t border-border bg-surface px-2 py-2 sm:px-3">
-                {chapter.description && <p className="px-3 pb-2 pt-1 text-sm text-ink-muted">{chapter.description}</p>}
+              <div id={panelId} hidden={!isOpen} className="border-t border-border bg-surface-1 p-1.5 sm:p-2">
+                {chapter.description && <p className="px-3 pb-2 pt-1.5 text-sm text-ink-muted">{chapter.description}</p>}
                 {chapter.lessons.length ? (
-                  <ol className="space-y-0.5">
+                  <ol>
                     {chapter.lessons.map((lesson) => (
                       <li key={lesson.id}>
                         <LessonRow lesson={lesson} mode={mode} highlight={mode === "enrolled" && lesson.id === nextLessonId} chapterScheduled={!!chapter.unlocksAt} />

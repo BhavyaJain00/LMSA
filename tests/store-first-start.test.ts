@@ -139,7 +139,7 @@ describe("first start of the store", { concurrency: true }, () => {
     assert.deepEqual(before.users, ["usr_ada", "usr_bob", "usr_cy"]);
     assert.equal(before.brand, "Existing Academy");
     assert.equal(before.threshold, 75);
-    assert.equal(before.accent, "#4f46e5", "settings missing from the stored row get their defaults");
+    assert.equal(before.accent, "#2f55d4", "settings missing from the stored row get their defaults");
     assert.ok(before.collections > 80, "every collection exists");
     assert.deepEqual(api, {
       removed: true,

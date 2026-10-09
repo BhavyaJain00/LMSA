@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { getCourseOutline, type ScheduledChapter } from "@/lib/data/courses";
@@ -59,6 +60,7 @@ export async function CourseOutline({
   mode,
   defaultOpenIds,
   nextLessonId,
+  header,
 }: {
   chapters: OutlineChapterView[];
   mode: OutlineMode;
@@ -66,6 +68,8 @@ export async function CourseOutline({
   defaultOpenIds?: string[];
   /** Lesson highlighted as "Up next" for enrolled learners. */
   nextLessonId?: string | null;
+  /** Section title laid out next to the "Expand all" toggle. */
+  header?: ReactNode;
 }) {
   let scheduled: ScheduledOutlineChapterView[] = chapters;
   const firstChapterId = chapters[0]?.id;
@@ -78,5 +82,5 @@ export async function CourseOutline({
       scheduled = withSchedule(chapters, await getCourseOutline(course, viewer), mode);
     }
   }
-  return <CourseOutlineAccordion chapters={scheduled} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={nextLessonId} />;
+  return <CourseOutlineAccordion chapters={scheduled} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={nextLessonId} header={header} />;
 }

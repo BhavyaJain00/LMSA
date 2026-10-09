@@ -5,7 +5,7 @@ import type { Settings } from "@/lib/types";
 import type { GatewayStatusView } from "@/lib/payments/types";
 import { savePaymentGatewaySettingsAction } from "@/lib/actions/payments";
 import { currencies } from "@/lib/config";
-import { Input, RadioCard, Select, Switch } from "@/components/ui/input";
+import { Input, RadioCard, Select, Switch, Textarea } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icons";
 import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./settings-ui";
 import { SaveBar } from "./save-bar";
@@ -115,6 +115,63 @@ export function PaymentsForm({ initial, gateways }: { initial: Settings["commerc
           </p>
         )}
         {errors.paymentGateway && <p className="px-5 pb-3 text-xs text-danger">{errors.paymentGateway}</p>}
+      </SettingsSection>
+
+      <SettingsSection title={t("paymentsForm.methods.title")} description={t("paymentsForm.methods.description")}>
+        {(["razorpay", "stripe", "manual"] as const).map((id) => {
+          const s = id === "manual" ? null : gateways.find((g) => g.gateway === id);
+          const main = gateway === id;
+          const state =
+            id === "manual"
+              ? null
+              : s?.configured
+                ? s.mode === "test"
+                  ? t("paymentsForm.methods.readyTest")
+                  : t("paymentsForm.methods.ready")
+                : t("paymentsForm.methods.needsKeys", { missing: s?.missing.join(", ") || "API keys" });
+          const good = main || id === "manual" || !!s?.configured;
+          return (
+            <SettingsSwitchRow key={id}>
+              <Switch
+                name={"method_" + id}
+                defaultChecked={initial.paymentMethods?.[id] ?? true}
+                disabled={main}
+                label={t(("paymentsForm.methods." + id) as "paymentsForm.methods.manual")}
+                description={
+                  <>
+                    {t(("paymentsForm.methods." + id + "Description") as "paymentsForm.methods.manualDescription")}
+                    {(main || state) && <span className={"mt-1 block text-xs font-medium " + (good ? "text-success" : "text-warning")}>{main ? t("paymentsForm.methods.main") : state}</span>}
+                  </>
+                }
+              />
+              {main && <input type="hidden" name={"method_" + id} value="on" />}
+            </SettingsSwitchRow>
+          );
+        })}
+      </SettingsSection>
+
+      <SettingsSection title={t("paymentsForm.manual.title")} description={t("paymentsForm.manual.description")}>
+        <SettingsRow label={t("paymentsForm.manual.instructions")} description={t("paymentsForm.manual.instructionsHint")} htmlFor="manualInstructions" error={errors.manualInstructions}>
+          <Textarea id="manualInstructions" name="manualInstructions" rows={3} maxLength={600} defaultValue={initial.manualPayment?.instructions ?? ""} invalid={!!errors.manualInstructions} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.accountName")} htmlFor="manualAccountName" error={errors.manualAccountName}>
+          <Input id="manualAccountName" name="manualAccountName" maxLength={120} defaultValue={initial.manualPayment?.accountName ?? ""} invalid={!!errors.manualAccountName} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.bankName")} htmlFor="manualBankName" error={errors.manualBankName}>
+          <Input id="manualBankName" name="manualBankName" maxLength={120} defaultValue={initial.manualPayment?.bankName ?? ""} invalid={!!errors.manualBankName} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.accountNumber")} htmlFor="manualAccountNumber" error={errors.manualAccountNumber}>
+          <Input id="manualAccountNumber" name="manualAccountNumber" maxLength={40} className="font-mono" dir="ltr" defaultValue={initial.manualPayment?.accountNumber ?? ""} invalid={!!errors.manualAccountNumber} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.ifsc")} htmlFor="manualIfsc" error={errors.manualIfsc}>
+          <Input id="manualIfsc" name="manualIfsc" maxLength={20} className="font-mono uppercase" dir="ltr" defaultValue={initial.manualPayment?.ifsc ?? ""} invalid={!!errors.manualIfsc} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.swift")} htmlFor="manualSwift" error={errors.manualSwift}>
+          <Input id="manualSwift" name="manualSwift" maxLength={11} className="font-mono uppercase" dir="ltr" defaultValue={initial.manualPayment?.swift ?? ""} invalid={!!errors.manualSwift} />
+        </SettingsRow>
+        <SettingsRow label={t("paymentsForm.manual.upiId")} description={t("paymentsForm.manual.upiHint")} htmlFor="manualUpiId" error={errors.manualUpiId}>
+          <Input id="manualUpiId" name="manualUpiId" maxLength={100} className="font-mono" dir="ltr" placeholder="school@okbank" defaultValue={initial.manualPayment?.upiId ?? ""} invalid={!!errors.manualUpiId} />
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title={t("paymentsForm.tax.title")}>

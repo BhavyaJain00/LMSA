@@ -1,151 +1,115 @@
 import Link from "next/link";
-import { preload } from "react-dom";
 import type { CourseSummary } from "@/lib/types";
-import { categoryPath, tagPath } from "@/lib/seo/content-index";
-import { tagSlug } from "@/lib/seo/text";
-import { VideoPlayer } from "@/components/player";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { getFormatter, getT } from "@/i18n/server";
-import { coursePreviewPlayback } from "@/lib/media/course-preview";
-import { CourseCover } from "./course-cover";
 import { InstructorByline } from "./instructor-byline";
-import { compactCount } from "./format";
-import { RatingStars } from "./rating-stars";
-
-function Dot() {
-  return (
-    <span aria-hidden="true" className="text-ink-faint">
-      ·
-    </span>
-  );
-}
+import { MetaDots } from "./course-page/section-card";
 
 /**
- * Course page hero: status badges, title, short introduction, meta row
- * (category, rating, students, duration, instructors), tags and the promo
- * video (custom player) or cover artwork. The breadcrumb trail is rendered by
- * the page (`<Breadcrumbs>`), and the category and tags link to their landing
- * pages. The cover (or the video poster) is the page's largest image, so it
- * is fetched with high priority.
+ * Course page header (simple layout): a back button to the catalog, the status badges that matter (unpublished,
+ * review status, upcoming), the title, one meta row (instructors, chapters, lessons, total duration and, when
+ * there are reviews, the rating linking to them) and the short introduction. The artwork and the enroll card
+ * are rendered by the page underneath.
  */
-export async function CourseHero({ course, manager, className }: { course: CourseSummary; manager: boolean; className?: string }) {
+export async function CourseHero({
+  course,
+  reviewsAnchor = true,
+  className,
+}: {
+  course: CourseSummary;
+  /** The page renders a `#reviews` section the rating can link to. */
+  reviewsAnchor?: boolean;
+  className?: string;
+}) {
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
-  const updated = course.updatedAt ? f.date(course.updatedAt, { month: "long", year: "numeric", day: undefined }) : "";
-  if (course.videoUrl && course.imageUrl) preload(course.imageUrl, { as: "image", fetchPriority: "high" });
-  // Adaptive (HLS) stream of an uploaded preview once converted; the uploaded file stays the fallback.
-  const preview = coursePreviewPlayback(course);
+  const showBadges = !course.published || course.upcoming;
+  const rated = !!course.averageRating && course.reviewCount > 0;
+  const ratingLabel = rated ? f.number(course.averageRating!, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "";
+  const rating = rated ? (
+    <>
+      <Icon.StarFilled className="size-4 text-warning" aria-hidden="true" />
+      <span aria-hidden="true">
+        <span className="font-semibold text-ink">{ratingLabel}</span> ({f.number(course.reviewCount)})
+      </span>
+      <span className="sr-only">{t("course.page.ratingLink", { rating: ratingLabel, count: course.reviewCount })}</span>
+    </>
+  ) : null;
+
+  const meta = [
+    course.instructors.length > 0 ? (
+      <span className="inline-flex min-w-0 items-center">
+        <span className="sr-only">{t("course.page.instructorLabel")} </span>
+        <InstructorByline instructors={course.instructors} size="xs" />
+      </span>
+    ) : null,
+    course.chapterCount > 0 ? (
+      <span className="inline-flex items-center gap-1.5">
+        <Icon.Layers className="size-4 text-ink-faint" aria-hidden="true" />
+        {t("card.chapterCount", { count: course.chapterCount })}
+      </span>
+    ) : null,
+    course.lessonCount > 0 ? (
+      <span className="inline-flex items-center gap-1.5">
+        <Icon.BookOpen className="size-4 text-ink-faint" aria-hidden="true" />
+        {t("catalog.lessonCount", { count: course.lessonCount })}
+      </span>
+    ) : null,
+    course.totalDurationSeconds > 0 ? (
+      <span className="inline-flex items-center gap-1.5">
+        <Icon.Clock className="size-4 text-ink-faint" aria-hidden="true" />
+        {f.duration(course.totalDurationSeconds)}
+      </span>
+    ) : null,
+    rated ? (
+      reviewsAnchor ? (
+        <a
+          href="#reviews"
+          className="inline-flex items-center gap-1.5 rounded-sm hover:text-ink hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          {rating}
+        </a>
+      ) : (
+        <span className="inline-flex items-center gap-1.5">{rating}</span>
+      )
+    ) : null,
+  ];
+
   return (
-    <section aria-labelledby="course-title" className={cn("space-y-5", className)}>
-      <div className="flex flex-wrap items-center gap-2">
-        {manager && course.published && <StatusBadge status="published" />}
-        {!course.published && (
-          <Badge tone="dark" size="sm">
-            <Icon.EyeOff className="size-3" aria-hidden="true" />
-            {t("card.unpublished")}
-          </Badge>
-        )}
-        {!course.published && course.status !== "approved" && <StatusBadge status={course.status} />}
-        {course.upcoming && (
-          <Badge tone="info" size="sm">
-            <Icon.Clock className="size-3" aria-hidden="true" />
-            {t("card.upcoming")}
-          </Badge>
-        )}
-        {course.featured && (
-          <Badge tone="warning" size="sm">
-            <Icon.Award className="size-3" aria-hidden="true" />
-            {t("card.featured")}
-          </Badge>
-        )}
-        {course.enforceLessonCompletion && (
-          <Badge tone="neutral" size="sm">
-            <Icon.ListChecks className="size-3" aria-hidden="true" />
-            {t("course.hero.lessonsInOrder")}
-          </Badge>
-        )}
-      </div>
+    <header className={cn("min-w-0", className)}>
+      <Link
+        href="/courses"
+        aria-label={t("course.page.back")}
+        title={t("course.page.back")}
+        className="inline-flex size-9 items-center justify-center rounded-lg border border-border bg-surface-1 text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        <Icon.ArrowLeft className="size-4 rtl:rotate-180" aria-hidden="true" />
+      </Link>
 
-      <div>
-        <h1 id="course-title" className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-          {course.title}
-        </h1>
-        {course.shortIntroduction && <p className="mt-3 max-w-3xl text-base leading-7 text-ink-muted sm:text-lg">{course.shortIntroduction}</p>}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-sm text-ink-muted">
-        {course.category && (
-          <>
-            <Link href={categoryPath(course.category.slug)} className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
-              <Icon.Tag className="size-4" aria-hidden="true" />
-              {course.category.name}
-            </Link>
-            <Dot />
-          </>
-        )}
-        {course.averageRating && course.reviewCount > 0 ? (
-          <>
-            <a href="#reviews" className="inline-flex items-center gap-1.5 hover:underline">
-              <span className="font-semibold text-ink">{f.number(course.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</span>
-              <RatingStars value={course.averageRating} size="sm" />
-              <span>{t("course.hero.ratings", { count: course.reviewCount, formatted: compactCount(course.reviewCount, f.locale) })}</span>
-            </a>
-            <Dot />
-          </>
-        ) : null}
-        {course.enrollmentCount > 0 && (
-          <>
-            <span className="inline-flex items-center gap-1.5">
-              <Icon.Users className="size-4" aria-hidden="true" />
-              {t("card.students", { count: course.enrollmentCount, formatted: compactCount(course.enrollmentCount, f.locale) })}
-            </span>
-            <Dot />
-          </>
-        )}
-        {course.lessonCount > 0 && (
-          <span className="inline-flex items-center gap-1.5">
-            <Icon.BookOpen className="size-4" aria-hidden="true" />
-            {course.totalDurationSeconds > 0
-              ? t("course.hero.lessonsWithDuration", { count: course.lessonCount, duration: f.duration(course.totalDurationSeconds) })
-              : t("catalog.lessonCount", { count: course.lessonCount })}
-          </span>
-        )}
-        {updated && (
-          <>
-            {course.lessonCount > 0 && <Dot />}
-            <span className="inline-flex items-center gap-1.5">
-              <Icon.Refresh className="size-4" aria-hidden="true" />
-              {t("course.hero.updated", { date: updated })}
-            </span>
-          </>
-        )}
-      </div>
-
-      {course.instructors.length > 0 && <InstructorByline instructors={course.instructors} size="sm" prefix={t("course.hero.createdBy")} />}
-
-      {course.tags.length > 0 && (
-        <ul className="flex flex-wrap gap-2" aria-label={t("course.hero.tags")}>
-          {course.tags.map((tag) => (
-            <li key={tag}>
-              <Link
-                href={tagSlug(tag) ? tagPath(tagSlug(tag)) : `/courses?search=${encodeURIComponent(tag)}`}
-                className="inline-flex items-center rounded-full bg-surface-2 px-3 py-1 text-sm font-medium text-ink-muted transition-colors hover:bg-surface-3 hover:text-ink"
-              >
-                {tag}
-              </Link>
-            </li>
-          ))}
-        </ul>
+      {showBadges && (
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          {!course.published && (
+            <Badge tone="dark" size="sm">
+              <Icon.EyeOff className="size-3" aria-hidden="true" />
+              {t("card.unpublished")}
+            </Badge>
+          )}
+          {!course.published && course.status !== "approved" && <StatusBadge status={course.status} />}
+          {course.upcoming && (
+            <Badge tone="info" size="sm">
+              <Icon.Clock className="size-3" aria-hidden="true" />
+              {t("card.upcoming")}
+            </Badge>
+          )}
+        </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-border bg-surface-3 shadow-card">
-        {preview ? (
-          <VideoPlayer src={preview.src} hlsUrl={preview.hlsUrl} poster={preview.poster} title={t("course.hero.previewTitle", { title: course.title })} className="rounded-none" />
-        ) : (
-          <CourseCover title={course.title} imageUrl={course.imageUrl} gradient={course.cardGradient} variant="hero" alt={course.title} priority="high" className="aspect-video w-full" />
-        )}
-      </div>
-    </section>
+      <h1 id="course-title" className={cn("max-w-4xl text-3xl font-extrabold tracking-tight text-ink sm:text-4xl", showBadges ? "mt-3" : "mt-5")}>
+        {course.title}
+      </h1>
+      <MetaDots parts={meta} className="mt-3 text-sm text-ink-muted" />
+      {course.shortIntroduction && <p className="mt-3 max-w-3xl text-body text-ink-muted">{course.shortIntroduction}</p>}
+    </header>
   );
 }

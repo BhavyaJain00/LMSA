@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ActionResult, Database, Payment, Settings, User } from "@/lib/types";
+import type { ActionResult, Database, ManualPaymentDetails, Payment, Settings, User } from "@/lib/types";
 import { getCurrentUser, isAdmin } from "@/lib/auth/session";
 import { getDb, mutate } from "@/lib/db/store";
 import { audit } from "@/lib/audit";
@@ -16,6 +16,7 @@ import {
   insertPendingOrder,
   installmentCheckout,
   membershipTerms,
+  notifyAdminsOfPaymentReference,
   notifyAdminsOfPendingOrder,
   orderTaxFields,
   parseItemType,
@@ -41,6 +42,7 @@ import {
   confirmRazorpayCheckout,
   createCheckout,
   gatewayErrorMessage,
+  gatewayMode,
   isConfigured,
   isRealGateway,
   isValidRazorpayCheckoutSignature,
@@ -53,6 +55,7 @@ import {
   testGatewayConnection,
 } from "@/lib/payments/gateway";
 import { GatewayError } from "@/lib/payments/http";
+import { normalizeBuyerReference, resolveCheckoutMethod, type CheckoutMethodId, type GatewayStatus } from "@/lib/payments/methods";
 import { parseDecimalAmount } from "@/lib/payments/amounts";
 import { assertPrerequisitesMet } from "@/lib/services/drip";
 import { verificationError } from "@/lib/auth/verification";
@@ -92,6 +95,9 @@ import { trackCheckoutStarted } from "@/lib/growth/checkout-tracking";
 /* Checkout                                                            */
 /* ------------------------------------------------------------------ */
 
+/** Keys present and test/live mode of an online gateway (for the checkout method check). */
+const gatewayStatus: GatewayStatus = (gateway) => ({ configured: isConfigured(gateway), mode: gatewayMode(gateway) });
+
 function orderPath(orderId: string): string {
   return `/billing/success/${encodeURIComponent(orderId)}`;
 }
@@ -110,9 +116,11 @@ function revalidateOrder(orderId: string) {
  * be ordered with `paymentOption=installments`: the order is then the first
  * of the plan's equal payments, and the rest are scheduled once it is paid.
  *
- * Gateways:
+ * Payment method: the buyer picks one at checkout (`method`, one of those offered in Settings → Payments and
+ * ready to take payments); without one, the site's main gateway is used.
  *  - total 0 or gateway "none" → recorded as paid immediately and fulfilled.
- *  - "manual"   → pending payment; admins confirm it in Settings → Transactions.
+ *  - "manual"   → pending payment with the buyer's transfer reference (`reference`, optional); admins confirm
+ *                 it in Settings → Transactions.
  *  - "stripe"   → returns the hosted Stripe Checkout URL to redirect to.
  *  - "razorpay" → returns the options for the Razorpay Checkout modal.
  */
@@ -204,10 +212,19 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   }
   const total = charge.amount + (bump?.summary.total ?? 0);
 
-  const gateway = settings.commerce.paymentGateway;
-  const settleNow = total <= 0 || gateway === "none";
-  if (!settleNow && isRealGateway(gateway) && !isConfigured(gateway)) {
-    return { ok: false, error: "Online payments are not available right now. Please try again later or contact us." };
+  const settleNow = total <= 0 || settings.commerce.paymentGateway === "none";
+  // The method the buyer picked (offered and ready), checked here again.
+  let gateway: CheckoutMethodId | "none" = "none";
+  let buyerReference = "";
+  if (!settleNow) {
+    const resolved = resolveCheckoutMethod(fd(formData, "method"), settings.commerce, gatewayStatus);
+    if (!resolved.ok) return { ok: false, error: resolved.error, fieldErrors: { method: resolved.error } };
+    gateway = resolved.method;
+    if (gateway === "manual") {
+      const ref = normalizeBuyerReference(fd(formData, "reference"));
+      if (!ref.ok) return { ok: false, error: ref.error, fieldErrors: { reference: ref.error } };
+      buyerReference = ref.value;
+    }
   }
 
   const billing = billingFields(input, settings.commerce.applyTax);
@@ -216,7 +233,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
   // The funnel's "started checkout" stage, also for buyers whose browser sends no page-view beacon.
   await trackCheckoutStarted({ userId: user.id, itemType: type, itemId });
   const referral = affiliateId ? { affiliateId } : {};
-  const orderGateway = total <= 0 ? "free" : gateway;
+  const orderGateway = total <= 0 ? "free" : settleNow ? settings.commerce.paymentGateway : gateway;
   const createdAt = new Date().toISOString();
   // The coupon's usage limit is enforced again inside this serialized insert (the use is reserved there).
   const inserted = await insertPendingOrder({
@@ -242,6 +259,7 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
     ...billing,
     ...referral,
     gateway: orderGateway,
+    ...(buyerReference ? { buyerReference, buyerReferenceAt: createdAt } : {}),
     status: "pending",
     createdAt,
   }, bump
@@ -294,7 +312,9 @@ export async function placeOrderAction(_prev: ActionResult<CheckoutNext> | null,
         ? `Your ${trialDays}-day free trial has started. We'll confirm your payment before it ends.`
         : split
           ? `Order placed. Your plan of ${split.plan.count} payments starts when we confirm the first one.`
-          : "Order placed. We'll confirm your payment shortly.",
+          : buyerReference
+            ? "Thank you! We received your payment reference and will confirm your payment shortly."
+            : "Order placed. Pay using the details below, then add your payment reference.",
       "success",
     );
     redirect(orderPath(payment.orderId));
@@ -436,6 +456,34 @@ export async function confirmRazorpayMembershipAction(input: {
 }
 
 /** Let a learner cancel their own order while it is still awaiting payment. */
+/**
+ * The buyer of a manual (bank transfer / UPI) order enters the transaction reference after paying, so an
+ * administrator can match the money and confirm the order. Can be changed until the order is confirmed.
+ */
+export async function submitPaymentReferenceAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const found = await ownPayment(fd(formData, "orderId"));
+  if ("error" in found) return { ok: false, error: found.error };
+  const { user, payment } = found;
+  if (payment.status !== "pending" || payment.gateway !== "manual") {
+    return { ok: false, error: "This order doesn't need a payment reference any more." };
+  }
+  const ref = normalizeBuyerReference(fd(formData, "reference"));
+  if (!ref.ok) return { ok: false, error: ref.error, fieldErrors: { reference: ref.error } };
+  if (!ref.value) return { ok: false, error: "Enter the reference of your transfer.", fieldErrors: { reference: "Enter the reference of your transfer." } };
+  if (ref.value === payment.buyerReference) return { ok: true, data: undefined, message: "Your payment reference is saved." };
+  const saved = await mutate((d) => {
+    const row = d.payments.find((p) => p.id === payment.id);
+    if (!row || row.status !== "pending") return null;
+    row.buyerReference = ref.value;
+    row.buyerReferenceAt = new Date().toISOString();
+    return { ...row };
+  });
+  if (!saved) return { ok: false, error: "This order doesn't need a payment reference any more." };
+  await notifyAdminsOfPaymentReference(saved, user.name);
+  revalidateOrder(payment.orderId);
+  return { ok: true, data: undefined, message: "Thank you! We'll confirm your payment shortly." };
+}
+
 export async function cancelOrderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const found = await ownPayment(fd(formData, "orderId"));
   if ("error" in found) return { ok: false, error: found.error };
@@ -1048,6 +1096,28 @@ export async function setInstallmentsEnabledAction(enabled: boolean): Promise<Ac
 
 const GATEWAY_CHOICES: Settings["commerce"]["paymentGateway"][] = ["manual", "stripe", "razorpay", "none"];
 
+/** Read and check the bank / UPI details of Settings → Payments (empty fields are dropped). */
+function readManualPaymentDetails(formData: FormData, errors: Record<string, string>): ManualPaymentDetails {
+  const text = (name: string) => fd(formData, name).trim();
+  const details: ManualPaymentDetails = {
+    instructions: text("manualInstructions"),
+    accountName: text("manualAccountName"),
+    bankName: text("manualBankName"),
+    accountNumber: text("manualAccountNumber").replace(/\s+/g, ""),
+    ifsc: text("manualIfsc").toUpperCase(),
+    swift: text("manualSwift").toUpperCase(),
+    upiId: text("manualUpiId"),
+  };
+  if ((details.instructions ?? "").length > 600) errors.manualInstructions = "Keep the instructions under 600 characters.";
+  if ((details.accountName ?? "").length > 120) errors.manualAccountName = "Keep the account name under 120 characters.";
+  if ((details.bankName ?? "").length > 120) errors.manualBankName = "Keep the bank name under 120 characters.";
+  if (details.accountNumber && !/^[A-Za-z0-9-]{4,40}$/.test(details.accountNumber)) errors.manualAccountNumber = "Enter the account number or IBAN with letters and digits only.";
+  if (details.ifsc && !/^[A-Z0-9-]{4,20}$/.test(details.ifsc)) errors.manualIfsc = "Enter the IFSC or routing code with letters and digits only.";
+  if (details.swift && !/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(details.swift)) errors.manualSwift = "A SWIFT / BIC code has 8 or 11 letters and digits.";
+  if (details.upiId && !/^[\w.-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,63}$/.test(details.upiId)) errors.manualUpiId = "Enter a UPI ID like name@bank.";
+  return Object.fromEntries(Object.entries(details).filter(([, v]) => v)) as ManualPaymentDetails;
+}
+
 /**
  * Save Settings → Payments (currency, active gateway, tax, reminders). A
  * real gateway can only be activated once its keys are configured, so
@@ -1073,6 +1143,13 @@ export async function savePaymentGatewaySettingsAction(_prev: ActionResult | nul
   else if (applyTax && taxPercentage <= 0) errors.taxPercentage = "Enter a tax percentage greater than zero, or turn tax off.";
   if (applyTax && !taxLabel) errors.taxLabel = "Tax label is required when tax is applied.";
   else if (taxLabel.length > 30) errors.taxLabel = "Keep the tax label under 30 characters.";
+  // Checkout methods (the main gateway is always offered) and the bank / UPI details for manual payments.
+  const paymentMethods = {
+    stripe: fdBool(formData, "method_stripe") || paymentGateway === "stripe",
+    razorpay: fdBool(formData, "method_razorpay") || paymentGateway === "razorpay",
+    manual: fdBool(formData, "method_manual") || paymentGateway === "manual",
+  };
+  const manual = readManualPaymentDetails(formData, errors);
   if (Object.keys(errors).length) return { ok: false, error: Object.values(errors)[0] ?? "Please fix the errors below.", fieldErrors: errors };
 
   await mutate((d) => {
@@ -1085,6 +1162,11 @@ export async function savePaymentGatewaySettingsAction(_prev: ActionResult | nul
     c.showUsdEquivalent = fdBool(formData, "showUsdEquivalent");
     c.applyRounding = fdBool(formData, "applyRounding");
     c.sendPaymentReminders = fdBool(formData, "sendPaymentReminders");
+    // Forms saved before these sections existed keep the stored methods and details.
+    if (formData.has("manualAccountName")) {
+      c.paymentMethods = paymentMethods;
+      c.manualPayment = manual;
+    }
     d.settings.updatedAt = new Date().toISOString();
   });
   await audit(actor, "settings.update", { type: "settings", id: "payments" }, { section: "payments", paymentGateway, defaultCurrency, applyTax });

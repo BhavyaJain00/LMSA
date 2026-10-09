@@ -11,7 +11,7 @@ export function defaultSettings(): Settings {
       tagline: "Learn by doing. Master real skills.",
       logoUrl: undefined,
       faviconUrl: undefined,
-      accentColor: "#4f46e5",
+      accentColor: "#2f55d4",
       metaDescription: BRAND_DESCRIPTION,
       metaImageUrl: undefined,
       metaKeywords: "lms, courses, learning, training",
@@ -49,6 +49,8 @@ export function defaultSettings(): Settings {
     commerce: {
       defaultCurrency: "USD",
       paymentGateway: "manual",
+      paymentMethods: { stripe: true, razorpay: true, manual: true },
+      manualPayment: {},
       applyTax: false,
       taxPercentage: 0,
       taxLabel: "Tax",
@@ -202,7 +204,13 @@ export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
     brand: { ...d.brand, ...(stored.brand ?? {}) },
     features: { ...d.features, ...(stored.features ?? {}) },
     learning: { ...d.learning, ...(stored.learning ?? {}) },
-    commerce: { ...d.commerce, ...(stored.commerce ?? {}) },
+    commerce: {
+      ...d.commerce,
+      ...(stored.commerce ?? {}),
+      // Settings saved before checkout offered a choice of methods get every method switched on.
+      paymentMethods: { ...d.commerce.paymentMethods, ...(stored.commerce?.paymentMethods ?? {}) },
+      manualPayment: { ...d.commerce.manualPayment, ...(stored.commerce?.manualPayment ?? {}) },
+    },
     contact: { ...d.contact, ...(stored.contact ?? {}) },
     sidebarItems: stored.sidebarItems ?? d.sidebarItems,
     customSignupContent: stored.customSignupContent ?? d.customSignupContent,

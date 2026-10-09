@@ -34,13 +34,13 @@ export function LandingSection({
 }) {
   return (
     <section aria-labelledby={id} className={className}>
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="max-w-2xl">
-          {eyebrow && <p className="text-xs font-semibold uppercase tracking-wider text-accent">{eyebrow}</p>}
-          <h2 id={id} className="mt-1 text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+      <div className="mb-5 flex items-end justify-between gap-4">
+        <div className="min-w-0 max-w-2xl">
+          {eyebrow && <p className="mb-1 text-micro font-semibold uppercase tracking-wider text-accent">{eyebrow}</p>}
+          <h2 id={id} className="text-2xl font-bold tracking-tight text-ink">
             {title}
           </h2>
-          {description && <p className="mt-2 text-sm leading-6 text-ink-muted sm:text-base">{description}</p>}
+          {description && <p className="mt-1 text-sm text-ink-faint">{description}</p>}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>
@@ -283,33 +283,16 @@ export async function LandingTestimonials({ testimonials }: { testimonials: Test
   if (!testimonials.length) return null;
   const tr = await getT("public");
   return (
-    <LandingSection
-      id="landing-testimonials"
-      eyebrow={tr("home.testimonials.eyebrow")}
-      title={tr("home.testimonials.title")}
-      description={tr("home.testimonials.description")}
-    >
+    <LandingSection id="landing-testimonials" title={tr("home.testimonials.title")}>
       <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {testimonials.map((t) => (
           <li key={t.id}>
-            <figure className="flex h-full flex-col rounded-card border border-border bg-surface-1 p-6 shadow-card">
-              <RatingStars value={t.rating} size="sm" />
-              <blockquote className="mt-4 flex-1 text-base leading-7 text-ink">
-                <p>
-                  <span aria-hidden="true" className="me-0.5 text-2xl leading-none text-accent">
-                    “
-                  </span>
-                  {t.review}
-                  <span aria-hidden="true" className="ms-0.5 text-2xl leading-none text-accent">
-                    ”
-                  </span>
-                </p>
-              </blockquote>
-              <figcaption className="mt-5 flex items-center gap-3 border-t border-border pt-4">
+            <figure className="flex h-full flex-col rounded-card border border-border bg-surface-1 p-5 shadow-card">
+              <figcaption className="flex items-center gap-3">
                 <Avatar name={t.user.name} src={t.user.avatarUrl} size="sm" />
                 <div className="min-w-0 text-sm">
-                  <p className="truncate font-medium text-ink">{t.user.name}</p>
-                  <p className="truncate text-xs text-ink-muted">
+                  <p className="truncate font-semibold text-ink">{t.user.name}</p>
+                  <p className="truncate text-xs text-ink-faint">
                     {tr.rich("home.testimonials.onCourse", {
                       link: () => (
                         <Link href={`/courses/${t.course.slug}`} className="font-medium text-accent hover:underline">
@@ -319,7 +302,11 @@ export async function LandingTestimonials({ testimonials }: { testimonials: Test
                     })}
                   </p>
                 </div>
+                <RatingStars value={t.rating} size="sm" className="ms-auto shrink-0" />
               </figcaption>
+              <blockquote className="mt-4 flex-1 text-sm leading-6 text-ink-muted">
+                <p>{t.review}</p>
+              </blockquote>
             </figure>
           </li>
         ))}
@@ -369,6 +356,43 @@ export async function LandingCta({
           </ButtonLink>
         )}
       </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Why learn with us (four small tiles)                                */
+/* ------------------------------------------------------------------ */
+
+const VALUES = [
+  { key: "depth", icon: "BookOpen", tint: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
+  { key: "practice", icon: "Code", tint: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
+  { key: "certificate", icon: "Award", tint: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  { key: "community", icon: "MessageSquare", tint: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+] as const;
+
+/** Four one-line promises under the course rows (the certificate tile only when certificates are on). */
+export async function LandingValues({ certificates }: { certificates: boolean }) {
+  const t = await getT("public");
+  const values = VALUES.filter((v) => v.key !== "certificate" || certificates);
+  return (
+    <section aria-label={t("home.values.label")}>
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {values.map((v) => {
+          const IconCmp = Icon[v.icon];
+          return (
+            <li key={v.key} className="flex items-center gap-3 rounded-card border border-border bg-surface-1 p-4">
+              <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl", v.tint)}>
+                <IconCmp className="size-5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-ink">{t(`home.values.${v.key}.title`)}</span>
+                <span className="block text-xs text-ink-faint">{t(`home.values.${v.key}.body`)}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

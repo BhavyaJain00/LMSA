@@ -76,15 +76,12 @@ export function LessonSidebar({
   const open = rt?.mobileSidebarOpen ?? localOpen;
   const setOpen = rt?.setMobileSidebarOpen ?? setLocalOpen;
 
-  const tabs: { value: SidebarTab; label: string; count?: number; icon: ReactNode }[] = [
-    { value: "outline", label: t("learn.sidebar.outline"), icon: <Icon.Layers className="size-4" /> },
-  ];
-  if (notesPanel) tabs.push({ value: "notes", label: t("learn.sidebar.notes"), count: noteCount, icon: <Icon.Note className="size-4" /> });
-  if (discussionPanel) tabs.push({ value: "discussion", label: t("learn.sidebar.discussion"), count: topicCount, icon: <Icon.MessageSquare className="size-4" /> });
-  if (aiPanel) tabs.push({ value: "ai", label: t("learn.sidebar.askAi"), icon: <Icon.Sparkles className="size-4" /> });
+  // Text-only segmented tabs (like the rest of the app); the "Ask AI" tab keeps its spark icon.
+  const tabs: { value: SidebarTab; label: string; count?: number; icon?: ReactNode }[] = [{ value: "outline", label: t("learn.sidebar.outline") }];
+  if (notesPanel) tabs.push({ value: "notes", label: t("learn.sidebar.notes"), count: noteCount });
+  if (discussionPanel) tabs.push({ value: "discussion", label: t("learn.sidebar.discussion"), count: topicCount });
+  if (aiPanel) tabs.push({ value: "ai", label: t("learn.sidebar.askAi"), icon: <Icon.Sparkles className="size-3.5" /> });
   const tab: SidebarTab = tabs.some((x) => x.value === rawTab) ? rawTab : "outline";
-  // Four labels with icons don't fit the narrowest sidebar (320px), so the icons go first.
-  const showTabIcons = tabs.length <= 3;
 
   const sheetMode = !isDesktop;
   const hiddenSheet = sheetMode && !open;
@@ -161,58 +158,44 @@ export function LessonSidebar({
         data-lesson-sheet-open={modalSheet ? "" : undefined}
         inert={hiddenSheet}
         className={cn(
-          "flex flex-col bg-surface-1",
+          "flex flex-col overflow-hidden bg-surface-1",
           // Mobile bottom sheet
           "fixed inset-x-0 bottom-0 z-50 h-[85dvh] rounded-t-2xl border-t border-border shadow-pop transition-transform duration-300 ease-out",
           open ? "translate-y-0" : "translate-y-full",
-          // Desktop sticky column
-          "lg:sticky lg:inset-x-auto lg:bottom-auto lg:top-14 lg:z-10 lg:h-[calc(100dvh-3.5rem)] lg:translate-y-0 lg:rounded-none lg:border-s lg:border-t-0 lg:shadow-none lg:transition-none",
+          // Desktop: a sticky rounded panel next to the lesson panel
+          "lg:sticky lg:inset-x-auto lg:bottom-auto lg:top-14 lg:z-10 lg:h-[calc(100dvh-4.25rem)] lg:translate-y-0 lg:rounded-2xl lg:border lg:border-border lg:bg-panel lg:shadow-sm lg:transition-none",
         )}
       >
-        {/* Mobile sheet header */}
-        <div className="relative flex items-center gap-2 border-b border-border px-4 pb-3 pt-4 lg:hidden">
-          <span className="absolute left-1/2 top-1.5 block h-1 w-10 -translate-x-1/2 rounded-full bg-border-strong" aria-hidden="true" />
-          <p id="lesson-sheet-title" className="min-w-0 flex-1 truncate text-base font-semibold text-ink">
-            {courseTitle}
-          </p>
-          <button ref={closeRef} type="button" onClick={() => setOpen(false)} className="rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink" aria-label={common("actions.close")}>
-            <Icon.X className="size-5" />
-          </button>
-        </div>
-
-        {/* Course header (desktop) */}
-        <div className="hidden border-b border-border bg-surface-2/40 px-5 py-4 lg:block">
-          <p className="line-clamp-2 text-base font-semibold leading-snug text-ink">{courseTitle}</p>
+        {/* Course header: title (+ close on the mobile sheet) and progress */}
+        <div className="relative shrink-0 px-5 pb-4 pt-6 lg:pt-5">
+          <span className="absolute left-1/2 top-2 block h-1 w-10 -translate-x-1/2 rounded-full bg-border-strong lg:hidden" aria-hidden="true" />
+          <div className="flex items-start gap-2">
+            <p id="lesson-sheet-title" className="line-clamp-2 min-w-0 flex-1 text-base font-bold leading-snug tracking-tight text-ink">
+              {courseTitle}
+            </p>
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={() => setOpen(false)}
+              className="-me-2 -mt-1.5 rounded-lg p-2 text-ink-muted hover:bg-surface-2 hover:text-ink lg:hidden"
+              aria-label={common("actions.close")}
+            >
+              <Icon.X className="size-5" />
+            </button>
+          </div>
           {progress && (
             <div className="mt-3">
-              <div className="mb-1.5 flex items-center justify-between text-xs">
-                <span className="flex items-center gap-1.5 text-ink-muted">
-                  <Icon.TrendingUp className="size-3.5" /> {t("learn.sidebar.completedPercent", { percent: progress.percent })}
-                </span>
-                <span className="tabular-nums text-ink-faint">
-                  {t("learn.topBar.lessonsCount", { completed: progress.completed, total: progress.total })}
-                </span>
-              </div>
-              <ProgressBar value={progress.percent} size="sm" tone="success" label={t("learn.sidebar.courseProgress")} />
+              <ProgressBar value={progress.percent} size="sm" tone={progress.percent >= 100 ? "success" : "accent"} label={t("learn.sidebar.courseProgress")} />
+              <p className="mt-1.5 flex items-center justify-between gap-2 text-meta text-ink-muted">
+                <span>{t("learn.sidebar.lessonsDone", { completed: progress.completed, total: progress.total })}</span>
+                <span className="font-semibold tabular-nums text-ink">{t("learn.sidebar.percent", { percent: progress.percent })}</span>
+              </p>
             </div>
           )}
         </div>
 
-        {/* Mobile progress line */}
-        {progress && (
-          <div className="border-b border-border px-4 py-2.5 lg:hidden">
-            <div className="mb-1 flex justify-between text-xs text-ink-muted">
-              <span>{t("learn.sidebar.completedPercent", { percent: progress.percent })}</span>
-              <span className="tabular-nums">
-                {progress.completed}/{progress.total}
-              </span>
-            </div>
-            <ProgressBar value={progress.percent} size="xs" tone="success" label={t("learn.sidebar.courseProgress")} />
-          </div>
-        )}
-
         {tabs.length > 1 && (
-          <div role="tablist" aria-label={t("learn.sidebar.sections")} className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2">
+          <div role="tablist" aria-label={t("learn.sidebar.sections")} className="mx-4 mb-3 flex shrink-0 gap-1 overflow-x-auto rounded-xl bg-surface-2 p-1 scrollbar-thin">
             {tabs.map((item) => {
               const active = item.value === tab;
               return (
@@ -235,12 +218,11 @@ export function LessonSidebar({
                     document.getElementById(`sidebar-tab-${nextTab.value}`)?.focus();
                   }}
                   className={cn(
-                    "-mb-px inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 py-2.5 text-sm font-medium transition-colors",
-                    showTabIcons ? "px-2" : "px-1.5",
-                    active ? "border-accent text-ink" : "border-transparent text-ink-muted hover:text-ink",
+                    "inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                    active ? "bg-surface-1 text-ink shadow-sm" : "text-ink-muted hover:text-ink",
                   )}
                 >
-                  {showTabIcons && item.icon}
+                  {item.icon}
                   {item.label}
                   {item.count !== undefined && item.count > 0 && (
                     <span className={cn("rounded-full px-1.5 text-[11px] tabular-nums", active ? "bg-accent/15 text-accent" : "bg-surface-3 text-ink-muted")}>{item.count}</span>
@@ -251,7 +233,7 @@ export function LessonSidebar({
           </div>
         )}
 
-        <div data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-thin">
+        <div data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-border scrollbar-thin">
           <div
             id="sidebar-panel-outline"
             role={tabs.length > 1 ? "tabpanel" : undefined}

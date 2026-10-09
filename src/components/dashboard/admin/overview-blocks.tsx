@@ -1,95 +1,165 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { ActivityFeedItem, ActivityKind, RecentEnrollment, RecentSignup } from "@/lib/data/dashboard";
+import type { RecentEnrollment } from "@/lib/data/dashboard";
 import { Avatar } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Card, StatCard } from "@/components/ui/card";
 import { Icon, type IconName } from "@/components/ui/icons";
 import { ProgressBar } from "@/components/ui/progress";
-import { EmptyState } from "@/components/ui/skeleton";
-import { Table, TBody, TD, TH, THead, TR, TableEmpty } from "@/components/ui/table";
-import type { Role } from "@/lib/types";
 import { getFormatter, getT } from "@/i18n/server";
 import { cn } from "@/lib/utils";
 
+/*
+ * Building blocks of the staff overview (/admin). The page answers "what needs me today?": a few quiet numbers,
+ * one list of pending work, the next live classes and the latest enrollments. Every staff tool lives in the
+ * sidebar's "Manage" group, so nothing here is a directory of links.
+ */
+
+const listCard = "overflow-hidden rounded-card border border-border bg-surface-1 shadow-card";
+
 /* ------------------------------------------------------------------ */
-/* KPI card (StatCard, optionally clickable)                            */
+/* Section                                                              */
 /* ------------------------------------------------------------------ */
 
-export function KpiCard({
+/** One overview section: a bold heading, an optional one-line description and an optional "View all →" link. */
+export function OverviewSection({
+  id,
+  title,
+  description,
+  href,
+  linkLabel,
+  children,
+}: {
+  id: string;
+  title: ReactNode;
+  description?: ReactNode;
+  href?: string;
+  linkLabel?: string;
+  children: ReactNode;
+}) {
+  const headingId = `${id}-title`;
+  return (
+    <section id={id} aria-labelledby={headingId} className="min-w-0">
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-heading font-bold text-ink">
+            {title}
+          </h2>
+          {description && <p className="mt-0.5 text-meta text-ink-faint">{description}</p>}
+        </div>
+        {href && linkLabel && (
+          <Link href={href} className="inline-flex min-h-11 shrink-0 items-center gap-1 text-sm font-semibold text-accent hover:underline sm:min-h-0">
+            {linkLabel}
+            <Icon.ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
+          </Link>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Stat tile                                                            */
+/* ------------------------------------------------------------------ */
+
+/** A small, quiet number tile (no icon). Clickable when `href` is given. */
+export function StatTile({
   href,
   label,
   value,
   hint,
-  icon,
   trend,
 }: {
   href?: string;
   label: string;
   value: ReactNode;
   hint?: ReactNode;
-  icon: ReactNode;
-  trend?: { value: number; label?: string };
+  /** Change in percent; its label replaces the hint ("+20% vs 4 last week"). */
+  trend?: { value: number; label: string };
 }) {
-  const card = <StatCard label={label} value={value} hint={hint} icon={icon} trend={trend} className="h-full" />;
-  if (!href) return card;
+  const body = (
+    <>
+      <span className="block truncate text-meta font-medium text-ink-muted">{label}</span>
+      <span className="mt-1 block text-2xl font-bold tracking-tight text-ink tabular-nums">{value}</span>
+      {(trend || hint) && (
+        <span className="mt-1 block text-xs text-ink-faint">
+          {trend && (
+            <span className={cn("font-semibold tabular-nums", trend.value >= 0 ? "text-success" : "text-danger")}>
+              {trend.value >= 0 ? "+" : "−"}
+              {Math.abs(trend.value)}%{" "}
+            </span>
+          )}
+          {trend?.label ?? hint}
+        </span>
+      )}
+    </>
+  );
+  const base = "block h-full rounded-card border border-border bg-surface-1 p-4 sm:p-5";
+  if (!href) return <div className={base}>{body}</div>;
   return (
-    <Link href={href} className="block h-full rounded-card transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-accent">
-      {card}
+    <Link href={href} className={cn(base, "transition-colors hover:border-border-strong hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent")}>
+      {body}
     </Link>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Quick links                                                          */
+/* Needs your attention                                                 */
 /* ------------------------------------------------------------------ */
 
-export interface QuickLink {
+export interface AttentionItem {
+  key: string;
   label: string;
   description: string;
-  href: string;
+  count: number;
   icon: IconName;
-  count?: number;
-  highlight?: boolean;
+  /** Omitted when the viewer's role cannot open the queue. */
+  href?: string;
 }
 
-export function QuickLinksGrid({ links }: { links: QuickLink[] }) {
+/** One list of pending work. Rows with a zero count are hidden; with none left it says "You're all caught up". */
+export async function AttentionList({ items }: { items: AttentionItem[] }) {
+  const [t, f] = await Promise.all([getT("admin"), getFormatter()]);
+  const visible = items.filter((item) => item.count > 0);
+
+  if (visible.length === 0) {
+    return (
+      <div className={cn(listCard, "flex items-center gap-3 px-4 py-4 sm:gap-4 sm:px-5")}>
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-success/15 text-success" aria-hidden="true">
+          <Icon.CheckCircle className="size-5" />
+        </span>
+        <p className="text-ink-muted">{t("pages.overview.attention.caughtUp")}</p>
+      </div>
+    );
+  }
+
   return (
-    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {links.map((link) => {
-        const IconCmp = Icon[link.icon];
+    <ul className={cn(listCard, "divide-y divide-border")}>
+      {visible.map((item) => {
+        const IconCmp = Icon[item.icon];
+        const content = (
+          <>
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-warning/15 text-warning" aria-hidden="true">
+              <IconCmp className="size-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className={cn("block font-semibold text-ink", item.href && "group-hover:text-accent")}>{item.label}</span>
+              <span className="block truncate text-meta text-ink-faint">{item.description}</span>
+            </span>
+            <span className="min-w-9 shrink-0 rounded-full bg-surface-2 px-2.5 py-0.5 text-center text-sm font-bold text-ink tabular-nums">
+              {f.number(item.count)}
+            </span>
+            {item.href && <Icon.ChevronRight className="size-4 shrink-0 text-ink-faint rtl:rotate-180" aria-hidden="true" />}
+          </>
+        );
         return (
-          <li key={link.href}>
-            <Link
-              href={link.href}
-              className="group flex h-full items-start gap-3 rounded-xl border border-border bg-surface-1 p-3 transition-colors hover:border-border-strong hover:bg-surface-2/60"
-            >
-              <span
-                className={cn(
-                  "flex size-9 shrink-0 items-center justify-center rounded-lg",
-                  link.highlight ? "bg-warning/15 text-warning" : "bg-accent/10 text-accent",
-                )}
-                aria-hidden="true"
-              >
-                <IconCmp className="size-4.5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-ink group-hover:text-accent">{link.label}</span>
-                  {link.count !== undefined && (
-                    <span
-                      className={cn(
-                        "rounded-full px-1.5 py-px text-[11px] font-medium tabular-nums",
-                        link.highlight ? "bg-warning/15 text-warning" : "bg-surface-3 text-ink-muted",
-                      )}
-                    >
-                      {link.count}
-                    </span>
-                  )}
-                </span>
-                <span className="mt-0.5 block text-xs text-ink-muted">{link.description}</span>
-              </span>
-            </Link>
+          <li key={item.key}>
+            {item.href ? (
+              <Link href={item.href} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-2 sm:gap-4 sm:px-5">
+                {content}
+              </Link>
+            ) : (
+              <div className="flex items-center gap-3 px-4 py-3 sm:gap-4 sm:px-5">{content}</div>
+            )}
           </li>
         );
       })}
@@ -98,171 +168,64 @@ export function QuickLinksGrid({ links }: { links: QuickLink[] }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Coming up                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Frame for the "Coming up" rows (`OverviewEventRow`, a client component that knows the viewer's time). */
+export function EventList({ children }: { children: ReactNode }) {
+  return <ul className={cn(listCard, "divide-y divide-border")}>{children}</ul>;
+}
+
+/* ------------------------------------------------------------------ */
 /* Recent enrollments                                                   */
 /* ------------------------------------------------------------------ */
 
-export async function RecentEnrollmentsTable({ rows }: { rows: RecentEnrollment[] }) {
+/** Compact rows: avatar, learner, course, progress and when they enrolled. */
+export async function RecentEnrollmentsList({ rows, empty }: { rows: RecentEnrollment[]; empty: ReactNode }) {
   const [t, f] = await Promise.all([getT("account"), getFormatter()]);
-  return (
-    <Table>
-      <THead>
-        <tr>
-          <TH>{t("dashboard.admin.learner")}</TH>
-          <TH>{t("dashboard.admin.course")}</TH>
-          <TH className="hidden sm:table-cell">{t("dashboard.admin.enrolled")}</TH>
-          <TH className="w-36">{t("dashboard.admin.progress")}</TH>
-        </tr>
-      </THead>
-      <TBody>
-        {rows.length === 0 && <TableEmpty colSpan={4}>{t("dashboard.admin.noEnrollments")}</TableEmpty>}
-        {rows.map((r) => (
-          <TR key={r.id}>
-            <TD>
-              {r.user ? (
-                <Link href={`/user/${r.user.username}`} className="flex min-w-0 items-center gap-2.5 hover:text-accent">
-                  <Avatar name={r.user.name} src={r.user.avatarUrl} size="sm" />
-                  <span className="max-w-40 truncate font-medium">{r.user.name}</span>
-                </Link>
-              ) : (
-                <span className="text-ink-muted">{t("dashboard.admin.deletedUser")}</span>
-              )}
-            </TD>
-            <TD>
-              <Link href={`/courses/${r.course.slug}`} className="line-clamp-2 min-w-40 hover:text-accent">
-                {r.course.title}
-              </Link>
-              {r.batchTitle && <span className="block truncate text-xs text-ink-muted">{t("dashboard.admin.viaBatch", { title: r.batchTitle })}</span>}
-            </TD>
-            <TD className="hidden whitespace-nowrap text-ink-muted sm:table-cell">{f.relative(r.enrolledAt)}</TD>
-            <TD>
-              {r.completed ? (
-                <Badge tone="success" dot>
-                  {t("dashboard.admin.completed")}
-                </Badge>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <ProgressBar value={r.progress} size="xs" label={t("dashboard.cards.progressLabel", { title: r.user?.name ?? t("dashboard.admin.learner") })} />
-                  <span className="w-9 shrink-0 text-end text-xs tabular-nums text-ink-muted">{f.percent(r.progress)}</span>
-                </div>
-              )}
-            </TD>
-          </TR>
-        ))}
-      </TBody>
-    </Table>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Recent signups                                                       */
-/* ------------------------------------------------------------------ */
-
-export async function RecentSignupsList({ users, showEmail }: { users: RecentSignup[]; showEmail: boolean }) {
-  const [t, ts, f] = await Promise.all([getT("account"), getT("shell"), getFormatter()]);
-  const roleLabel = (role: Role) => (ts.has(`roles.${role}`) ? ts(`roles.${role}`) : t("dashboard.admin.staff"));
-  return (
-    <Card className="h-full">
-      {users.length === 0 ? (
-        <div className="p-4">
-          <EmptyState compact icon={<Icon.UserPlus />} title={t("dashboard.admin.noMembers")} description={t("dashboard.admin.noMembersBody")} />
-        </div>
-      ) : (
-        <ul className="divide-y divide-border">
-          {users.map((u) => (
-            <li key={u.id}>
-              <Link href={`/user/${u.username}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-2">
-                <Avatar name={u.name} src={u.avatarUrl} size="sm" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-ink">{u.name}</span>
-                  <span className="block truncate text-xs text-ink-muted">
-                    <span dir="ltr">{showEmail && u.email ? u.email : `@${u.username}`}</span> · {t("count.courses", { count: u.enrollments })}
-                  </span>
-                </span>
-                <span className="flex shrink-0 flex-col items-end gap-1">
-                  <span className="text-[11px] text-ink-faint">{f.relative(u.createdAt)}</span>
-                  {u.roles.some((r) => r !== "student") && (
-                    <Badge tone="accent" size="xs">
-                      {roleLabel(u.roles.find((r) => r !== "student")!)}
-                    </Badge>
-                  )}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Activity feed                                                        */
-/* ------------------------------------------------------------------ */
-
-const activityIcon: Record<ActivityKind, { icon: ReactNode; tone: string }> = {
-  signup: { icon: <Icon.UserPlus />, tone: "bg-info/10 text-info" },
-  enrollment: { icon: <Icon.BookOpen />, tone: "bg-accent/10 text-accent" },
-  batch_enrollment: { icon: <Icon.Users />, tone: "bg-accent/10 text-accent" },
-  completion: { icon: <Icon.Trophy />, tone: "bg-success/10 text-success" },
-  certificate: { icon: <Icon.Certificate />, tone: "bg-success/10 text-success" },
-  quiz: { icon: <Icon.ListChecks />, tone: "bg-warning/15 text-warning" },
-  assignment: { icon: <Icon.ClipboardList />, tone: "bg-warning/15 text-warning" },
-  review: { icon: <Icon.Star />, tone: "bg-warning/15 text-warning" },
-  payment: { icon: <Icon.CreditCard />, tone: "bg-success/10 text-success" },
-};
-
-export async function ActivityFeed({ items }: { items: ActivityFeedItem[] }) {
-  const [t, f] = await Promise.all([getT("account"), getFormatter()]);
-  if (items.length === 0) {
-    return (
-      <EmptyState
-        compact
-        icon={<Icon.Zap />}
-        title={t("dashboard.admin.noActivity")}
-        description={t("dashboard.admin.noActivityBody")}
-      />
-    );
+  if (rows.length === 0) {
+    return <div className={cn(listCard, "px-4 py-5 text-ink-muted sm:px-5")}>{empty}</div>;
   }
   return (
-    <Card className="p-4">
-      <ol className="relative space-y-4 before:absolute before:bottom-2 before:start-[15px] before:top-2 before:w-px before:bg-border">
-        {items.map((item) => {
-          const meta = activityIcon[item.kind];
-          return (
-            <li key={item.id} className="relative flex gap-3">
-              <span className={cn("relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full ring-4 ring-surface-1 [&>svg]:size-4", meta.tone)} aria-hidden="true">
-                {meta.icon}
+    <ul className={cn(listCard, "divide-y divide-border")}>
+      {rows.map((r) => {
+        const name = r.user?.name ?? t("dashboard.admin.deletedUser");
+        return (
+          <li key={r.id} className="flex items-center gap-3 px-4 py-3 sm:gap-4 sm:px-5">
+            <span aria-hidden="true" className="shrink-0">
+              <Avatar name={name} src={r.user?.avatarUrl} size="md" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold text-ink">
+                {r.user ? (
+                  <Link href={`/user/${r.user.username}`} className="hover:text-accent">
+                    {name}
+                  </Link>
+                ) : (
+                  <span className="text-ink-muted">{name}</span>
+                )}
               </span>
-              <div className="min-w-0 flex-1 pt-1">
-                <p className="text-sm text-ink-muted">
-                  {item.actor ? (
-                    <Link href={`/user/${item.actor.username}`} className="font-medium text-ink hover:text-accent">
-                      {item.actor.name}
-                    </Link>
-                  ) : (
-                    <span className="font-medium text-ink">{t("dashboard.admin.someone")}</span>
-                  )}{" "}
-                  {item.verb}
-                  {item.target && (
-                    <>
-                      {" "}
-                      {item.target.href ? (
-                        <Link href={item.target.href} className="font-medium text-ink hover:text-accent">
-                          {item.target.label}
-                        </Link>
-                      ) : (
-                        <span className="font-medium text-ink">{item.target.label}</span>
-                      )}
-                    </>
-                  )}
-                </p>
-                {item.detail && <p className="mt-0.5 line-clamp-2 text-xs text-ink-muted">{item.detail}</p>}
-                <p className="mt-0.5 text-[11px] text-ink-faint">{f.relative(item.at)}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </Card>
+              <span className="block truncate text-meta text-ink-faint">
+                <Link href={`/courses/${r.course.slug}`} className="hover:text-accent">
+                  {r.course.title}
+                </Link>
+                {r.batchTitle && <> · {t("dashboard.admin.viaBatch", { title: r.batchTitle })}</>}
+              </span>
+            </span>
+            <span className="flex w-24 shrink-0 flex-col items-end gap-1 sm:w-36">
+              {r.completed ? (
+                <span className="text-meta font-semibold text-success">{t("dashboard.admin.completed")}</span>
+              ) : (
+                <span className="flex w-full items-center gap-2">
+                  <ProgressBar value={r.progress} size="xs" label={t("dashboard.cards.progressLabel", { title: name })} />
+                  <span className="shrink-0 text-xs font-medium text-ink-muted tabular-nums">{f.percent(r.progress)}</span>
+                </span>
+              )}
+              <span className="text-xs whitespace-nowrap text-ink-faint">{f.relative(r.enrolledAt)}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

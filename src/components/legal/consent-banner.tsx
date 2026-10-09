@@ -111,13 +111,13 @@ export function ConsentBanner({ enabled, initialConsent, policy }: ConsentBanner
         <section
           aria-labelledby={titleId}
           aria-describedby={descriptionId}
-          className="pointer-events-none fixed inset-x-0 bottom-0 z-60 p-3 sm:p-4 print:hidden"
-          style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+          className="pointer-events-none fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-60 flex justify-end p-3 sm:p-4 lg:bottom-0 print:hidden"
         >
-          <div className="pointer-events-auto mx-auto max-h-[70vh] max-w-3xl overflow-y-auto rounded-2xl border border-border bg-surface-1 p-4 text-ink shadow-pop sm:p-5">
+          {/* A small corner card (not a page-wide bar), so it never hides what the visitor came for. */}
+          <div className="pointer-events-auto max-h-[60vh] w-full max-w-sm overflow-y-auto rounded-2xl border border-border bg-surface-1 p-4 text-ink shadow-pop">
             <div className="flex gap-3">
-              <span className="hidden size-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent sm:flex">
-                <Icon.ShieldCheck className="size-5" />
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                <Icon.ShieldCheck className="size-4" />
               </span>
               <div className="min-w-0">
                 <h2 id={titleId} className="text-sm font-semibold">
@@ -129,15 +129,15 @@ export function ConsentBanner({ enabled, initialConsent, policy }: ConsentBanner
                 </p>
               </div>
             </div>
-            <div className="mt-4 grid gap-2 sm:flex sm:items-center sm:justify-end">
-              <Button ref={customizeRef} variant="ghost" size="sm" onClick={openDialog} aria-haspopup="dialog">
-                Customize
-              </Button>
+            <div className="mt-4 grid grid-cols-2 gap-2">
               <Button variant="secondary" size="sm" onClick={() => decide(REJECT_ALL)}>
                 Reject non-essential
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => decide(ACCEPT_ALL)}>
+              <Button size="sm" onClick={() => decide(ACCEPT_ALL)}>
                 Accept all
+              </Button>
+              <Button ref={customizeRef} variant="ghost" size="sm" onClick={openDialog} aria-haspopup="dialog" className="col-span-2">
+                Customize
               </Button>
             </div>
           </div>

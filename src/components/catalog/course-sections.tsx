@@ -1,18 +1,18 @@
 import Link from "next/link";
 import type { Announcement, CourseSummary, PublicUser } from "@/lib/types";
-import { Avatar } from "@/components/ui/avatar";
 import { ButtonLink } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 import { getFormatter, getT } from "@/i18n/server";
 import { CourseGrid } from "./course-grid";
+import { SectionCard } from "./course-page/section-card";
 
 /** Section heading used across the course page. */
 export function SectionHeading({ id, children, aside }: { id: string; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-      <h2 id={id} className="text-2xl font-semibold tracking-tight text-ink">
+      <h2 id={id} className="text-heading font-bold text-ink">
         {children}
       </h2>
       {aside && <div className="text-sm text-ink-muted">{aside}</div>}
@@ -74,47 +74,48 @@ export async function CourseDescription({ description }: { description: string }
 
 export type AnnouncementView = Announcement & { author: PublicUser | null };
 
-/** Latest course announcements from the instructors. */
+/** Latest course announcements from the instructors (simple card at the end of the course page). */
 export async function CourseAnnouncements({ announcements }: { announcements: AnnouncementView[] }) {
   if (!announcements.length) return null;
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
-    <section aria-labelledby="announcements-heading">
-      <SectionHeading id="announcements-heading" aside={t("course.sections.recent", { count: announcements.length })}>
-        {t("course.sections.announcements")}
-      </SectionHeading>
-      <ol className="space-y-3">
+    <SectionCard
+      id="announcements"
+      headingId="announcements-heading"
+      title={t("course.sections.announcements")}
+      description={t("course.page.announcementsDescription")}
+    >
+      <ol className="divide-y divide-border">
         {announcements.map((a) => (
-          <li key={a.id} className="rounded-card border border-border bg-surface-1 p-4 sm:p-5">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
-                <Icon.Megaphone className="size-4.5" aria-hidden="true" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-ink">{a.subject}</h3>
-                <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-muted">
-                  {a.author && (
-                    <>
-                      <Avatar name={a.author.name} src={a.author.avatarUrl} size="xs" />
-                      <span className="font-medium text-ink">{a.author.name}</span>
-                      <span aria-hidden="true">·</span>
-                    </>
-                  )}
-                  <time dateTime={a.createdAt} title={f.date(a.createdAt)}>
-                    {f.relative(a.createdAt)}
-                  </time>
-                </p>
-                <Markdown content={a.body} className="mt-3 text-sm! text-ink-muted!" />
+          <li key={a.id} className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
+            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+              <Icon.Megaphone className="size-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-bold text-ink">{a.subject}</h3>
+              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint">
+                {a.author && (
+                  <>
+                    <span className="font-medium text-ink-muted">{a.author.name}</span>
+                    <span aria-hidden="true">·</span>
+                  </>
+                )}
+                <time dateTime={a.createdAt} title={f.date(a.createdAt)}>
+                  {f.relative(a.createdAt)}
+                </time>
+              </p>
+              <div className="mt-2 line-clamp-3">
+                <Markdown content={a.body} className="text-sm! text-ink-muted!" />
               </div>
             </div>
           </li>
         ))}
       </ol>
-    </section>
+    </SectionCard>
   );
 }
 
-/** "Related Courses" grid (hidden when there are none). */
+/** "Related courses" (three cards, hidden when there are none). */
 export async function RelatedCourses({ courses, explicit }: { courses: CourseSummary[]; explicit: boolean }) {
   if (!courses.length) return null;
   const t = await getT("public");
@@ -123,7 +124,7 @@ export async function RelatedCourses({ courses, explicit }: { courses: CourseSum
       <SectionHeading
         id="related-heading"
         aside={
-          <Link href="/courses" className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
+          <Link href="/courses" className="inline-flex items-center gap-1 font-semibold text-accent hover:underline">
             {t("landing.browseAll")}
             <Icon.ArrowRight className="size-3.5 rtl:rotate-180" aria-hidden="true" />
           </Link>
@@ -131,7 +132,7 @@ export async function RelatedCourses({ courses, explicit }: { courses: CourseSum
       >
         {explicit ? t("course.sections.related") : t("course.sections.moreLikeThis")}
       </SectionHeading>
-      <CourseGrid courses={courses} />
+      <CourseGrid courses={courses.slice(0, 3)} columns="compact" />
     </section>
   );
 }
@@ -207,7 +208,7 @@ export async function CertificationCard({
   );
 }
 
-/** Live batches that teach this course. */
+/** Live batches that teach this course (simple card at the end of the course page). */
 export async function CourseBatches({
   batches,
 }: {
@@ -216,26 +217,28 @@ export async function CourseBatches({
   if (!batches.length) return null;
   const [t, f] = await Promise.all([getT("public"), getFormatter()]);
   return (
-    <section aria-labelledby="batches-heading" className="rounded-card border border-border bg-surface-1 p-5 shadow-card">
-      <h2 id="batches-heading" className="flex items-center gap-2 font-semibold text-ink">
-        <Icon.Users className="size-4.5 text-accent" aria-hidden="true" />
-        {t("course.sections.cohort")}
-      </h2>
-      <ul className="mt-3 divide-y divide-border">
+    <SectionCard id="batches" headingId="batches-heading" title={t("course.sections.cohort")} description={t("course.page.batchesDescription")}>
+      <ul className="-my-3 divide-y divide-border">
         {batches.map((b) => (
           <li key={b.slug}>
-            <Link href={`/batches/${b.slug}`} className="group flex items-center justify-between gap-3 py-2.5">
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-ink group-hover:text-accent">{b.title}</span>
-                <span className="block text-xs text-ink-muted">{t("home.batches.range", { start: f.date(b.startDate), end: f.date(b.endDate) })}</span>
+            <Link href={`/batches/${b.slug}`} className="group flex items-center justify-between gap-3 py-3">
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                  <Icon.Users className="size-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold text-ink group-hover:text-accent">{b.title}</span>
+                  <span className="block text-xs text-ink-faint">{t("home.batches.range", { start: f.date(b.startDate), end: f.date(b.endDate) })}</span>
+                </span>
               </span>
-              <span className="shrink-0 text-xs font-semibold text-ink">
+              <span className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-ink">
                 {b.paidBatch ? f.price(b.amount, b.currency, t("catalog.free")) : t("catalog.free")}
+                <Icon.ChevronRight className="size-4 text-ink-faint rtl:rotate-180" aria-hidden="true" />
               </span>
             </Link>
           </li>
         ))}
       </ul>
-    </section>
+    </SectionCard>
   );
 }

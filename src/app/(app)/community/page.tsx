@@ -13,7 +13,7 @@ import { TopicList } from "@/components/community/topic-list";
 import { PageLinks } from "@/components/gamification/page-links";
 
 export const metadata: Metadata = {
-  title: "Community",
+  title: "Discussions",
   description: "Questions and discussions from your courses and batches in one place.",
 };
 
@@ -38,7 +38,7 @@ export default async function CommunityPage(props: PageProps<"/community">) {
   if (!settings.features.discussions) {
     return (
       <div className="animate-fade-in">
-        <PageHeader title="Community" />
+        <PageHeader title="Discussions" />
         <EmptyState
           icon={<Icon.MessageSquare />}
           title="Discussions are turned off"
@@ -77,7 +77,7 @@ export default async function CommunityPage(props: PageProps<"/community">) {
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Community" description="Questions and discussions from your courses and batches, all in one place. Jump into any thread to reply." />
+      <PageHeader title="Discussions" description="Questions and answers from your courses and batches. Open a thread to reply." />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-8">
         <div className="min-w-0 space-y-4">

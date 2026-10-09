@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { getCurrentPublicUser } from "@/lib/auth/session";
 import { getDb, getSettings } from "@/lib/db/store";
 import { cn } from "@/lib/utils";
-import { buildNavigation, navContextFor, type NavContext } from "@/lib/nav";
+import { buildNavigation, buildShellNav, navContextFor, type NavContext } from "@/lib/nav";
 import { countUnreadMessages } from "@/lib/comms/messages";
 import { getNotifications, getUnreadCount } from "@/lib/services/notifications";
 import { getT } from "@/i18n/server";
@@ -14,8 +14,9 @@ import { buildMobileTabs, MOBILE_TAB_BAR_PADDING } from "./mobile-tabs";
 import { Sidebar, SidebarProvider } from "./sidebar";
 
 /**
- * Sidebar + header shell used by every page except auth screens, the lesson
- * player and the printable certificate.
+ * The shell used by every page except auth screens, the lesson player and the printable certificate: the
+ * sidebar on a quiet canvas and the page inside one rounded panel next to it (desktop), or a slim top bar
+ * and a bottom tab bar (phones).
  */
 export async function AppShell({ children, contained = true }: { children: ReactNode; contained?: boolean }) {
   const [user, settings, t] = await Promise.all([getCurrentPublicUser(), getSettings(), getT("shell")]);
@@ -34,28 +35,35 @@ export async function AppShell({ children, contained = true }: { children: React
     membership = settings.growth.subscriptionsEnabled || db.subscriptions.some((s) => s.userId === user.id);
   }
   const sections = buildNavigation(user, settings, { ...context, unread, grading }, t);
-  const tabs = buildMobileTabs(user, settings, settings.features.notifications ? unread : 0, t);
+  const nav = buildShellNav(user, settings, sections, t);
+  const tabs = buildMobileTabs(user, settings, nav, t);
+  const brand = { name: settings.brand.name, logoUrl: settings.brand.logoUrl };
+  const showNotifications = settings.features.notifications;
 
   return (
     <SidebarProvider>
-      <div className="flex min-h-screen">
-        <Sidebar sections={sections} brand={{ name: settings.brand.name, logoUrl: settings.brand.logoUrl }} />
+      <div className="flex min-h-screen bg-surface">
+        <Sidebar
+          nav={nav}
+          brand={brand}
+          user={user}
+          unread={showNotifications ? unread : 0}
+          showNotifications={showNotifications}
+          membership={membership}
+          gifts={settings.growth.giftsEnabled}
+        />
         {/* Below lg the phone tab bar is fixed to the bottom, so the column reserves its height. */}
-        <div className={cn("flex min-w-0 flex-1 flex-col", MOBILE_TAB_BAR_PADDING)}>
-          <Header
-            user={user}
-            notifications={notifications}
-            unread={unread}
-            showNotifications={settings.features.notifications}
-            membership={membership}
-            gifts={settings.growth.giftsEnabled}
-          />
-          <main className={contained ? "mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8" : "flex-1"}>
-            {/* Email verification / required 2FA notice (renders nothing when there is nothing to do). */}
-            <AccountSecurityBanner className={contained ? undefined : "mx-4 mt-4 sm:mx-6 lg:mx-8"} />
-            {children}
-          </main>
-          <SiteFooter />
+        <div className={cn("flex min-w-0 flex-1 flex-col lg:py-3 lg:pe-3", MOBILE_TAB_BAR_PADDING)}>
+          <Header user={user} brand={brand} notifications={notifications} unread={unread} showNotifications={showNotifications} />
+          {/* `overflow-clip` (not hidden) rounds the corners without breaking sticky elements inside the page. */}
+          <div className="flex flex-1 flex-col overflow-clip bg-panel lg:rounded-2xl lg:border lg:border-border lg:shadow-sm">
+            <main className={contained ? "mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8" : "flex-1"}>
+              {/* Email verification / required 2FA notice (renders nothing when there is nothing to do). */}
+              <AccountSecurityBanner className={contained ? undefined : "mx-4 mt-4 sm:mx-6 lg:mx-8"} />
+              {children}
+            </main>
+            <SiteFooter />
+          </div>
         </div>
       </div>
       <MobileTabBar tabs={tabs} user={user ? { name: user.name, username: user.username, avatarUrl: user.avatarUrl } : null} />

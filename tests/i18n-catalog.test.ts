@@ -72,8 +72,11 @@ describe("i18n catalog: every namespace in every language", () => {
     for (const namespace of ["shell", "auth"] as const) {
       for (const locale of TRANSLATED) {
         const translated = translatedMessages(locale, namespace);
-        const identical = Object.keys(translated).filter((key) => translated[key] === englishMessages(namespace)[key] && /[a-z]{4}/.test(translated[key]!));
-        // Placeholders such as "you@example.com" may stay identical; whole sentences may not.
+        // Single words spelled the same in both languages ("Notifications", "Messages", "Discussions" in
+        // French) and placeholders such as "you@example.com" may stay identical; whole phrases may not.
+        const identical = Object.keys(translated).filter(
+          (key) => translated[key] === englishMessages(namespace)[key] && /[a-z]{4}/.test(translated[key]!) && /\s/.test(translated[key]!.trim()),
+        );
         assert.ok(identical.length <= 3, `${namespace}/${locale} copies English for: ${identical.join(", ")}`);
       }
     }

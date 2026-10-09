@@ -56,6 +56,8 @@ export interface TransactionView {
   gateway: string;
   gatewayLabel: string;
   gatewayPaymentId?: string;
+  /** Manual payments: the transaction / UTR reference the buyer entered. */
+  buyerReference?: string;
   /** Stripe Checkout Session id or Razorpay order id. */
   gatewayOrderId?: string;
   status: PaymentStatus;
@@ -366,6 +368,11 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
                   <span className="font-mono text-xs">{tx.gatewayOrderId}</span>
                 </DetailItem>
               )}
+              {tx.buyerReference && (
+                <DetailItem label="Buyer's reference">
+                  <span className="font-mono text-xs font-semibold text-ink">{tx.buyerReference}</span>
+                </DetailItem>
+              )}
               <DetailItem label="Payment ID">
                 {tx.gatewayPaymentId ? (
                   <>
@@ -425,7 +432,17 @@ function TransactionDialog({ tx, onClose }: { tx: TransactionView; onClose: () =
           {tx.status === "pending" && !online && (
             <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-ink">
               <Icon.Clock className="mt-0.5 size-4 shrink-0 text-warning" />
-              This order is awaiting a manual payment. Mark it as paid once the money has arrived — the learner is enrolled immediately.
+              <span>
+                This order is awaiting a manual payment. Mark it as paid once the money has arrived — the learner is enrolled immediately.
+                {tx.buyerReference ? (
+                  <>
+                    {" "}
+                    The buyer reported reference <strong className="font-mono">{tx.buyerReference}</strong>: check it against your bank or UPI statement first.
+                  </>
+                ) : (
+                  " The buyer has not entered a transfer reference yet."
+                )}
+              </span>
             </p>
           )}
           {tx.status === "pending" && online && (

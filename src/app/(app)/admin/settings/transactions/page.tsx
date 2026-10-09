@@ -89,6 +89,7 @@ export default async function TransactionsSettingsPage(props: PageProps<"/admin/
     gateway: r.gateway,
     gatewayLabel: gatewayLabel(r.gateway),
     gatewayPaymentId: r.gatewayPaymentId,
+    buyerReference: r.buyerReference,
     gatewayOrderId: r.gatewayOrderId,
     status: r.status,
     createdAt: r.createdAt,

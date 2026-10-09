@@ -11,7 +11,8 @@ import { useT } from "@/i18n/client";
 import { FocusExitIcon, FocusIcon } from "./learn-icons";
 
 /**
- * Two-column lesson layout (content 70% / sidebar 30% on desktop). Zen mode
+ * Two-column lesson layout (content 70% / sidebar 30% on desktop), drawn as two
+ * rounded panels on the page canvas like the rest of the app. Zen mode
  * collapses the sidebar (it can be brought back as an overlay with
  * ZenPanelToggle) and narrows the reading column via the `--lesson-w`
  * variable used by every block. Theater mode collapses the sidebar only on
@@ -27,13 +28,19 @@ export function LessonFrame({ children, sidebar }: { children: ReactNode; sideba
   const overlay = zen && zenPanel && !!sidebar;
   return (
     <div
-      className={cn("flex-1 lg:grid", collapse ? "lg:grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_minmax(320px,30%)]")}
+      className={cn(
+        "flex flex-1 flex-col lg:grid lg:gap-3",
+        zen ? "lg:p-3" : "lg:px-3 lg:pb-3",
+        collapse ? "lg:grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_minmax(320px,30%)]",
+      )}
       style={{ "--lesson-w": zen ? "46rem" : "56rem" } as CSSProperties}
     >
-      <div className="min-w-0">{children}</div>
+      <div className={cn("min-w-0 flex-1 bg-panel lg:rounded-2xl lg:border lg:border-border lg:shadow-sm", zen ? "lg:min-h-[calc(100dvh-1.5rem)]" : "lg:min-h-[calc(100dvh-4.25rem)]")}>
+        {children}
+      </div>
       {sidebar &&
         (overlay ? (
-          <div className="min-w-0 lg:fixed lg:inset-y-0 lg:end-0 lg:z-40 lg:flex lg:w-[min(26rem,40vw)] lg:flex-col lg:border-s lg:border-border lg:bg-surface-1 lg:shadow-pop lg:[&>aside]:border-s-0 animate-fade-in">
+          <div className="min-w-0 lg:fixed lg:inset-y-0 lg:end-0 lg:z-40 lg:flex lg:w-[min(26rem,40vw)] lg:flex-col lg:border-s lg:border-border lg:bg-panel lg:shadow-pop lg:[&>aside]:static lg:[&>aside]:h-auto lg:[&>aside]:min-h-0 lg:[&>aside]:flex-1 lg:[&>aside]:rounded-none lg:[&>aside]:border-0 lg:[&>aside]:shadow-none animate-fade-in">
             <div className="hidden h-14 shrink-0 items-center border-b border-border px-3 lg:flex">
               <button
                 type="button"
@@ -88,8 +95,8 @@ export function ZenPanelToggle({ tab, className }: { tab: Exclude<SidebarTab, "o
         aria-controls="lesson-sidebar"
         aria-label={label}
         className={cn(
-          "inline-flex size-8 items-center justify-center rounded-lg border border-border-strong text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink",
-          zenPanel && "border-accent bg-accent/10 text-accent",
+          "inline-flex size-8 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink",
+          zenPanel && "bg-accent/10 text-accent",
         )}
       >
         <Icon.MessageSquare className="size-4" />
@@ -111,8 +118,8 @@ export function ZenToggle({ className }: { className?: string }) {
         aria-pressed={zen}
         aria-label={label}
         className={cn(
-          "inline-flex size-8 items-center justify-center rounded-lg border border-border-strong text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink",
-          zen && "border-accent bg-accent/10 text-accent",
+          "inline-flex size-8 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink",
+          zen && "bg-accent/10 text-accent",
         )}
       >
         {zen ? <FocusExitIcon className="size-4" /> : <FocusIcon className="size-4" />}

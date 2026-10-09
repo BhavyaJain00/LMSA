@@ -3,7 +3,7 @@
  * client components so links and router updates build identical URLs.
  */
 
-export const CATALOG_QUERY_KEYS = ["tab", "search", "category", "certification", "sort", "limit", "page"] as const;
+export const CATALOG_QUERY_KEYS = ["tab", "search", "category", "certification", "price", "sort", "limit", "page"] as const;
 export type CatalogQueryKey = (typeof CATALOG_QUERY_KEYS)[number];
 export type CatalogParams = Partial<Record<CatalogQueryKey, string>>;
 

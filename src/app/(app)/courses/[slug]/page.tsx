@@ -27,11 +27,11 @@ import {
   hasPaidForCourse,
 } from "@/lib/data/catalog";
 import { getPublicUser } from "@/lib/data/users";
-import { ensureDripNotifications } from "@/lib/services/drip";
+import { ensureDripNotifications, getPrerequisiteStatus } from "@/lib/services/drip";
 import { Icon } from "@/components/ui/icons";
 import { CourseHero } from "@/components/catalog/course-hero";
 import { CourseOutline } from "@/components/catalog/course-outline";
-import { EnrollCard, type CourseIncludes, type EnrollCardEnrollment } from "@/components/catalog/enroll-card";
+import { EnrollCard, type EnrollCardEnrollment } from "@/components/catalog/enroll-card";
 import { CourseInstructors } from "@/components/catalog/course-instructors";
 import { ReviewsPanel } from "@/components/catalog/reviews-panel";
 import {
@@ -39,14 +39,17 @@ import {
   CourseAnnouncements,
   CourseBatches,
   CourseDescription,
-  CourseOutcomes,
   CourseRequirements,
   RelatedCourses,
-  SectionHeading,
 } from "@/components/catalog/course-sections";
+import { AboutCard } from "@/components/catalog/course-page/about-card";
+import { BreadcrumbData } from "@/components/catalog/course-page/breadcrumb-data";
+import { CourseMedia } from "@/components/catalog/course-page/course-media";
+import { PREREQUISITES_ANCHOR, PrerequisitesCard } from "@/components/catalog/course-page/prerequisites-card";
+import { courseCardClasses, MetaDots } from "@/components/catalog/course-page/section-card";
 import { lessonKindFromBlocks, reviewDateLabel } from "@/components/catalog/format";
 import type { OutlineChapterView, OutlineMode, ReviewView } from "@/components/catalog/types";
-import { sum } from "@/lib/utils";
+import { cn, sum } from "@/lib/utils";
 import { getFormatter, getLocale, getT } from "@/i18n/server";
 import type { Translator } from "@/i18n/translate";
 import type { MessageKey } from "@/i18n/catalog";
@@ -157,6 +160,12 @@ export async function generateMetadata(props: PageProps<"/courses/[slug]">): Pro
 /* Page                                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Course page. The simple layout: back button, title and one meta row; the enroll card (price or progress and
+ * ONE main action) next to the cover or preview video; then full-width cards — about, course content,
+ * instructors, reviews — and, only when they have content, prerequisites, live batches, announcements, the
+ * syllabus form, related courses and articles. A course with a custom sales page keeps the sales layout.
+ */
 export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const { slug } = await props.params;
   const [user, settings, course, t, f] = await Promise.all([getCurrentUser(), getSettings(), getCourseBySlug(slug), getT("public"), getFormatter()]);
@@ -172,13 +181,13 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   // No scheduler: announce drip content released since the learner's last visit (never throws).
   if (user && enrollment) await ensureDripNotifications(user.id);
 
-  const [summary, outline, reviews, breakdown, related, content, announcements, certificate, batches, alreadyPaid, instructorStats, evaluator] =
+  const [summary, outline, reviews, breakdown, related, content, announcements, certificate, batches, alreadyPaid, instructorStats, evaluator, prerequisites] =
     await Promise.all([
       getCourseSummaryForViewer(course.id, user, !!enrollment),
       getCourseOutline(course, user),
       settings.features.reviews ? getCourseReviews(course.id) : Promise.resolve([] as ReviewWithUser[]),
       getRatingBreakdown(course.id),
-      getRelatedCourses(course, user, 4),
+      getRelatedCourses(course, user, 3),
       getCourseContentStats(course.id),
       getCourseAnnouncements(course.id, 5),
       getUserCourseCertificate(user?.id, course.id),
@@ -186,6 +195,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
       hasPaidForCourse(user?.id, course.id),
       getInstructorStats(course.instructorIds),
       course.paidCertificate && course.evaluatorId ? getPublicUser(course.evaluatorId) : Promise.resolve(null),
+      getPrerequisiteStatus(course, user),
     ]);
   if (!summary) notFound();
 
@@ -214,18 +224,6 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
         }
       : null;
 
-  const includes: CourseIncludes = {
-    enrolledCount: summary.enrollmentCount,
-    lessonCount,
-    totalDurationSeconds: summary.totalDurationSeconds,
-    videoSeconds: content.videoSeconds,
-    hasVideo: !!course.videoUrl || content.videoLessonCount > 0,
-    quizCount: content.quizCount,
-    assignmentCount: content.assignmentCount,
-    exerciseCount: content.exerciseCount,
-    previewCount: content.previewLessonCount,
-  };
-
   const reviewViews = toReviewViews(reviews, user?.id ?? null, f.locale);
   const hasOwnReview = reviewViews.some((r) => r.isOwn);
   const isInstructor = !!user && course.instructorIds.includes(user.id);
@@ -233,6 +231,7 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
   const certificationsEnabled = settings.features.certifications;
   // The AI tutor's full page: enrolled learners (with access) and course staff, once the tutor is set up.
   const askAi = !!user && (manager || !!enrollmentView) && courseTutorAccess(await getDb(), course, user).ok;
+  const showPrerequisites = prerequisites.items.length > 0 && (!enrollment || manager);
 
   const enrollCard = (
     <EnrollCard
@@ -244,38 +243,30 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
       certificate={certificate ? { code: certificate.code } : null}
       alreadyPaid={alreadyPaid}
       batches={batches.map((b) => ({ slug: b.slug, title: b.title, startDate: b.startDate }))}
-      includes={includes}
       certificationsEnabled={certificationsEnabled}
       askAiHref={askAi ? `/courses/${course.slug}/ask` : null}
+      prerequisitesAnchor={showPrerequisites ? PREREQUISITES_ANCHOR : undefined}
     />
   );
 
   const showCertification = certificationsEnabled && (course.enableCertification || course.paidCertificate || !!certificate);
   const salesPage = hasSalesPage(course.salesPage) ? course.salesPage : null;
-  // The preview's HLS stream (adaptive streaming) once converted; the uploaded file stays the fallback.
-  const preview = coursePreviewPlayback(course);
-  const previewVideo = preview ? { url: preview.src, poster: preview.poster, hlsUrl: preview.hlsUrl } : null;
   // "Get the syllabus by email" for visitors who are not learners of a public course yet.
   const offerSyllabus = isCoursePublic(course) && !enrollment && !manager && lessonCount > 0;
-  const serverNow = requestTime();
-
-  const curriculumBody = (
-    <>
-      {chapters.length && lessonCount ? (
-        <CourseOutline chapters={chapters} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={enrollment ? (nextLesson?.id ?? null) : null} />
-      ) : (
-        <div className="flex flex-col items-center justify-center rounded-card border border-dashed border-border-strong px-6 py-10 text-center">
-          <Icon.BookOpen className="size-7 text-ink-faint" aria-hidden="true" />
-          <p className="mt-2 text-sm font-medium text-ink-muted">{t("course.contentComingSoon")}</p>
-        </div>
-      )}
-      {mode === "guest" && content.previewLessonCount > 0 && (
-        <p className="mt-3 flex items-center gap-2 text-sm text-ink-muted">
-          <Icon.Eye className="size-4 shrink-0 text-accent" aria-hidden="true" />
-          <span>{t.rich("course.previewNote", { b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}</span>
-        </p>
-      )}
-    </>
+  const previewNote =
+    mode === "guest" && content.previewLessonCount > 0 ? (
+      <p className="mt-4 flex items-center gap-2 text-sm text-ink-muted">
+        <Icon.Eye className="size-4 shrink-0 text-accent" aria-hidden="true" />
+        <span>{t.rich("course.previewNote", { b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}</span>
+      </p>
+    ) : null;
+  const hasOutline = chapters.length > 0 && lessonCount > 0;
+  const emptyOutline = (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border-strong px-6 py-10 text-center">
+      <Icon.BookOpen className="size-7 text-ink-faint" aria-hidden="true" />
+      <p className="mt-2 text-sm font-semibold text-ink">{t("course.contentComingSoon")}</p>
+      <p className="mt-1 text-sm text-ink-muted">{t("course.page.contentEmpty")}</p>
+    </div>
   );
 
   const syllabusForm = offerSyllabus ? (
@@ -289,27 +280,8 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
     />
   ) : null;
 
-  const certificationBlock =
-    showCertification || batches.length > 0 ? (
-      <div className="grid gap-5 md:grid-cols-2">
-        {showCertification && (
-          <CertificationCard
-            slug={course.slug}
-            enableCertification={course.enableCertification}
-            paidCertificate={course.paidCertificate}
-            certificatePrice={course.certificatePrice}
-            currency={course.currency}
-            evaluatorName={evaluator?.name}
-            certificate={certificate ? { code: certificate.code, issueDate: certificate.issueDate } : null}
-            lessonCount={lessonCount}
-          />
-        )}
-        <CourseBatches batches={batches} />
-      </div>
-    ) : null;
-
   const reviewsBlock = settings.features.reviews ? (
-    <section id="reviews" aria-label={t("reviews.title")} className="scroll-mt-20">
+    <section id="reviews" aria-labelledby="reviews-heading" className={cn(courseCardClasses, "scroll-mt-20")}>
       <ReviewsPanel
         courseSlug={course.slug}
         courseTitle={course.title}
@@ -322,101 +294,177 @@ export default async function CoursePage(props: PageProps<"/courses/[slug]">) {
     </section>
   ) : null;
 
-  const handsOn = content.assignmentCount + content.exerciseCount;
-  const salesIncludes = salesPage
-    ? [
-        lessonCount > 0
-          ? summary.totalDurationSeconds > 0
-            ? t("course.salesIncludes.lessonsTotal", { count: lessonCount, duration: f.duration(summary.totalDurationSeconds) })
-            : t("catalog.lessonCount", { count: lessonCount })
-          : "",
-        content.quizCount > 0 ? t("course.salesIncludes.quizzes", { count: content.quizCount }) : "",
-        handsOn > 0 ? t("course.salesIncludes.handsOn", { count: handsOn }) : "",
-        showCertification ? (course.paidCertificate ? t("enroll.includes.certificateEvaluation") : t("enroll.includes.certificateCompletion")) : "",
-        content.previewLessonCount > 0 ? t("enroll.includes.previews", { count: content.previewLessonCount }) : "",
-        t("course.salesIncludes.anyDevice"),
-      ].filter(Boolean)
-    : [];
-  const salesAction = enrollment ? t("enroll.continueLearning") : isPaidCourse(course) && !alreadyPaid ? t("course.getCourse") : t("course.enrollNow");
+  const instructorsBlock = <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />;
 
-  return (
-    <div className="animate-fade-in pb-6">
-      {isCoursePublic(course) && <JsonLd data={await getCourseJsonLd(course, summary)} />}
-      <Breadcrumbs items={courseTrail(course, summary.category)} structuredData={isCoursePublic(course)} />
+  const unpublishedBanner =
+    !course.published && manager ? (
+      <div role="status" className="flex items-start gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-ink">
+        <Icon.EyeOff className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+        <p>
+          <span className="font-medium">{t("course.unpublished.title")}</span> <span className="text-ink-muted">{t("course.unpublished.body")}</span>
+        </p>
+      </div>
+    ) : null;
 
-      {!course.published && manager && (
-        <div role="status" className="mb-6 flex items-start gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-ink">
-          <Icon.EyeOff className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-          <p>
-            <span className="font-medium">{t("course.unpublished.title")}</span>{" "}
-            <span className="text-ink-muted">{t("course.unpublished.body")}</span>
-          </p>
+  /* ---------------------------------------------------------------- */
+  /* Custom sales page: the sales layout (hero, sections, sticky card) */
+  /* ---------------------------------------------------------------- */
+  if (salesPage) {
+    const serverNow = requestTime();
+    // The preview's HLS stream (adaptive streaming) once converted; the uploaded file stays the fallback.
+    const preview = coursePreviewPlayback(course);
+    const previewVideo = preview ? { url: preview.src, poster: preview.poster, hlsUrl: preview.hlsUrl } : null;
+    const handsOn = content.assignmentCount + content.exerciseCount;
+    const salesIncludes = [
+      lessonCount > 0
+        ? summary.totalDurationSeconds > 0
+          ? t("course.salesIncludes.lessonsTotal", { count: lessonCount, duration: f.duration(summary.totalDurationSeconds) })
+          : t("catalog.lessonCount", { count: lessonCount })
+        : "",
+      content.quizCount > 0 ? t("course.salesIncludes.quizzes", { count: content.quizCount }) : "",
+      handsOn > 0 ? t("course.salesIncludes.handsOn", { count: handsOn }) : "",
+      showCertification ? (course.paidCertificate ? t("enroll.includes.certificateEvaluation") : t("enroll.includes.certificateCompletion")) : "",
+      content.previewLessonCount > 0 ? t("enroll.includes.previews", { count: content.previewLessonCount }) : "",
+      t("course.salesIncludes.anyDevice"),
+    ].filter(Boolean);
+    const salesAction = enrollment ? t("enroll.continueLearning") : isPaidCourse(course) && !alreadyPaid ? t("course.getCourse") : t("course.enrollNow");
+    const curriculumBody = (
+      <>
+        {hasOutline ? <CourseOutline chapters={chapters} mode={mode} defaultOpenIds={defaultOpenIds} nextLessonId={enrollment ? (nextLesson?.id ?? null) : null} /> : emptyOutline}
+        {previewNote}
+      </>
+    );
+    const certificationBlock =
+      showCertification || batches.length > 0 ? (
+        <div className="grid gap-5 md:grid-cols-2">
+          {showCertification && (
+            <CertificationCard
+              slug={course.slug}
+              enableCertification={course.enableCertification}
+              paidCertificate={course.paidCertificate}
+              certificatePrice={course.certificatePrice}
+              currency={course.currency}
+              evaluatorName={evaluator?.name}
+              certificate={certificate ? { code: certificate.code, issueDate: certificate.issueDate } : null}
+              lessonCount={lessonCount}
+            />
+          )}
+          <CourseBatches batches={batches} />
         </div>
-      )}
+      ) : null;
 
-      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
-          {salesPage ? <SalesHero course={summary} page={salesPage} manager={manager} serverNow={serverNow} /> : <CourseHero course={summary} manager={manager} />}
-        </div>
+    return (
+      <div className="animate-fade-in pb-6">
+        {isCoursePublic(course) && <JsonLd data={await getCourseJsonLd(course, summary)} />}
+        <Breadcrumbs items={courseTrail(course, summary.category)} structuredData={isCoursePublic(course)} />
+        {unpublishedBanner && <div className="mb-6">{unpublishedBanner}</div>}
 
-        <aside id={ENROLL_ANCHOR} aria-label={t("course.enrollment")} className="min-w-0 scroll-mt-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
-          <div className="lg:sticky lg:top-20">{enrollCard}</div>
-        </aside>
+        <div className="grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,1fr)_21rem]">
+          <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+            <SalesHero course={summary} page={salesPage} manager={manager} serverNow={serverNow} />
+          </div>
 
-        {salesPage ? (
+          <aside id={ENROLL_ANCHOR} aria-label={t("course.enrollment")} className="min-w-0 scroll-mt-20 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+            <div className="lg:sticky lg:top-20">{enrollCard}</div>
+          </aside>
+
           <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
             <SalesSections
               page={salesPage}
               courseTitle={course.title}
               video={previewVideo}
               pricing={{ course, includes: salesIncludes, actionLabel: salesAction }}
-              slots={{
-                curriculum: curriculumBody,
-                instructor: <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />,
-              }}
+              slots={{ curriculum: curriculumBody, instructor: instructorsBlock }}
               serverNow={serverNow}
             />
             <CourseRequirements requirements={course.requirements} />
             {!salesPage.sections.some((s) => s.type === "text") && <CourseDescription description={course.description} />}
+            {showPrerequisites && <PrerequisitesCard status={prerequisites} loggedIn={!!user} manager={manager} />}
             {syllabusForm}
             {certificationBlock}
             <CourseAnnouncements announcements={announcements} />
             {reviewsBlock}
           </div>
-        ) : (
-          <div className="min-w-0 space-y-12 lg:col-start-1 lg:row-start-2">
-            <CourseOutcomes outcomes={course.outcomes} />
+        </div>
 
-            <section aria-labelledby="curriculum-heading" id="curriculum" className="scroll-mt-20">
-              <SectionHeading
-                id="curriculum-heading"
-                aside={
-                  lessonCount > 0 ? (
-                    <span>
-                      {summary.totalDurationSeconds > 0
-                        ? t("course.contentStatsWithLength", { sections: chapters.length, lessons: lessonCount, duration: f.duration(summary.totalDurationSeconds) })
-                        : t("course.contentStats", { sections: chapters.length, lessons: lessonCount })}
-                    </span>
-                  ) : undefined
-                }
-              >
-                {t("course.content")}
-              </SectionHeading>
-              {curriculumBody}
-            </section>
+        <div className="mt-16 space-y-16">
+          <RelatedCourses courses={related.courses} explicit={related.explicit} />
+          {isCoursePublic(course) && <CourseArticles course={course} />}
+        </div>
+      </div>
+    );
+  }
 
-            {syllabusForm}
-            <CourseRequirements requirements={course.requirements} />
-            <CourseDescription description={course.description} />
-            {certificationBlock}
-            <CourseAnnouncements announcements={announcements} />
-            <CourseInstructors instructors={summary.instructors} stats={instructorStats} teachingProfiles={isCoursePublic(course)} />
-            {reviewsBlock}
-          </div>
-        )}
+  /* ---------------------------------------------------------------- */
+  /* Simple layout                                                     */
+  /* ---------------------------------------------------------------- */
+  const contentStats = [
+    hasOutline ? t("card.chapterCount", { count: chapters.length }) : null,
+    lessonCount > 0 ? t("catalog.lessonCount", { count: lessonCount }) : null,
+    summary.totalDurationSeconds > 0 ? f.duration(summary.totalDurationSeconds) : null,
+  ];
+  const contentExtras = [
+    content.quizCount > 0 ? t("enroll.includes.quizzes", { count: content.quizCount }) : null,
+    content.assignmentCount > 0 ? t("enroll.includes.assignments", { count: content.assignmentCount }) : null,
+    content.exerciseCount > 0 ? t("enroll.includes.exercises", { count: content.exerciseCount }) : null,
+    content.previewLessonCount > 0 && !enrollment && !manager ? t("enroll.includes.previews", { count: content.previewLessonCount }) : null,
+    course.enforceLessonCompletion && hasOutline ? t("course.hero.lessonsInOrder") : null,
+  ];
+  const contentHeader = (
+    <div>
+      <h2 id="curriculum-heading" className="text-heading font-bold text-ink">
+        {t("course.content")}
+      </h2>
+      <MetaDots parts={contentStats} className="mt-0.5 text-meta text-ink-faint" />
+      <MetaDots parts={contentExtras} className="mt-0.5 text-meta text-ink-faint" />
+    </div>
+  );
+
+  return (
+    <div className="animate-fade-in space-y-6 pb-6">
+      {isCoursePublic(course) && <JsonLd data={await getCourseJsonLd(course, summary)} />}
+      <BreadcrumbData items={courseTrail(course, summary.category)} structuredData={isCoursePublic(course)} />
+      {unpublishedBanner}
+
+      <CourseHero course={summary} reviewsAnchor={settings.features.reviews} />
+
+      {/* Phones: the enroll card first, then the artwork. Desktop: side by side. */}
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <aside id={ENROLL_ANCHOR} aria-label={t("course.enrollment")} className="min-w-0 scroll-mt-20">
+          {enrollCard}
+        </aside>
+        <CourseMedia course={summary} />
       </div>
 
-      <div className="mt-16 space-y-16">
+      <AboutCard description={course.description} outcomes={course.outcomes} requirements={course.requirements} category={summary.category} tags={course.tags} />
+
+      <section id="curriculum" aria-labelledby="curriculum-heading" className={cn(courseCardClasses, "scroll-mt-20")}>
+        {hasOutline ? (
+          <CourseOutline
+            chapters={chapters}
+            mode={mode}
+            defaultOpenIds={defaultOpenIds}
+            nextLessonId={enrollment ? (nextLesson?.id ?? null) : null}
+            header={contentHeader}
+          />
+        ) : (
+          <>
+            <div className="mb-4">{contentHeader}</div>
+            {emptyOutline}
+          </>
+        )}
+        {previewNote}
+      </section>
+
+      {instructorsBlock}
+      {reviewsBlock}
+
+      {showPrerequisites && <PrerequisitesCard status={prerequisites} loggedIn={!!user} manager={manager} />}
+      <CourseBatches batches={batches} />
+      <CourseAnnouncements announcements={announcements} />
+      {syllabusForm}
+
+      <div className="space-y-10 pt-4">
         <RelatedCourses courses={related.courses} explicit={related.explicit} />
         {isCoursePublic(course) && <CourseArticles course={course} />}
       </div>

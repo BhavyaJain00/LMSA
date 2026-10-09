@@ -6,80 +6,170 @@
 /* ------------------------------------------------------------------ */
 /* Design tokens                                                        */
 /* ------------------------------------------------------------------ */
+/*
+ * The look follows a simple "one panel" layout: a quiet canvas (sidebar and page
+ * background), one rounded content panel, and cards one step lighter than the
+ * panel. Dark is the default theme (see themeInitScript); light is one click away.
+ *
+ * `--brand` is the admin's brand colour (Settings → Brand, set inline in
+ * src/app/layout.tsx). Light mode fills buttons with it directly; dark mode uses a
+ * lighter mix of it with dark text, so filled buttons stay readable on dark panels.
+ */
 :root {
-  --accent: #4f46e5; /* overridden inline from Settings.brand.accentColor */
+  --accent: var(--brand, #2f55d4);
   --accent-fg: #ffffff;
 
-  --surface: #f7f7f8;
-  --surface-1: #ffffff;
-  --surface-2: #f3f4f6;
-  --surface-3: #e5e7eb;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
+  --surface: #e9eef5; /* canvas: page background and sidebar */
+  --panel: #f5f8fc; /* the rounded content panel next to the sidebar */
+  --surface-1: #ffffff; /* cards, menus, dialogs */
+  --surface-2: #eef2f8; /* hover rows, chips, quiet fills */
+  --surface-3: #dfe6ef;
+  --border: #dbe3ee; /* decorative dividers and card edges */
+  --border-strong: #c9d3e0;
+  --border-input: #8592a3; /* form control outlines: 3.1:1 on surface-1 (WCAG 1.4.11) */
 
-  --ink: #18181b;
-  --ink-muted: #52525b;
-  --ink-faint: #a1a1aa;
+  --ink: #0f1729;
+  --ink-muted: #475569;
+  --ink-faint: #5d6b7e; /* quiet text (meta lines, timestamps): 5.5:1 on surface-1 */
+  --ink-disabled: #a3adbb; /* disabled controls and decoration only, never for readable text */
 
+  /*
+   * Status colours. The plain tokens are for fills, dots, bars and icons; the
+   * `-ink` tokens are text-safe shades (≥ 4.5:1 on surface-1, surface-2 and on
+   * their own 12–15% tint). `text-success`, `text-accent`, ... use the `-ink`
+   * shade automatically (see `--text-color-*` in @theme below).
+   */
   --success: #16a34a;
   --warning: #d97706;
   --danger: #dc2626;
   --info: #2563eb;
+  --accent-ink: var(--accent);
+  --success-ink: #147238;
+  --warning-ink: #9a4410;
+  --danger-ink: #b91c1c;
+  --info-ink: #1d4ed8;
+  --danger-fill: #dc2626; /* filled destructive buttons with white text (4.8:1) */
 
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
-  --shadow: 0 1px 3px rgb(0 0 0 / 0.08), 0 4px 12px rgb(0 0 0 / 0.04);
-  --shadow-lg: 0 10px 30px rgb(0 0 0 / 0.12);
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.05);
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 18px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 12px 32px rgb(15 23 42 / 0.16);
 }
 
 :root[data-theme="dark"] {
-  --accent-fg: #ffffff;
+  /* A lighter mix of the brand colour (#688be5 for the default) with dark text: 5.6:1. */
+  --accent: color-mix(in oklab, var(--brand, #2f55d4) 70%, white);
+  --accent-fg: #0a1330;
 
-  --surface: #0f0f11;
-  --surface-1: #17171a;
-  --surface-2: #1f1f23;
-  --surface-3: #2a2a30;
-  --border: #27272a;
-  --border-strong: #3f3f46;
+  --surface: #12151a;
+  --panel: #1b1f26;
+  --surface-1: #252b34;
+  --surface-2: #2e3540;
+  --surface-3: #39414d;
+  --border: #2f3640;
+  --border-strong: #3c4450;
+  --border-input: #6e7886; /* 3.1:1 on surface-1 */
 
-  --ink: #f4f4f5;
-  --ink-muted: #a1a1aa;
-  --ink-faint: #71717a;
+  --ink: #f3f6fb;
+  --ink-muted: #b4bcc8;
+  --ink-faint: #949dab; /* 5.1:1 on surface-1, 6:1 on the panel */
+  --ink-disabled: #5a6270;
 
   --success: #22c55e;
   --warning: #f59e0b;
   --danger: #ef4444;
   --info: #3b82f6;
+  /* Text, links, focus rings and thin strokes use an even lighter mix (7:1 or more on dark surfaces). */
+  --accent-ink: color-mix(in oklab, var(--brand, #2f55d4) 50%, white);
+  --success-ink: #4ade80;
+  --warning-ink: #fbbf24;
+  --danger-ink: #f87171;
+  --info-ink: #60a5fa;
+  --danger-fill: #dc2626;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow: 0 1px 3px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 10px 30px rgb(0 0 0 / 0.6);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 8px 20px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 14px 36px rgb(0 0 0 / 0.55);
 }
 
 @theme inline {
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-surface: var(--surface);
+  --color-panel: var(--panel);
   --color-surface-1: var(--surface-1);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
+  --color-border-input: var(--border-input);
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-ink-faint: var(--ink-faint);
+  --color-ink-disabled: var(--ink-disabled);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-info: var(--info);
+  --color-accent-ink: var(--accent-ink);
+  --color-success-ink: var(--success-ink);
+  --color-warning-ink: var(--warning-ink);
+  --color-danger-ink: var(--danger-ink);
+  --color-info-ink: var(--info-ink);
+  --color-danger-fill: var(--danger-fill);
 
-  /* `--font-script` puts a script face before Geist for Arabic / Hindi pages (see "Interface languages" below). */
-  --font-sans: var(--font-script, var(--font-geist-sans)), ui-sans-serif, system-ui, sans-serif;
+  /*
+   * Text colours resolve from `--text-color-*` before `--color-*`, so every
+   * existing `text-accent`, `text-success`, ... (about 1,400 uses) gets the
+   * text-safe shade, while fills (`bg-*`, `fill-*`, `stroke-*`) keep the bright
+   * colour. Utilities that need the other shade can name it: `text-accent-ink`,
+   * `bg-success-ink`, `text-(--accent)`.
+   */
+  --text-color-accent: var(--accent-ink);
+  --text-color-success: var(--success-ink);
+  --text-color-warning: var(--warning-ink);
+  --text-color-danger: var(--danger-ink);
+  --text-color-info: var(--info-ink);
+  /* Accent lines (focus outlines, selected borders and rings) need 3:1, so they follow the text shade too. */
+  --outline-color-accent: var(--accent-ink);
+  --border-color-accent: var(--accent-ink);
+  --ring-color-accent: var(--accent-ink);
+
+  /*
+   * Type scale: `text-display` (marketing hero), `text-title` (page h1),
+   * `text-heading` (section h2), `text-body`, `text-meta` (secondary lines),
+   * `text-micro` (badges, table headers; the smallest size in the app).
+   */
+  --text-display: clamp(1.875rem, 1.35rem + 1.6vw, 2.25rem);
+  --text-display--line-height: 1.12;
+  --text-display--font-weight: 700;
+  --text-display--letter-spacing: -0.025em;
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.875rem;
+  --text-title--font-weight: 650;
+  --text-title--letter-spacing: -0.015em;
+  --text-heading: 1.125rem;
+  --text-heading--line-height: 1.625rem;
+  --text-heading--font-weight: 600;
+  --text-heading--letter-spacing: -0.01em;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.5rem;
+  --text-meta: 0.8125rem;
+  --text-meta--line-height: 1.125rem;
+  --text-micro: 0.75rem;
+  --text-micro--line-height: 1rem;
+
+  /* Page widths for <PageContainer>: `max-w-page-narrow` (forms, settings), `max-w-page` (default). */
+  --container-page-narrow: 45rem;
+  --container-page: 70rem;
+
+  /* `--font-script` puts a script face before Manrope for Arabic / Hindi pages (see "Interface languages" below). */
+  --font-sans: var(--font-script, var(--font-ui)), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --shadow-card: var(--shadow);
   --shadow-pop: var(--shadow-lg);
 
-  --radius-card: 0.875rem;
+  --radius-card: 1rem;
 }
 
 /* ------------------------------------------------------------------ */
@@ -111,14 +201,14 @@ body {
 }
 
 /*
- * Geist covers Latin only. On Arabic and Hindi pages a Noto face for the script
- * comes first (loaded in src/app/layout.tsx); Geist follows for anything it lacks.
+ * Manrope covers Latin only. On Arabic and Hindi pages a Noto face for the script
+ * comes first (loaded in src/app/layout.tsx); Manrope follows for anything it lacks.
  */
 html:lang(ar) {
-  --font-script: var(--font-noto-arabic), var(--font-geist-sans);
+  --font-script: var(--font-noto-arabic), var(--font-ui);
 }
 html:lang(hi) {
-  --font-script: var(--font-noto-devanagari), var(--font-geist-sans);
+  --font-script: var(--font-noto-devanagari), var(--font-ui);
 }
 
 ::selection {
@@ -130,7 +220,7 @@ html:lang(hi) {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -142,6 +232,28 @@ button,
 button:disabled,
 [role="button"][aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+/*
+ * Touch hit area. Small controls (buttons under 44px, chips, icon buttons) keep
+ * their visual size but get an invisible 44x44px hit area on touch screens.
+ * In the components layer so a caller's `absolute`/`fixed` class still wins.
+ */
+@layer components {
+  .tap-target {
+    position: relative;
+  }
+  @media (pointer: coarse) {
+    .tap-target::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 2.75rem);
+      height: max(100%, 2.75rem);
+      transform: translate(-50%, -50%);
+    }
+  }
 }
 
 /* Thin scrollbars for sidebars and player menus. */
@@ -204,7 +316,7 @@ button:disabled,
   margin: 0;
 }
 .prose-ll a {
-  color: var(--accent);
+  color: var(--accent-ink);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -213,7 +325,7 @@ button:disabled,
 }
 .prose-ll ul,
 .prose-ll ol {
-  padding-left: 1.5rem;
+  padding-inline-start: 1.5rem;
 }
 .prose-ll ul {
   list-style: disc;
@@ -229,11 +341,12 @@ button:disabled,
   margin-top: 0.3em;
 }
 .prose-ll blockquote {
-  border-left: 3px solid var(--accent);
+  border-inline-start: 3px solid var(--accent);
   padding: 0.25rem 1rem;
   color: var(--ink-muted);
   background: var(--surface-2);
-  border-radius: 0 0.5rem 0.5rem 0;
+  border-start-end-radius: 0.5rem;
+  border-end-end-radius: 0.5rem;
 }
 .prose-ll code {
   font-family: var(--font-mono);
@@ -278,7 +391,7 @@ button:disabled,
 .prose-ll td {
   border: 1px solid var(--border);
   padding: 0.5rem 0.75rem;
-  text-align: left;
+  text-align: start;
 }
 .prose-ll th {
   background: var(--surface-2);
@@ -289,7 +402,7 @@ button:disabled,
   border-radius: 0.25rem;
 }
 .prose-ll input[type="checkbox"] {
-  margin-right: 0.5rem;
+  margin-inline-end: 0.5rem;
   accent-color: var(--accent);
 }
 

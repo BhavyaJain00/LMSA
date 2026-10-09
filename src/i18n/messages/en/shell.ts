@@ -1,8 +1,9 @@
 import type { Messages } from "../../types";
 
 /**
- * The app shell: sidebar navigation, header, account menu, notifications
- * bell and the phone tab bar. Provided by `AppShell`.
+ * The app shell: sidebar navigation, guest top bar, header, account menu,
+ * notifications bell, the phone tab bar and the cookie banner. Provided on
+ * every page by the root layout.
  */
 const shell = {
   "nav.main": "Main",
@@ -10,6 +11,10 @@ const shell = {
   "nav.section.you": "You",
   "nav.section.manage": "Manage",
   "nav.section.links": "Links",
+  "nav.section.more": "More",
+  "nav.group.content": "Content",
+  "nav.group.people": "People",
+  "nav.group.business": "Business",
 
   "nav.dashboard": "Dashboard",
   "nav.courses": "Courses",
@@ -48,8 +53,31 @@ const shell = {
   "nav.emailOutbox": "Email outbox",
   "nav.settings": "Settings",
   "nav.contactUs": "Contact us",
+  "nav.teams": "Teams",
+  "nav.grading": "Grading",
+  "nav.analytics": "Analytics",
+  "nav.sales": "Sales",
+  "nav.coupons": "Coupons",
+  "nav.leads": "Leads",
+  "nav.affiliates": "Affiliates",
+  "nav.pricing": "Pricing",
+  "nav.home": "Home",
+  "nav.discussions": "Discussions",
+  "nav.manage": "Manage",
+  "sidebar.signInForMore": "Sign in for more",
+  "sidebar.accountMenu": "Account menu",
+  "sidebar.viewAccount": "Profile and settings",
+
+  "workspace.label": "Workspace",
+  "workspace.learn": "Learning",
+  "workspace.manage": "Teaching & admin",
+
+  "skipToContent": "Skip to main content",
 
   "tabs.home": "Home",
+  "tabs.explore": "Explore",
+  "tabs.inbox": "Inbox",
+  "tabs.search": "Search",
   "tabs.you": "You",
   "tabs.logIn": "Log in",
   "tabs.unread": "{count, plural, one {# unread} other {# unread}}",
@@ -64,6 +92,7 @@ const shell = {
   "header.search": "Search",
   "header.logIn": "Log in",
   "header.signUp": "Sign up",
+  "header.homeLink": "{brand} home",
 
   "notifications.title": "Notifications",
   "notifications.labelUnread": "{count, plural, =0 {Notifications} one {Notifications (# unread)} other {Notifications (# unread)}}",
@@ -92,6 +121,25 @@ const shell = {
   "roles.moderator": "Moderator",
   "roles.batch_evaluator": "Evaluator",
   "roles.admin": "Admin",
+
+  "consent.title": "Your privacy choices",
+  "consent.body": "We use essential cookies to keep the site working. With your permission, we'd also use analytics and marketing cookies.",
+  "consent.policyLink": "Read the {title}",
+  "consent.settings": "Settings",
+  "consent.reject": "Reject all",
+  "consent.accept": "Accept all",
+  "consent.dialogTitle": "Cookie settings",
+  "consent.dialogDescription": "Choose which optional cookies we may use. You can change this at any time from the “Cookie settings” link.",
+  "consent.save": "Save choices",
+  "consent.necessaryTitle": "Strictly necessary",
+  "consent.necessaryDescription": "Sign-in, security, your theme and this cookie choice. The site can't work without them, so they are always on.",
+  "consent.alwaysOn": "Always on",
+  "consent.analyticsTitle": "Analytics",
+  "consent.analyticsDescription": "Help us understand which pages and lessons are useful and where learners get stuck (for example Google Analytics).",
+  "consent.marketingTitle": "Marketing",
+  "consent.marketingDescription": "Measure how our ads perform and show you relevant offers on other sites (for example the Meta Pixel).",
+  "consent.current": "Current choice: analytics {analytics, select, on {on} other {off}}, marketing {marketing, select, on {on} other {off}}.",
+  "consent.undecided": "You haven't chosen yet, so only strictly necessary cookies are used.",
 } satisfies Messages;
 
 export default shell;

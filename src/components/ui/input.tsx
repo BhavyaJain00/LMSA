@@ -1,8 +1,9 @@
 import type { ComponentProps, InputHTMLAttributes, LabelHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
+/* `border-input` keeps empty fields visible (≥ 3:1 against the page in both themes). */
 const fieldBase =
-  "w-full rounded-lg border border-border-strong bg-surface-1 text-ink placeholder:text-ink-faint transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:opacity-60 disabled:bg-surface-2 aria-[invalid=true]:border-danger aria-[invalid=true]:focus:ring-danger/25";
+  "w-full rounded-lg border border-border-input bg-surface-1 text-ink placeholder:text-ink-faint transition-colors focus:border-accent-ink focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60 disabled:bg-surface-2 aria-[invalid=true]:border-danger aria-[invalid=true]:focus:ring-danger/30";
 
 export interface InputProps extends ComponentProps<"input"> {
   invalid?: boolean;
@@ -88,7 +89,7 @@ export function Checkbox({ className, label, description, id, ...props }: Checkb
     <input
       id={inputId}
       type="checkbox"
-      className={cn("mt-0.5 size-4 shrink-0 cursor-pointer rounded border-border-strong accent-accent", className)}
+      className={cn("mt-0.5 size-4 shrink-0 cursor-pointer rounded border-border-input accent-accent", className)}
       {...props}
     />
   );
@@ -122,7 +123,7 @@ export function Switch({ className, label, description, id, ...props }: SwitchPr
       )}
       <span className="relative inline-flex shrink-0">
         <input id={inputId} type="checkbox" className="peer sr-only" {...props} />
-        <span className="h-5.5 w-10 rounded-full bg-surface-3 transition-colors peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-disabled:opacity-50" />
+        <span className="h-5.5 w-10 rounded-full bg-border-input transition-colors peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent-ink peer-disabled:opacity-50" />
         <span className="absolute inset-s-0.5 top-0.5 size-4.5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4.5 rtl:peer-checked:-translate-x-4.5" />
       </span>
     </label>
@@ -204,7 +205,8 @@ export function RadioCard({
     <label
       className={cn(
         "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
-        checked ? "border-accent bg-accent/5 ring-1 ring-accent" : "border-border hover:bg-surface-2",
+        checked ? "border-accent bg-accent/5 ring-1 ring-accent" : "border-border-strong hover:bg-surface-2",
+        "has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-accent-ink",
         disabled && "cursor-not-allowed opacity-60",
       )}
     >

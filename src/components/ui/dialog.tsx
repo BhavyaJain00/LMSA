@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Icon } from "./icons";
 import { Button, IconButton } from "./button";
@@ -31,6 +31,7 @@ const sizes = {
 export function Dialog({ open, onClose, title, description, children, footer, size = "md", hideClose, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const t = useT("common");
+  const titleId = useId();
 
   useEffect(() => {
     const el = ref.current;
@@ -61,14 +62,14 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
-      aria-labelledby={title ? "dialog-title" : undefined}
+      aria-labelledby={title ? titleId : undefined}
     >
       <div className={cn("flex max-h-[85vh] flex-col", size === "full" && "h-full max-h-full")}>
         {(title || !hideClose) && (
           <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div className="min-w-0">
               {title && (
-                <h2 id="dialog-title" className="text-base font-semibold">
+                <h2 id={titleId} className="text-base font-semibold">
                   {title}
                 </h2>
               )}

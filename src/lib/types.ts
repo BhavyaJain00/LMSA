@@ -1173,6 +1173,10 @@ export interface Payment {
   source?: string;
   gateway: string;
   gatewayPaymentId?: string;
+  /** Manual payments: the transaction / UTR reference the buyer entered after paying. */
+  buyerReference?: string;
+  /** When the buyer entered or last changed `buyerReference`. */
+  buyerReferenceAt?: string;
   status: PaymentStatus;
   createdAt: string;
   paidAt?: string;
@@ -1303,6 +1307,31 @@ export interface SidebarItem {
   order: number;
 }
 
+/** Which payment methods checkout offers. */
+export interface PaymentMethodsSettings {
+  /** Cards, Apple Pay and Google Pay through Stripe. */
+  stripe: boolean;
+  /** UPI, cards, net banking, wallets and EMI through Razorpay. */
+  razorpay: boolean;
+  /** Bank transfer or UPI to the site's own account, confirmed by an administrator. */
+  manual: boolean;
+}
+
+/** What a buyer needs to pay by bank transfer or UPI (every field optional). */
+export interface ManualPaymentDetails {
+  /** Short instructions shown above the details. */
+  instructions?: string;
+  accountName?: string;
+  bankName?: string;
+  accountNumber?: string;
+  /** IFSC (India) or sort/routing code. */
+  ifsc?: string;
+  /** SWIFT/BIC for international transfers. */
+  swift?: string;
+  /** UPI ID (VPA), e.g. school@okbank. */
+  upiId?: string;
+}
+
 export interface Settings {
   brand: {
     name: string;
@@ -1349,7 +1378,15 @@ export interface Settings {
   };
   commerce: {
     defaultCurrency: string;
+    /**
+     * The site's main gateway: preselected at checkout and used for orders the system creates by itself
+     * (renewals, later installments, one-click upsells). "none" makes every order free.
+     */
     paymentGateway: "none" | "manual" | "stripe" | "razorpay";
+    /** Payment methods buyers can choose from at checkout (online ones show once their keys are set). */
+    paymentMethods: PaymentMethodsSettings;
+    /** Bank transfer / UPI details shown to buyers who pay manually. */
+    manualPayment: ManualPaymentDetails;
     applyTax: boolean;
     taxPercentage: number;
     taxLabel: string;

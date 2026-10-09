@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import "./globals.css";
-import { themeInitScript } from "@/components/ui/theme-toggle";
+import { themeInitScript } from "@/components/ui/theme";
 import { reportClientError } from "@/lib/errors/report";
 
 /**

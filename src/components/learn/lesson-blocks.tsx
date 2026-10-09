@@ -36,6 +36,16 @@ export interface LessonBlocksProps {
   quizTitles: Record<string, string>;
   passedQuizIds: string[];
   exercisesEnabled: boolean;
+  /**
+   * The lesson header, shown under the player when the lesson opens with a video (the page renders
+   * it above the content otherwise). Use `leadsWithVideo` to decide.
+   */
+  leadHeader?: ReactNode;
+}
+
+/** Whether the lesson opens with a video: its header then goes right under the player. */
+export function leadsWithVideo(blocks: LessonBlock[]): boolean {
+  return blocks[0]?.type === "video";
 }
 
 /** Resume position for a video: only when meaningfully into it and not at the very end. */
@@ -59,11 +69,14 @@ export async function LessonBlocks({
   quizTitles,
   passedQuizIds,
   exercisesEnabled,
+  leadHeader,
 }: LessonBlocksProps) {
   const primaryVideoId = blocks.find((b) => b.type === "video")?.id;
   const lastVideoId = blocks.findLast((b) => b.type === "video")?.id;
   // Signed URLs for protected uploads + watermark/preview/autoplay options (Settings → Video).
   const [videos, t] = await Promise.all([prepareLessonVideos(blocks, lessonId, loggedIn ? await getCurrentUser() : null), getT("learning")]);
+
+  const leadId = leadHeader && leadsWithVideo(blocks) ? blocks[0]!.id : null;
 
   const renderBlock = (block: LessonBlock): ReactNode => {
     switch (block.type) {
@@ -103,6 +116,7 @@ export async function LessonBlocks({
             quizNodes={quizNodes}
             quizTitles={quizTitles}
             passedQuizIds={passedQuizIds}
+            header={block.id === leadId ? leadHeader : undefined}
           />
         );
       }
@@ -156,11 +170,19 @@ export async function LessonBlocks({
 
   return (
     <div className="space-y-8">
-      {blocks.map((block) => (
-        <section key={block.id} id={`block-${block.id}`} className="scroll-mt-24" aria-label={blockLabel(block, t)}>
-          {renderBlock(block)}
-        </section>
-      ))}
+      {blocks.map((block) =>
+        // The opening video carries the lesson header (the h1), so it is not a labelled region of its own;
+        // the player inside is already a named region.
+        block.id === leadId ? (
+          <div key={block.id} id={`block-${block.id}`} className="scroll-mt-24">
+            {renderBlock(block)}
+          </div>
+        ) : (
+          <section key={block.id} id={`block-${block.id}`} className="scroll-mt-24" aria-label={blockLabel(block, t)}>
+            {renderBlock(block)}
+          </section>
+        ),
+      )}
     </div>
   );
 }

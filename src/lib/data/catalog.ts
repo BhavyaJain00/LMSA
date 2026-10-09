@@ -341,6 +341,8 @@ export interface LandingBatch extends Batch {
 export interface LandingData {
   stats: LandingStats;
   featured: CourseSummary[];
+  /** Free live courses for the "Learn for free" row (not repeating the first three featured ones when possible). */
+  free: CourseSummary[];
   upcoming: CourseSummary[];
   categories: (Category & { courseCount: number })[];
   batches: LandingBatch[];
@@ -372,6 +374,9 @@ export async function getLandingData(): Promise<LandingData> {
   const live = await getCourseSummaries(null, { tab: "live", sort: "popular" });
   const featuredOnly = live.filter((c) => c.featured);
   const featured = (featuredOnly.length >= 3 ? featuredOnly : [...featuredOnly, ...live.filter((c) => !c.featured)]).slice(0, 6);
+  const freeCourses = live.filter((c) => !(c.paidCourse && c.price > 0));
+  const shown = new Set(featured.slice(0, 3).map((c) => c.id));
+  const free = [...freeCourses.filter((c) => !shown.has(c.id)), ...freeCourses.filter((c) => shown.has(c.id))].slice(0, 3);
   const upcoming = (await getCourseSummaries(null, { tab: "upcoming", sort: "newest" })).slice(0, 3);
 
   const categories = await getCatalogCategories();
@@ -408,6 +413,7 @@ export async function getLandingData(): Promise<LandingData> {
   return {
     stats,
     featured,
+    free,
     upcoming,
     categories,
     batches,

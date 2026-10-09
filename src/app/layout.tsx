@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Noto_Sans_Arabic, Noto_Sans_Devanagari } from "next/font/google";
+import { Geist_Mono, Manrope, Noto_Sans_Arabic, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { getSettings } from "@/lib/db/store";
 import { readFlash } from "@/lib/flash";
 import { rootMetadata } from "@/lib/seo/metadata";
 import { readConsentCookie } from "@/lib/legal/consent";
 import { FlashToast, ToastProvider } from "@/components/ui/toast";
-import { themeInitScript } from "@/components/ui/theme-toggle";
+import { themeInitScript } from "@/components/ui/theme";
 import { PwaProvider } from "@/components/pwa/pwa-provider";
 import { RootSeo } from "@/components/seo/root-seo";
 import { TrackingScripts } from "@/components/seo/tracking-scripts";
@@ -23,14 +23,15 @@ import { englishMessages } from "@/i18n/catalog";
  */
 const ROOT_PICK = globalSlices(["common", "shell"], (namespace) => Object.keys(englishMessages(namespace)));
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+/** Interface face (variable, 200–800). */
+const manrope = Manrope({ variable: "--font-ui", subsets: ["latin", "latin-ext"], display: "swap" });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 /*
- * Geist has no Arabic or Devanagari glyphs. These self-hosted variable faces (every weight, so the
+ * Manrope has no Arabic or Devanagari glyphs. These self-hosted variable faces (every weight, so the
  * 650 headings render as designed) are put first in the font stack only when the page language is
  * `ar` / `hi` (see `--font-script` in globals.css). Their @font-face rules carry unicode-range and
  * are never referenced in other languages, so they are not downloaded there; `preload: false`
- * keeps them out of every page's <head>. No fallback-metrics face: Geist follows them in the stack.
+ * keeps them out of every page's <head>. No fallback-metrics face: Manrope follows them in the stack.
  */
 const notoArabic = Noto_Sans_Arabic({ variable: "--font-noto-arabic", subsets: ["arabic"], preload: false, adjustFontFallback: false, display: "swap" });
 const notoDevanagari = Noto_Sans_Devanagari({ variable: "--font-noto-devanagari", subsets: ["devanagari"], preload: false, adjustFontFallback: false, display: "swap" });
@@ -46,10 +47,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // The interface language sets lang/dir; an explicit admin text direction (Settings → General) overrides dir.
   const dir = documentDir(locale, settings.textDirection);
   return (
-    <html lang={locale} dir={dir} className={`${geistSans.variable} ${geistMono.variable} ${notoArabic.variable} ${notoDevanagari.variable} h-full antialiased`} suppressHydrationWarning>
+    <html lang={locale} dir={dir} className={`${manrope.variable} ${geistMono.variable} ${notoArabic.variable} ${notoDevanagari.variable} h-full antialiased`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        <style>{`:root{--accent:${settings.brand.accentColor};}`}</style>
+        {/* The brand colour; globals.css derives the light and dark accent from it. */}
+        <style>{`:root{--brand:${settings.brand.accentColor};}`}</style>
       </head>
       <body className="min-h-full flex flex-col">
         <RootSeo />

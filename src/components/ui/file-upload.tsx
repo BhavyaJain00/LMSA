@@ -236,7 +236,7 @@ export function FileUpload({ name, value, onChange, kind = "auto", accept, label
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
-                className="rounded font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60"
+                className="rounded font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink disabled:opacity-60"
                 disabled={pickDisabled}
               >
                 {value ? t("upload.replace") : t("upload.choose")}
@@ -253,7 +253,7 @@ export function FileUpload({ name, value, onChange, kind = "auto", accept, label
               setMeta(null);
               onChange?.("", undefined);
             }}
-            className="absolute inset-e-2 top-2 rounded-md p-1 text-ink-faint hover:bg-surface-3 hover:text-danger focus-visible:outline-2 focus-visible:outline-accent"
+            className="absolute inset-e-2 top-2 rounded-md p-1 text-ink-faint hover:bg-surface-3 hover:text-danger focus-visible:outline-2 focus-visible:outline-accent-ink"
             aria-label={t("upload.remove")}
           >
             <Icon.X className="size-4" />
@@ -275,7 +275,7 @@ export function FileUpload({ name, value, onChange, kind = "auto", accept, label
                   file: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
                 })}
               </span>
-              <button type="button" onClick={() => discard(item)} className="rounded font-medium text-ink-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-accent">
+              <button type="button" onClick={() => discard(item)} className="rounded font-medium text-ink-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-accent-ink">
                 {t("upload.discard")}
               </button>
             </li>
@@ -416,7 +416,7 @@ function ControlButton({ onClick, icon, children, primary, danger }: { onClick: 
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink",
         primary ? "bg-accent text-accent-fg hover:brightness-110" : "border border-border-strong bg-surface-1 text-ink hover:bg-surface-2",
         danger && "hover:border-danger/50 hover:text-danger",
       )}

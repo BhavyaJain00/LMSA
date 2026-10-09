@@ -4,15 +4,12 @@ import { Icon } from "./icons";
 import { IconButton } from "./button";
 import { useT } from "@/i18n/client";
 
-export type Theme = "light" | "dark";
+import { DEFAULT_THEME, THEME_STORAGE_KEY as STORAGE_KEY, type Theme } from "./theme";
 
-const STORAGE_KEY = "ll-theme";
-
-/** Inline script that applies the saved theme before first paint (avoids a flash). */
-export const themeInitScript = `(function(){try{var t=localStorage.getItem("${STORAGE_KEY}");if(!t){t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}document.documentElement.setAttribute("data-theme",t)}catch(e){}})();`;
+export { DEFAULT_THEME, themeInitScript, type Theme } from "./theme";
 
 export function getTheme(): Theme {
-  if (typeof document === "undefined") return "light";
+  if (typeof document === "undefined") return DEFAULT_THEME;
   return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
 }
 

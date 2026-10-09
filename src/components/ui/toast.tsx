@@ -102,7 +102,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 </button>
               )}
             </div>
-            <button type="button" aria-label={translate("actions.dismiss")} onClick={() => dismiss(t.id)} className="shrink-0 rounded p-0.5 text-ink-faint hover:text-ink">
+            <button type="button" aria-label={translate("actions.dismiss")} onClick={() => dismiss(t.id)} className="tap-target shrink-0 rounded p-0.5 text-ink-faint hover:text-ink">
               <Icon.X className="size-4" />
             </button>
           </div>

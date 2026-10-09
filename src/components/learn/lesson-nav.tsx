@@ -14,7 +14,10 @@ function useNextLabel(): (locked: boolean) => string {
   return (locked) => (locked ? t("learn.nav.completeAndContinue") : common("actions.next"));
 }
 
-/** Compact Previous / Next buttons for the lesson header (desktop). */
+/**
+ * Compact Previous / Next pair under the lesson title (Next is the page's primary action).
+ * On phones the pair spans the width and Next takes the remaining space.
+ */
 export function LessonNavButtons({ className }: { className?: string }) {
   const rt = useLessonRuntime();
   const t = useT("learning");
@@ -22,24 +25,24 @@ export function LessonNavButtons({ className }: { className?: string }) {
   const nextLabel = useNextLabel();
   const busy = rt.navigating || rt.completing;
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <div className={cn("flex w-full items-center gap-2 sm:w-auto", className)}>
       {rt.prev && (
-        <Button variant="outline" size="sm" onClick={rt.goPrev} disabled={!rt.canGoPrev || busy} leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
+        <Button variant="outline" onClick={rt.goPrev} disabled={!rt.canGoPrev || busy} leftIcon={<Icon.ChevronLeft className="size-4 rtl:rotate-180" />}>
           {common("actions.previous")}
         </Button>
       )}
       {rt.canGoNext ? (
         <Button
-          size="sm"
           onClick={() => void rt.goNext()}
           loading={busy}
           rightIcon={<Icon.ChevronRight className="size-4 rtl:rotate-180" />}
           title={rt.next?.locked ? t("learn.nav.lockedHint") : undefined}
+          className="flex-1 sm:flex-none"
         >
           {nextLabel(!!rt.next?.locked)}
         </Button>
       ) : (
-        <ButtonLink href={rt.courseHref} variant="outline" size="sm">
+        <ButtonLink href={rt.courseHref} variant="outline" className="flex-1 sm:flex-none">
           {t("learn.backToCourse")}
         </ButtonLink>
       )}
@@ -59,11 +62,11 @@ export function LessonPager() {
       {rt.prev && rt.canGoPrev ? (
         <Link
           href={rt.prev.href}
-          className="group flex items-center gap-3 rounded-xl border border-border bg-surface-1 p-4 transition-colors hover:border-border-strong hover:bg-surface-2"
+          className="group flex items-center gap-3 rounded-card border border-border bg-surface-1 p-4 transition-colors hover:bg-surface-2"
         >
           <Icon.ArrowLeft className="size-5 shrink-0 text-ink-faint transition-transform group-hover:-translate-x-0.5 rtl:rotate-180 rtl:group-hover:translate-x-0.5" />
           <span className="min-w-0">
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">{common("actions.previous")}</span>
+            <span className="block text-meta text-ink-faint">{common("actions.previous")}</span>
             <span className="block truncate text-sm font-medium text-ink">{rt.prev.title}</span>
           </span>
         </Link>
@@ -75,10 +78,10 @@ export function LessonPager() {
           type="button"
           onClick={() => void rt.goNext()}
           disabled={busy}
-          className="group flex items-center justify-end gap-3 rounded-xl border border-accent/40 bg-accent/5 p-4 text-end transition-colors hover:bg-accent/10 disabled:opacity-70 sm:col-start-2"
+          className="group flex items-center justify-end gap-3 rounded-card border border-accent/40 bg-accent/8 p-4 text-end transition-colors hover:bg-accent/12 disabled:opacity-70 sm:col-start-2"
         >
           <span className="min-w-0">
-            <span className="block text-xs font-medium uppercase tracking-wider text-accent">{nextLabel(rt.next.locked)}</span>
+            <span className="block text-meta font-medium text-accent">{nextLabel(rt.next.locked)}</span>
             <span className="block truncate text-sm font-medium text-ink">{rt.next.title}</span>
           </span>
           {busy ? (
@@ -90,10 +93,10 @@ export function LessonPager() {
       ) : (
         <Link
           href={rt.courseHref}
-          className="group flex items-center justify-end gap-3 rounded-xl border border-border bg-surface-1 p-4 text-end transition-colors hover:bg-surface-2 sm:col-start-2"
+          className="group flex items-center justify-end gap-3 rounded-card border border-border bg-surface-1 p-4 text-end transition-colors hover:bg-surface-2 sm:col-start-2"
         >
           <span className="min-w-0">
-            <span className="block text-xs font-medium uppercase tracking-wider text-ink-faint">{rt.next ? t("learn.nav.nextLocked") : t("learn.nav.reachedEnd")}</span>
+            <span className="block text-meta text-ink-faint">{rt.next ? t("learn.nav.nextLocked") : t("learn.nav.reachedEnd")}</span>
             <span className="block truncate text-sm font-medium text-ink">{t("learn.backToCourse")}</span>
           </span>
           <Icon.BookOpen className="size-5 shrink-0 text-ink-faint" />

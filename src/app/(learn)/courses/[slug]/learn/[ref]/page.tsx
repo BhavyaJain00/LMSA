@@ -22,10 +22,10 @@ import { EmptyState } from "@/components/ui/skeleton";
 import { getLessonAiPanel } from "@/components/ai/lesson-ai-panel";
 import { CompletedBadge, CompletionPanel, type ViewerMode } from "@/components/learn/completion-panel";
 import { DiscussionPanel } from "@/components/learn/discussion-panel";
-import { LessonBlocks } from "@/components/learn/lesson-blocks";
+import { LessonBlocks, leadsWithVideo } from "@/components/learn/lesson-blocks";
 import { HideInZen, LessonFrame, ZenOnly, ZenPanelToggle, ZenToggle } from "@/components/learn/lesson-frame";
-import { InstructorNotesBox, InstructorsRow, LessonBreadcrumbs, LessonMeta } from "@/components/learn/lesson-header";
-import { LessonNavButtons, LessonPager, MobilePager } from "@/components/learn/lesson-nav";
+import { InstructorNotesBox, LessonMeta } from "@/components/learn/lesson-header";
+import { LessonNavButtons, LessonPager } from "@/components/learn/lesson-nav";
 import { LessonRuntimeProvider } from "@/components/learn/lesson-runtime";
 import { LessonSidebar } from "@/components/learn/lesson-sidebar";
 import { LockedLessonNotice } from "@/components/learn/locked-notice";
@@ -106,10 +106,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           />
         }
       >
-        <main id="lesson-main" className="px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pt-8">
-          <div className="mx-auto w-full max-w-(--lesson-w)">
-            <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={locked ? data.lesson.title : t("learn.lessonNotFound")} />
-          </div>
+        <main id="lesson-main" className="px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pb-16 lg:pt-10">
           <LockedLessonNotice
             variant={locked ? "locked" : "not_found"}
             href={data.resume?.href ?? null}
@@ -140,10 +137,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
           />
         }
       >
-        <main id="lesson-main" className="px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pt-8">
-          <div className="mx-auto w-full max-w-(--lesson-w)">
-            <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={data.lesson.title} />
-          </div>
+        <main id="lesson-main" className="px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:pb-16 lg:pt-10">
           <NoPreviewCard
             course={course}
             lessonTitle={data.lesson.title}
@@ -162,7 +156,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
   }
 
   /* -------------------------------- open -------------------------------- */
-  const { lesson, chapter, index, total, prev, next, instructors, certificate } = data;
+  const { lesson, chapter, index, total, prev, next, certificate } = data;
   const settings = ctx.settings;
   const tracking = ctx.enrolled;
   const studentView = ctx.manager && sp.studentView === "1";
@@ -209,7 +203,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
   if (settings.features.certifications && viewer) {
     if (certificate) {
       certificateButton = (
-        <ButtonLink href={`/certificates/${certificate.code}`} variant="outline" size="sm" leftIcon={<Icon.GraduationCap className="size-4" />}>
+        <ButtonLink href={`/certificates/${certificate.code}`} variant="subtle" size="xs" leftIcon={<Icon.GraduationCap className="size-3.5" />}>
           {t("learn.viewCertificate")}
         </ButtonLink>
       );
@@ -217,9 +211,9 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
       certificateButton = (
         <ButtonLink
           href={ctx.enrollment.purchasedCertificate ? `/courses/${course.slug}/certification` : `/billing/certificate/${course.id}`}
-          variant="outline"
-          size="sm"
-          leftIcon={<Icon.GraduationCap className="size-4" />}
+          variant="subtle"
+          size="xs"
+          leftIcon={<Icon.GraduationCap className="size-3.5" />}
         >
           {t("learn.getCertified")}
         </ButtonLink>
@@ -255,6 +249,53 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
     />
   );
 
+  // Meta line, title, Previous / Next (with the zen toggles); completed badge, certificate and editor link underneath.
+  const lessonHeader = (
+    <header className="mx-auto w-full max-w-(--lesson-w)">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+        <div className="min-w-0">
+          <HideInZen>
+            <LessonMeta chapterNumber={chapter.number} index={index} total={total} durationSeconds={lesson.durationSeconds} preview={showPreview && lesson.includeInPreview} />
+          </HideInZen>
+          <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-ink text-balance sm:text-3xl">{lesson.title}</h1>
+          <ZenOnly>
+            <p className="mt-1.5 flex items-center gap-1.5 text-sm text-ink-muted">
+              {chapter.title} - {course.title}
+              {tracking && (
+                <Tooltip label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
+                  <span tabIndex={0} className="inline-flex rounded text-ink-faint" aria-label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
+                    <Icon.Info className="size-4" />
+                  </span>
+                </Tooltip>
+              )}
+            </p>
+          </ZenOnly>
+        </div>
+        <div className="flex w-full shrink-0 items-center gap-1 sm:mt-1 sm:w-auto">
+          {canZen && (notesEnabled || discussionsEnabled) && <ZenPanelToggle tab={discussionsEnabled ? "discussion" : "notes"} />}
+          {canZen && <ZenToggle className="me-1" />}
+          <LessonNavButtons className="flex-1 sm:flex-none" />
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 empty:hidden">
+        <CompletedBadge />
+        {ctx.manager && (
+          <ButtonLink href={`/admin/courses/${course.id}/lessons/${lesson.id}`} variant="subtle" size="xs" leftIcon={<Icon.Edit className="size-3.5" />}>
+            {t("learn.editorView")}
+          </ButtonLink>
+        )}
+        {certificateButton}
+      </div>
+      {presentAsManager && lesson.instructorNotes && (
+        <div className="mt-6">
+          <InstructorNotesBox notes={lesson.instructorNotes} />
+        </div>
+      )}
+    </header>
+  );
+  // A lesson that opens with a video shows the video first and the header right under the player.
+  const videoFirst = leadsWithVideo(lesson.blocks);
+
   return (
     <LessonRuntimeProvider
       key={lesson.id}
@@ -272,8 +313,7 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
       initialTab={initialTab}
     >
       <LessonFrame sidebar={sidebar}>
-        <MobilePager index={index} total={total} />
-        <main id="lesson-main" className="px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-16 lg:pt-8">
+        <main id="lesson-main" className="px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pb-16 lg:pt-8">
           {studentView && (
             <div className="mx-auto mb-4 flex w-full max-w-(--lesson-w) flex-wrap items-center justify-between gap-2 rounded-xl border border-info/30 bg-info/8 px-4 py-2.5 text-sm">
               <span className="flex items-center gap-2 text-ink">
@@ -285,66 +325,12 @@ export default async function LessonPage(props: PageProps<"/courses/[slug]/learn
             </div>
           )}
 
-          <header className="mx-auto w-full max-w-(--lesson-w)">
-            <HideInZen>
-              <LessonBreadcrumbs courseTitle={course.title} courseHref={courseHref} lessonTitle={lesson.title} lessonHref={withView(lesson.href)} />
-            </HideInZen>
-            <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-              <div className="min-w-0">
-                <HideInZen>
-                  <LessonMeta
-                    chapterNumber={chapter.number}
-                    chapterTitle={chapter.title}
-                    index={index}
-                    total={total}
-                    durationSeconds={lesson.durationSeconds}
-                    preview={showPreview && lesson.includeInPreview}
-                  />
-                </HideInZen>
-                <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-ink text-balance sm:text-3xl">{lesson.title}</h1>
-                <ZenOnly>
-                  <p className="mt-1.5 flex items-center gap-1.5 text-sm text-ink-muted">
-                    {chapter.title} - {course.title}
-                    {tracking && (
-                      <Tooltip label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
-                        <span tabIndex={0} className="inline-flex rounded text-ink-faint" aria-label={t("learn.percentCompleted", { percent: ctx.progress.percent })}>
-                          <Icon.Info className="size-4" />
-                        </span>
-                      </Tooltip>
-                    )}
-                  </p>
-                </ZenOnly>
-                <div className="mt-2 flex flex-wrap items-center gap-2 empty:hidden">
-                  <CompletedBadge />
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                {ctx.manager && (
-                  <ButtonLink href={`/admin/courses/${course.id}/lessons/${lesson.id}`} variant="outline" size="sm" leftIcon={<Icon.Edit className="size-4" />}>
-                    {t("learn.editorView")}
-                  </ButtonLink>
-                )}
-                {certificateButton}
-                {canZen && (notesEnabled || discussionsEnabled) && <ZenPanelToggle tab={discussionsEnabled ? "discussion" : "notes"} />}
-                {canZen && <ZenToggle />}
-                <LessonNavButtons className="hidden lg:flex" />
-              </div>
-            </div>
-            <HideInZen>
-              <div className="mt-4">
-                <InstructorsRow instructors={instructors} />
-              </div>
-            </HideInZen>
-            {presentAsManager && lesson.instructorNotes && (
-              <div className="mt-6">
-                <InstructorNotesBox notes={lesson.instructorNotes} />
-              </div>
-            )}
-          </header>
+          {!videoFirst && lessonHeader}
 
-          <SelectableContent className="mt-8">
+          <SelectableContent className={videoFirst ? undefined : "mt-8"}>
             {lesson.blocks.length ? (
               <LessonBlocks
+                leadHeader={videoFirst ? lessonHeader : undefined}
                 blocks={lesson.blocks}
                 lessonId={lesson.id}
                 courseId={course.id}

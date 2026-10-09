@@ -717,8 +717,21 @@ export async function notifyAdminsOfPendingOrder(payment: Payment, buyerName: st
   await notifyMany(admins, {
     type: "system",
     subject: `New order awaiting confirmation: ${payment.itemTitle}`,
-    message: `${buyerName} placed order ${payment.orderId} for ${formatPrice(payment.amount, payment.currency)}.`,
+    message: `${buyerName} placed order ${payment.orderId} for ${formatPrice(payment.amount, payment.currency)}.${payment.buyerReference ? ` Payment reference: ${payment.buyerReference}.` : ""}`,
     link: `/admin/settings/transactions?status=pending`,
+    fromUserId: payment.userId,
+  });
+}
+
+/** Tell administrators that a buyer added (or changed) the transfer reference of a manual order. */
+export async function notifyAdminsOfPaymentReference(payment: Payment, buyerName: string): Promise<void> {
+  const db = await getDb();
+  const admins = db.users.filter((u) => u.enabled && u.roles.includes("admin")).map((u) => u.id);
+  await notifyMany(admins, {
+    type: "system",
+    subject: `Payment reference added: ${payment.itemTitle}`,
+    message: `${buyerName} says order ${payment.orderId} (${formatPrice(payment.amount, payment.currency)}) was paid. Reference: ${payment.buyerReference}.`,
+    link: `/admin/settings/transactions?search=${encodeURIComponent(payment.orderId)}`,
     fromUserId: payment.userId,
   });
 }

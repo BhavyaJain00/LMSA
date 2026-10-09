@@ -2,7 +2,9 @@
 
 import { useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import type { ActionResult, PaymentItemType, Settings } from "@/lib/types";
+import type { ActionResult, ManualPaymentDetails, PaymentItemType, Settings } from "@/lib/types";
+import { preferredMethod, type CheckoutMethodId, type CheckoutMethodView } from "@/lib/payments/methods";
+import { ManualPaymentPanel, PaymentMethodPicker } from "./payment-methods";
 import type { CheckoutNext } from "@/lib/payments/types";
 import { placeOrderAction } from "@/lib/actions/payments";
 import { Button } from "@/components/ui/button";
@@ -112,16 +114,20 @@ export function BillingForm({
   repriceOnCountry = false,
   expectedTotal,
   totalLabel,
-  gateway,
-  gatewayReady,
-  gatewayMode,
+  gateway: siteGateway,
+  gatewayReady: siteGatewayReady,
+  gatewayMode: siteGatewayMode,
+  methods,
+  manualDetails,
+  upiUrl = null,
+  staff = false,
   applyTax,
   taxLabel,
   defaults,
   contactEmail,
   legal = [],
-  membership = null,
-  installments = null,
+  membership: membershipProp = null,
+  installments: installmentsProp = null,
   bump = null,
   action = placeOrderAction,
   extraFields,
@@ -141,6 +147,17 @@ export function BillingForm({
   /** False when the active gateway is Stripe/Razorpay but its keys are missing. */
   gatewayReady: boolean;
   gatewayMode: "test" | "live" | null;
+  /**
+   * Payment methods the buyer chooses from (Settings → Payments). Without it the form uses `gateway` only (the
+   * gift checkout).
+   */
+  methods?: CheckoutMethodView[];
+  /** Bank / UPI details for the "Bank transfer / UPI" method. */
+  manualDetails?: ManualPaymentDetails;
+  /** upi:// link with the amount (INR orders with a UPI ID). */
+  upiUrl?: string | null;
+  /** The viewer is an administrator: unavailable methods explain how to switch them on. */
+  staff?: boolean;
   applyTax: boolean;
   taxLabel: string;
   defaults: BillingDefaults;
@@ -198,6 +215,16 @@ export function BillingForm({
     repriceForVat();
   };
   const [withBump, setWithBump] = useState(false);
+  // The method the buyer picked (the site's gateway when the page offers no choice).
+  const [picked, setPicked] = useState<CheckoutMethodId | null>(methods?.length ? preferredMethod(methods) : null);
+  const pickedView = methods?.find((m) => m.id === picked);
+  const gateway: Gateway = methods?.length ? (picked ?? siteGateway) : siteGateway;
+  const gatewayReady = methods?.length ? !!pickedView?.ready : siteGatewayReady;
+  const gatewayMode = methods?.length ? (pickedView?.mode ?? null) : siteGatewayMode;
+  // Renewals and later installments are charged by themselves only through the gateways that store the card.
+  const membership =
+    methods?.length && membershipProp ? { ...membershipProp, automaticRenewal: membershipProp.recurring && (gateway === "stripe" || gateway === "razorpay") } : membershipProp;
+  const installments = methods?.length && installmentsProp ? { ...installmentsProp, automatic: gateway === "stripe" } : installmentsProp;
   const launcher = useCheckoutLauncher();
   const { onSubmit: submitOrder, pending, errors, formError } = useFormAction(action, {
     toastSuccess: false,
@@ -292,8 +319,9 @@ export function BillingForm({
       {extraFields?.(errors)}
 
       <div className={`rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6${extraFields ? " mt-5" : ""}`}>
-        <h2 id="billing-address-heading" className="text-lg font-semibold text-ink">
-          {gift ? t("commerce.billing.yourAddress") : t("commerce.billing.address")}
+        <h2 id="billing-address-heading" className="flex items-center gap-2.5 text-lg font-semibold text-ink">
+          {methods?.length ? <StepNumber n={1} /> : null}
+          {gift ? t("commerce.billing.yourAddress") : methods?.length ? t("commerce.billing.stepDetails") : t("commerce.billing.address")}
         </h2>
         {formError && !Object.keys(errors).length && (
           <div className="mt-4">
@@ -413,18 +441,52 @@ export function BillingForm({
 
       <div className="mt-5 rounded-card border border-border bg-surface-1 p-5 shadow-card sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-ink">{t("commerce.billing.payment")}</h2>
-          {online && gatewayReady && gatewayMode === "test" && (
-            <Badge tone="warning" dot>
-              {t("commerce.billing.testMode")}
-            </Badge>
+          <h2 className="flex items-center gap-2.5 text-lg font-semibold text-ink">
+            {methods?.length ? <StepNumber n={2} /> : null}
+            {methods?.length && !free ? t("commerce.billing.stepPayment") : t("commerce.billing.payment")}
+          </h2>
+          {methods?.length && !free ? (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
+              <Icon.Lock className="size-3.5" aria-hidden="true" />
+              {t("commerce.billing.secure")}
+            </span>
+          ) : (
+            online &&
+            gatewayReady &&
+            gatewayMode === "test" && (
+              <Badge tone="warning" dot>
+                {t("commerce.billing.testMode")}
+              </Badge>
+            )
           )}
         </div>
+        {methods?.length && !free ? (
+          <div className="mt-4">
+            <PaymentMethodPicker methods={methods} value={picked} onChange={setPicked} showAdminHints={staff} error={errors.method} />
+          </div>
+        ) : null}
         {free ? (
           <p className="mt-2 flex items-start gap-2 text-sm text-ink-muted">
             <Icon.Gift className="mt-0.5 size-4 shrink-0 text-success" />
             {membership ? t("commerce.billing.freeMembership") : expectedTotal <= 0 ? t("commerce.billing.freeDiscount") : t("commerce.billing.freeOrder")}
           </p>
+        ) : gateway === "manual" && methods?.length ? (
+          <div className="mt-5 space-y-4">
+            <ManualPaymentPanel details={manualDetails ?? {}} amountLabel={payLabel} upiUrl={upiUrl} />
+            <p className="flex items-start gap-2 text-sm text-ink-muted">
+              <Icon.Info className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden="true" />
+              <span>
+                {trial
+                  ? t.rich("commerce.billing.manualTrial", { amount: totalLabel, date: membership?.firstChargeOn ?? "", b: bold })
+                  : t.rich("commerce.manual.steps", { amount: payLabel, b: bold })}
+                {installmentLine && <> {installmentLine}</>}
+              </span>
+            </p>
+            <Field label={t("commerce.manual.reference")} htmlFor="reference" error={errors.reference} hint={errors.reference ? undefined : t("commerce.manual.referenceHint")}>
+              <Input id="reference" name="reference" maxLength={80} autoComplete="off" spellCheck={false} className="font-mono" dir="ltr" invalid={!!errors.reference} />
+            </Field>
+            {contactEmail && <p className="text-xs text-ink-muted">{t.rich("commerce.billing.questions", { email: contactEmail, link: mailLink })}</p>}
+          </div>
         ) : gateway === "manual" ? (
           <div className="mt-2 space-y-2 text-sm text-ink-muted">
             <p className="flex items-start gap-2">
@@ -552,7 +614,8 @@ export function BillingForm({
               type="submit"
               loading={busy}
               disabled={unavailable}
-              className="w-full sm:w-auto"
+              size={methods?.length ? "lg" : undefined}
+              className={methods?.length ? "w-full sm:min-w-72" : "w-full sm:w-auto"}
               leftIcon={free ? undefined : online ? <Icon.Lock className="size-4" /> : <Icon.Receipt className="size-4" />}
             >
               {submitLabel}
@@ -562,9 +625,24 @@ export function BillingForm({
                 {statusLabel}
               </p>
             )}
+            {methods?.length && !free ? (
+              <p className="flex max-w-72 items-start gap-1.5 text-xs text-ink-faint sm:text-end">
+                <Icon.ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                {online ? t("commerce.billing.trustOnline", { name: GATEWAY_NAME[gateway] ?? "" }) : t("commerce.billing.trustManual")}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
     </form>
+  );
+}
+
+/** Numbered step marker in the checkout's card headings. */
+function StepNumber({ n }: { n: number }) {
+  return (
+    <span aria-hidden="true" className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-fg">
+      {n}
+    </span>
   );
 }

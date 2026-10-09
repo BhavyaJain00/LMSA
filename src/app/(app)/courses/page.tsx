@@ -27,6 +27,7 @@ import { CatalogFooter } from "@/components/catalog/catalog-footer";
 import { CatalogTabs, type CatalogTabLink } from "@/components/catalog/catalog-tabs";
 import { CatalogToolbar } from "@/components/catalog/catalog-toolbar";
 import { CourseGrid } from "@/components/catalog/course-grid";
+import { isPaidCourse } from "@/components/catalog/price-tag";
 import { CATALOG_QUERY_KEYS, catalogHref, firstParam, type CatalogParams } from "@/components/catalog/catalog-params";
 import { listingIndexing, pageMetadata } from "@/lib/seo/metadata";
 import { siteOrigin } from "@/lib/seo/site";
@@ -69,7 +70,7 @@ export async function generateMetadata(props: PageProps<"/courses">): Promise<Me
   const { noindex, follow } = listingIndexing({
     search,
     sort: params.sort,
-    filters: [params.category, params.tab && params.tab !== "live" ? params.tab : undefined, params.certification, params.limit],
+    filters: [params.category, params.tab && params.tab !== "live" ? params.tab : undefined, params.certification, params.price, params.limit],
     page: Number(params.page) || 1,
   });
   return pageMetadata({ title, description, path: "/courses", noindex, follow, locale }, settings);
@@ -249,12 +250,15 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
   const search = params.search?.trim().slice(0, 100) || undefined;
   const query = { tab, search, categorySlug: params.category, certification, sort };
 
-  const [{ courses, category }, counts, categories] = await Promise.all([
+  const freeOnly = params.price === "free";
+  const [{ courses: allCourses, category }, counts, categories] = await Promise.all([
     getCatalogCourses(user, query),
     getCatalogTabCounts(user, query),
     getCatalogCategories(),
   ]);
 
+  // "Free only" (the home page's "Learn for free" link) narrows the list after the query.
+  const courses = freeOnly ? allCourses.filter((c) => !isPaidCourse(c)) : allCourses;
   const visible = courses.slice(0, pageSize * page);
   const nextHref = visible.length < courses.length ? catalogHref(params, { page: String(page + 1) }) : null;
 
@@ -267,7 +271,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
     active: def.value === tab,
   }));
 
-  const filtered = !!search || !!category || certification;
+  const filtered = !!search || !!category || certification || freeOnly;
   const clearHref = catalogHref({ tab: params.tab, sort: params.sort, limit: params.limit }, {});
   const activeTab = tabs.find((item) => item.active);
   const bold = (chunks: React.ReactNode) => <span className="font-medium text-ink">{chunks}</span>;
@@ -292,6 +296,7 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
           sort={sort}
           certification={certification}
           showCertification={settings.features.certifications}
+          freeOnly={freeOnly}
         />
       </div>
 
@@ -318,6 +323,9 @@ export default async function CoursesPage(props: PageProps<"/courses">) {
             )}
             {category && (
               <FilterChip label={category.name} removeHref={catalogHref(params, { category: null, page: null })} removeLabel={t("catalog.filters.remove")} />
+            )}
+            {freeOnly && (
+              <FilterChip label={t("catalog.filters.freeOnly")} removeHref={catalogHref(params, { price: null, page: null })} removeLabel={t("catalog.filters.remove")} />
             )}
             {certification && (
               <FilterChip

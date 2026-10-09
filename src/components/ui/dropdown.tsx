@@ -22,16 +22,25 @@ export function Dropdown({
   trigger,
   items,
   align = "end",
+  side = "bottom",
   className,
+  triggerClassName,
   menuClassName,
   header,
+  label,
 }: {
   trigger: ReactNode;
   items: DropdownItem[];
   align?: "start" | "end";
+  /** Open below the trigger (default) or above it (menus at the bottom of the screen). */
+  side?: "bottom" | "top";
   className?: string;
+  /** Extra classes for the trigger button, e.g. `w-full`. */
+  triggerClassName?: string;
   menuClassName?: string;
   header?: ReactNode;
+  /** Accessible name for the trigger when its content is not text. */
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -62,8 +71,9 @@ export function Dropdown({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={id}
+        aria-label={label}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center rounded-lg focus-visible:outline-2 focus-visible:outline-accent"
+        className={cn("tap-target inline-flex items-center rounded-lg focus-visible:outline-2 focus-visible:outline-accent-ink", triggerClassName)}
       >
         {trigger}
       </button>
@@ -72,8 +82,11 @@ export function Dropdown({
           id={id}
           role="menu"
           className={cn(
-            "absolute z-50 mt-1.5 min-w-48 overflow-hidden rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
-            align === "end" ? "inset-e-0 origin-top-right rtl:origin-top-left" : "inset-s-0 origin-top-left rtl:origin-top-right",
+            "absolute z-50 min-w-48 overflow-hidden rounded-xl border border-border bg-surface-1 p-1 shadow-pop animate-scale-in",
+            side === "top" ? "bottom-full mb-1.5" : "mt-1.5",
+            align === "end"
+              ? side === "top" ? "inset-e-0 origin-bottom-right rtl:origin-bottom-left" : "inset-e-0 origin-top-right rtl:origin-top-left"
+              : side === "top" ? "inset-s-0 origin-bottom-left rtl:origin-bottom-right" : "inset-s-0 origin-top-left rtl:origin-top-right",
             menuClassName,
           )}
         >

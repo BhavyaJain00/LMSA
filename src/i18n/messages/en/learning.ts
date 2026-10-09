@@ -233,6 +233,8 @@ const learningMessages = {
   "learn.sidebar.courseProgress": "Course progress",
   "learn.sidebar.sections": "Sidebar sections",
   "learn.sidebar.chapters": "Chapters",
+  "learn.sidebar.lessonsDone": "{total, plural, one {{completed} of # lesson} other {{completed} of # lessons}}",
+  "learn.sidebar.percent": "{percent}%",
 
   "learn.color.yellow": "Yellow",
   "learn.color.green": "Green",
@@ -400,6 +402,7 @@ const learningMessages = {
   "global.player.error.serviceDown": "This video is unavailable right now. Please try again later.",
   "global.player.error.loadFailed": "The video could not be loaded.",
   "global.player.error.offline": "Check your connection and try again.",
+  "global.player.error.title": "This video isn't available right now",
 
   "global.player.mute": "Mute (m)",
   "global.player.unmute": "Unmute (m)",

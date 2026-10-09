@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { setTheme } from "@/components/ui/theme-toggle";
+import { DEFAULT_THEME, setTheme } from "@/components/ui/theme-toggle";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
@@ -16,9 +16,9 @@ const CHANGE_EVENT = "ll-theme-preference";
 function readPreference(): ThemePreference {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    return v === "light" || v === "dark" ? v : "system";
+    return v === "light" || v === "dark" || v === "system" ? v : DEFAULT_THEME;
   } catch {
-    return "system";
+    return DEFAULT_THEME;
   }
 }
 
@@ -36,11 +36,11 @@ function subscribe(onChange: () => void): () => void {
 
 const systemDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
-/** Apply a preference: explicit light/dark is stored; "system" clears it and follows the OS. */
+/** Apply a preference: light and dark are stored as is; "system" is stored too and follows the OS. */
 export function applyThemePreference(pref: ThemePreference): void {
   if (pref === "system") {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(STORAGE_KEY, "system");
     } catch {
       /* storage unavailable */
     }

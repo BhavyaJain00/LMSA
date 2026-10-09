@@ -3,13 +3,17 @@ import { cn } from "@/lib/utils";
 
 export type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger" | "info" | "outline" | "dark";
 
+/*
+ * Tinted tones use the bright status colour for the fill and its text-safe
+ * `-ink` shade for the label (≥ 4.5:1 in both themes).
+ */
 const tones: Record<BadgeTone, string> = {
   neutral: "bg-surface-2 text-ink-muted",
-  accent: "bg-accent/12 text-accent",
-  success: "bg-success/12 text-success",
-  warning: "bg-warning/15 text-warning",
-  danger: "bg-danger/12 text-danger",
-  info: "bg-info/12 text-info",
+  accent: "bg-accent/12 text-accent-ink",
+  success: "bg-success/12 text-success-ink",
+  warning: "bg-warning/15 text-warning-ink",
+  danger: "bg-danger/12 text-danger-ink",
+  info: "bg-info/12 text-info-ink",
   outline: "border border-border-strong text-ink-muted",
   dark: "bg-ink text-surface-1",
 };
@@ -26,7 +30,7 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full font-medium whitespace-nowrap",
-        size === "xs" && "px-1.5 py-px text-[10px] leading-4",
+        size === "xs" && "px-1.5 py-px text-micro",
         size === "sm" && "px-2 py-0.5 text-xs",
         size === "md" && "px-2.5 py-1 text-sm",
         tones[tone],

@@ -729,6 +729,13 @@ export const Icon = {
   Puzzle: base(<path d="M10 3a2 2 0 0 1 2 2v1h3a1 1 0 0 1 1 1v3h1a2 2 0 1 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 1 1-4 0v-1H5a1 1 0 0 1-1-1v-3h1a2 2 0 1 0 0-4H4V7a1 1 0 0 1 1-1h3V5a2 2 0 0 1 2-2Z" />),
   Hash: base(<path d="M5 9h14M5 15h14M10 3l-2 18M16 3l-2 18" />),
   Dot: base(<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />),
+  /** Sidebar toggle (panel with a left rail). */
+  PanelLeft: base(
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M9 4v16" />
+    </>,
+  ),
 } as const;
 
 export type IconName = keyof typeof Icon;

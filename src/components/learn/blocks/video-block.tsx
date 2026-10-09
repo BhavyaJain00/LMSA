@@ -51,6 +51,11 @@ export interface VideoBlockProps {
   hlsUrl?: string;
   /** Round 3: the block's `transcriptId`, when the server passes it: the transcript panel then holds its place while loading. */
   transcriptId?: string;
+  /**
+   * The lesson header (meta line, title, Previous / Next) when this video opens the lesson: it is
+   * shown right under the player, above the chapter list and transcript (video first, then title).
+   */
+  header?: ReactNode;
 }
 
 interface ActiveQuiz {
@@ -90,6 +95,7 @@ export function VideoBlock({
   lastVideo = true,
   hlsUrl,
   transcriptId,
+  header,
 }: VideoBlockProps) {
   const rt = useLessonRuntime();
   const t = useT("learning");
@@ -243,8 +249,10 @@ export function VideoBlock({
         />
       </div>
 
+      {header && <div className="mt-5">{header}</div>}
+
       {chapters && chapters.length > 1 && (
-        <details className="group mt-3 rounded-lg border border-border bg-surface-1">
+        <details className={cn("group rounded-xl border border-border bg-surface-1", header ? "mt-6" : "mt-3")}>
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-ink [&::-webkit-details-marker]:hidden">
             <span className="flex items-center gap-2">
               <Icon.Layers className="size-4 text-ink-muted" /> {t("learn.video.chapters")}

@@ -61,7 +61,7 @@ describe("i18n fonts: Arabic and Devanagari have a matching face", () => {
 
   it("the font stack puts the script face first only for ar and hi", () => {
     const css = read("src/app/globals.css");
-    assert.match(css, /--font-sans: var\(--font-script, var\(--font-geist-sans\)\)/);
+    assert.match(css, /--font-sans: var\(--font-script, var\(--font-ui\)\)/);
     assert.match(css, /html:lang\(ar\)\s*\{\s*--font-script: var\(--font-noto-arabic\)/);
     assert.match(css, /html:lang\(hi\)\s*\{\s*--font-script: var\(--font-noto-devanagari\)/);
   });

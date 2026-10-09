@@ -3,18 +3,23 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "./icons";
 
-export type ButtonVariant = "primary" | "secondary" | "outline" | "ghost" | "danger" | "subtle" | "link";
+export type ButtonVariant = "primary" | "secondary" | "outline" | "ghost" | "danger" | "subtle" | "link" | "inverse" | "inverse-outline";
 export type ButtonSize = "xs" | "sm" | "md" | "lg" | "icon" | "icon-sm";
 
 const variants: Record<ButtonVariant, string> = {
   primary:
     "bg-accent text-accent-fg shadow-sm hover:brightness-110 active:brightness-95 disabled:hover:brightness-100",
-  secondary: "bg-ink text-surface-1 hover:opacity-90",
+  /** Second-level action next to a primary one: accent tint, never black. */
+  secondary: "bg-accent/10 text-accent hover:bg-accent/15",
   outline: "border border-border-strong bg-surface-1 text-ink hover:bg-surface-2",
   ghost: "text-ink hover:bg-surface-2",
   subtle: "bg-surface-2 text-ink hover:bg-surface-3",
-  danger: "bg-danger text-white hover:brightness-110",
+  danger: "bg-danger-fill text-white hover:brightness-110",
   link: "text-accent underline-offset-4 hover:underline px-0 h-auto",
+  /** On an accent-coloured band (CTA sections): light button with accent text. */
+  inverse: "bg-accent-fg text-(--accent) shadow-sm hover:bg-accent-fg/90",
+  /** Outline companion of `inverse` on an accent-coloured band. */
+  "inverse-outline": "border border-accent-fg/70 text-accent-fg hover:bg-accent-fg/10",
 };
 
 const sizes: Record<ButtonSize, string> = {
@@ -26,6 +31,9 @@ const sizes: Record<ButtonSize, string> = {
   "icon-sm": "size-7 rounded-md",
 };
 
+/** Sizes below 44px get an invisible 44px touch hit area (`.tap-target` in globals.css). */
+const smallSizes: ReadonlySet<ButtonSize> = new Set(["xs", "sm", "md", "icon", "icon-sm"]);
+
 export function buttonClasses(opts: { variant?: ButtonVariant; size?: ButtonSize; className?: string } = {}) {
   const { variant = "primary", size = "md", className } = opts;
   return cn(
@@ -33,6 +41,7 @@ export function buttonClasses(opts: { variant?: ButtonVariant; size?: ButtonSize
     "disabled:opacity-50 disabled:pointer-events-none",
     variants[variant],
     sizes[size],
+    smallSizes.has(size) && "tap-target",
     className,
   );
 }

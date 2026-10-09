@@ -40,14 +40,14 @@ export function EnrollButton({
   );
 }
 
-/** Subtle "Get certificate" button shown when the free certificate can be claimed. */
+/** Secondary "Get certificate" button shown under the main action when the free certificate can be claimed. */
 export function ClaimCertificateButton({ slug }: { slug: string }) {
   const t = useT("public");
   const [state, action, pending] = useActionState(claimCertificateAction, null);
   return (
     <form action={action} className="space-y-2">
       <input type="hidden" name="slug" value={slug} />
-      <Button type="submit" variant="subtle" className="w-full" loading={pending} leftIcon={<Icon.GraduationCap className="size-4" />}>
+      <Button type="submit" variant="secondary" className="w-full" loading={pending} leftIcon={<Icon.GraduationCap className="size-4" />}>
         {t("enroll.getCertificate")}
       </Button>
       <FormError message={state && !state.ok ? state.error : null} />

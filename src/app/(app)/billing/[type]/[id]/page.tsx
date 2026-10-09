@@ -21,6 +21,8 @@ import { trackCheckoutView } from "@/lib/commerce/checkout-sessions";
 import { isKnownCountry } from "@/components/commerce/countries";
 import { CurrencySwitcher } from "@/components/commerce/currency-switcher";
 import { gatewayMode, isConfigured } from "@/lib/payments/gateway";
+import { checkoutMethods, upiPayUrl } from "@/lib/payments/methods";
+import { CheckoutSteps } from "@/components/commerce/checkout-steps";
 import { intervalNoun, intervalSuffix } from "@/lib/commerce/plans";
 import { INSTALLMENT_GRACE_DAYS, intervalPhrase, scheduleDates } from "@/lib/commerce/installments";
 import { legalLinks } from "@/lib/legal/links";
@@ -38,7 +40,7 @@ import { NotPermitted } from "@/components/commerce/not-permitted";
 import { FreeEnrollForm } from "@/components/commerce/free-enroll-form";
 import { formatDate } from "@/lib/utils";
 
-export const metadata = { title: "Billing Details" };
+export const metadata = { title: "Checkout" };
 
 export default async function BillingPage(props: PageProps<"/billing/[type]/[id]">) {
   const [{ type: rawType, id }, sp] = await Promise.all([props.params, props.searchParams]);
@@ -52,7 +54,13 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   const item = priceItemIn(listed, preferredCurrency(chosenCurrency, visitorCountry, currencies), db.settings);
 
   const basePath = `/billing/${type}/${id}`;
-  const header = <PageHeader title="Billing Details" breadcrumbs={<Breadcrumbs items={[{ label: item.plan ? "Membership" : item.name, href: item.href }, { label: "Billing Details" }]} />} />;
+  const header = (
+    <PageHeader
+      title="Checkout"
+      description={item.plan ? `Membership: ${item.plan.name}` : item.name}
+      breadcrumbs={<Breadcrumbs items={[{ label: item.plan ? "Membership" : item.name, href: item.href }, { label: "Checkout" }]} />}
+    />
+  );
 
   const user = await getCurrentUser();
   if (!user) {
@@ -130,6 +138,8 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   const summary = computeOrderSummary(item, coupon, settings, tax);
 
   const gateway = settings.commerce.paymentGateway;
+  // The methods the buyer can choose from (online ones are "available soon" until their keys are set).
+  const methods = checkoutMethods(settings.commerce, (g) => ({ configured: isConfigured(g), mode: gatewayMode(g) }));
   // Courses sold in installments: the buyer picks "in full" or "in N payments" (`?pay=installments`).
   const split = installmentCheckout(item, coupon, settings, tax);
   const inParts = split && sp.pay === "installments" ? split : null;
@@ -183,6 +193,7 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
   return (
     <>
       {header}
+      <CheckoutSteps stage="checkout" className="-mt-2 mb-6" />
       <div className="grid gap-6 pb-10 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start xl:grid-cols-[minmax(0,1fr)_22rem]">
         <aside className="space-y-4 lg:sticky lg:top-20 lg:order-last">
           <OrderSummary
@@ -322,6 +333,10 @@ export default async function BillingPage(props: PageProps<"/billing/[type]/[id]
             gateway={gateway}
             gatewayReady={isConfigured(gateway)}
             gatewayMode={gatewayMode(gateway)}
+            methods={paid ? methods : undefined}
+            manualDetails={settings.commerce.manualPayment}
+            upiUrl={summary.currency.toUpperCase() === "INR" ? upiPayUrl(settings.commerce.manualPayment, charge.amount, item.title) : null}
+            staff={user.roles.includes("admin")}
             applyTax={settings.commerce.applyTax}
             taxLabel={settings.commerce.taxLabel}
             contactEmail={settings.contact.email}

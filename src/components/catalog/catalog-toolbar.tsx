@@ -17,6 +17,8 @@ export interface CatalogToolbarProps {
   certification: boolean;
   /** Whether the certification filter is offered (certificates feature on). */
   showCertification: boolean;
+  /** Show only free courses (`?price=free`). */
+  freeOnly?: boolean;
 }
 
 type Updates = Record<string, string | null>;
@@ -26,7 +28,7 @@ type Updates = Record<string, string | null>;
  * (`?search=&category=&sort=&certification=`) so results are shareable and
  * rendered on the server; the page is reset to the first "load more" page.
  */
-export function CatalogToolbar({ categories, sorts, category, sort, certification, showCertification }: CatalogToolbarProps) {
+export function CatalogToolbar({ categories, sorts, category, sort, certification, showCertification, freeOnly = false }: CatalogToolbarProps) {
   const t = useT("public");
   const router = useRouter();
   const pathname = usePathname();
@@ -93,7 +95,7 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
     apply({ search: query.trim() || null });
   };
 
-  const activeFilters = (category ? 1 : 0) + (certification ? 1 : 0) + (sort !== "newest" ? 1 : 0);
+  const activeFilters = (category ? 1 : 0) + (certification ? 1 : 0) + (freeOnly ? 1 : 0) + (sort !== "newest" ? 1 : 0);
 
   const categorySelect = (id: string) => (
     <Select
@@ -171,6 +173,16 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
       <div className="hidden flex-wrap items-center gap-2 sm:flex">
         {categories.length > 0 && categorySelect("catalog-category")}
         {sortSelect("catalog-sort")}
+        <label
+          className={cn(
+            "inline-flex h-9.5 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm transition-colors",
+            freeOnly ? "border-accent bg-accent/5 text-ink" : "border-border-strong bg-surface-1 text-ink-muted hover:bg-surface-2",
+          )}
+        >
+          <input type="checkbox" checked={freeOnly} onChange={(e) => apply({ price: e.target.checked ? "free" : null })} className="size-4 cursor-pointer accent-accent" />
+          <Icon.Gift className="size-4" aria-hidden="true" />
+          {t("catalog.filters.freeOnly")}
+        </label>
         {showCertification && (
           <label
             className={cn(
@@ -210,6 +222,7 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
           <Field label={t("catalog.filters.sortBy")} htmlFor="catalog-sort-mobile">
             {sortSelect("catalog-sort-mobile")}
           </Field>
+          <Checkbox id="catalog-free-mobile" label={t("catalog.filters.freeOnly")} checked={freeOnly} onChange={(e) => apply({ price: e.target.checked ? "free" : null })} />
           {showCertification && (
             <Checkbox
               id="catalog-certification-mobile"
@@ -224,7 +237,7 @@ export function CatalogToolbar({ categories, sorts, category, sort, certificatio
               variant="outline"
               className="flex-1"
               disabled={activeFilters === 0}
-              onClick={() => apply({ category: null, sort: null, certification: null })}
+              onClick={() => apply({ category: null, sort: null, certification: null, price: null })}
             >
               {t("catalog.filters.reset")}
             </Button>

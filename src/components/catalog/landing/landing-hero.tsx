@@ -1,179 +1,149 @@
 import Link from "next/link";
-import type { CourseSummary, PublicUser } from "@/lib/types";
-import { AvatarGroup } from "@/components/ui/avatar";
-import { ButtonLink } from "@/components/ui/button";
+import type { ReactNode } from "react";
 import { Icon } from "@/components/ui/icons";
-import { getFormatter, getT } from "@/i18n/server";
-import { CourseCover } from "../course-cover";
-import { compactCount } from "../format";
-import { PriceTag } from "../price-tag";
+import { getT } from "@/i18n/server";
+import { cn } from "@/lib/utils";
+import { DISPLAY, EDITORIAL } from "./fonts";
+import { editorialLines } from "./tagline";
+import { Tilt } from "@/components/landing3d/tilt";
+
+/** Short facts shown as rotated stickers around the headline (each one optional). */
+export interface HeroStickers {
+  /** Accent sticker, top left (e.g. "4 courses"). */
+  primary?: string;
+  /** Lilac sticker, right side (e.g. "Free to start"). */
+  secondary?: string;
+  /** Orange circle, bottom (e.g. "Get certified"). */
+  circle?: string;
+}
+
+const pill =
+  "inline-flex min-h-12 items-center justify-center gap-2 rounded-full px-6 text-sm font-bold transition-[transform,background-color,box-shadow] duration-200 hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent motion-reduce:hover:translate-y-0";
+
+function Sticker({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "pointer-events-none select-none rounded-md border border-black/10 px-2.5 py-1 font-mono text-xs font-black uppercase leading-tight shadow-md shadow-black/30 sm:text-sm",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
 
 /**
- * Guest landing hero: brand tagline, description, primary CTAs and a
- * spotlight card for the top featured course (real data only).
+ * Guest home banner in the editorial style: the site tagline set as huge bold capitals mixed with italic serif
+ * words, a few rotated stickers with real facts, one sentence of description and two pill buttons.
  */
 export async function LandingHero({
-  brandName,
   tagline,
   description,
   signupEnabled,
   browse,
-  spotlight,
-  instructors,
-  courseCount,
-  learnerCount,
-  averageRating,
-  reviewCount,
+  stickers,
 }: {
-  brandName: string;
   tagline: string;
   description?: string;
   signupEnabled: boolean;
-  /** Secondary "browse the catalog" link; null hides it (e.g. guests can't browse and signup is off). */
+  /** "Explore courses" link; null hides it (guests can't browse and signup is off). */
   browse: { href: string; label: string } | null;
-  spotlight: CourseSummary | null;
-  instructors: PublicUser[];
-  courseCount: number;
-  learnerCount: number;
-  averageRating: number | null;
-  reviewCount: number;
+  stickers: HeroStickers;
 }) {
-  const [t, f] = await Promise.all([getT("public"), getFormatter()]);
+  const t = await getT("public");
+  const lines = editorialLines(tagline);
+  // Long taglines get a smaller scale so the capitals still fit the panel.
+  const long = lines.some((l) => l.text.length > 14);
+  const boldLines = lines.filter((l) => l.style === "bold");
+  const highlight = boldLines.length > 1 ? boldLines.at(-1) : undefined;
+
+  const primary = browse
+    ? { href: browse.href, label: browse.label }
+    : signupEnabled
+      ? { href: "/register", label: t("home.hero.getStarted") }
+      : { href: "/login", label: t("home.hero.logInToStart") };
+  const secondary = browse && signupEnabled ? { href: "/register", label: t("home.hero.getStarted") } : null;
+
   return (
-    <section aria-labelledby="landing-title" className="relative isolate overflow-hidden rounded-3xl border border-border bg-surface-1 px-5 py-10 shadow-card sm:px-10 sm:py-14 lg:px-14">
-      <div aria-hidden="true" className="pointer-events-none absolute -right-24 -top-24 -z-10 size-96 rounded-full bg-accent/15 blur-3xl" />
-      <div aria-hidden="true" className="pointer-events-none absolute -bottom-32 -left-20 -z-10 size-96 rounded-full bg-info/10 blur-3xl" />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 -z-10 text-ink opacity-[0.035]"
-        style={{ backgroundImage: "radial-gradient(currentColor 1px, transparent 1px)", backgroundSize: "22px 22px" }}
-      />
+    <section
+      aria-labelledby="landing-title"
+      className="relative isolate flex flex-col justify-center px-5 pb-16 pt-24 sm:min-h-[92svh] sm:px-6 sm:pt-28 lg:px-8 lg:pb-24 lg:pt-32"
+    >
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]">
+        <div className="absolute -end-40 -top-40 size-[34rem] rounded-full bg-accent/15 blur-3xl" />
+        <div className="absolute -bottom-24 -start-40 size-[30rem] rounded-full bg-violet-500/10 blur-3xl" />
+      </div>
 
-      <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div>
-          <p className="inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
-            <Icon.Sparkles className="size-3.5" aria-hidden="true" />
-            {t("home.hero.welcome", { brand: brandName })}
-          </p>
-          <h1 id="landing-title" className="mt-5 text-4xl font-semibold leading-[1.1] tracking-tight text-ink sm:text-5xl lg:text-6xl">
-            {tagline}
+      <div className="mx-auto flex max-w-5xl flex-col items-center">
+        {/* The headline tilts with the mouse; the stickers float in front of it (translate-z). */}
+        <Tilt max={5} glare={false} className="w-full sm:w-auto">
+          {stickers.primary && (
+            <Sticker className="absolute -top-7 -start-1 z-10 hidden -rotate-6 translate-z-17.5 bg-accent text-accent-fg sm:inline-block lg:-start-14">{stickers.primary}</Sticker>
+          )}
+          <h1
+            id="landing-title"
+            className="translate-z-7.5 text-start text-ink filter-[drop-shadow(0_2px_0_rgb(0_0_0/0.35))_drop-shadow(0_6px_0_rgb(0_0_0/0.18))_drop-shadow(0_18px_28px_rgb(0_0_0/0.35))]"
+          >
+            {lines.map((line, i) =>
+              line.style === "bold" ? (
+                <span
+                  key={i}
+                  className={cn(
+                    "block font-bold uppercase leading-[0.9] tracking-tight",
+                    DISPLAY,
+                    long ? "text-[2.4rem] sm:text-6xl lg:text-7xl" : "text-[2.9rem] sm:text-7xl lg:text-[6.75rem]",
+                    i > 0 && "mt-1 sm:mt-2",
+                  )}
+                >
+                  {line === highlight ? <span className="bg-linear-to-r from-accent via-violet-400 to-info bg-clip-text text-transparent">{line.text}</span> : line.text}{" "}
+                </span>
+              ) : (
+                <span
+                  key={i}
+                  className={cn(
+                    "relative z-10 -mt-1.5 ms-3 block font-normal italic leading-[0.9] sm:-mt-3 sm:ms-8",
+                    EDITORIAL,
+                    long ? "text-[2.2rem] sm:text-5xl lg:text-6xl" : "text-[2.6rem] sm:text-6xl lg:text-[5.75rem]",
+                  )}
+                >
+                  {line.text}{" "}
+                </span>
+              ),
+            )}
           </h1>
-          {description && <p className="mt-5 max-w-xl text-base leading-7 text-ink-muted sm:text-lg">{description}</p>}
+          {stickers.secondary && (
+            <Sticker className="absolute end-0 top-[38%] z-10 hidden rotate-3 translate-z-20 bg-violet-300 text-slate-950 sm:inline-block lg:-end-10">{stickers.secondary}</Sticker>
+          )}
+          {stickers.circle && (
+            <span className="pointer-events-none absolute bottom-1 end-[18%] z-10 hidden size-16 rotate-12 translate-z-24 select-none items-center justify-center rounded-full border border-black/10 bg-orange-400 p-1.5 text-center font-mono text-[0.68rem] font-black uppercase leading-tight text-slate-950 shadow-md sm:flex">
+              {stickers.circle}
+            </span>
+          )}
+        </Tilt>
 
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            {signupEnabled ? (
-              <ButtonLink href="/register" size="lg" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
-                {t("home.hero.getStarted")}
-              </ButtonLink>
-            ) : (
-              <ButtonLink href="/login" size="lg" rightIcon={<Icon.ArrowRight className="size-4 rtl:rotate-180" />}>
-                {t("home.hero.logInToStart")}
-              </ButtonLink>
-            )}
-            {browse && (
-              <ButtonLink href={browse.href} size="lg" variant="outline" leftIcon={<Icon.BookOpen className="size-4" />}>
-                {browse.label}
-              </ButtonLink>
-            )}
-          </div>
-
-          <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-ink-muted">
-            {instructors.length > 0 && (
-              <div className="flex items-center gap-2.5">
-                <AvatarGroup users={instructors} size="sm" max={4} />
-                <span>{t.rich("home.hero.taughtBy", { count: instructors.length, b: (chunks) => <span className="font-medium text-ink">{chunks}</span> })}</span>
-              </div>
-            )}
-            {averageRating && reviewCount > 0 && (
-              <div className="flex items-center gap-1.5">
-                <Icon.StarFilled className="size-4 text-warning" aria-hidden="true" />
-                <span>
-                  {t.rich("home.hero.averageRating", {
-                    rating: f.number(averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
-                    count: reviewCount,
-                    reviews: compactCount(reviewCount, f.locale),
-                    b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
-                  })}
-                </span>
-              </div>
-            )}
-            {courseCount > 0 && learnerCount > 0 && (
-              <div className="flex items-center gap-1.5">
-                <Icon.Users className="size-4" aria-hidden="true" />
-                <span>
-                  {t.rich("home.hero.learnersEnrolled", {
-                    count: learnerCount,
-                    learners: compactCount(learnerCount, f.locale),
-                    b: (chunks) => <span className="font-medium text-ink">{chunks}</span>,
-                  })}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {spotlight && (
-          <div className="relative mx-auto w-full max-w-md lg:max-w-none">
-            <div aria-hidden="true" className="absolute -inset-3 -z-10 rotate-2 rounded-3xl bg-accent/10" />
-            <Link
-              href={`/courses/${spotlight.slug}`}
-              className="group block overflow-hidden rounded-2xl border border-border bg-surface-1 shadow-pop transition-transform duration-300 hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
-            >
-              <CourseCover title={spotlight.title} imageUrl={spotlight.imageUrl} gradient={spotlight.cardGradient} className="aspect-video w-full">
-                <span className="inline-flex items-center gap-1 rounded-full bg-surface-1 px-2 py-0.5 text-[11px] font-semibold text-ink shadow-sm">
-                  <Icon.Award className="size-3 text-warning" aria-hidden="true" />
-                  {spotlight.featured ? t("home.hero.featuredCourse") : t("home.hero.popularCourse")}
-                </span>
-              </CourseCover>
-              <div className="p-5">
-                {spotlight.category && <p className="text-xs font-semibold uppercase tracking-wide text-accent">{spotlight.category.name}</p>}
-                <p className="mt-1 text-lg font-semibold leading-snug text-ink group-hover:text-accent">{spotlight.title}</p>
-                <p className="mt-1 line-clamp-2 text-sm text-ink-muted">{spotlight.shortIntroduction}</p>
-                <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm">
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-muted">
-                    {spotlight.lessonCount > 0 && (
-                      <span className="inline-flex items-center gap-1">
-                        <Icon.BookOpen className="size-4" aria-hidden="true" />
-                        {t("catalog.lessonCount", { count: spotlight.lessonCount })}
-                      </span>
-                    )}
-                    {spotlight.totalDurationSeconds > 0 && (
-                      <span className="inline-flex items-center gap-1">
-                        <Icon.Clock className="size-4" aria-hidden="true" />
-                        {f.duration(spotlight.totalDurationSeconds)}
-                      </span>
-                    )}
-                  </span>
-                  <PriceTag course={spotlight} />
-                </div>
-              </div>
-            </Link>
-            {spotlight.averageRating && spotlight.reviewCount > 0 && (
-              <div className="absolute -start-3 top-8 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
-                <Icon.StarFilled className="size-5 text-warning" aria-hidden="true" />
-                <div className="leading-tight">
-                  <p className="text-sm font-semibold text-ink">
-                    {t("home.hero.rating", { rating: f.number(spotlight.averageRating, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) })}
-                  </p>
-                  <p className="text-[11px] text-ink-muted">{t("catalog.reviewCount", { count: spotlight.reviewCount })}</p>
-                </div>
-              </div>
-            )}
-            {(spotlight.enableCertification || spotlight.paidCertificate) && (
-              <div className="absolute -end-3 bottom-24 hidden items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 shadow-pop sm:flex">
-                <span className="flex size-8 items-center justify-center rounded-lg bg-success/12 text-success">
-                  <Icon.GraduationCap className="size-4.5" aria-hidden="true" />
-                </span>
-                <div className="leading-tight">
-                  <p className="text-sm font-semibold text-ink">{t("home.hero.certificate")}</p>
-                  <p className="text-[11px] text-ink-muted">
-                    {spotlight.paidCertificate ? t("home.hero.certificateAfterEvaluation") : t("home.hero.certificateOnCompletion")}
-                  </p>
-                </div>
-              </div>
-            )}
+        {/* Phones: the same stickers in a row under the headline. */}
+        {(stickers.primary || stickers.secondary || stickers.circle) && (
+          <div className="mt-5 flex w-full flex-wrap gap-2 sm:hidden" aria-hidden="true">
+            {stickers.primary && <Sticker className="inline-block -rotate-3 bg-accent text-accent-fg">{stickers.primary}</Sticker>}
+            {stickers.secondary && <Sticker className="inline-block rotate-2 bg-violet-300 text-slate-950">{stickers.secondary}</Sticker>}
+            {stickers.circle && <Sticker className="inline-block -rotate-2 bg-orange-400 text-slate-950">{stickers.circle}</Sticker>}
           </div>
         )}
+
+        {description && <p className="mt-8 max-w-2xl text-center text-base leading-relaxed text-ink-muted sm:mt-10 sm:text-lg">{description}</p>}
+
+        <div className="mt-7 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
+          <Link href={primary.href} className={cn(pill, "bg-accent text-accent-fg shadow-lg shadow-accent/25 hover:shadow-xl hover:shadow-accent/35")}>
+            {primary.label}
+            <Icon.ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
+          </Link>
+          {secondary && (
+            <Link href={secondary.href} className={cn(pill, "border border-border-strong text-ink hover:bg-surface-1")}>
+              {secondary.label}
+            </Link>
+          )}
+        </div>
       </div>
     </section>
   );

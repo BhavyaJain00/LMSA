@@ -114,26 +114,21 @@ export async function InstructorNotesBox({ notes }: { notes: string }) {
   );
 }
 
-/** Meta line: "Chapter 1 · Lesson 3 of 12 · 10m". */
-export async function LessonMeta({ chapterNumber, chapterTitle, index, total, durationSeconds, preview }: { chapterNumber: number; chapterTitle: string; index: number; total: number; durationSeconds: number; preview: boolean }) {
+/** One quiet meta line above the lesson title: "Chapter 2 · Lesson 5 of 10 · 11m" (+ "Free preview"). */
+export async function LessonMeta({ chapterNumber, index, total, durationSeconds, preview }: { chapterNumber: number; index: number; total: number; durationSeconds: number; preview: boolean }) {
   const [t, f] = await Promise.all([getT("learning"), getFormatter()]);
   return (
-    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-muted">
-      <span className="font-medium uppercase tracking-wider text-ink-faint">{t("learn.meta.chapter", { number: chapterNumber })}</span>
-      <span className="truncate">{chapterTitle}</span>
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-ink-faint">
+      <span>{t("learn.meta.chapter", { number: chapterNumber })}</span>
       <span aria-hidden="true">·</span>
-      <span className="tabular-nums">
-        {t("learn.meta.position", { index: index + 1, total })}
-      </span>
+      <span className="tabular-nums">{t("learn.meta.position", { index: index + 1, total })}</span>
       {durationSeconds > 0 && (
         <>
           <span aria-hidden="true">·</span>
-          <span className="inline-flex items-center gap-1">
-            <Icon.Clock className="size-3.5" /> {f.duration(durationSeconds)}
-          </span>
+          <span>{f.duration(durationSeconds)}</span>
         </>
       )}
-      {preview && <span className="rounded bg-info/12 px-1.5 py-0.5 font-medium text-info">{t("learn.freePreview")}</span>}
+      {preview && <span className="ms-1 rounded-full bg-info/12 px-2 py-0.5 text-micro font-medium text-info">{t("learn.freePreview")}</span>}
     </p>
   );
 }

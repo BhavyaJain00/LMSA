@@ -914,7 +914,7 @@ export function VideoPlayer({
       {watermarkOptions && <Watermark text={watermarkOptions.text} opacity={watermarkOptions.opacity} reducedMotion={reducedMotion} />}
 
       {/* Title (top gradient) */}
-      {title && !docked && (
+      {title && !docked && !errorMessage && (
         <div className={cn("pointer-events-none absolute inset-x-0 top-0 z-10 bg-linear-to-b from-black/70 to-transparent px-4 pb-8 pt-3 transition-opacity", controlsShown ? "opacity-100" : "opacity-0")}>
           <p className="truncate text-sm font-medium drop-shadow" dir="auto">
             {title}
@@ -1004,15 +1004,36 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Error */}
+      {/* Error: a calm "not available" state inside the same 16:9 frame (no layout jump). */}
       {errorMessage && (
-        <div role="alert" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center">
-          <Icon.AlertTriangle className={docked ? "size-6 text-warning" : "size-10 text-warning"} />
-          <p className="max-w-sm text-sm" dir="auto">
-            {errorMessage}
-          </p>
+        <div
+          role="alert"
+          className={cn(
+            "absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 text-center",
+            docked ? "gap-1.5 px-4" : "gap-2 px-6 sm:gap-3",
+          )}
+        >
+          <span className={cn("flex items-center justify-center rounded-full bg-white/10 text-white/75", docked ? "size-8" : "size-10 sm:size-12")} aria-hidden="true">
+            <Icon.Video className={docked ? "size-4" : "size-5 sm:size-6"} />
+          </span>
+          <div className="space-y-1">
+            <p className={cn("font-semibold text-white", docked ? "text-xs" : "text-sm sm:text-base")}>{t("global.player.error.title")}</p>
+            {!docked && errorMessage !== t("global.player.error.unavailable") && (
+              <p className="mx-auto line-clamp-2 max-w-sm text-xs text-white/60 sm:text-sm" dir="auto">
+                {errorMessage}
+              </p>
+            )}
+          </div>
           {media.status !== "denied" && (
-            <button type="button" onClick={actions.retry} className="rounded-lg bg-white/15 px-4 py-2 text-sm font-medium hover:bg-white/25">
+            <button
+              type="button"
+              onClick={actions.retry}
+              className={cn(
+                "mt-1 inline-flex items-center gap-1.5 rounded-full bg-white/12 font-medium text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                docked ? "px-2.5 py-1 text-xs" : "px-3.5 py-1.5 text-sm",
+              )}
+            >
+              <Icon.Refresh className={docked ? "size-3.5" : "size-4"} />
               {t("global.player.tryAgain")}
             </button>
           )}
@@ -1057,7 +1078,7 @@ export function VideoPlayer({
         chapters={chapters}
         markers={markers}
         maxSeekable={preventSkipping ? Math.max(maxPos, state.currentTime) : undefined}
-        visible={controlsShown && !shortcutsOpen}
+        visible={controlsShown && !shortcutsOpen && !errorMessage}
         onMenuOpenChange={setMenuOpen}
         onMarkerClick={(m) => {
           if (actions.seek(m.time)) onMarker?.(m);

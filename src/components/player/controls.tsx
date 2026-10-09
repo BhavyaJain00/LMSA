@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { cn, formatTime } from "@/lib/utils";
 import { Icon } from "@/components/ui/icons";
 import { AUTO_QUALITY, type QualityOption } from "@/lib/media/sources";
@@ -12,6 +12,12 @@ import { useT } from "@/i18n/client";
 
 /** Shared with the server, which bounds heartbeats by the fastest rate. */
 export { PLAYBACK_RATES };
+
+// Picture-in-picture support is a browser-only fact: the server (and the hydration pass) must render
+// the same markup, so the button only appears once the client store reports support.
+const subscribeNever = () => () => undefined;
+const clientPipSupport = (): boolean => "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
+const serverPipSupport = (): boolean => false;
 
 function ControlButton({ label, onClick, children, active, className }: { label: string; onClick: () => void; children: ReactNode; active?: boolean; className?: string }) {
   return (
@@ -382,7 +388,7 @@ export function ControlBar({
   const t = useT("learning");
   const [showRemaining, setShowRemaining] = useState(false);
   const currentChapter = chapterAt(chapters, state.currentTime);
-  const pipSupported = allowPip && typeof document !== "undefined" && "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
+  const pipSupported = useSyncExternalStore(subscribeNever, clientPipSupport, serverPipSupport) && allowPip;
 
   return (
     <div
